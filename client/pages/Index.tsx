@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import HeroBackground from "@/components/visuals/HeroBackground";
+import { MetaHelmet } from "@/components/MetaHelmet";
 
 const Index = () => {
   const containerVariants: Variants = {
@@ -59,6 +60,12 @@ const Index = () => {
   };
   return (
     <div className="flex flex-col">
+      <MetaHelmet
+        title="Home"
+        description="Transform your loan brokerage with our comprehensive management platform. Streamline applications, track leads, and close deals faster."
+        keywords="loan broker, mortgage management, real estate finance, loan applications, broker platform"
+      />
+
       {/* Hero Section */}
       <section className="relative overflow-hidden bg-background py-20 md:py-32">
         <HeroBackground />
