@@ -4,16 +4,11 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import { Provider } from "react-redux";
 import { HelmetProvider } from "react-helmet-async";
 import { store } from "./store";
-import Index from "./pages/Index";
-import ClientPortal from "./pages/ClientPortal";
-import BrokerDashboard from "./pages/BrokerDashboard";
-import ApplicationWizard from "./pages/ApplicationWizard";
-import NotFound from "./pages/NotFound";
-import AppLayout from "./components/layout/AppLayout";
+import AppRoutes from "./AppRoutes";
 
 const queryClient = new QueryClient();
 
@@ -25,16 +20,7 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
-            <AppLayout>
-              <Routes>
-                <Route path="/" element={<Index />} />
-                <Route path="/portal" element={<ClientPortal />} />
-                <Route path="/admin" element={<BrokerDashboard />} />
-                <Route path="/apply" element={<ApplicationWizard />} />
-                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </AppLayout>
+            <AppRoutes />
           </BrowserRouter>
         </TooltipProvider>
       </QueryClientProvider>

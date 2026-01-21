@@ -1,29 +1,44 @@
 import { configureStore } from "@reduxjs/toolkit";
-import authReducer from "./slices/authSlice";
+import clientAuthReducer from "./slices/clientAuthSlice";
+import brokerAuthReducer from "./slices/brokerAuthSlice";
 import applicationsReducer from "./slices/applicationsSlice";
 import leadsReducer from "./slices/leadsSlice";
 import documentsReducer from "./slices/documentsSlice";
 import tasksReducer from "./slices/tasksSlice";
 import notificationsReducer from "./slices/notificationsSlice";
+import pipelineReducer from "./slices/pipelineSlice";
+import clientsReducer from "./slices/clientsSlice";
+import brokersReducer from "./slices/brokersSlice";
+import communicationTemplatesReducer from "./slices/communicationTemplatesSlice";
+import dashboardReducer from "./slices/dashboardSlice";
 
 export const store = configureStore({
   reducer: {
-    auth: authReducer,
+    clientAuth: clientAuthReducer,
+    brokerAuth: brokerAuthReducer,
     applications: applicationsReducer,
     leads: leadsReducer,
     documents: documentsReducer,
     tasks: tasksReducer,
     notifications: notificationsReducer,
+    pipeline: pipelineReducer,
+    clients: clientsReducer,
+    brokers: brokersReducer,
+    communicationTemplates: communicationTemplatesReducer,
+    dashboard: dashboardReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializableCheck: {
         // Ignore these action types
-        ignoredActions: ["auth/login/fulfilled", "auth/verify/fulfilled"],
+        ignoredActions: [
+          "clientAuth/login/fulfilled",
+          "clientAuth/verify/fulfilled",
+        ],
         // Ignore these field paths in all actions
         ignoredActionPaths: ["meta.arg", "payload.timestamp"],
         // Ignore these paths in the state
-        ignoredPaths: ["auth.lastLogin"],
+        ignoredPaths: ["clientAuth.lastLogin"],
       },
     }),
 });

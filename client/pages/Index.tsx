@@ -4,24 +4,19 @@ import { motion, Variants } from "framer-motion";
 import {
   ArrowRight,
   ShieldCheck,
-  Zap,
-  BarChart3,
-  Users,
-  FileText,
-  MessageSquare,
+  Home,
+  TrendingDown,
   CheckCircle2,
+  Phone,
+  Calendar,
+  MessageSquare,
   Clock,
-  Smartphone,
-  Lock as LockIcon,
+  Award,
+  Sparkles,
+  TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import HeroBackground from "@/components/visuals/HeroBackground";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -49,182 +44,451 @@ const Index = () => {
     },
   };
 
-  const floatingVariants: Variants = {
+  const floatVariants: Variants = {
     animate: {
-      y: [0, -15, 0],
+      y: [0, -10, 0],
       transition: {
-        duration: 4,
+        duration: 3,
         repeat: Infinity,
+        ease: "easeInOut",
       },
     },
   };
+
+  const statsVariants: Variants = {
+    hidden: { scale: 0.8, opacity: 0 },
+    visible: {
+      scale: 1,
+      opacity: 1,
+      transition: {
+        type: "spring",
+        stiffness: 100,
+        damping: 15,
+      },
+    },
+  };
+
+  const loanOptions = [
+    {
+      name: "30 Year Fixed",
+      description:
+        "Most popular mortgage program. Enjoy a low interest rate and fixed monthly payments. Quick approval and closing complete within 30 days.",
+    },
+    {
+      name: "15 Year Fixed",
+      description:
+        "Pay-off your home and save thousands of dollars during the life of the loan. Enjoy a low interest rate and fixed monthly payments.",
+    },
+    {
+      name: "FHA Loans",
+      description:
+        "Qualify with a down payment as low as 3.5%, worry-free loan qualification & marginal credit acceptable.",
+    },
+    {
+      name: "VA Loans",
+      description:
+        "$0 down payment required, no monthly mortgage insurance, low rates and worry-free approval.",
+    },
+    {
+      name: "JUMBO Loans",
+      description:
+        "5% and 10% down payment options. Low rates for fixed and adjustable terms.",
+    },
+    {
+      name: "Non QM",
+      description:
+        "Non-Qualified Mortgage loans for borrowers with unique income qualifying circumstances.",
+    },
+    {
+      name: "ARM Loans",
+      description:
+        "Ideal if you plan to stay in your home for less than ten years. Enjoy a low interest rate for a 5, 7, or 10-year period.",
+    },
+  ];
+
   return (
     <div className="flex flex-col">
       <MetaHelmet
-        title="Home"
-        description="Transform your loan brokerage with our comprehensive management platform. Streamline applications, track leads, and close deals faster."
-        keywords="loan broker, mortgage management, real estate finance, loan applications, broker platform"
+        title="Your Online Resource for Personalized Mortgage Loans"
+        description="Encore Mortgage provides personalized mortgage solutions including purchase loans, refinancing, FHA, VA, and more. Get pre-approved today!"
+        keywords="mortgage, home loans, refinance, FHA loans, VA loans, purchase loans, Encore Mortgage"
       />
 
       {/* Hero Section */}
-      <section className="relative overflow-hidden bg-background py-20 md:py-32">
+      <section className="relative overflow-hidden bg-gradient-to-br from-background via-background to-primary/5 py-20 md:py-32 lg:py-40">
         <HeroBackground />
 
+        {/* Animated gradient orbs */}
+        <div className="absolute top-20 left-10 h-72 w-72 rounded-full bg-primary/20 blur-3xl animate-pulse" />
+        <div className="absolute bottom-20 right-10 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl animate-pulse delay-700" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[600px] rounded-full bg-primary/5 blur-[120px]" />
+
         <div className="container relative z-10">
+          <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 items-center">
+            {/* Left Column - Content */}
+            <motion.div
+              variants={containerVariants}
+              initial="hidden"
+              animate="visible"
+              className="space-y-8"
+            >
+              <motion.div variants={itemVariants} className="inline-flex">
+                <Badge className="bg-primary/10 text-primary border-primary/20 px-4 py-2 text-sm font-semibold backdrop-blur-sm hover:bg-primary/20 transition-colors">
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Fast. Simple. Personalized.
+                </Badge>
+              </motion.div>
+
+              <motion.h1
+                variants={itemVariants}
+                className="text-5xl font-black tracking-tight sm:text-6xl lg:text-7xl xl:text-8xl leading-[1.1]"
+              >
+                Your Dream Home{" "}
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-blue-600 to-primary">
+                  Starts Here
+                </span>
+              </motion.h1>
+
+              <motion.p
+                variants={itemVariants}
+                className="text-xl text-muted-foreground leading-relaxed max-w-xl"
+              >
+                Get pre-approved in 60 seconds. Experience mortgage lending
+                that's{" "}
+                <span className="text-foreground font-semibold">
+                  fast, transparent
+                </span>
+                , and built around{" "}
+                <span className="text-foreground font-semibold">
+                  your goals
+                </span>
+                .
+              </motion.p>
+
+              {/* Quick Stats */}
+              <motion.div
+                variants={itemVariants}
+                className="flex flex-wrap gap-6 py-4"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Clock className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold">30 Days</div>
+                    <div className="text-xs text-muted-foreground">
+                      Quick Closing
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Award className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold">Best Rates</div>
+                    <div className="text-xs text-muted-foreground">
+                      Guaranteed
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <ShieldCheck className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold">100%</div>
+                    <div className="text-xs text-muted-foreground">Secure</div>
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* CTA Buttons */}
+              <motion.div
+                variants={itemVariants}
+                className="flex flex-col sm:flex-row gap-4"
+              >
+                <Link to="/apply" className="flex-1 sm:flex-initial">
+                  <Button
+                    size="lg"
+                    className="w-full sm:w-auto h-14 px-8 text-lg font-bold shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95 bg-gradient-to-r from-primary to-blue-600 hover:from-primary/90 hover:to-blue-600/90"
+                  >
+                    Get Pre-Approved
+                    <ArrowRight className="ml-2 h-5 w-5" />
+                  </Button>
+                </Link>
+                <a href="tel:(562)337-0000" className="flex-1 sm:flex-initial">
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="w-full sm:w-auto h-14 px-8 text-lg font-semibold border-2 hover:bg-accent/50 backdrop-blur-sm transition-all hover:scale-105 active:scale-95"
+                  >
+                    <Phone className="mr-2 h-5 w-5" />
+                    (562) 337-0000
+                  </Button>
+                </a>
+              </motion.div>
+
+              {/* Trust Indicators */}
+              <motion.div
+                variants={itemVariants}
+                className="flex items-center gap-6 pt-4 text-sm text-muted-foreground"
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span>No hidden fees</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span>Free consultation</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span>Expert guidance</span>
+                </div>
+              </motion.div>
+            </motion.div>
+
+            {/* Right Column - Interactive Cards */}
+            <motion.div
+              variants={containerVariants}
+              initial="hidden"
+              animate="visible"
+              className="relative hidden lg:block"
+            >
+              {/* Main Card */}
+              <motion.div variants={statsVariants} className="relative">
+                <Card className="relative overflow-hidden border-2 bg-gradient-to-br from-white/80 to-white/40 backdrop-blur-xl shadow-2xl">
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent" />
+                  <CardHeader className="relative">
+                    <div className="flex items-center justify-between mb-4">
+                      <Badge
+                        variant="secondary"
+                        className="bg-green-500/10 text-green-700 border-green-200"
+                      >
+                        <TrendingUp className="mr-1 h-3 w-3" />
+                        Rates Down
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Updated Today
+                      </span>
+                    </div>
+                    <CardTitle className="text-3xl font-bold">
+                      Today's Rates
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="relative space-y-6">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between p-4 rounded-xl bg-white/60 backdrop-blur-sm border">
+                        <div>
+                          <div className="text-sm font-medium text-muted-foreground">
+                            30-Year Fixed
+                          </div>
+                          <div className="text-2xl font-bold text-primary">
+                            6.75%
+                          </div>
+                        </div>
+                        <ArrowRight className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="flex items-center justify-between p-4 rounded-xl bg-white/60 backdrop-blur-sm border">
+                        <div>
+                          <div className="text-sm font-medium text-muted-foreground">
+                            15-Year Fixed
+                          </div>
+                          <div className="text-2xl font-bold text-primary">
+                            6.25%
+                          </div>
+                        </div>
+                        <ArrowRight className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="flex items-center justify-between p-4 rounded-xl bg-white/60 backdrop-blur-sm border">
+                        <div>
+                          <div className="text-sm font-medium text-muted-foreground">
+                            FHA Loans
+                          </div>
+                          <div className="text-2xl font-bold text-primary">
+                            6.50%
+                          </div>
+                        </div>
+                        <ArrowRight className="h-5 w-5 text-primary" />
+                      </div>
+                    </div>
+                    <Link to="/apply">
+                      <Button className="w-full" variant="secondary">
+                        View All Rates
+                      </Button>
+                    </Link>
+                  </CardContent>
+                </Card>
+              </motion.div>
+
+              {/* Floating stat cards */}
+              <motion.div
+                variants={floatVariants}
+                animate="animate"
+                className="absolute -top-6 -right-6 max-w-[200px]"
+              >
+                <Card className="border-2 bg-white/90 backdrop-blur-xl shadow-xl">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 rounded-full bg-blue-500/10 flex items-center justify-center">
+                        <Home className="h-6 w-6 text-blue-600" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-muted-foreground">
+                          New Loans
+                        </div>
+                        <div className="text-xl font-bold">This Month</div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+
+              <motion.div
+                variants={floatVariants}
+                animate="animate"
+                className="absolute -bottom-6 -left-6 max-w-[220px]"
+                transition={{ delay: 0.5 }}
+              >
+                <Card className="border-2 bg-white/90 backdrop-blur-xl shadow-xl">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 rounded-full bg-green-500/10 flex items-center justify-center">
+                        <CheckCircle2 className="h-6 w-6 text-green-600" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-muted-foreground">
+                          Happy Customers
+                        </div>
+                        <div className="text-xl font-bold">500+</div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            </motion.div>
+          </div>
+
+          {/* Bottom CTA for mobile */}
           <motion.div
-            className="mx-auto max-w-3xl text-center"
-            variants={containerVariants}
+            variants={itemVariants}
             initial="hidden"
             animate="visible"
+            className="mt-12 lg:hidden text-center"
           >
-            <motion.div variants={itemVariants}>
-              <Badge
-                variant="outline"
-                className="mb-4 py-1 px-4 border-primary/20 bg-primary/5 text-primary backdrop-blur-sm"
+            <a
+              href="https://calendly.com/danielcarrillodc/initial-call"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Button
+                variant="ghost"
+                size="lg"
+                className="h-12 text-base font-semibold hover:bg-accent/50"
               >
-                Next-Gen Brokerage Platform
-              </Badge>
-            </motion.div>
-
-            <motion.h1
-              variants={itemVariants}
-              className="mb-6 text-5xl font-extrabold tracking-tight sm:text-6xl lg:text-7xl"
-            >
-              Bridge the Gap Between{" "}
-              <span className="text-primary">Brokers</span> and{" "}
-              <span className="text-primary">Clients</span>
-            </motion.h1>
-
-            <motion.p
-              variants={itemVariants}
-              className="mb-10 text-xl text-muted-foreground leading-relaxed"
-            >
-              The all-in-one platform for seamless loan lifecycles. Automate
-              workflows, manage documents, and provide clients with a
-              world-class digital experience.
-            </motion.p>
-
-            <motion.div
-              variants={itemVariants}
-              className="flex flex-col items-center justify-center gap-4 sm:flex-row"
-            >
-              <Link to="/apply">
-                <Button
-                  size="lg"
-                  className="h-14 px-8 text-lg font-semibold shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95"
-                >
-                  I'm a Client <ArrowRight className="ml-2 h-5 w-5" />
-                </Button>
-              </Link>
-              <Link to="/admin">
-                <Button
-                  variant="outline"
-                  size="lg"
-                  className="h-14 px-8 text-lg font-semibold transition-all hover:bg-accent active:scale-95"
-                >
-                  I'm a Broker
-                </Button>
-              </Link>
-            </motion.div>
-
-            <motion.div
-              variants={itemVariants}
-              className="mt-12 flex items-center justify-center gap-8 text-sm text-muted-foreground opacity-70 grayscale"
-            >
-              <span className="flex items-center gap-1">
-                <ShieldCheck className="h-4 w-4" /> Secure & Compliant
-              </span>
-              <span className="flex items-center gap-1">
-                <Zap className="h-4 w-4" /> Real-time Updates
-              </span>
-              <span className="flex items-center gap-1">
-                <CheckCircle2 className="h-4 w-4" /> 99.9% Success Rate
-              </span>
-            </motion.div>
+                <Calendar className="mr-2 h-5 w-5" />
+                Schedule Free Consultation
+              </Button>
+            </a>
           </motion.div>
         </div>
-
-        {/* Background blobs (kept for extra depth) */}
-        <div className="absolute top-1/2 left-1/2 -z-20 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-[120px]" />
       </section>
 
-      {/* Stats Section */}
-      <section className="border-y bg-muted/30 py-12">
+      {/* Our Story Section */}
+      <section className="py-24 bg-muted/30">
         <div className="container">
-          <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
-            <div className="text-center">
-              <div className="text-3xl font-bold md:text-4xl">$2.4B+</div>
-              <div className="text-sm text-muted-foreground">
-                Loans Processed
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl font-bold md:text-4xl">15k+</div>
-              <div className="text-sm text-muted-foreground">
-                Active Brokers
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl font-bold md:text-4xl">45%</div>
-              <div className="text-sm text-muted-foreground">
-                Faster Closings
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl font-bold md:text-4xl">98%</div>
-              <div className="text-sm text-muted-foreground">
-                Client Satisfaction
-              </div>
-            </div>
+          <div className="mx-auto max-w-3xl text-center">
+            <h2 className="mb-6 text-3xl font-bold tracking-tight md:text-4xl">
+              Our Story
+            </h2>
+            <p className="text-lg text-muted-foreground leading-relaxed">
+              The Story of Encore Mortgage begins in Montebello, CA., where they
+              sought out to represent the communities that they serve. Their
+              goal has always been to build on the goal of providing the best
+              options to achieve home ownership.
+            </p>
           </div>
         </div>
       </section>
 
-      {/* Features for Clients */}
+      {/* Purchase & Refinance Section */}
       <section className="py-24">
+        <div className="container">
+          <div className="grid gap-12 lg:grid-cols-2">
+            <Card className="group transition-all hover:shadow-xl">
+              <CardHeader>
+                <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-xl bg-primary/10 transition-colors group-hover:bg-primary/20">
+                  <Home className="h-8 w-8 text-primary" />
+                </div>
+                <CardTitle className="text-2xl">Purchase</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-muted-foreground">
+                  Owning a home is one the biggest investments in your life. We
+                  will help you get you in your new home on-time, at the lowest
+                  available rate, and with the best mortgage.
+                </p>
+                <Link to="/purchase">
+                  <Button className="mt-4">
+                    Get Pre-Approved <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+
+            <Card className="group transition-all hover:shadow-xl">
+              <CardHeader>
+                <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-xl bg-primary/10 transition-colors group-hover:bg-primary/20">
+                  <TrendingDown className="h-8 w-8 text-primary" />
+                </div>
+                <CardTitle className="text-2xl">Refinance</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-muted-foreground">
+                  Whether you're looking to lower your monthly payment, or get
+                  cash to consolidate your debt, we can help you determine how
+                  refinancing fits with your financial goals.
+                </p>
+                <Link to="/refinance">
+                  <Button className="mt-4">
+                    Get a Custom Quote <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* Loan Options Section */}
+      <section className="bg-muted/50 py-24">
         <div className="container">
           <div className="mb-16 text-center">
             <h2 className="mb-4 text-3xl font-bold tracking-tight md:text-4xl">
-              Empowering Clients
+              Review Your Loan Options
             </h2>
             <p className="mx-auto max-w-2xl text-muted-foreground">
-              We've redesigned the loan application from the ground up to be
-              transparent, fast, and stress-free.
+              No two loans are alike. Learn more about our various loan options
+              to see what fits your needs.
             </p>
           </div>
-          <div className="grid gap-8 md:grid-cols-3">
-            {[
-              {
-                icon: <Zap className="h-8 w-8 text-primary" />,
-                title: "Full-Page Wizard",
-                description:
-                  "A beautiful, step-by-step onboarding experience that guides you through every requirement.",
-              },
-              {
-                icon: <FileText className="h-8 w-8 text-primary" />,
-                title: "Smart Doc Management",
-                description:
-                  "Upload and manage documents securely. We'll automatically verify and track what's missing.",
-              },
-              {
-                icon: <Clock className="h-8 w-8 text-primary" />,
-                title: "Live Tracking",
-                description:
-                  "See exactly where your application stands in the pipeline with real-time status updates.",
-              },
-            ].map((feature, i) => (
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {loanOptions.map((loan, i) => (
               <Card
                 key={i}
                 className="group transition-all hover:shadow-xl hover:-translate-y-1"
               >
                 <CardHeader>
-                  <div className="mb-2 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 transition-colors group-hover:bg-primary/20">
-                    {feature.icon}
-                  </div>
-                  <CardTitle>{feature.title}</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5 text-primary" />
+                    {loan.name}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-muted-foreground">{feature.description}</p>
+                  <p className="text-muted-foreground text-sm">
+                    {loan.description}
+                  </p>
                 </CardContent>
               </Card>
             ))}
@@ -232,134 +496,66 @@ const Index = () => {
         </div>
       </section>
 
-      {/* Features for Brokers */}
-      <section className="bg-muted/50 py-24">
-        <div className="container">
-          <div className="flex flex-col items-center gap-12 lg:flex-row">
-            <div className="flex-1 space-y-6">
-              <Badge variant="outline" className="bg-primary/5 text-primary">
-                Broker Operations
-              </Badge>
-              <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
-                Total Operational Control
-              </h2>
-              <p className="text-lg text-muted-foreground">
-                NexusBroker gives you the tools to manage high-volume pipelines
-                without breaking a sweat.
-              </p>
-              <ul className="space-y-4">
-                {[
-                  "Automated lead follow-up and status tracking",
-                  "Unified communication (Email, SMS, VoIP)",
-                  "Intelligent task assignment and reminders",
-                  "Marketing automation & campaign management",
-                  "Compliance tracking and document auditing",
-                ].map((item, i) => (
-                  <li key={i} className="flex items-center gap-3">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-              <Button className="mt-4">Explore Broker Suite</Button>
-            </div>
-            <div className="flex-1">
-              <div className="relative rounded-2xl border bg-background p-4 shadow-2xl">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-4">
-                    <div className="h-32 rounded-lg bg-muted animate-pulse" />
-                    <div className="h-48 rounded-lg bg-muted animate-pulse" />
-                  </div>
-                  <div className="space-y-4 pt-8">
-                    <div className="h-48 rounded-lg bg-muted animate-pulse" />
-                    <div className="h-32 rounded-lg bg-muted animate-pulse" />
-                  </div>
-                </div>
-                {/* Overlay card for detail */}
-                <div className="absolute -bottom-6 -left-6 max-w-[240px] rounded-xl border bg-background p-4 shadow-xl">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center">
-                      <BarChart3 className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-semibold">
-                        Active Pipeline
-                      </div>
-                      <div className="text-sm font-bold">$12.4M</div>
-                    </div>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                    <div className="h-full w-2/3 bg-primary" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Security Section */}
+      {/* Contact Section */}
       <section className="py-24">
         <div className="container">
           <div className="rounded-3xl bg-primary px-8 py-16 text-primary-foreground md:px-16">
             <div className="grid gap-12 lg:grid-cols-2">
               <div>
+                <Badge className="mb-4 bg-white/20 text-white">
+                  ENCORE MORTGAGE
+                </Badge>
                 <h2 className="mb-6 text-3xl font-bold md:text-4xl">
-                  Security is not an option. It's our foundation.
+                  Get Started
                 </h2>
-                <p className="mb-8 text-primary-foreground/80 text-lg">
-                  We use bank-grade encryption and comply with all major
-                  financial regulations to ensure your clients' data is always
-                  protected.
+                <p className="mb-8 text-primary-foreground/90 text-lg">
+                  The biggest decision of your life deserves a phone call.
                 </p>
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="flex items-start gap-3">
-                    <LockIcon className="h-6 w-6 mt-1" />
-                    <div>
-                      <h4 className="font-bold">AES-256 Encryption</h4>
-                      <p className="text-xs text-primary-foreground/70">
-                        At rest and in transit
-                      </p>
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-sm font-semibold opacity-80">
+                      Office Address
                     </div>
+                    <div className="text-lg">
+                      15111 Whittier Blvd Suite 101-B
+                    </div>
+                    <div className="text-lg">Whittier, CA 90603</div>
                   </div>
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck className="h-6 w-6 mt-1" />
-                    <div>
-                      <h4 className="font-bold">SOC2 Type II</h4>
-                      <p className="text-xs text-primary-foreground/70">
-                        Certified infrastructure
-                      </p>
+                  <div>
+                    <div className="text-sm font-semibold opacity-80">
+                      Hours
                     </div>
+                    <div className="text-lg">Monday–Friday: 7am to 8pm</div>
                   </div>
-                  <div className="flex items-start gap-3">
-                    <Smartphone className="h-6 w-6 mt-1" />
-                    <div>
-                      <h4 className="font-bold">MFA Auth</h4>
-                      <p className="text-xs text-primary-foreground/70">
-                        Multi-factor security
-                      </p>
+                  <div>
+                    <div className="text-sm font-semibold opacity-80">
+                      Phone
                     </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <Users className="h-6 w-6 mt-1" />
-                    <div>
-                      <h4 className="font-bold">Role-Based Access</h4>
-                      <p className="text-xs text-primary-foreground/70">
-                        Granular permissions
-                      </p>
-                    </div>
+                    <a
+                      href="tel:(562)337-0000"
+                      className="text-2xl font-bold hover:underline"
+                    >
+                      (562) 337-0000
+                    </a>
                   </div>
                 </div>
               </div>
               <div className="flex items-center justify-center">
                 <div className="text-center">
-                  <div className="mb-4 inline-flex h-24 w-24 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
-                    <ShieldCheck className="h-12 w-12" />
+                  <div className="mb-6 inline-flex h-32 w-32 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
+                    <ShieldCheck className="h-16 w-16" />
                   </div>
-                  <h3 className="text-2xl font-bold">100% Secure</h3>
-                  <p className="text-primary-foreground/70">
-                    Trusted by 500+ institutions
+                  <h3 className="text-2xl font-bold mb-4">
+                    Get Pre-Approved Today
+                  </h3>
+                  <p className="mb-6 text-primary-foreground/80">
+                    Quick approval and closing complete within 30 days
                   </p>
+                  <Link to="/apply">
+                    <Button size="lg" variant="secondary" className="h-12 px-8">
+                      Apply Now
+                    </Button>
+                  </Link>
                 </div>
               </div>
             </div>
@@ -367,30 +563,24 @@ const Index = () => {
         </div>
       </section>
 
-      {/* CTA Section */}
-      <section className="py-24 text-center">
-        <div className="container">
-          <h2 className="mb-6 text-3xl font-bold md:text-4xl">
-            Ready to transform your brokerage?
-          </h2>
-          <p className="mx-auto mb-10 max-w-xl text-muted-foreground text-lg">
-            Join thousands of brokers who have scaled their operations with
-            NexusBroker.
+      {/* Footer Info */}
+      <section className="border-t bg-muted/30 py-12">
+        <div className="container text-center">
+          <p className="text-sm text-muted-foreground mb-2">
+            Encore Mortgage, NMLS #1946451
           </p>
-          <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <Link to="/apply">
-              <Button size="lg" className="h-14 px-8 text-lg font-semibold">
-                Start Free Trial
-              </Button>
-            </Link>
-            <Button
-              variant="outline"
-              size="lg"
-              className="h-14 px-8 text-lg font-semibold"
+          <p className="text-xs text-muted-foreground">
+            For our NMLS consumer access page, please{" "}
+            <a
+              href="https://www.nmlsconsumeraccess.org/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-primary"
             >
-              Book a Demo
-            </Button>
-          </div>
+              click here
+            </a>
+            .
+          </p>
         </div>
       </section>
     </div>

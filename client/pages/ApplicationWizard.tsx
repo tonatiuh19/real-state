@@ -1,13 +1,15 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
-import { 
-  CheckCircle2, 
-  ArrowRight, 
-  ArrowLeft, 
-  Home, 
-  User, 
-  Briefcase, 
+import { MetaHelmet } from "@/components/MetaHelmet";
+import { applicationPageMeta } from "@/lib/seo-helpers";
+import {
+  CheckCircle2,
+  ArrowRight,
+  ArrowLeft,
+  Home,
+  User,
+  Briefcase,
   ShieldCheck,
   Upload,
   FileUp,
@@ -15,7 +17,7 @@ import {
   CreditCard,
   DollarSign,
   Building2,
-  Lock as LockIcon
+  Lock as LockIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -30,7 +32,7 @@ const STEPS = [
   { id: 3, title: "Finances", icon: <DollarSign className="h-5 w-5" /> },
   { id: 4, title: "Employment", icon: <Briefcase className="h-5 w-5" /> },
   { id: 5, title: "Documents", icon: <Upload className="h-5 w-5" /> },
-  { id: 6, title: "Finish", icon: <ShieldCheck className="h-5 w-5" /> }
+  { id: 6, title: "Finish", icon: <ShieldCheck className="h-5 w-5" /> },
 ];
 
 const ApplicationWizard = () => {
@@ -44,7 +46,7 @@ const ApplicationWizard = () => {
       setCurrentStep((prev) => prev + 1);
     }
   };
-  
+
   const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 1));
 
   return (
@@ -57,16 +59,28 @@ const ApplicationWizard = () => {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                 <ShieldCheck className="h-5 w-5" />
               </div>
-              <span className="text-xl font-bold tracking-tight">NexusBroker</span>
+              <span className="text-xl font-bold tracking-tight">
+                NexusBroker
+              </span>
             </Link>
             <div className="h-4 w-px bg-border hidden sm:block" />
-            <span className="text-sm font-medium text-muted-foreground hidden sm:block">Loan Application Wizard</span>
+            <span className="text-sm font-medium text-muted-foreground hidden sm:block">
+              Loan Application Wizard
+            </span>
           </div>
-          <Button variant="ghost" size="icon" onClick={() => navigate("/")} className="rounded-full">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/")}
+            className="rounded-full"
+          >
             <X className="h-5 w-5" />
           </Button>
         </div>
-        <Progress value={(currentStep / STEPS.length) * 100} className="h-1 rounded-none bg-primary/10" />
+        <Progress
+          value={(currentStep / STEPS.length) * 100}
+          className="h-1 rounded-none bg-primary/10"
+        />
       </header>
 
       <div className="flex-1 flex flex-col">
@@ -75,29 +89,47 @@ const ApplicationWizard = () => {
             {/* Sidebar Steps */}
             <aside className="hidden lg:block space-y-6">
               <div className="space-y-2">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-primary/60">Application Steps</h3>
-                <p className="text-xs text-muted-foreground">Please fill in all details accurately to ensure a smooth processing of your loan.</p>
+                <h3 className="text-sm font-bold uppercase tracking-widest text-primary/60">
+                  Application Steps
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Please fill in all details accurately to ensure a smooth
+                  processing of your loan.
+                </p>
               </div>
               <nav className="space-y-4">
                 {STEPS.map((step) => (
-                  <div 
-                    key={step.id} 
+                  <div
+                    key={step.id}
                     className={cn(
                       "flex items-center gap-4 transition-all",
-                      currentStep === step.id ? "translate-x-2" : "opacity-60"
+                      currentStep === step.id ? "translate-x-2" : "opacity-60",
                     )}
                   >
-                    <div className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full border-2 transition-all",
-                      currentStep === step.id ? "border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20" : 
-                      currentStep > step.id ? "border-primary bg-primary/10 text-primary" : "border-muted"
-                    )}>
-                      {currentStep > step.id ? <CheckCircle2 className="h-4 w-4" /> : step.icon}
+                    <div
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-full border-2 transition-all",
+                        currentStep === step.id
+                          ? "border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20"
+                          : currentStep > step.id
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-muted",
+                      )}
+                    >
+                      {currentStep > step.id ? (
+                        <CheckCircle2 className="h-4 w-4" />
+                      ) : (
+                        step.icon
+                      )}
                     </div>
-                    <span className={cn(
-                      "text-sm font-semibold",
-                      currentStep === step.id ? "text-primary" : "text-muted-foreground"
-                    )}>
+                    <span
+                      className={cn(
+                        "text-sm font-semibold",
+                        currentStep === step.id
+                          ? "text-primary"
+                          : "text-muted-foreground",
+                      )}
+                    >
                       {step.title}
                     </span>
                   </div>
@@ -117,9 +149,18 @@ const ApplicationWizard = () => {
                   className="space-y-8"
                 >
                   <div className="space-y-2">
-                    <Badge variant="outline" className="mb-2 text-primary border-primary/20 bg-primary/5">Step {currentStep} of {STEPS.length}</Badge>
-                    <h2 className="text-3xl font-bold tracking-tight">{STEPS[currentStep - 1].title}</h2>
-                    <p className="text-muted-foreground">Provide your details to continue the application.</p>
+                    <Badge
+                      variant="outline"
+                      className="mb-2 text-primary border-primary/20 bg-primary/5"
+                    >
+                      Step {currentStep} of {STEPS.length}
+                    </Badge>
+                    <h2 className="text-3xl font-bold tracking-tight">
+                      {STEPS[currentStep - 1].title}
+                    </h2>
+                    <p className="text-muted-foreground">
+                      Provide your details to continue the application.
+                    </p>
                   </div>
 
                   <div className="rounded-3xl border bg-card p-8 md:p-12 shadow-sm">
@@ -127,23 +168,45 @@ const ApplicationWizard = () => {
                       <div className="grid gap-6 md:grid-cols-2">
                         <div className="space-y-2">
                           <Label htmlFor="firstName">First Name</Label>
-                          <Input id="firstName" placeholder="Jane" className="h-12 rounded-xl" />
+                          <Input
+                            id="firstName"
+                            placeholder="Jane"
+                            className="h-12 rounded-xl"
+                          />
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="lastName">Last Name</Label>
-                          <Input id="lastName" placeholder="Doe" className="h-12 rounded-xl" />
+                          <Input
+                            id="lastName"
+                            placeholder="Doe"
+                            className="h-12 rounded-xl"
+                          />
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="email">Email Address</Label>
-                          <Input id="email" type="email" placeholder="jane@example.com" className="h-12 rounded-xl" />
+                          <Input
+                            id="email"
+                            type="email"
+                            placeholder="jane@example.com"
+                            className="h-12 rounded-xl"
+                          />
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="phone">Phone Number</Label>
-                          <Input id="phone" type="tel" placeholder="(555) 000-0000" className="h-12 rounded-xl" />
+                          <Input
+                            id="phone"
+                            type="tel"
+                            placeholder="(555) 000-0000"
+                            className="h-12 rounded-xl"
+                          />
                         </div>
                         <div className="space-y-2 md:col-span-2">
                           <Label htmlFor="address">Current Home Address</Label>
-                          <Input id="address" placeholder="123 Main St, Apartment 4B" className="h-12 rounded-xl" />
+                          <Input
+                            id="address"
+                            placeholder="123 Main St, Apartment 4B"
+                            className="h-12 rounded-xl"
+                          />
                         </div>
                       </div>
                     )}
@@ -160,30 +223,50 @@ const ApplicationWizard = () => {
                           </select>
                         </div>
                         <div className="space-y-2">
-                          <Label htmlFor="amount">Estimated Property Value</Label>
+                          <Label htmlFor="amount">
+                            Estimated Property Value
+                          </Label>
                           <div className="relative">
                             <DollarSign className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
-                            <Input id="amount" type="number" placeholder="500,000" className="h-12 rounded-xl pl-9" />
+                            <Input
+                              id="amount"
+                              type="number"
+                              placeholder="500,000"
+                              className="h-12 rounded-xl pl-9"
+                            />
                           </div>
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="propertyType">Property Type</Label>
                           <div className="grid grid-cols-2 gap-3">
-                            <Button variant="outline" className="h-20 flex-col gap-2 rounded-xl border-2 transition-all hover:border-primary hover:bg-primary/5">
+                            <Button
+                              variant="outline"
+                              className="h-20 flex-col gap-2 rounded-xl border-2 transition-all hover:border-primary hover:bg-primary/5"
+                            >
                               <Home className="h-5 w-5" />
                               <span className="text-xs">Single Family</span>
                             </Button>
-                            <Button variant="outline" className="h-20 flex-col gap-2 rounded-xl border-2 transition-all hover:border-primary hover:bg-primary/5">
+                            <Button
+                              variant="outline"
+                              className="h-20 flex-col gap-2 rounded-xl border-2 transition-all hover:border-primary hover:bg-primary/5"
+                            >
                               <Building2 className="h-5 w-5" />
                               <span className="text-xs">Multi Family</span>
                             </Button>
                           </div>
                         </div>
                         <div className="space-y-2">
-                          <Label htmlFor="downPayment">Planned Down Payment</Label>
+                          <Label htmlFor="downPayment">
+                            Planned Down Payment
+                          </Label>
                           <div className="relative">
                             <DollarSign className="absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
-                            <Input id="downPayment" type="number" placeholder="100,000" className="h-12 rounded-xl pl-9" />
+                            <Input
+                              id="downPayment"
+                              type="number"
+                              placeholder="100,000"
+                              className="h-12 rounded-xl pl-9"
+                            />
                           </div>
                         </div>
                       </div>
@@ -193,7 +276,13 @@ const ApplicationWizard = () => {
                       <div className="grid gap-6">
                         <div className="space-y-4">
                           <Label>Annual Household Income</Label>
-                          <Input type="range" min="30000" max="500000" step="5000" className="accent-primary" />
+                          <Input
+                            type="range"
+                            min="30000"
+                            max="500000"
+                            step="5000"
+                            className="accent-primary"
+                          />
                           <div className="flex justify-between text-xs font-bold text-primary">
                             <span>$30k</span>
                             <span>$500k+</span>
@@ -203,7 +292,11 @@ const ApplicationWizard = () => {
                           <Label>Credit Score Range</Label>
                           <div className="grid grid-cols-3 gap-3">
                             {["740+", "680-739", "<680"].map((score) => (
-                              <Button key={score} variant="outline" className="h-12 rounded-xl border-2">
+                              <Button
+                                key={score}
+                                variant="outline"
+                                className="h-12 rounded-xl border-2"
+                              >
                                 {score}
                               </Button>
                             ))}
@@ -218,20 +311,41 @@ const ApplicationWizard = () => {
                           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
                             <FileUp className="h-8 w-8 text-primary" />
                           </div>
-                          <h4 className="mb-2 text-lg font-bold">Secure Document Upload</h4>
-                          <p className="text-sm text-muted-foreground mb-6">Drag and drop files here, or click to browse. We accept PDF, JPG, and PNG.</p>
-                          <Button size="lg" className="rounded-xl px-8">Select Files</Button>
+                          <h4 className="mb-2 text-lg font-bold">
+                            Secure Document Upload
+                          </h4>
+                          <p className="text-sm text-muted-foreground mb-6">
+                            Drag and drop files here, or click to browse. We
+                            accept PDF, JPG, and PNG.
+                          </p>
+                          <Button size="lg" className="rounded-xl px-8">
+                            Select Files
+                          </Button>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
-                          {["W-2 Form (2023)", "Bank Statement (Last 60 days)", "Valid Government ID"].map((doc) => (
-                            <div key={doc} className="flex items-center justify-between rounded-xl border bg-muted/30 p-4">
+                          {[
+                            "W-2 Form (2023)",
+                            "Bank Statement (Last 60 days)",
+                            "Valid Government ID",
+                          ].map((doc) => (
+                            <div
+                              key={doc}
+                              className="flex items-center justify-between rounded-xl border bg-muted/30 p-4"
+                            >
                               <div className="flex items-center gap-3">
                                 <div className="h-8 w-8 rounded-lg bg-background flex items-center justify-center border shadow-sm">
                                   <FileText className="h-4 w-4 text-primary" />
                                 </div>
-                                <span className="text-sm font-medium">{doc}</span>
+                                <span className="text-sm font-medium">
+                                  {doc}
+                                </span>
                               </div>
-                              <Badge variant="outline" className="bg-background text-[10px]">Required</Badge>
+                              <Badge
+                                variant="outline"
+                                className="bg-background text-[10px]"
+                              >
+                                Required
+                              </Badge>
                             </div>
                           ))}
                         </div>
@@ -247,9 +361,11 @@ const ApplicationWizard = () => {
                           </div>
                         </div>
                         <div className="max-w-md">
-                          <h3 className="text-2xl font-bold">{STEPS[currentStep - 1].title}</h3>
+                          <h3 className="text-2xl font-bold">
+                            {STEPS[currentStep - 1].title}
+                          </h3>
                           <p className="text-muted-foreground mt-4 leading-relaxed">
-                            {currentStep === 6 
+                            {currentStep === 6
                               ? "You're all set! Click submit to send your application to our brokers. We'll get back to you within 24 hours."
                               : "Continue prompting to refine the specific fields for this step. We're capturing every detail for a perfect loan application."}
                           </p>
@@ -259,30 +375,33 @@ const ApplicationWizard = () => {
                   </div>
 
                   <div className="flex items-center justify-between pt-6">
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       size="lg"
-                      onClick={prevStep} 
+                      onClick={prevStep}
                       disabled={currentStep === 1}
                       className="rounded-xl text-muted-foreground"
                     >
                       <ArrowLeft className="mr-2 h-5 w-5" /> Back
                     </Button>
                     <div className="flex gap-4">
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="lg"
                         onClick={() => navigate("/")}
                         className="rounded-xl hidden sm:flex"
                       >
                         Save for later
                       </Button>
-                      <Button 
+                      <Button
                         size="lg"
-                        onClick={nextStep} 
+                        onClick={nextStep}
                         className="rounded-xl px-10 font-bold shadow-xl shadow-primary/20 transition-all hover:scale-105 active:scale-95"
                       >
-                        {currentStep === STEPS.length ? "Submit Application" : "Continue"} <ArrowRight className="ml-2 h-5 w-5" />
+                        {currentStep === STEPS.length
+                          ? "Submit Application"
+                          : "Continue"}{" "}
+                        <ArrowRight className="ml-2 h-5 w-5" />
                       </Button>
                     </div>
                   </div>
@@ -297,10 +416,12 @@ const ApplicationWizard = () => {
           <div className="container flex flex-col items-center justify-between gap-4 sm:flex-row">
             <div className="flex items-center gap-6">
               <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                <ShieldCheck className="h-3 w-3 text-emerald-500" /> SOC2 Compliant
+                <ShieldCheck className="h-3 w-3 text-emerald-500" /> SOC2
+                Compliant
               </div>
               <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                <LockIcon className="h-3 w-3 text-emerald-500" /> 256-bit Encryption
+                <LockIcon className="h-3 w-3 text-emerald-500" /> 256-bit
+                Encryption
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">

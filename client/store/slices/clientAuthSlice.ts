@@ -10,7 +10,7 @@ interface User {
   role?: string;
 }
 
-interface AuthState {
+interface ClientAuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
@@ -19,10 +19,10 @@ interface AuthState {
   verificationEmail: string | null;
 }
 
-const initialState: AuthState = {
+const initialState: ClientAuthState = {
   user: null,
-  token: localStorage.getItem("token"),
-  isAuthenticated: false,
+  token: localStorage.getItem("client_token"),
+  isAuthenticated: !!localStorage.getItem("client_token"),
   isLoading: false,
   error: null,
   verificationEmail: null,
@@ -30,7 +30,7 @@ const initialState: AuthState = {
 
 // Async thunks
 export const loginUser = createAsyncThunk(
-  "auth/login",
+  "clientAuth/login",
   async (
     { email, userType }: { email: string; userType: "user" | "broker" },
     { rejectWithValue },
@@ -56,7 +56,7 @@ export const loginUser = createAsyncThunk(
 );
 
 export const verifyCode = createAsyncThunk(
-  "auth/verify",
+  "clientAuth/verify",
   async (
     {
       email,
@@ -87,7 +87,7 @@ export const verifyCode = createAsyncThunk(
 );
 
 export const registerUser = createAsyncThunk(
-  "auth/register",
+  "clientAuth/register",
   async (
     userData: {
       email: string;
@@ -121,13 +121,13 @@ export const registerUser = createAsyncThunk(
 );
 
 export const getCurrentUser = createAsyncThunk(
-  "auth/me",
+  "clientAuth/me",
   async (_, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { clientAuth } = getState() as RootState;
       const response = await fetch("/api/auth/me", {
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${clientAuth.token}`,
         },
       });
 
@@ -144,8 +144,8 @@ export const getCurrentUser = createAsyncThunk(
   },
 );
 
-const authSlice = createSlice({
-  name: "auth",
+const clientAuthSlice = createSlice({
+  name: "clientAuth",
   initialState,
   reducers: {
     logout: (state) => {
@@ -154,7 +154,7 @@ const authSlice = createSlice({
       state.isAuthenticated = false;
       state.error = null;
       state.verificationEmail = null;
-      localStorage.removeItem("token");
+      localStorage.removeItem("client_token");
     },
     clearError: (state) => {
       state.error = null;
@@ -183,9 +183,10 @@ const authSlice = createSlice({
       .addCase(verifyCode.fulfilled, (state, action) => {
         state.isLoading = false;
         state.token = action.payload.token;
-        state.user = action.payload.user || action.payload.broker;
+        state.user = action.payload.user;
         state.isAuthenticated = true;
         state.verificationEmail = null;
+        localStorage.setItem("client_token", action.payload.token);
       })
       .addCase(verifyCode.rejected, (state, action) => {
         state.isLoading = false;
@@ -216,21 +217,22 @@ const authSlice = createSlice({
         state.isLoading = false;
         state.isAuthenticated = false;
         state.token = null;
-        localStorage.removeItem("token");
+        localStorage.removeItem("client_token");
       });
   },
 });
 
-export const { logout, clearError } = authSlice.actions;
+export const { logout, clearError } = clientAuthSlice.actions;
 
 // Selectors
-export const selectAuth = (state: RootState) => state.auth;
-export const selectUser = (state: RootState) => state.auth.user;
+export const selectClientAuth = (state: RootState) => state.clientAuth;
+export const selectUser = (state: RootState) => state.clientAuth.user;
 export const selectIsAuthenticated = (state: RootState) =>
-  state.auth.isAuthenticated;
-export const selectAuthLoading = (state: RootState) => state.auth.isLoading;
-export const selectAuthError = (state: RootState) => state.auth.error;
+  state.clientAuth.isAuthenticated;
+export const selectAuthLoading = (state: RootState) =>
+  state.clientAuth.isLoading;
+export const selectAuthError = (state: RootState) => state.clientAuth.error;
 export const selectVerificationEmail = (state: RootState) =>
-  state.auth.verificationEmail;
+  state.clientAuth.verificationEmail;
 
-export default authSlice.reducer;
+export default clientAuthSlice.reducer;
