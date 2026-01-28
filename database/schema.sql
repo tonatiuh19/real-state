@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 20, 2026 at 11:38 PM
+-- Generation Time: Jan 27, 2026 at 10:20 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -52,10 +52,33 @@ CREATE TABLE `audit_logs` (
   `entity_type` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `entity_id` int(11) DEFAULT NULL,
   `changes` json DEFAULT NULL,
+  `status` enum('success','failure','warning') COLLATE utf8mb4_unicode_ci DEFAULT 'success',
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `request_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `duration_ms` int(11) DEFAULT NULL COMMENT 'Request duration in milliseconds',
   `ip_address` varchar(45) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `user_agent` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `audit_logs`
+--
+
+INSERT INTO `audit_logs` (`id`, `user_id`, `broker_id`, `actor_type`, `action`, `entity_type`, `entity_id`, `changes`, `status`, `error_message`, `request_id`, `duration_ms`, `ip_address`, `user_agent`, `created_at`) VALUES
+(1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 20:51:03'),
+(2, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 20:58:08'),
+(3, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:02:06'),
+(4, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:02:42'),
+(5, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:05:12'),
+(6, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:05:20'),
+(7, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:06:07'),
+(8, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:06:55'),
+(9, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:17:11'),
+(10, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:47:34'),
+(11, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:47:57'),
+(12, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:48:09'),
+(13, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', '2026-01-21 21:48:29');
 
 -- --------------------------------------------------------
 
@@ -84,8 +107,10 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `created_at`, `updated_at`) VALUES
-(1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-01-20 21:54:43', NULL, NULL, '2026-01-20 18:56:12', '2026-01-20 21:54:43'),
-(2, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'admin', 'active', 0, '2026-01-20 23:11:01', '123457890', '[\"First-Time Home Buyers\"]', '2026-01-20 23:10:11', '2026-01-20 23:11:01');
+(1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-01-27 22:16:54', NULL, NULL, '2026-01-20 18:56:12', '2026-01-27 22:16:54'),
+(2, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'admin', 'active', 0, '2026-01-21 00:14:12', '123457890', '[\"First-Time Home Buyers\"]', '2026-01-20 23:10:11', '2026-01-21 00:14:12'),
+(3, 'teamdc@encoremortgage.org', 'Encore', 'Admin', NULL, 'admin', 'active', 0, '2026-01-21 11:06:11', NULL, NULL, '2026-01-21 00:08:17', '2026-01-21 11:06:11'),
+(4, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-01-21 11:04:00', NULL, '[\"Investment Properties\", \"Refinancing\"]', '2026-01-21 00:08:54', '2026-01-21 11:04:00');
 
 -- --------------------------------------------------------
 
@@ -130,7 +155,10 @@ CREATE TABLE `broker_sessions` (
 --
 
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(4, 2, 766374, 1, NULL, NULL, '2026-01-21 05:25:49', '2026-01-21 05:10:49');
+(6, 2, 457422, 1, NULL, NULL, '2026-01-21 12:29:02', '2026-01-21 06:14:02'),
+(8, 4, 754456, 1, NULL, NULL, '2026-01-21 23:18:44', '2026-01-21 17:03:44'),
+(9, 3, 761666, 1, NULL, NULL, '2026-01-21 23:20:38', '2026-01-21 17:05:37'),
+(23, 1, 874054, 1, NULL, NULL, '2026-01-28 04:31:43', '2026-01-28 04:16:42');
 
 -- --------------------------------------------------------
 
@@ -214,7 +242,7 @@ CREATE TABLE `clients` (
 --
 
 INSERT INTO `clients` (`id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
-(1, 'test.client@example.com', '', 'John', 'Doe', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, NULL, 1, 'broker_created', NULL, '2026-01-20 21:55:33', '2026-01-20 21:55:33');
+(7, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-01-27 22:12:26', 1, 'broker_created', NULL, '2026-01-23 22:42:46', '2026-01-27 22:12:26');
 
 -- --------------------------------------------------------
 
@@ -413,7 +441,8 @@ CREATE TABLE `loan_applications` (
 --
 
 INSERT INTO `loan_applications` (`id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `created_at`, `updated_at`, `submitted_at`) VALUES
-(1, 'LA67733401', 1, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-01-20 21:55:33', '2026-01-20 21:55:33', '2026-01-20 21:55:33');
+(7, 'LA29766692', 7, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-01-23 22:42:46', '2026-01-23 22:42:46', '2026-01-23 22:42:46'),
+(8, 'LA71476798', 7, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-01-27 21:37:57', '2026-01-27 21:37:57', '2026-01-27 21:37:57');
 
 -- --------------------------------------------------------
 
@@ -438,7 +467,8 @@ CREATE TABLE `notifications` (
 --
 
 INSERT INTO `notifications` (`id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
-(1, 1, 'New Loan Application Created', 'Your loan application LA67733401 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-01-20 21:55:33', NULL);
+(7, 7, 'New Loan Application Created', 'Your loan application LA29766692 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-01-23 22:42:47', NULL),
+(8, 7, 'New Loan Application Created', 'Your loan application LA71476798 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-01-27 21:37:57', NULL);
 
 -- --------------------------------------------------------
 
@@ -504,17 +534,104 @@ CREATE TABLE `tasks` (
   `due_date` datetime DEFAULT NULL,
   `completed_at` datetime DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `form_completed` tinyint(1) DEFAULT '0' COMMENT 'Whether custom form is completed',
+  `form_completed_at` datetime DEFAULT NULL COMMENT 'When form was completed',
+  `documents_uploaded` tinyint(1) DEFAULT '0' COMMENT 'Whether required documents are uploaded',
+  `documents_verified` tinyint(1) DEFAULT '0' COMMENT 'Whether uploaded documents are verified by broker'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data for table `tasks`
 --
 
-INSERT INTO `tasks` (`id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`) VALUES
-(2, NULL, 0, 1, 'Clear to Close', 'Final review before closing', 'review', 'pending', 'urgent', 1, NULL, 1, '2026-02-10 21:55:33', NULL, '2026-01-20 21:55:33', '2026-01-20 21:55:33'),
-(3, NULL, 0, 1, 'Underwriting Submission', 'Submit complete file to underwriting', 'underwriting', 'pending', 'high', 1, NULL, 1, '2026-01-30 21:55:34', NULL, '2026-01-20 21:55:33', '2026-01-20 21:55:33'),
-(4, NULL, 0, 1, 'Property Appraisal Order', 'Order property appraisal', 'appraisal', 'pending', 'medium', 1, NULL, 1, '2026-01-25 21:55:34', NULL, '2026-01-20 21:55:33', '2026-01-20 21:55:33');
+INSERT INTO `tasks` (`id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`) VALUES
+(15, 22, 0, 7, 'INE Verification', 'Need the INE', 'document_verification', 'completed', 'medium', 7, NULL, 1, '2026-02-02 22:42:47', '2026-01-27 20:57:39', '2026-01-23 22:42:46', '2026-01-27 20:57:39', 1, '2026-01-27 20:57:38', 0, 0),
+(16, 22, 0, 8, 'INE Verification', 'Need the INE', 'document_verification', 'completed', 'medium', 7, NULL, 1, '2026-02-06 21:37:57', '2026-01-27 22:16:25', '2026-01-27 21:37:57', '2026-01-27 22:16:24', 1, '2026-01-27 22:16:24', 1, 0);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `task_documents`
+--
+
+CREATE TABLE `task_documents` (
+  `id` int(11) NOT NULL,
+  `task_id` int(11) NOT NULL,
+  `field_id` int(11) DEFAULT NULL COMMENT 'Associated form field if uploaded via form',
+  `document_type` enum('pdf','image') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `filename` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `original_filename` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `file_path` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Path on external server',
+  `file_size` bigint(20) DEFAULT NULL COMMENT 'File size in bytes',
+  `uploaded_by_user_id` int(11) DEFAULT NULL,
+  `uploaded_by_broker_id` int(11) DEFAULT NULL,
+  `uploaded_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `notes` text COLLATE utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Document attachments for tasks';
+
+--
+-- Dumping data for table `task_documents`
+--
+
+INSERT INTO `task_documents` (`id`, `task_id`, `field_id`, `document_type`, `filename`, `original_filename`, `file_path`, `file_size`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `uploaded_at`, `notes`) VALUES
+(1, 16, NULL, 'pdf', 'adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_69798d97f05c0.pdf', 'adquiramexico.com.mx_multipagos_portal_payment_voucher_tr=YXgeVjQzpFmulnzaMCJhdBUeEEAmulava&dp=ZmFsc2U%3D.pdf', '/data/encore/16/pdfs/adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_69798d97f05c0.pdf', 93081, NULL, NULL, '2026-01-27 22:16:24', NULL),
+(2, 16, NULL, 'pdf', 'adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_69798d97f037a.pdf', 'adquiramexico.com.mx_multipagos_portal_payment_voucher_tr=YXgeVjQzpFmulnzaMCJhdBUeEEAmulava&dp=ZmFsc2U%3D.pdf', '/data/encore/16/pdfs/adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_69798d97f037a.pdf', 93081, NULL, NULL, '2026-01-27 22:16:24', NULL);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `task_form_fields`
+--
+
+CREATE TABLE `task_form_fields` (
+  `id` int(11) NOT NULL,
+  `task_template_id` int(11) NOT NULL,
+  `field_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Field name (e.g., license_number)',
+  `field_label` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Display label',
+  `field_type` enum('text','number','email','phone','date','textarea','file_pdf','file_image','select','checkbox') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'text',
+  `field_options` json DEFAULT NULL COMMENT 'Options for select fields',
+  `is_required` tinyint(1) DEFAULT '1',
+  `placeholder` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `validation_rules` json DEFAULT NULL COMMENT 'Validation rules (min, max, pattern, etc)',
+  `order_index` int(11) DEFAULT '0',
+  `help_text` text COLLATE utf8mb4_unicode_ci COMMENT 'Helper text shown below field',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Custom form fields for task templates';
+
+--
+-- Dumping data for table `task_form_fields`
+--
+
+INSERT INTO `task_form_fields` (`id`, `task_template_id`, `field_name`, `field_label`, `field_type`, `field_options`, `is_required`, `placeholder`, `validation_rules`, `order_index`, `help_text`, `created_at`) VALUES
+(7, 22, 'front', 'Front', 'file_pdf', NULL, 1, NULL, NULL, 0, NULL, '2026-01-23 22:40:43'),
+(8, 22, 'back', 'Back', 'file_pdf', NULL, 1, NULL, NULL, 1, NULL, '2026-01-23 22:40:43'),
+(9, 22, 'enter_license_number', 'Enter License Number', 'text', NULL, 1, 'Enter License Number', NULL, 2, NULL, '2026-01-23 22:40:43');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `task_form_responses`
+--
+
+CREATE TABLE `task_form_responses` (
+  `id` int(11) NOT NULL,
+  `task_id` int(11) NOT NULL,
+  `field_id` int(11) NOT NULL,
+  `field_value` text COLLATE utf8mb4_unicode_ci COMMENT 'Text value for non-file fields',
+  `submitted_by_user_id` int(11) DEFAULT NULL,
+  `submitted_by_broker_id` int(11) DEFAULT NULL,
+  `submitted_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Submitted responses for task form fields';
+
+--
+-- Dumping data for table `task_form_responses`
+--
+
+INSERT INTO `task_form_responses` (`id`, `task_id`, `field_id`, `field_value`, `submitted_by_user_id`, `submitted_by_broker_id`, `submitted_at`, `updated_at`) VALUES
+(1, 15, 9, NULL, NULL, NULL, '2026-01-27 20:57:38', '2026-01-27 20:57:38'),
+(2, 16, 9, NULL, NULL, NULL, '2026-01-27 22:16:24', '2026-01-27 22:16:24');
 
 -- --------------------------------------------------------
 
@@ -533,24 +650,18 @@ CREATE TABLE `task_templates` (
   `is_active` tinyint(1) DEFAULT '1' COMMENT 'Only active templates are used for new loans',
   `created_by_broker_id` int(11) NOT NULL COMMENT 'Broker who created this template',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `requires_documents` tinyint(1) DEFAULT '0' COMMENT 'Whether this task requires document uploads',
+  `document_instructions` text COLLATE utf8mb4_unicode_ci COMMENT 'Instructions for required documents',
+  `has_custom_form` tinyint(1) DEFAULT '0' COMMENT 'Whether this task has custom form fields'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Reusable task templates for loan workflows';
 
 --
 -- Dumping data for table `task_templates`
 --
 
-INSERT INTO `task_templates` (`id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`) VALUES
-(1, 'Initial Document Collection', 'Collect initial loan application documents from client', 'document_collection', 'high', 2, 1, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(2, 'Credit Report Review', 'Pull and review client credit report', 'credit_check', 'high', 1, 2, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(3, 'Income Verification', 'Verify employment and income documentation', 'verification', 'high', 3, 3, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(4, 'Property Appraisal Order', 'Order property appraisal', 'appraisal', 'medium', 5, 4, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(5, 'Title Search', 'Order title search and insurance', 'title_search', 'medium', 7, 5, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(6, 'Underwriting Submission', 'Submit complete file to underwriting', 'underwriting', 'high', 10, 6, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(7, 'Conditional Approval Follow-up', 'Address underwriting conditions', 'follow_up', 'high', 14, 7, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(8, 'Clear to Close', 'Final review before closing', 'review', 'urgent', 21, 8, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(9, 'Schedule Closing', 'Coordinate closing date with all parties', 'closing', 'high', 25, 9, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49'),
-(10, 'Fund Loan', 'Final loan funding and disbursement', 'closing', 'urgent', 30, 10, 1, 1, '2026-01-20 20:56:49', '2026-01-20 20:56:49');
+INSERT INTO `task_templates` (`id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`, `requires_documents`, `document_instructions`, `has_custom_form`) VALUES
+(22, 'INE Verification', 'Need the INE', 'document_verification', 'medium', 10, 1, 1, 1, '2026-01-23 22:40:43', '2026-01-23 22:40:43', 1, 'Please upload the INE', 1);
 
 -- --------------------------------------------------------
 
@@ -616,7 +727,12 @@ ALTER TABLE `audit_logs`
   ADD KEY `idx_user_id` (`user_id`),
   ADD KEY `idx_broker_id` (`broker_id`),
   ADD KEY `idx_entity` (`entity_type`,`entity_id`),
-  ADD KEY `idx_created_at` (`created_at`);
+  ADD KEY `idx_created_at` (`created_at`),
+  ADD KEY `idx_actor_type` (`actor_type`),
+  ADD KEY `idx_action` (`action`),
+  ADD KEY `idx_entity_type` (`entity_type`),
+  ADD KEY `idx_status` (`status`),
+  ADD KEY `idx_request_id` (`request_id`);
 
 --
 -- Indexes for table `brokers`
@@ -792,7 +908,35 @@ ALTER TABLE `tasks`
   ADD KEY `idx_status` (`status`),
   ADD KEY `idx_due_date` (`due_date`),
   ADD KEY `idx_template` (`template_id`),
-  ADD KEY `idx_application_status` (`application_id`,`status`);
+  ADD KEY `idx_application_status` (`application_id`,`status`),
+  ADD KEY `idx_tasks_form_completed` (`form_completed`),
+  ADD KEY `idx_tasks_documents_uploaded` (`documents_uploaded`);
+
+--
+-- Indexes for table `task_documents`
+--
+ALTER TABLE `task_documents`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_task_id` (`task_id`),
+  ADD KEY `idx_field_id` (`field_id`),
+  ADD KEY `idx_uploaded_at` (`uploaded_at`);
+
+--
+-- Indexes for table `task_form_fields`
+--
+ALTER TABLE `task_form_fields`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_task_template_id` (`task_template_id`),
+  ADD KEY `idx_order_index` (`order_index`);
+
+--
+-- Indexes for table `task_form_responses`
+--
+ALTER TABLE `task_form_responses`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_task_field_response` (`task_id`,`field_id`),
+  ADD KEY `idx_task_id` (`task_id`),
+  ADD KEY `idx_field_id` (`field_id`);
 
 --
 -- Indexes for table `task_templates`
@@ -800,7 +944,9 @@ ALTER TABLE `tasks`
 ALTER TABLE `task_templates`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_created_by_broker` (`created_by_broker_id`),
-  ADD KEY `idx_active_order` (`is_active`,`order_index`);
+  ADD KEY `idx_active_order` (`is_active`,`order_index`),
+  ADD KEY `idx_task_templates_requires_documents` (`requires_documents`),
+  ADD KEY `idx_task_templates_has_custom_form` (`has_custom_form`);
 
 --
 -- Indexes for table `user_profiles`
@@ -833,13 +979,13 @@ ALTER TABLE `application_status_history`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `brokers`
 --
 ALTER TABLE `brokers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `broker_profiles`
@@ -851,7 +997,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -869,7 +1015,7 @@ ALTER TABLE `campaign_recipients`
 -- AUTO_INCREMENT for table `clients`
 --
 ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `communications`
@@ -917,13 +1063,13 @@ ALTER TABLE `lead_activities`
 -- AUTO_INCREMENT for table `loan_applications`
 --
 ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `sms_templates`
@@ -941,13 +1087,31 @@ ALTER TABLE `system_settings`
 -- AUTO_INCREMENT for table `tasks`
 --
 ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+
+--
+-- AUTO_INCREMENT for table `task_documents`
+--
+ALTER TABLE `task_documents`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+
+--
+-- AUTO_INCREMENT for table `task_form_fields`
+--
+ALTER TABLE `task_form_fields`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+
+--
+-- AUTO_INCREMENT for table `task_form_responses`
+--
+ALTER TABLE `task_form_responses`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `task_templates`
 --
 ALTER TABLE `task_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
 
 --
 -- AUTO_INCREMENT for table `user_profiles`
@@ -959,7 +1123,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- Constraints for dumped tables
@@ -1076,6 +1240,26 @@ ALTER TABLE `tasks`
   ADD CONSTRAINT `tasks_ibfk_3` FOREIGN KEY (`assigned_to_user_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `tasks_ibfk_4` FOREIGN KEY (`assigned_to_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `tasks_ibfk_5` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `task_documents`
+--
+ALTER TABLE `task_documents`
+  ADD CONSTRAINT `fk_task_documents_field` FOREIGN KEY (`field_id`) REFERENCES `task_form_fields` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_task_documents_task` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `task_form_fields`
+--
+ALTER TABLE `task_form_fields`
+  ADD CONSTRAINT `fk_task_form_fields_template` FOREIGN KEY (`task_template_id`) REFERENCES `task_templates` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `task_form_responses`
+--
+ALTER TABLE `task_form_responses`
+  ADD CONSTRAINT `fk_task_form_responses_field` FOREIGN KEY (`field_id`) REFERENCES `task_form_fields` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_task_form_responses_task` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `task_templates`

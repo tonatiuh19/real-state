@@ -243,7 +243,7 @@ async function sendClientLoanWelcomeEmail(
     const mailOptions = {
       from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: `🏡 Your Loan Application ${applicationNumber} - Next Steps`,
+      subject: `Your Loan Application ${applicationNumber} - Next Steps`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -282,9 +282,152 @@ async function sendClientLoanWelcomeEmail(
   }
 }
 
+/**
+ * Send email when task is reopened for rework
+ */
+async function sendTaskReopenedEmail(
+  email: string,
+  firstName: string,
+  taskTitle: string,
+  reason: string,
+): Promise<void> {
+  try {
+    console.log("📧 Sending task reopened email");
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || "mail.disruptinglabs.com",
+      port: parseInt(process.env.SMTP_PORT || "465"),
+      secure: process.env.SMTP_SECURE === "true" || true,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    const mailOptions = {
+      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: `Task Needs Revision: ${taskTitle}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc;">
+          <div style="max-width: 600px; margin: 40px auto; background: white; border-radius: 16px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);">
+            <div style="background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%); padding: 40px 30px; text-align: center; border-radius: 16px 16px 0 0;">
+              <div style="background: white; width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                <div style="font-size: 40px;">📝</div>
+              </div>
+              <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">Task Needs Revision</h1>
+            </div>
+            <div style="padding: 40px 30px;">
+              <p style="color: #334155; font-size: 16px;">Hi <strong>${firstName}</strong>,</p>
+              <p style="color: #475569; font-size: 15px;">Your task <strong>"${taskTitle}"</strong> has been reviewed and needs some revisions before it can be approved.</p>
+              
+              <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-left: 4px solid #f59e0b; border-radius: 8px; padding: 20px; margin: 24px 0;">
+                <h3 style="margin: 0 0 12px 0; color: #92400e; font-size: 16px; font-weight: 600;">📋 Feedback from Your Loan Officer</h3>
+                <p style="margin: 0; color: #78350f; font-size: 14px; line-height: 1.6;">${reason}</p>
+              </div>
+
+              <div style="background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-radius: 12px; padding: 20px; margin: 24px 0;">
+                <h3 style="margin: 0 0 12px 0; color: #1e40af; font-size: 14px; font-weight: 600;">✅ What to Do Next</h3>
+                <ol style="margin: 0; padding-left: 20px; color: #1e3a8a;">
+                  <li style="margin: 8px 0; font-size: 14px;">Log in to your client portal</li>
+                  <li style="margin: 8px 0; font-size: 14px;">Review the feedback above</li>
+                  <li style="margin: 8px 0; font-size: 14px;">Make the necessary updates or corrections</li>
+                  <li style="margin: 8px 0; font-size: 14px;">Resubmit the task for review</li>
+                </ol>
+              </div>
+
+              <div style="text-align: center; margin: 32px 0;">
+                <a href="${process.env.CLIENT_URL || "http://localhost:5000"}/portal" style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600; box-shadow: 0 4px 6px rgba(245, 158, 11, 0.3);">Review Task Now</a>
+              </div>
+
+              <div style="border-top: 1px solid #e2e8f0; margin-top: 32px; padding-top: 20px;">
+                <p style="margin: 0; color: #64748b; font-size: 13px; text-align: center;">
+                  If you have any questions, please don't hesitate to contact your loan officer.
+                </p>
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("✅ Task reopened email sent!");
+  } catch (error) {
+    console.error("❌ Error sending task reopened email:", error);
+    throw error;
+  }
+}
+
 // =====================================================
 // MIDDLEWARE
 // =====================================================
+
+/**
+ * Middleware to verify client session
+ */
+const verifyClientSession = async (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "No session token provided",
+      });
+    }
+
+    const sessionToken = authHeader.substring(7);
+
+    try {
+      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+
+      if (decoded.userType !== "client") {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied",
+        });
+      }
+
+      // Get client details
+      const [clients] = await pool.query<any[]>(
+        "SELECT * FROM clients WHERE id = ? AND status = 'active'",
+        [decoded.clientId],
+      );
+
+      if (clients.length === 0) {
+        return res.status(401).json({
+          success: false,
+          message: "Client not found or inactive",
+        });
+      }
+
+      // Attach client info to request
+      (req as any).client = clients[0];
+      (req as any).clientId = decoded.clientId;
+
+      next();
+    } catch (jwtError) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session",
+      });
+    }
+  } catch (error) {
+    console.error("Error verifying client session:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify session",
+    });
+  }
+};
 
 /**
  * Middleware to verify broker session
@@ -349,6 +492,72 @@ const verifyBrokerSession = async (
     });
   }
 };
+
+// =====================================================
+// AUDIT LOG HELPER
+// =====================================================
+
+/**
+ * Create an audit log entry
+ */
+async function createAuditLog({
+  actorType,
+  actorId,
+  action,
+  entityType,
+  entityId,
+  changes,
+  status = "success",
+  errorMessage,
+  requestId,
+  durationMs,
+  ipAddress,
+  userAgent,
+}: {
+  actorType: "user" | "broker";
+  actorId: number;
+  action: string;
+  entityType?: string;
+  entityId?: number;
+  changes?: any;
+  status?: "success" | "failure" | "warning";
+  errorMessage?: string;
+  requestId?: string;
+  durationMs?: number;
+  ipAddress?: string;
+  userAgent?: string;
+}): Promise<void> {
+  try {
+    const userId = actorType === "user" ? actorId : null;
+    const brokerId = actorType === "broker" ? actorId : null;
+
+    await pool.query(
+      `INSERT INTO audit_logs (
+        user_id, broker_id, actor_type, action, entity_type, entity_id, 
+        changes, status, error_message, request_id, duration_ms, 
+        ip_address, user_agent, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        userId,
+        brokerId,
+        actorType,
+        action,
+        entityType || null,
+        entityId || null,
+        changes ? JSON.stringify(changes) : null,
+        status,
+        errorMessage || null,
+        requestId || null,
+        durationMs || null,
+        ipAddress || null,
+        userAgent || null,
+      ],
+    );
+  } catch (error) {
+    console.error("Error creating audit log:", error);
+    // Don't throw - audit logging should not break the main flow
+  }
+}
 
 // =====================================================
 // ROUTE HANDLERS
@@ -617,6 +826,273 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
 };
 
 /**
+ * POST /api/client/auth/send-code
+ * Send verification code to client email
+ */
+const handleClientSendCode: RequestHandler = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email format",
+      });
+    }
+
+    // Normalize email
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Check if client exists
+    const [clients] = await pool.query<any[]>(
+      "SELECT * FROM clients WHERE email = ? AND status = 'active'",
+      [normalizedEmail],
+    );
+
+    if (clients.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "client_not_found",
+        redirect: "/wizard",
+      });
+    }
+
+    const client = clients[0];
+
+    // Delete old sessions for this client
+    await pool.query("DELETE FROM user_sessions WHERE user_id = ?", [
+      client.id,
+    ]);
+
+    // Generate 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000);
+
+    // Create new session with 15-minute expiry
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    await pool.query(
+      `INSERT INTO user_sessions (user_id, session_code, is_active, expires_at) 
+       VALUES (?, ?, TRUE, ?)`,
+      [client.id, code, expiresAt],
+    );
+
+    // Send email with code
+    await sendClientVerificationEmail(normalizedEmail, code, client.first_name);
+
+    res.json({
+      success: true,
+      message: "Verification code sent to your email",
+      debug_code: process.env.NODE_ENV === "development" ? code : undefined,
+    });
+  } catch (error) {
+    console.error("Error sending client verification code:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send verification code",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/**
+ * POST /api/client/auth/verify-code
+ * Verify code and create client session
+ */
+const handleClientVerifyCode: RequestHandler = async (req, res) => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and code are required",
+      });
+    }
+
+    // Check if client exists
+    const [clients] = await pool.query<any[]>(
+      "SELECT * FROM clients WHERE email = ? AND status = 'active'",
+      [email],
+    );
+
+    if (clients.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Client not found",
+      });
+    }
+
+    const client = clients[0];
+
+    // Check if code is valid
+    const [sessions] = await pool.query<any[]>(
+      `SELECT * FROM user_sessions 
+       WHERE user_id = ? AND session_code = ? AND is_active = TRUE 
+       AND expires_at > NOW()`,
+      [client.id, parseInt(code)],
+    );
+
+    if (sessions.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired verification code",
+      });
+    }
+
+    // Generate session token (JWT)
+    const sessionToken = jwt.sign(
+      {
+        clientId: client.id,
+        email: client.email,
+        userType: "client",
+      },
+      JWT_SECRET,
+      { expiresIn: "30d" },
+    );
+
+    // Update last login
+    await pool.query("UPDATE clients SET last_login = NOW() WHERE id = ?", [
+      client.id,
+    ]);
+
+    res.json({
+      success: true,
+      sessionToken,
+      client: {
+        id: client.id,
+        email: client.email,
+        first_name: client.first_name,
+        last_name: client.last_name,
+        phone: client.phone,
+        is_active: client.status === "active",
+      },
+    });
+  } catch (error) {
+    console.error("Error verifying client code:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify code",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/**
+ * GET /api/client/auth/validate
+ * Validate client session token
+ */
+const handleClientValidateSession: RequestHandler = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "No session token provided",
+      });
+    }
+
+    const sessionToken = authHeader.substring(7);
+
+    try {
+      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+
+      if (decoded.userType !== "client") {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid session type",
+        });
+      }
+
+      // Get client details
+      const [clients] = await pool.query<any[]>(
+        "SELECT * FROM clients WHERE id = ? AND status = 'active'",
+        [decoded.clientId],
+      );
+
+      if (clients.length === 0) {
+        return res.status(401).json({
+          success: false,
+          message: "Client not found or inactive",
+        });
+      }
+
+      const client = clients[0];
+
+      res.json({
+        success: true,
+        client: {
+          id: client.id,
+          email: client.email,
+          first_name: client.first_name,
+          last_name: client.last_name,
+          phone: client.phone,
+          is_active: client.status === "active",
+        },
+      });
+    } catch (jwtError) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session",
+      });
+    }
+  } catch (error) {
+    console.error("Error validating client session:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to validate session",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/**
+ * POST /api/client/auth/logout
+ * Logout client and invalidate sessions
+ */
+const handleClientLogout: RequestHandler = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(200).json({ success: true });
+    }
+
+    const sessionToken = authHeader.substring(7);
+
+    try {
+      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+
+      if (decoded.clientId) {
+        // Delete all sessions for this client
+        await pool.query("DELETE FROM user_sessions WHERE user_id = ?", [
+          decoded.clientId,
+        ]);
+      }
+    } catch (error) {
+      // Token already invalid, no problem
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error logging out client:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to logout",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+/**
  * POST /api/admin/auth/logout
  * Logout broker and invalidate sessions
  */
@@ -754,11 +1230,17 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + (task.due_days || 3));
 
+      console.log(`📝 Creating task:`, {
+        title: task.title,
+        template_id: task.template_id,
+        task_type: task.task_type,
+      });
+
       await connection.query(
         `INSERT INTO tasks (
           application_id, title, description, task_type, status, priority,
-          assigned_to_user_id, created_by_broker_id, due_date
-        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+          assigned_to_user_id, created_by_broker_id, due_date, template_id
+        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
         [
           applicationId,
           task.title,
@@ -768,6 +1250,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
           clientId,
           brokerId,
           dueDate,
+          task.template_id || null,
         ],
       );
 
@@ -1464,6 +1947,9 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
         default_due_days,
         order_index,
         is_active,
+        requires_documents,
+        document_instructions,
+        has_custom_form,
         created_at,
         updated_at
       FROM task_templates
@@ -1499,7 +1985,11 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
       description,
       task_type,
       priority,
-      due_date, // Convert to default_due_days
+      default_due_days,
+      is_active,
+      requires_documents,
+      document_instructions,
+      has_custom_form,
       application_id, // Ignore this for templates
     } = req.body;
 
@@ -1510,16 +2000,6 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
         error: "Title, task type, and priority are required",
       });
       return;
-    }
-
-    // Calculate default_due_days if due_date provided
-    let defaultDueDays = null;
-    if (due_date) {
-      const dueDate = new Date(due_date);
-      const now = new Date();
-      const diffTime = dueDate.getTime() - now.getTime();
-      defaultDueDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      if (defaultDueDays < 0) defaultDueDays = 1;
     }
 
     // Get max order_index to append new template at end
@@ -1539,16 +2019,23 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
         default_due_days,
         order_index,
         is_active,
+        requires_documents,
+        document_instructions,
+        has_custom_form,
         created_by_broker_id,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         title,
         description || null,
         task_type,
         priority,
-        defaultDueDays,
+        default_due_days || null,
         orderIndex,
+        is_active !== undefined ? is_active : true,
+        requires_documents || false,
+        document_instructions || null,
+        has_custom_form || false,
         brokerId,
       ],
     );
@@ -1614,7 +2101,11 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
       description,
       task_type,
       priority,
-      due_date,
+      default_due_days,
+      is_active,
+      requires_documents,
+      document_instructions,
+      has_custom_form,
       application_id, // Ignore for templates
     } = req.body;
 
@@ -1635,20 +2126,32 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
       });
     }
 
-    // Calculate default_due_days if due_date provided
-    let defaultDueDays = null;
-    if (due_date) {
-      const dueDate = new Date(due_date);
-      const now = new Date();
-      const diffTime = dueDate.getTime() - now.getTime();
-      defaultDueDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      if (defaultDueDays < 0) defaultDueDays = 1;
-    }
-
     // Update task template in database
     await pool.query(
-      "UPDATE task_templates SET title = ?, description = ?, task_type = ?, priority = ?, default_due_days = ?, updated_at = NOW() WHERE id = ?",
-      [title, description || null, task_type, priority, defaultDueDays, taskId],
+      `UPDATE task_templates SET 
+        title = ?, 
+        description = ?, 
+        task_type = ?, 
+        priority = ?, 
+        default_due_days = ?,
+        is_active = ?,
+        requires_documents = ?,
+        document_instructions = ?,
+        has_custom_form = ?,
+        updated_at = NOW() 
+      WHERE id = ?`,
+      [
+        title,
+        description || null,
+        task_type,
+        priority,
+        default_due_days || null,
+        is_active !== undefined ? is_active : true,
+        requires_documents || false,
+        document_instructions || null,
+        has_custom_form || false,
+        taskId,
+      ],
     );
 
     // Fetch updated template
@@ -1716,6 +2219,902 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
         error instanceof Error
           ? error.message
           : "Failed to delete task template",
+    });
+  }
+};
+
+/**
+ * Create task form fields for a template
+ */
+const handleCreateTaskFormFields: RequestHandler = async (req, res) => {
+  try {
+    console.log("📥 API: handleCreateTaskFormFields called");
+    const { taskId } = req.params;
+    const { form_fields } = req.body;
+
+    console.log("📥 API: Task ID:", taskId);
+    console.log("📥 API: Form fields received:", form_fields);
+
+    if (!form_fields || !Array.isArray(form_fields)) {
+      console.error("❌ API: Invalid form_fields - not an array");
+      return res.status(400).json({
+        success: false,
+        error: "form_fields array is required",
+      });
+    }
+
+    console.log(`📥 API: Processing ${form_fields.length} form fields...`);
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      console.log("🔄 API: Transaction started");
+
+      // Update task template to indicate it has custom form
+      await connection.query(
+        `UPDATE task_templates SET has_custom_form = 1 WHERE id = ?`,
+        [taskId],
+      );
+      console.log(
+        "✅ API: Updated task_templates.has_custom_form = 1 for task",
+        taskId,
+      );
+
+      // Insert form fields
+      const insertedFields = [];
+      for (const field of form_fields) {
+        console.log(
+          `🔄 API: Inserting field: ${field.field_label} (${field.field_type})`,
+        );
+
+        const [result] = await connection.query(
+          `INSERT INTO task_form_fields 
+          (task_template_id, field_name, field_label, field_type, field_options, 
+           is_required, placeholder, validation_rules, order_index, help_text)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            taskId,
+            field.field_name,
+            field.field_label,
+            field.field_type,
+            field.field_options ? JSON.stringify(field.field_options) : null,
+            field.is_required ?? true,
+            field.placeholder || null,
+            field.validation_rules
+              ? JSON.stringify(field.validation_rules)
+              : null,
+            field.order_index || 0,
+            field.help_text || null,
+          ],
+        );
+
+        const insertedId = (result as any).insertId;
+        console.log(`✅ API: Field inserted with ID: ${insertedId}`);
+        insertedFields.push({ id: insertedId, ...field });
+      }
+
+      await connection.commit();
+      console.log("✅ API: Transaction committed successfully");
+      console.log(
+        `✅ API: ${insertedFields.length} form fields created successfully`,
+      );
+
+      res.json({
+        success: true,
+        fields: insertedFields,
+        message: "Form fields created successfully",
+      });
+    } catch (error) {
+      await connection.rollback();
+      console.error("❌ API: Transaction rolled back due to error");
+      throw error;
+    } finally {
+      connection.release();
+      console.log("🔄 API: Database connection released");
+    }
+  } catch (error) {
+    console.error("❌ API: Error creating task form fields:", error);
+    console.error(
+      "❌ API: Error stack:",
+      error instanceof Error ? error.stack : "No stack trace",
+    );
+    res.status(500).json({
+      success: false,
+      error: "Failed to create task form fields",
+    });
+  }
+};
+
+/**
+ * Get task form fields for a template
+ */
+const handleGetTaskFormFields: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+
+    const [fields] = await pool.query(
+      `SELECT * FROM task_form_fields 
+       WHERE task_template_id = ? 
+       ORDER BY order_index ASC`,
+      [taskId],
+    );
+
+    res.json({
+      success: true,
+      fields: fields,
+    });
+  } catch (error) {
+    console.error("❌ Error getting task form fields:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to get task form fields",
+    });
+  }
+};
+
+/**
+ * Submit task form response
+ */
+const handleSubmitTaskForm: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { responses } = req.body;
+    const userId = (req as any).userId;
+    const brokerId = (req as any).brokerId;
+
+    if (!responses || !Array.isArray(responses)) {
+      return res.status(400).json({
+        success: false,
+        error: "responses array is required",
+      });
+    }
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // Insert or update form responses
+      for (const response of responses) {
+        await connection.query(
+          `INSERT INTO task_form_responses 
+          (task_id, field_id, field_value, submitted_by_user_id, submitted_by_broker_id)
+          VALUES (?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+          field_value = VALUES(field_value),
+          updated_at = CURRENT_TIMESTAMP`,
+          [
+            taskId,
+            response.field_id,
+            response.field_value,
+            userId || null,
+            brokerId || null,
+          ],
+        );
+      }
+
+      // Mark task form as completed
+      await connection.query(
+        `UPDATE tasks 
+         SET form_completed = 1, form_completed_at = CURRENT_TIMESTAMP 
+         WHERE id = ?`,
+        [taskId],
+      );
+
+      await connection.commit();
+
+      res.json({
+        success: true,
+        message: "Form submitted successfully",
+        task_id: parseInt(taskId as string),
+      });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error("❌ Error submitting task form:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to submit task form",
+    });
+  }
+};
+
+/**
+ * Upload task document (integrates with external PHP API)
+ */
+const handleUploadTaskDocument: RequestHandler = async (req, res) => {
+  try {
+    const {
+      task_id,
+      field_id,
+      document_type,
+      filename,
+      original_filename,
+      file_path,
+      file_size,
+      notes,
+    } = req.body;
+    const userId = (req as any).userId;
+    const brokerId = (req as any).brokerId;
+
+    if (!task_id || !document_type || !filename || !file_path) {
+      return res.status(400).json({
+        success: false,
+        error: "task_id, document_type, filename, and file_path are required",
+      });
+    }
+
+    const [result] = await pool.query(
+      `INSERT INTO task_documents 
+      (task_id, field_id, document_type, filename, original_filename, file_path, file_size,
+       uploaded_by_user_id, uploaded_by_broker_id, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        task_id,
+        field_id || null,
+        document_type,
+        filename,
+        original_filename || filename,
+        file_path,
+        file_size || null,
+        userId || null,
+        brokerId || null,
+        notes || null,
+      ],
+    );
+
+    // Mark task documents as uploaded
+    await pool.query(`UPDATE tasks SET documents_uploaded = 1 WHERE id = ?`, [
+      task_id,
+    ]);
+
+    const [documents] = await pool.query(
+      `SELECT * FROM task_documents WHERE id = ?`,
+      [(result as any).insertId],
+    );
+
+    res.json({
+      success: true,
+      document: (documents as any[])[0],
+      message: "Document uploaded successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error uploading task document:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to upload task document",
+    });
+  }
+};
+
+/**
+ * Get task documents
+ */
+const handleGetTaskDocuments: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+
+    const [documents] = await pool.query(
+      `SELECT * FROM task_documents WHERE task_id = ? ORDER BY uploaded_at DESC`,
+      [taskId],
+    );
+
+    res.json({
+      success: true,
+      documents: documents,
+    });
+  } catch (error) {
+    console.error("❌ Error getting task documents:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to get task documents",
+    });
+  }
+};
+
+/**
+ * Delete task document
+ */
+const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
+  try {
+    const { documentId } = req.params;
+
+    await pool.query(`DELETE FROM task_documents WHERE id = ?`, [documentId]);
+
+    res.json({
+      success: true,
+      message: "Document deleted successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error deleting task document:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete task document",
+    });
+  }
+};
+
+/**
+ * Approve a completed task
+ */
+const handleApproveTask: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const brokerId = (req as any).brokerId;
+
+    // Get task details
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      `SELECT t.*, a.client_user_id, c.email as client_email, c.first_name, c.last_name
+       FROM tasks t
+       INNER JOIN loan_applications a ON t.application_id = a.id
+       INNER JOIN clients c ON a.client_user_id = c.id
+       WHERE t.id = ?`,
+      [taskId],
+    );
+
+    if (!Array.isArray(taskRows) || taskRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Task not found",
+      });
+    }
+
+    const task = taskRows[0];
+
+    // Verify task is completed
+    if (task.status !== "completed") {
+      return res.status(400).json({
+        success: false,
+        error: "Task must be completed before approval",
+      });
+    }
+
+    // Update task to approved
+    await pool.query(
+      `UPDATE tasks SET 
+        status = 'approved',
+        approval_status = 'approved',
+        approved_by_broker_id = ?,
+        approved_at = NOW(),
+        updated_at = NOW()
+       WHERE id = ?`,
+      [brokerId, taskId],
+    );
+
+    // Create notification for client
+    await pool.query(
+      `INSERT INTO notifications (user_id, title, message, notification_type, action_url)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        task.client_user_id,
+        "Task Approved",
+        `Your task "${task.title}" has been approved. Great job!`,
+        "success",
+        "/portal",
+      ],
+    );
+
+    // Create audit log
+    await pool.query(
+      `INSERT INTO audit_logs (broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, 'broker', 'approve_task', 'task', ?, ?, 'success')`,
+      [
+        brokerId,
+        taskId,
+        JSON.stringify({ status: "approved", approved_at: new Date() }),
+      ],
+    );
+
+    res.json({
+      success: true,
+      message: "Task approved successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error approving task:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to approve task",
+    });
+  }
+};
+
+/**
+ * Reopen a task for rework
+ */
+const handleReopenTask: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { reason } = req.body;
+    const brokerId = (req as any).brokerId;
+
+    if (!reason || reason.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Reason for reopening is required",
+      });
+    }
+
+    // Get task and client details
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      `SELECT t.*, a.client_user_id, c.email as client_email, c.first_name, c.last_name
+       FROM tasks t
+       INNER JOIN loan_applications a ON t.application_id = a.id
+       INNER JOIN clients c ON a.client_user_id = c.id
+       WHERE t.id = ?`,
+      [taskId],
+    );
+
+    if (!Array.isArray(taskRows) || taskRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Task not found",
+      });
+    }
+
+    const task = taskRows[0];
+
+    // Update task to reopened
+    await pool.query(
+      `UPDATE tasks SET 
+        status = 'reopened',
+        approval_status = 'rejected',
+        reopened_by_broker_id = ?,
+        reopened_at = NOW(),
+        reopen_reason = ?,
+        completed_at = NULL,
+        form_completed = 0,
+        documents_uploaded = 0,
+        updated_at = NOW()
+       WHERE id = ?`,
+      [brokerId, reason, taskId],
+    );
+
+    // Create notification for client
+    await pool.query(
+      `INSERT INTO notifications (user_id, title, message, notification_type, action_url)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        task.client_user_id,
+        "Task Needs Revision",
+        `Your task "${task.title}" needs to be revised. Please check the feedback.`,
+        "warning",
+        "/portal",
+      ],
+    );
+
+    // Send email to client
+    try {
+      await sendTaskReopenedEmail(
+        task.client_email,
+        task.first_name,
+        task.title,
+        reason,
+      );
+    } catch (emailError) {
+      console.error("Failed to send reopened email:", emailError);
+      // Don't fail the request if email fails
+    }
+
+    // Create audit log
+    await pool.query(
+      `INSERT INTO audit_logs (broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, 'broker', 'reopen_task', 'task', ?, ?, 'success')`,
+      [
+        brokerId,
+        taskId,
+        JSON.stringify({
+          status: "reopened",
+          reopened_at: new Date(),
+          reason: reason,
+        }),
+      ],
+    );
+
+    res.json({
+      success: true,
+      message: "Task reopened successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error reopening task:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to reopen task",
+    });
+  }
+};
+
+/**
+ * Generate MISMO 3.4 XML file for loan application
+ */
+const handleGenerateMISMO: RequestHandler = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const brokerId = (req as any).brokerId;
+
+    // Get complete loan application data
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        a.*,
+        c.first_name as client_first_name,
+        c.last_name as client_last_name,
+        c.email as client_email,
+        c.phone as client_phone,
+        c.date_of_birth,
+        c.ssn_encrypted,
+        c.address_street,
+        c.address_city,
+        c.address_state,
+        c.address_zip,
+        c.employment_status,
+        c.income_type,
+        c.annual_income,
+        c.credit_score,
+        b.first_name as broker_first_name,
+        b.last_name as broker_last_name,
+        b.email as broker_email,
+        b.phone as broker_phone,
+        b.license_number
+       FROM loan_applications a
+       INNER JOIN clients c ON a.client_user_id = c.id
+       LEFT JOIN brokers b ON a.broker_user_id = b.id
+       WHERE a.id = ?`,
+      [loanId],
+    );
+
+    if (!Array.isArray(loanRows) || loanRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Loan application not found",
+      });
+    }
+
+    const loan = loanRows[0];
+
+    // Check if all tasks are approved
+    const [taskStats] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_tasks,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_tasks
+       FROM tasks 
+       WHERE application_id = ?`,
+      [loanId],
+    );
+
+    const stats = taskStats[0];
+    if (stats.total_tasks > 0 && stats.approved_tasks < stats.total_tasks) {
+      return res.status(400).json({
+        success: false,
+        error: `Not all tasks are approved. ${stats.approved_tasks}/${stats.total_tasks} tasks approved.`,
+      });
+    }
+
+    // Generate MISMO 3.4 XML
+    const xml = generateMISMO34XML(loan);
+
+    // Set headers for XML download
+    const filename = `MISMO_${loan.application_number}_${new Date().toISOString().split("T")[0]}.xml`;
+    res.setHeader("Content-Type", "application/xml");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+    // Create audit log
+    await pool.query(
+      `INSERT INTO audit_logs (broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, 'broker', 'generate_mismo', 'loan_application', ?, ?, 'success')`,
+      [
+        brokerId,
+        loanId,
+        JSON.stringify({ filename, generated_at: new Date() }),
+      ],
+    );
+
+    res.send(xml);
+  } catch (error) {
+    console.error("❌ Error generating MISMO file:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to generate MISMO file",
+    });
+  }
+};
+
+/**
+ * Helper function to generate MISMO 3.4 XML
+ */
+function generateMISMO34XML(loan: any): string {
+  const now = new Date().toISOString();
+  const loanAmount = parseFloat(loan.loan_amount || 0);
+  const propertyValue = parseFloat(loan.property_value || 0);
+  const downPayment = parseFloat(loan.down_payment || 0);
+  const loanToValue =
+    propertyValue > 0 ? ((loanAmount / propertyValue) * 100).toFixed(2) : "0";
+
+  // Format loan type for MISMO
+  const loanPurposeType =
+    loan.loan_type === "purchase"
+      ? "Purchase"
+      : loan.loan_type === "refinance"
+        ? "Refinance"
+        : "Other";
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<MESSAGE xmlns="http://www.mismo.org/residential/2009/schemas" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.mismo.org/residential/2009/schemas">
+  
+  <ABOUT_VERSIONS>
+    <ABOUT_VERSION>
+      <CreatedDatetime>${now}</CreatedDatetime>
+      <DataVersionIdentifier>MISMO 3.4</DataVersionIdentifier>
+    </ABOUT_VERSION>
+  </ABOUT_VERSIONS>
+
+  <DEAL_SETS>
+    <DEAL_SET>
+      <DEALS>
+        <DEAL>
+          <LOANS>
+            <LOAN>
+              <LOAN_IDENTIFIERS>
+                <LOAN_IDENTIFIER>
+                  <LoanIdentifier>${loan.application_number}</LoanIdentifier>
+                  <LoanIdentifierType>LenderLoan</LoanIdentifierType>
+                </LOAN_IDENTIFIER>
+              </LOAN_IDENTIFIERS>
+
+              <LOAN_DETAIL>
+                <LoanAmountRequested>${loanAmount.toFixed(2)}</LoanAmountRequested>
+                <LoanPurposeType>${loanPurposeType}</LoanPurposeType>
+                <LoanStatusType>${loan.status === "approved" ? "Approved" : "Submitted"}</LoanStatusType>
+                <ApplicationReceivedDate>${loan.submitted_at || loan.created_at}</ApplicationReceivedDate>
+              </LOAN_DETAIL>
+
+              <TERMS_OF_LOAN>
+                <LoanAmortizationType>AdjustableRate</LoanAmortizationType>
+                <LoanAmortizationPeriodCount>${loan.loan_term_months || 360}</LoanAmortizationPeriodCount>
+                <LoanAmortizationPeriodType>Month</LoanAmortizationPeriodType>
+                ${loan.interest_rate ? `<NoteRatePercent>${loan.interest_rate}</NoteRatePercent>` : ""}
+              </TERMS_OF_LOAN>
+
+              <QUALIFICATION>
+                <ApplicationTakenMethodType>Internet</ApplicationTakenMethodType>
+              </QUALIFICATION>
+
+              <LOAN_PROGRAMS>
+                <LOAN_PROGRAM>
+                  <LoanProgramName>Conventional</LoanProgramName>
+                </LOAN_PROGRAM>
+              </LOAN_PROGRAMS>
+
+              <PARTIES>
+                <PARTY>
+                  <INDIVIDUAL>
+                    <NAME>
+                      <FirstName>${loan.client_first_name || ""}</FirstName>
+                      <LastName>${loan.client_last_name || ""}</LastName>
+                    </NAME>
+                    ${loan.date_of_birth ? `<BirthDate>${loan.date_of_birth}</BirthDate>` : ""}
+                    ${loan.ssn_encrypted ? `<TaxIdentificationIdentifier>${loan.ssn_encrypted}</TaxIdentificationIdentifier>` : ""}
+                  </INDIVIDUAL>
+
+                  <ROLES>
+                    <ROLE>
+                      <ROLE_DETAIL>
+                        <PartyRoleType>Borrower</PartyRoleType>
+                      </ROLE_DETAIL>
+
+                      <BORROWER>
+                        ${
+                          loan.credit_score
+                            ? `<CREDIT_SCORES>
+                          <CREDIT_SCORE>
+                            <CreditScoreValue>${loan.credit_score}</CreditScoreValue>
+                            <CreditScoreModelType>FICO</CreditScoreModelType>
+                          </CREDIT_SCORE>
+                        </CREDIT_SCORES>`
+                            : ""
+                        }
+
+                        <EMPLOYERS>
+                          <EMPLOYER>
+                            <EMPLOYMENT>
+                              <EmploymentStatusType>${loan.employment_status || "Current"}</EmploymentStatusType>
+                              <EmploymentMonthlyIncomeAmount>${loan.annual_income ? (loan.annual_income / 12).toFixed(2) : "0"}</EmploymentMonthlyIncomeAmount>
+                            </EMPLOYMENT>
+                          </EMPLOYER>
+                        </EMPLOYERS>
+
+                        <RESIDENCES>
+                          <RESIDENCE>
+                            <ADDRESS>
+                              <AddressLineText>${loan.address_street || ""}</AddressLineText>
+                              <CityName>${loan.address_city || ""}</CityName>
+                              <StateCode>${loan.address_state || ""}</StateCode>
+                              <PostalCode>${loan.address_zip || ""}</PostalCode>
+                            </ADDRESS>
+                          </RESIDENCE>
+                        </RESIDENCES>
+                      </BORROWER>
+                    </ROLE>
+                  </ROLES>
+
+                  <TAXPAYER_IDENTIFIERS>
+                    <TAXPAYER_IDENTIFIER>
+                      ${loan.ssn_encrypted ? `<TaxpayerIdentifierValue>${loan.ssn_encrypted}</TaxpayerIdentifierValue>` : ""}
+                      <TaxpayerIdentifierType>SocialSecurityNumber</TaxpayerIdentifierType>
+                    </TAXPAYER_IDENTIFIER>
+                  </TAXPAYER_IDENTIFIERS>
+
+                  <CONTACTS>
+                    <CONTACT>
+                      <CONTACT_POINTS>
+                        ${
+                          loan.client_email
+                            ? `<CONTACT_POINT>
+                          <ContactPointValue>${loan.client_email}</ContactPointValue>
+                          <ContactPointType>Email</ContactPointType>
+                        </CONTACT_POINT>`
+                            : ""
+                        }
+                        ${
+                          loan.client_phone
+                            ? `<CONTACT_POINT>
+                          <ContactPointValue>${loan.client_phone}</ContactPointValue>
+                          <ContactPointType>Phone</ContactPointType>
+                        </CONTACT_POINT>`
+                            : ""
+                        }
+                      </CONTACT_POINTS>
+                    </CONTACT>
+                  </CONTACTS>
+                </PARTY>
+
+                ${
+                  loan.broker_first_name
+                    ? `<PARTY>
+                  <INDIVIDUAL>
+                    <NAME>
+                      <FirstName>${loan.broker_first_name}</FirstName>
+                      <LastName>${loan.broker_last_name}</LastName>
+                    </NAME>
+                  </INDIVIDUAL>
+
+                  <ROLES>
+                    <ROLE>
+                      <ROLE_DETAIL>
+                        <PartyRoleType>LoanOriginationCompany</PartyRoleType>
+                      </ROLE_DETAIL>
+                      <LOAN_ORIGINATOR>
+                        ${loan.license_number ? `<LicenseIdentifier>${loan.license_number}</LicenseIdentifier>` : ""}
+                      </LOAN_ORIGINATOR>
+                    </ROLE>
+                  </ROLES>
+
+                  <CONTACTS>
+                    <CONTACT>
+                      <CONTACT_POINTS>
+                        ${
+                          loan.broker_email
+                            ? `<CONTACT_POINT>
+                          <ContactPointValue>${loan.broker_email}</ContactPointValue>
+                          <ContactPointType>Email</ContactPointType>
+                        </CONTACT_POINT>`
+                            : ""
+                        }
+                        ${
+                          loan.broker_phone
+                            ? `<CONTACT_POINT>
+                          <ContactPointValue>${loan.broker_phone}</ContactPointValue>
+                          <ContactPointType>Phone</ContactPointType>
+                        </CONTACT_POINT>`
+                            : ""
+                        }
+                      </CONTACT_POINTS>
+                    </CONTACT>
+                  </CONTACTS>
+                </PARTY>`
+                    : ""
+                }
+              </PARTIES>
+
+              <COLLATERALS>
+                <COLLATERAL>
+                  <SUBJECT_PROPERTY>
+                    <ADDRESS>
+                      <AddressLineText>${loan.property_address || ""}</AddressLineText>
+                      <CityName>${loan.property_city || ""}</CityName>
+                      <StateCode>${loan.property_state || ""}</StateCode>
+                      <PostalCode>${loan.property_zip || ""}</PostalCode>
+                    </ADDRESS>
+
+                    <PROPERTY_DETAIL>
+                      <PropertyCurrentUsageType>PrimaryResidence</PropertyCurrentUsageType>
+                      <PropertyEstimatedValueAmount>${propertyValue.toFixed(2)}</PropertyEstimatedValueAmount>
+                    </PROPERTY_DETAIL>
+
+                    <PROPERTY_VALUATIONS>
+                      <PROPERTY_VALUATION>
+                        <PropertyValuationAmount>${propertyValue.toFixed(2)}</PropertyValuationAmount>
+                        <PropertyValuationMethodType>Purchase</PropertyValuationMethodType>
+                      </PROPERTY_VALUATION>
+                    </PROPERTY_VALUATIONS>
+                  </SUBJECT_PROPERTY>
+                </COLLATERAL>
+              </COLLATERALS>
+
+              <GOVERNMENT_LOAN>
+                <GOVERNMENT_LOAN_DETAIL>
+                  <LoanToValuePercent>${loanToValue}</LoanToValuePercent>
+                </GOVERNMENT_LOAN_DETAIL>
+              </GOVERNMENT_LOAN>
+
+              <DOWN_PAYMENTS>
+                <DOWN_PAYMENT>
+                  <DownPaymentAmount>${downPayment.toFixed(2)}</DownPaymentAmount>
+                  <DownPaymentType>Cash</DownPaymentType>
+                </DOWN_PAYMENT>
+              </DOWN_PAYMENTS>
+            </LOAN>
+          </LOANS>
+        </DEAL>
+      </DEALS>
+    </DEAL_SET>
+  </DEAL_SETS>
+</MESSAGE>`;
+}
+
+/**
+ * Get all task documents for broker (admin documents page)
+ * Admin role: sees all documents from all brokers
+ * Regular broker: sees only their own documents
+ */
+const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+
+    let query = `
+      SELECT 
+        td.*,
+        t.title as task_title,
+        t.task_type,
+        t.status as task_status,
+        a.application_number,
+        a.broker_user_id as broker_id,
+        c.first_name as client_first_name,
+        c.last_name as client_last_name,
+        c.email as client_email,
+        b.first_name as broker_first_name,
+        b.last_name as broker_last_name
+      FROM task_documents td
+      INNER JOIN tasks t ON td.task_id = t.id
+      INNER JOIN loan_applications a ON t.application_id = a.id
+      INNER JOIN clients c ON a.client_user_id = c.id
+      LEFT JOIN brokers b ON a.broker_user_id = b.id`;
+
+    let params: any[] = [];
+
+    // If broker is not admin, filter by broker_user_id
+    if (brokerRole !== "admin") {
+      query += ` WHERE a.broker_user_id = ?`;
+      params.push(brokerId);
+    }
+
+    query += ` ORDER BY td.uploaded_at DESC`;
+
+    const [documents] = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      documents: documents,
+    });
+  } catch (error) {
+    console.error("❌ Error getting all task documents:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to get task documents",
     });
   }
 };
@@ -1933,6 +3332,410 @@ const handleDeleteEmailTemplate: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/client/applications
+ * Get all loan applications for authenticated client
+ */
+const handleGetClientApplications: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+
+    const [applications] = await pool.query<any[]>(
+      `SELECT 
+        la.id,
+        la.application_number,
+        la.loan_type,
+        la.loan_amount,
+        la.property_address,
+        la.property_city,
+        la.property_state,
+        la.status,
+        la.current_step,
+        la.total_steps,
+        la.estimated_close_date,
+        la.created_at,
+        la.submitted_at,
+        b.first_name as broker_first_name,
+        b.last_name as broker_last_name,
+        b.phone as broker_phone,
+        b.email as broker_email,
+        (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND status = 'completed') as completed_tasks,
+        (SELECT COUNT(*) FROM tasks WHERE application_id = la.id) as total_tasks
+      FROM loan_applications la
+      LEFT JOIN brokers b ON la.broker_user_id = b.id
+      WHERE la.client_user_id = ?
+      ORDER BY la.created_at DESC`,
+      [clientId],
+    );
+
+    res.json({
+      success: true,
+      applications,
+    });
+  } catch (error) {
+    console.error("Error fetching client applications:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to fetch applications",
+    });
+  }
+};
+
+/**
+ * GET /api/client/tasks
+ * Get all tasks for authenticated client across all their applications
+ */
+const handleGetClientTasks: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+
+    const [tasks] = await pool.query<any[]>(
+      `SELECT 
+        t.id,
+        t.application_id,
+        t.title,
+        t.description,
+        t.task_type,
+        t.status,
+        t.priority,
+        t.due_date,
+        t.completed_at,
+        t.created_at,
+        la.application_number,
+        la.loan_type,
+        la.property_address
+      FROM tasks t
+      INNER JOIN loan_applications la ON t.application_id = la.id
+      WHERE t.assigned_to_user_id = ?
+      ORDER BY 
+        CASE t.status
+          WHEN 'pending' THEN 1
+          WHEN 'in_progress' THEN 2
+          WHEN 'completed' THEN 3
+          WHEN 'cancelled' THEN 4
+        END,
+        t.due_date ASC`,
+      [clientId],
+    );
+
+    res.json({
+      success: true,
+      tasks,
+    });
+  } catch (error) {
+    console.error("Error fetching client tasks:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch tasks",
+    });
+  }
+};
+
+/**
+ * PATCH /api/client/tasks/:taskId
+ * Update task status (client can mark as in_progress or completed)
+ */
+const handleUpdateClientTask: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+    const { taskId } = req.params;
+    const { status } = req.body;
+
+    // Validate status
+    if (!["in_progress", "completed"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Invalid status. Clients can only set 'in_progress' or 'completed'",
+      });
+    }
+
+    // Verify task belongs to client
+    const [tasks] = await pool.query<any[]>(
+      "SELECT t.* FROM tasks t INNER JOIN loan_applications la ON t.application_id = la.id WHERE t.id = ? AND la.client_user_id = ?",
+      [taskId, clientId],
+    );
+
+    if (tasks.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Task not found",
+      });
+    }
+
+    const completedAt = status === "completed" ? new Date() : null;
+
+    await pool.query(
+      "UPDATE tasks SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?",
+      [status, completedAt, taskId],
+    );
+
+    res.json({
+      success: true,
+      message: "Task updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating client task:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to update task",
+    });
+  }
+};
+
+/**
+ * GET /api/client/tasks/:taskId/details
+ * Get task details including form fields and required documents
+ */
+const handleGetTaskDetails: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+    const { taskId } = req.params;
+
+    // Verify task belongs to client
+    const [tasks] = await pool.query<any[]>(
+      `SELECT t.*, 
+              la.application_number,
+              la.loan_type,
+              la.property_address,
+              la.property_city,
+              la.property_state,
+              la.property_zip,
+              la.loan_amount
+       FROM tasks t 
+       INNER JOIN loan_applications la ON t.application_id = la.id 
+       WHERE t.id = ? AND la.client_user_id = ?`,
+      [taskId, clientId],
+    );
+
+    if (tasks.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Task not found",
+      });
+    }
+
+    const task = tasks[0];
+
+    console.log(`📋 Fetching task details for task ${taskId}:`, {
+      taskId: task.id,
+      title: task.title,
+      template_id: task.template_id,
+      task_type: task.task_type,
+    });
+
+    // Get form fields if template has custom form
+    let formFields = [];
+    if (task.template_id) {
+      const [fields] = await pool.query<any[]>(
+        `SELECT * FROM task_form_fields 
+         WHERE task_template_id = ? 
+         ORDER BY order_index`,
+        [task.template_id],
+      );
+      formFields = fields;
+      console.log(
+        `✅ Found ${fields.length} form fields for template ${task.template_id}`,
+      );
+    } else {
+      console.warn(
+        `⚠️ Task ${taskId} has no template_id, cannot fetch form fields`,
+      );
+    }
+
+    // Get required documents (file upload fields) and check if uploaded
+    const [documents] = await pool.query<any[]>(
+      `SELECT 
+        tff.id,
+        tff.field_name as document_type,
+        tff.field_label as description,
+        CASE WHEN td.id IS NOT NULL THEN 1 ELSE 0 END as is_uploaded
+       FROM task_form_fields tff
+       LEFT JOIN task_documents td ON td.task_id = ? AND td.field_id = tff.id
+       WHERE tff.task_template_id = ? 
+       AND (tff.field_type = 'file_pdf' OR tff.field_type = 'file_image')
+       ORDER BY tff.order_index`,
+      [taskId, task.template_id || 0],
+    );
+
+    console.log(`📄 Found ${documents.length} document fields`);
+
+    res.json({
+      success: true,
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      due_date: task.due_date,
+      application_id: task.application_id,
+      application_number: task.application_number,
+      loan_type: task.loan_type,
+      property_address: task.property_address,
+      property_city: task.property_city,
+      property_state: task.property_state,
+      property_zip: task.property_zip,
+      loan_amount: task.loan_amount,
+      formFields,
+      requiredDocuments: documents,
+    });
+  } catch (error) {
+    console.error("Error fetching task details:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to fetch task details",
+    });
+  }
+};
+
+/**
+ * GET /api/client/profile
+ * Get authenticated client's profile information
+ */
+const handleGetClientProfile: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+
+    const [clients] = await pool.query<any[]>(
+      `SELECT 
+        id,
+        email,
+        first_name,
+        last_name,
+        phone,
+        alternate_phone,
+        date_of_birth,
+        address_street,
+        address_city,
+        address_state,
+        address_zip,
+        employment_status,
+        income_type,
+        annual_income,
+        status,
+        email_verified,
+        phone_verified,
+        created_at
+      FROM clients
+      WHERE id = ?`,
+      [clientId],
+    );
+
+    if (clients.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Client not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      profile: clients[0],
+    });
+  } catch (error) {
+    console.error("Error fetching client profile:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch profile",
+    });
+  }
+};
+
+/**
+ * PUT /api/client/profile
+ * Update authenticated client's profile information
+ */
+const handleUpdateClientProfile: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+    const {
+      first_name,
+      last_name,
+      phone,
+      alternate_phone,
+      address_street,
+      address_city,
+      address_state,
+      address_zip,
+    } = req.body;
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (first_name !== undefined) {
+      updates.push("first_name = ?");
+      values.push(first_name);
+    }
+    if (last_name !== undefined) {
+      updates.push("last_name = ?");
+      values.push(last_name);
+    }
+    if (phone !== undefined) {
+      updates.push("phone = ?");
+      values.push(phone);
+    }
+    if (alternate_phone !== undefined) {
+      updates.push("alternate_phone = ?");
+      values.push(alternate_phone || null);
+    }
+    if (address_street !== undefined) {
+      updates.push("address_street = ?");
+      values.push(address_street);
+    }
+    if (address_city !== undefined) {
+      updates.push("address_city = ?");
+      values.push(address_city);
+    }
+    if (address_state !== undefined) {
+      updates.push("address_state = ?");
+      values.push(address_state);
+    }
+    if (address_zip !== undefined) {
+      updates.push("address_zip = ?");
+      values.push(address_zip);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No fields to update",
+      });
+    }
+
+    values.push(clientId);
+
+    await pool.query(
+      `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ?`,
+      values,
+    );
+
+    // Fetch updated profile
+    const [clients] = await pool.query<any[]>(
+      `SELECT 
+        id, email, first_name, last_name, phone, alternate_phone,
+        address_street, address_city, address_state, address_zip,
+        employment_status, income_type, annual_income,
+        status, email_verified, phone_verified, created_at
+      FROM clients WHERE id = ?`,
+      [clientId],
+    );
+
+    res.json({
+      success: true,
+      profile: clients[0],
+      message: "Profile updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating client profile:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to update profile",
+    });
+  }
+};
+
+/**
  * Get all SMS templates
  */
 const handleGetSmsTemplates: RequestHandler = async (req, res) => {
@@ -2142,6 +3945,482 @@ const handleDeleteSmsTemplate: RequestHandler = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/audit-logs
+ * Get all audit logs with optional filters
+ */
+const handleGetAuditLogs: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      actor_type,
+      action,
+      entity_type,
+      status,
+      from_date,
+      to_date,
+      limit = 100,
+      offset = 0,
+    } = req.query;
+
+    // Build dynamic query
+    let query = `
+      SELECT 
+        al.*,
+        COALESCE(b.email, c.email) as actor_email,
+        COALESCE(CONCAT(b.first_name, ' ', b.last_name), CONCAT(c.first_name, ' ', c.last_name)) as actor_name
+      FROM audit_logs al
+      LEFT JOIN brokers b ON al.broker_id = b.id
+      LEFT JOIN clients c ON al.user_id = c.id
+      WHERE 1=1
+    `;
+
+    const queryParams: any[] = [];
+
+    if (actor_type) {
+      query += ` AND al.actor_type = ?`;
+      queryParams.push(actor_type);
+    }
+
+    if (action) {
+      query += ` AND al.action LIKE ?`;
+      queryParams.push(`%${action}%`);
+    }
+
+    if (entity_type) {
+      query += ` AND al.entity_type = ?`;
+      queryParams.push(entity_type);
+    }
+
+    if (status) {
+      query += ` AND al.status = ?`;
+      queryParams.push(status);
+    }
+
+    if (from_date) {
+      query += ` AND al.created_at >= ?`;
+      queryParams.push(from_date);
+    }
+
+    if (to_date) {
+      query += ` AND al.created_at <= ?`;
+      queryParams.push(to_date);
+    }
+
+    query += ` ORDER BY al.created_at DESC LIMIT ? OFFSET ?`;
+    queryParams.push(parseInt(limit as string), parseInt(offset as string));
+
+    const [logs] = await pool.query<RowDataPacket[]>(query, queryParams);
+
+    // Get total count for pagination
+    let countQuery = `SELECT COUNT(*) as total FROM audit_logs WHERE 1=1`;
+    const countParams: any[] = [];
+
+    if (actor_type) {
+      countQuery += ` AND actor_type = ?`;
+      countParams.push(actor_type);
+    }
+
+    if (action) {
+      countQuery += ` AND action LIKE ?`;
+      countParams.push(`%${action}%`);
+    }
+
+    if (entity_type) {
+      countQuery += ` AND entity_type = ?`;
+      countParams.push(entity_type);
+    }
+
+    if (status) {
+      countQuery += ` AND status = ?`;
+      countParams.push(status);
+    }
+
+    if (from_date) {
+      countQuery += ` AND created_at >= ?`;
+      countParams.push(from_date);
+    }
+
+    if (to_date) {
+      countQuery += ` AND created_at <= ?`;
+      countParams.push(to_date);
+    }
+
+    const [countResult] = await pool.query<RowDataPacket[]>(
+      countQuery,
+      countParams,
+    );
+
+    // Create audit log for viewing audit logs
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "view_audit_logs",
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    res.json({
+      success: true,
+      logs,
+      total: countResult[0].total,
+      limit: parseInt(limit as string),
+      offset: parseInt(offset as string),
+    });
+  } catch (error) {
+    console.error("Error fetching audit logs:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to fetch audit logs",
+    });
+  }
+};
+
+/**
+ * GET /api/audit-logs/stats
+ * Get audit log statistics
+ */
+const handleGetAuditLogStats: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+
+    // Get various statistics
+    const [totalLogs] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) as count FROM audit_logs",
+    );
+
+    const [logsByStatus] = await pool.query<RowDataPacket[]>(
+      "SELECT status, COUNT(*) as count FROM audit_logs GROUP BY status",
+    );
+
+    const [logsByActorType] = await pool.query<RowDataPacket[]>(
+      "SELECT actor_type, COUNT(*) as count FROM audit_logs GROUP BY actor_type",
+    );
+
+    const [logsByAction] = await pool.query<RowDataPacket[]>(
+      `SELECT action, COUNT(*) as count 
+       FROM audit_logs 
+       GROUP BY action 
+       ORDER BY count DESC 
+       LIMIT 10`,
+    );
+
+    const [recentActivity] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        DATE(created_at) as date, 
+        COUNT(*) as count 
+       FROM audit_logs 
+       WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+       GROUP BY DATE(created_at)
+       ORDER BY date DESC`,
+    );
+
+    res.json({
+      success: true,
+      stats: {
+        total: totalLogs[0].count,
+        byStatus: logsByStatus,
+        byActorType: logsByActorType,
+        topActions: logsByAction,
+        recentActivity,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching audit log stats:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch audit log stats",
+    });
+  }
+};
+
+/**
+ * GET /api/reports/overview
+ * Get comprehensive report overview with all statistics
+ */
+const handleGetReportsOverview: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { from_date, to_date } = req.query;
+
+    // Build date filter
+    let dateFilter = "";
+    const dateParams: any[] = [];
+    if (from_date && to_date) {
+      dateFilter = " AND created_at BETWEEN ? AND ?";
+      dateParams.push(from_date, to_date);
+    }
+
+    // Loan statistics
+    const [loanStats] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_loans,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_loans,
+        SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) as pending_loans,
+        SUM(CASE WHEN status = 'denied' THEN 1 ELSE 0 END) as rejected_loans,
+        SUM(CASE WHEN status = 'under_review' THEN 1 ELSE 0 END) as in_review_loans,
+        AVG(CAST(loan_amount AS DECIMAL(15,2))) as avg_loan_amount,
+        SUM(CAST(loan_amount AS DECIMAL(15,2))) as total_loan_volume
+      FROM loan_applications 
+      WHERE broker_user_id = ?${dateFilter}`,
+      [brokerId, ...dateParams],
+    );
+
+    // Loans by type
+    const [loansByType] = await pool.query<RowDataPacket[]>(
+      `SELECT loan_type, COUNT(*) as count 
+       FROM loan_applications 
+       WHERE broker_user_id = ?${dateFilter}
+       GROUP BY loan_type`,
+      [brokerId, ...dateParams],
+    );
+
+    // Loans by status over time
+    const [loansTrend] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        DATE(created_at) as date,
+        status,
+        COUNT(*) as count
+       FROM loan_applications 
+       WHERE broker_user_id = ?${dateFilter}
+       GROUP BY DATE(created_at), status
+       ORDER BY date DESC
+       LIMIT 30`,
+      [brokerId, ...dateParams],
+    );
+
+    // Client statistics
+    const [clientStats] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_clients,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_clients,
+        AVG(credit_score) as avg_credit_score
+      FROM clients 
+      WHERE assigned_broker_id = ?${dateFilter}`,
+      [brokerId, ...dateParams],
+    );
+
+    // Task statistics
+    const [taskStats] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_tasks,
+        SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed_tasks,
+        SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) as pending_tasks,
+        SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) as in_progress_tasks
+      FROM tasks t
+      JOIN loan_applications la ON t.application_id = la.id
+      WHERE la.broker_user_id = ?${dateFilter.replace("created_at", "t.created_at")}`,
+      [brokerId, ...dateParams],
+    );
+
+    // Communication statistics
+    const [commStats] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        communication_type,
+        COUNT(*) as count
+      FROM communications c
+      JOIN loan_applications la ON c.application_id = la.id
+      WHERE la.broker_user_id = ?${dateFilter.replace("created_at", "c.created_at")}
+      GROUP BY communication_type`,
+      [brokerId, ...dateParams],
+    );
+
+    // Document statistics
+    const [docStats] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_documents,
+        SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END) as verified_documents,
+        document_type,
+        COUNT(*) as count
+      FROM documents d
+      JOIN loan_applications la ON d.application_id = la.id
+      WHERE la.broker_user_id = ?${dateFilter.replace("created_at", "d.created_at")}
+      GROUP BY document_type`,
+      [brokerId, ...dateParams],
+    );
+
+    res.json({
+      success: true,
+      data: {
+        loans: loanStats[0],
+        loansByType,
+        loansTrend,
+        clients: clientStats[0],
+        tasks: taskStats[0],
+        communications: commStats,
+        documents: docStats,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching reports overview:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch reports overview",
+    });
+  }
+};
+
+/**
+ * GET /api/reports/revenue
+ * Get revenue and financial analytics
+ */
+const handleGetRevenueReport: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { from_date, to_date, group_by = "month" } = req.query;
+
+    let dateFilter = "";
+    const dateParams: any[] = [];
+    if (from_date && to_date) {
+      dateFilter = " AND created_at BETWEEN ? AND ?";
+      dateParams.push(from_date, to_date);
+    }
+
+    // Group by month or week
+    const dateFormat = group_by === "week" ? "%Y-%u" : "%Y-%m";
+
+    const [revenue] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        DATE_FORMAT(created_at, ?) as period,
+        COUNT(*) as loan_count,
+        SUM(CAST(loan_amount AS DECIMAL(15,2))) as total_amount,
+        AVG(CAST(loan_amount AS DECIMAL(15,2))) as avg_amount,
+        loan_type
+      FROM loan_applications 
+      WHERE broker_user_id = ?${dateFilter}
+      GROUP BY period, loan_type
+      ORDER BY period DESC`,
+      [dateFormat, brokerId, ...dateParams],
+    );
+
+    res.json({
+      success: true,
+      data: revenue,
+    });
+  } catch (error) {
+    console.error("Error fetching revenue report:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch revenue report",
+    });
+  }
+};
+
+/**
+ * GET /api/reports/performance
+ * Get broker/team performance metrics
+ */
+const handleGetPerformanceReport: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { from_date, to_date } = req.query;
+
+    let dateFilter = "";
+    const dateParams: any[] = [];
+    if (from_date && to_date) {
+      dateFilter = " AND created_at BETWEEN ? AND ?";
+      dateParams.push(from_date, to_date);
+    }
+
+    // Conversion rates
+    const [conversionRate] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_applications,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+        ROUND((SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) / COUNT(*)) * 100, 2) as approval_rate
+      FROM loan_applications 
+      WHERE broker_user_id = ?${dateFilter}`,
+      [brokerId, ...dateParams],
+    );
+
+    // Average processing time
+    const [processingTime] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        AVG(DATEDIFF(updated_at, created_at)) as avg_days,
+        status
+      FROM loan_applications 
+      WHERE broker_user_id = ?${dateFilter}
+      GROUP BY status`,
+      [brokerId, ...dateParams],
+    );
+
+    // Task completion rate
+    const [taskCompletion] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        COUNT(*) as total_tasks,
+        SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
+        ROUND((SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) / COUNT(*)) * 100, 2) as completion_rate,
+        AVG(CASE WHEN t.status = 'completed' THEN DATEDIFF(t.updated_at, t.created_at) ELSE NULL END) as avg_completion_days
+      FROM tasks t
+      JOIN loan_applications la ON t.application_id = la.id
+      WHERE la.broker_user_id = ?${dateFilter.replace("created_at", "t.created_at")}`,
+      [brokerId, ...dateParams],
+    );
+
+    res.json({
+      success: true,
+      data: {
+        conversionRate: conversionRate[0],
+        processingTime,
+        taskCompletion: taskCompletion[0],
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching performance report:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch performance report",
+    });
+  }
+};
+
+/**
+ * POST /api/reports/export
+ * Export report data in various formats
+ */
+const handleExportReport: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { report_type, format = "csv", from_date, to_date } = req.body;
+
+    // Create audit log
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "export_report",
+      entityType: "report",
+      changes: { report_type, format, from_date, to_date },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    res.json({
+      success: true,
+      message: "Report export initiated. Download will begin shortly.",
+      download_url: `/api/reports/download/${report_type}?format=${format}`,
+    });
+  } catch (error) {
+    console.error("Error exporting report:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to export report",
+    });
+  }
+};
+
 // =====================================================
 // SERVER INITIALIZATION
 // =====================================================
@@ -2177,6 +4456,12 @@ function createServer() {
   expressApp.get("/api/admin/auth/validate", handleAdminValidateSession);
   expressApp.post("/api/admin/auth/logout", handleAdminLogout);
 
+  // Client auth routes (no auth required)
+  expressApp.post("/api/client/auth/send-code", handleClientSendCode);
+  expressApp.post("/api/client/auth/verify-code", handleClientVerifyCode);
+  expressApp.get("/api/client/auth/validate", handleClientValidateSession);
+  expressApp.post("/api/client/auth/logout", handleClientLogout);
+
   // Protected routes (require broker session)
   expressApp.get(
     "/api/dashboard/stats",
@@ -2189,6 +4474,11 @@ function createServer() {
     "/api/loans/:loanId",
     verifyBrokerSession,
     handleGetLoanDetails,
+  );
+  expressApp.get(
+    "/api/loans/:loanId/export-mismo",
+    verifyBrokerSession,
+    handleGenerateMISMO,
   );
   expressApp.get("/api/clients", verifyBrokerSession, handleGetClients);
   expressApp.get("/api/brokers", verifyBrokerSession, handleGetBrokers);
@@ -2217,6 +4507,61 @@ function createServer() {
     handleDeleteTaskTemplate,
   );
 
+  // Task approval routes
+  expressApp.post(
+    "/api/tasks/:taskId/approve",
+    verifyBrokerSession,
+    handleApproveTask,
+  );
+  expressApp.post(
+    "/api/tasks/:taskId/reopen",
+    verifyBrokerSession,
+    handleReopenTask,
+  );
+
+  // Task form fields routes (require broker session)
+  expressApp.post(
+    "/api/tasks/:taskId/form-fields",
+    verifyBrokerSession,
+    handleCreateTaskFormFields,
+  );
+  expressApp.get(
+    "/api/tasks/:taskId/form-fields",
+    verifyBrokerSession,
+    handleGetTaskFormFields,
+  );
+
+  // Task documents routes (broker and client can access)
+  expressApp.post(
+    "/api/tasks/:taskId/documents",
+    verifyBrokerSession,
+    handleUploadTaskDocument,
+  );
+  expressApp.get(
+    "/api/tasks/:taskId/documents",
+    verifyBrokerSession,
+    handleGetTaskDocuments,
+  );
+  expressApp.delete(
+    "/api/tasks/documents/:documentId",
+    verifyBrokerSession,
+    handleDeleteTaskDocument,
+  );
+
+  // All documents route (admin documents page)
+  expressApp.get(
+    "/api/documents",
+    verifyBrokerSession,
+    handleGetAllTaskDocuments,
+  );
+
+  // Task form submission routes (broker and client can access)
+  expressApp.post(
+    "/api/tasks/:taskId/submit-form",
+    verifyBrokerSession,
+    handleSubmitTaskForm,
+  );
+
   // Email template routes (require broker session)
   expressApp.get(
     "/api/email-templates",
@@ -2239,6 +4584,60 @@ function createServer() {
     handleDeleteEmailTemplate,
   );
 
+  // Client Portal routes (require client session)
+  expressApp.get(
+    "/api/client/applications",
+    verifyClientSession,
+    handleGetClientApplications,
+  );
+  expressApp.get(
+    "/api/client/tasks",
+    verifyClientSession,
+    handleGetClientTasks,
+  );
+  expressApp.patch(
+    "/api/client/tasks/:taskId",
+    verifyClientSession,
+    handleUpdateClientTask,
+  );
+  expressApp.get(
+    "/api/client/tasks/:taskId/details",
+    verifyClientSession,
+    handleGetTaskDetails,
+  );
+  expressApp.get(
+    "/api/client/profile",
+    verifyClientSession,
+    handleGetClientProfile,
+  );
+  expressApp.put(
+    "/api/client/profile",
+    verifyClientSession,
+    handleUpdateClientProfile,
+  );
+
+  // Client task form and document routes (require client session)
+  expressApp.post(
+    "/api/client/tasks/:taskId/submit-form",
+    verifyClientSession,
+    handleSubmitTaskForm,
+  );
+  expressApp.post(
+    "/api/client/tasks/:taskId/documents",
+    verifyClientSession,
+    handleUploadTaskDocument,
+  );
+  expressApp.get(
+    "/api/client/tasks/:taskId/documents",
+    verifyClientSession,
+    handleGetTaskDocuments,
+  );
+  expressApp.delete(
+    "/api/client/tasks/documents/:documentId",
+    verifyClientSession,
+    handleDeleteTaskDocument,
+  );
+
   // SMS Templates routes
   expressApp.get(
     "/api/sms-templates",
@@ -2259,6 +4658,36 @@ function createServer() {
     "/api/sms-templates/:templateId",
     verifyBrokerSession,
     handleDeleteSmsTemplate,
+  );
+
+  // Audit Logs routes
+  expressApp.get("/api/audit-logs", verifyBrokerSession, handleGetAuditLogs);
+  expressApp.get(
+    "/api/audit-logs/stats",
+    verifyBrokerSession,
+    handleGetAuditLogStats,
+  );
+
+  // Reports & Analytics routes
+  expressApp.get(
+    "/api/reports/overview",
+    verifyBrokerSession,
+    handleGetReportsOverview,
+  );
+  expressApp.get(
+    "/api/reports/revenue",
+    verifyBrokerSession,
+    handleGetRevenueReport,
+  );
+  expressApp.get(
+    "/api/reports/performance",
+    verifyBrokerSession,
+    handleGetPerformanceReport,
+  );
+  expressApp.post(
+    "/api/reports/export",
+    verifyBrokerSession,
+    handleExportReport,
   );
 
   // 404 handler - only for API routes

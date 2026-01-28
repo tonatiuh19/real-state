@@ -11,6 +11,9 @@ import clientsReducer from "./slices/clientsSlice";
 import brokersReducer from "./slices/brokersSlice";
 import communicationTemplatesReducer from "./slices/communicationTemplatesSlice";
 import dashboardReducer from "./slices/dashboardSlice";
+import clientPortalReducer from "./slices/clientPortalSlice";
+import auditLogsReducer from "./slices/auditLogsSlice";
+import reportsReducer from "./slices/reportsSlice";
 
 export const store = configureStore({
   reducer: {
@@ -26,6 +29,9 @@ export const store = configureStore({
     brokers: brokersReducer,
     communicationTemplates: communicationTemplatesReducer,
     dashboard: dashboardReducer,
+    clientPortal: clientPortalReducer,
+    auditLogs: auditLogsReducer,
+    reports: reportsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

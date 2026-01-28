@@ -1,18 +1,49 @@
-import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
-import type { GetTasksResponse } from "@shared/api";
+import type { GetTasksResponse, TaskFormFieldType } from "@shared/api";
+
+interface FormField {
+  id?: number;
+  field_name: string;
+  field_label: string;
+  field_type: TaskFormFieldType;
+  field_options?: string[];
+  is_required: boolean;
+  placeholder?: string;
+  help_text?: string;
+  order_index: number;
+}
+
+interface TaskTemplateDraft {
+  formData: {
+    title: string;
+    description: string;
+    task_type: string;
+    priority: string;
+    default_due_days: number | null;
+    is_active: boolean;
+    requires_documents: boolean;
+    document_instructions: string;
+    has_custom_form: boolean;
+  };
+  formFields: FormField[];
+  activeTab: string;
+  savedAt: string;
+}
 
 interface TasksState {
   tasks: GetTasksResponse["tasks"];
   isLoading: boolean;
   error: string | null;
+  taskTemplateDraft: TaskTemplateDraft | null;
 }
 
 const initialState: TasksState = {
   tasks: [],
   isLoading: false,
   error: null,
+  taskTemplateDraft: null,
 };
 
 export const fetchTasks = createAsyncThunk(
@@ -62,7 +93,13 @@ export const createTask = createAsyncThunk(
       description?: string;
       task_type: string;
       priority: string;
-      due_date?: string;
+      default_due_days?: number | null;
+      is_active?: boolean;
+      requires_documents?: boolean;
+      document_instructions?: string;
+      min_documents?: number | null;
+      max_documents?: number | null;
+      has_custom_form?: boolean;
       application_id?: number | null;
     },
     { getState, rejectWithValue },
@@ -90,7 +127,13 @@ export const updateTask = createAsyncThunk(
       description?: string;
       task_type?: string;
       priority?: string;
-      due_date?: string;
+      default_due_days?: number | null;
+      is_active?: boolean;
+      requires_documents?: boolean;
+      document_instructions?: string;
+      min_documents?: number | null;
+      max_documents?: number | null;
+      has_custom_form?: boolean;
       application_id?: number | null;
     },
     { getState, rejectWithValue },
@@ -127,6 +170,179 @@ export const deleteTask = createAsyncThunk(
   },
 );
 
+export const uploadTaskDocument = createAsyncThunk(
+  "tasks/uploadDocument",
+  async (
+    {
+      taskId,
+      documentData,
+    }: {
+      taskId: number;
+      documentData: {
+        task_id: number;
+        field_id?: number;
+        document_type: "pdf" | "image";
+        filename: string;
+        original_filename: string;
+        file_path: string;
+        file_size?: number;
+        notes?: string;
+      };
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post(
+        `/api/tasks/${taskId}/documents`,
+        documentData,
+        {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        },
+      );
+      return data.document;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to upload document",
+      );
+    }
+  },
+);
+
+export const fetchTaskDocuments = createAsyncThunk(
+  "tasks/fetchDocuments",
+  async (taskId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get(`/api/tasks/${taskId}/documents`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return { taskId, documents: data.documents };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch documents",
+      );
+    }
+  },
+);
+
+export const deleteTaskDocument = createAsyncThunk(
+  "tasks/deleteDocument",
+  async (documentId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.delete(`/api/tasks/documents/${documentId}`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return documentId;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to delete document",
+      );
+    }
+  },
+);
+
+export const createTaskFormFields = createAsyncThunk(
+  "tasks/createFormFields",
+  async (
+    {
+      taskId,
+      form_fields,
+    }: {
+      taskId: number;
+      form_fields: Array<{
+        field_name: string;
+        field_label: string;
+        field_type: string;
+        field_options?: string[];
+        is_required?: boolean;
+        placeholder?: string;
+        validation_rules?: Record<string, any>;
+        order_index?: number;
+        help_text?: string;
+      }>;
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      console.log("🔄 Redux: createTaskFormFields called");
+      console.log("🔄 Redux: Task ID:", taskId);
+      console.log("🔄 Redux: Form fields:", form_fields);
+
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      console.log("🔄 Redux: Session token exists:", !!sessionToken);
+
+      const { data } = await axios.post(
+        `/api/tasks/${taskId}/form-fields`,
+        { form_fields },
+        {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        },
+      );
+
+      console.log("✅ Redux: Form fields created successfully:", data);
+      return { taskId, fields: data.fields };
+    } catch (error: any) {
+      console.error("❌ Redux: Failed to create form fields:", error);
+      console.error("❌ Redux: Error response:", error.response?.data);
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to create form fields",
+      );
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to create form fields",
+      );
+    }
+  },
+);
+
+export const fetchTaskFormFields = createAsyncThunk(
+  "tasks/fetchFormFields",
+  async (taskId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get(`/api/tasks/${taskId}/form-fields`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return { taskId, fields: data.fields };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch form fields",
+      );
+    }
+  },
+);
+
+export const submitTaskForm = createAsyncThunk(
+  "tasks/submitForm",
+  async (
+    {
+      taskId,
+      responses,
+    }: {
+      taskId: number;
+      responses: Array<{ field_id: number; field_value: string }>;
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post(
+        `/api/tasks/${taskId}/submit-form`,
+        { responses },
+        {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        },
+      );
+      return { taskId, message: data.message };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to submit form",
+      );
+    }
+  },
+);
+
 const tasksSlice = createSlice({
   name: "tasks",
   initialState,
@@ -134,6 +350,15 @@ const tasksSlice = createSlice({
     clearTasks: (state) => {
       state.tasks = [];
       state.error = null;
+    },
+    saveTaskTemplateDraft: (
+      state,
+      action: PayloadAction<TaskTemplateDraft>,
+    ) => {
+      state.taskTemplateDraft = action.payload;
+    },
+    clearTaskTemplateDraft: (state) => {
+      state.taskTemplateDraft = null;
     },
   },
   extraReducers: (builder) => {
@@ -150,12 +375,6 @@ const tasksSlice = createSlice({
         state.isLoading = false;
         state.error = action.payload as string;
       })
-      .addCase(updateTaskStatus.fulfilled, (state, action) => {
-        const task = state.tasks.find((t) => t.id === action.payload.taskId);
-        if (task) {
-          task.status = action.payload.status;
-        }
-      })
       .addCase(createTask.fulfilled, (state, action) => {
         state.tasks.unshift(action.payload);
       })
@@ -171,5 +390,6 @@ const tasksSlice = createSlice({
   },
 });
 
-export const { clearTasks } = tasksSlice.actions;
+export const { clearTasks, saveTaskTemplateDraft, clearTaskTemplateDraft } =
+  tasksSlice.actions;
 export default tasksSlice.reducer;

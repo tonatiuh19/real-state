@@ -1,145 +1,143 @@
-import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
+import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import axios from "axios";
 import type { RootState } from "../index";
-
-interface User {
-  id: number;
-  email: string;
-  firstName: string;
-  lastName: string;
-  userType: "user" | "broker";
-  role?: string;
-}
+import type {
+  ClientSendCodeRequest,
+  ClientSendCodeResponse,
+  ClientVerifyCodeRequest,
+  ClientVerifyCodeResponse,
+  ClientValidateSessionResponse,
+  ClientInfo,
+} from "@shared/api";
 
 interface ClientAuthState {
-  user: User | null;
-  token: string | null;
+  sessionToken: string | null;
+  client: ClientInfo | null;
   isAuthenticated: boolean;
-  isLoading: boolean;
+  loading: boolean;
   error: string | null;
-  verificationEmail: string | null;
+  sendCodeLoading: boolean;
+  verifyCodeLoading: boolean;
+  shouldRedirectToWizard: boolean;
 }
 
 const initialState: ClientAuthState = {
-  user: null,
-  token: localStorage.getItem("client_token"),
-  isAuthenticated: !!localStorage.getItem("client_token"),
-  isLoading: false,
+  sessionToken: localStorage.getItem("client_session_token"),
+  client: null,
+  isAuthenticated: false,
+  loading: false,
   error: null,
-  verificationEmail: null,
+  sendCodeLoading: false,
+  verifyCodeLoading: false,
+  shouldRedirectToWizard: false,
 };
 
-// Async thunks
-export const loginUser = createAsyncThunk(
-  "clientAuth/login",
-  async (
-    { email, userType }: { email: string; userType: "user" | "broker" },
-    { rejectWithValue },
-  ) => {
+/**
+ * Send verification code to client email
+ */
+export const sendClientCode = createAsyncThunk(
+  "clientAuth/sendCode",
+  async (data: ClientSendCodeRequest, { rejectWithValue }) => {
     try {
-      const response = await fetch(`/api/auth/${userType}/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Login failed");
-      }
-
-      const data = await response.json();
-      return { email, userType, message: data.message };
-    } catch (error) {
-      return rejectWithValue("Network error");
+      const response = await axios.post<ClientSendCodeResponse>(
+        "/api/client/auth/send-code",
+        data,
+      );
+      return response.data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data || { message: "Failed to send verification code" },
+      );
     }
   },
 );
 
-export const verifyCode = createAsyncThunk(
-  "clientAuth/verify",
-  async (
-    {
-      email,
-      code,
-      userType,
-    }: { email: string; code: string; userType: "user" | "broker" },
-    { rejectWithValue },
-  ) => {
+/**
+ * Verify code and login client
+ */
+export const verifyClientCode = createAsyncThunk(
+  "clientAuth/verifyCode",
+  async (data: ClientVerifyCodeRequest, { rejectWithValue }) => {
     try {
-      const response = await fetch(`/api/auth/${userType}/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Verification failed");
+      const response = await axios.post<ClientVerifyCodeResponse>(
+        "/api/client/auth/verify-code",
+        data,
+      );
+      if (response.data.success && response.data.sessionToken) {
+        localStorage.setItem(
+          "client_session_token",
+          response.data.sessionToken,
+        );
       }
-
-      const data = await response.json();
-      localStorage.setItem("token", data.token);
-      return data;
-    } catch (error) {
-      return rejectWithValue("Network error");
+      return response.data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to verify code",
+      );
     }
   },
 );
 
-export const registerUser = createAsyncThunk(
-  "clientAuth/register",
-  async (
-    userData: {
-      email: string;
-      firstName: string;
-      lastName: string;
-      phone?: string;
-      userType: "user" | "broker";
-      licenseNumber?: string;
-    },
-    { rejectWithValue },
-  ) => {
-    try {
-      const { userType, ...body } = userData;
-      const response = await fetch(`/api/auth/${userType}/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Registration failed");
-      }
-
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      return rejectWithValue("Network error");
-    }
-  },
-);
-
-export const getCurrentUser = createAsyncThunk(
-  "clientAuth/me",
+/**
+ * Validate existing session
+ */
+export const validateClientSession = createAsyncThunk(
+  "clientAuth/validate",
   async (_, { getState, rejectWithValue }) => {
     try {
-      const { clientAuth } = getState() as RootState;
-      const response = await fetch("/api/auth/me", {
-        headers: {
-          Authorization: `Bearer ${clientAuth.token}`,
-        },
-      });
+      const state = getState() as RootState;
+      const token = state.clientAuth.sessionToken;
 
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Failed to get user");
+      if (!token) {
+        return rejectWithValue("No session token found");
       }
 
-      const data = await response.json();
-      return data;
+      const response = await axios.get<ClientValidateSessionResponse>(
+        "/api/client/auth/validate",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      return response.data;
+    } catch (error: any) {
+      localStorage.removeItem("client_session_token");
+      return rejectWithValue(
+        error.response?.data?.message || "Session validation failed",
+      );
+    }
+  },
+);
+
+/**
+ * Logout client
+ */
+export const logoutClient = createAsyncThunk(
+  "clientAuth/logout",
+  async (_, { getState }) => {
+    try {
+      const state = getState() as RootState;
+      const token = state.clientAuth.sessionToken;
+
+      if (token) {
+        await axios.post(
+          "/api/client/auth/logout",
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+      }
+
+      localStorage.removeItem("client_session_token");
+      return true;
     } catch (error) {
-      return rejectWithValue("Network error");
+      localStorage.removeItem("client_session_token");
+      return true;
     }
   },
 );
@@ -148,91 +146,116 @@ const clientAuthSlice = createSlice({
   name: "clientAuth",
   initialState,
   reducers: {
-    logout: (state) => {
-      state.user = null;
-      state.token = null;
-      state.isAuthenticated = false;
+    clearClientError: (state) => {
       state.error = null;
-      state.verificationEmail = null;
-      localStorage.removeItem("client_token");
     },
-    clearError: (state) => {
-      state.error = null;
+    clearRedirectFlag: (state) => {
+      state.shouldRedirectToWizard = false;
     },
   },
   extraReducers: (builder) => {
+    // Send code
     builder
-      // Login
-      .addCase(loginUser.pending, (state) => {
-        state.isLoading = true;
+      .addCase(sendClientCode.pending, (state) => {
+        state.sendCodeLoading = true;
+        state.error = null;
+        state.shouldRedirectToWizard = false;
+      })
+      .addCase(sendClientCode.fulfilled, (state, action) => {
+        state.sendCodeLoading = false;
+        // Check if client not found and should redirect to wizard
+        if (action.payload.redirect === "/wizard") {
+          state.shouldRedirectToWizard = true;
+          state.error = "Client not found. Please create an application first.";
+        }
+      })
+      .addCase(sendClientCode.rejected, (state, action: any) => {
+        state.sendCodeLoading = false;
+        const payload = action.payload;
+        if (
+          payload?.message === "client_not_found" ||
+          payload?.redirect === "/wizard"
+        ) {
+          state.shouldRedirectToWizard = true;
+          state.error = "No account found. Let's get you pre-approved!";
+        } else {
+          state.error = payload?.message || (action.payload as string);
+        }
+      });
+
+    // Verify code
+    builder
+      .addCase(verifyClientCode.pending, (state) => {
+        state.verifyCodeLoading = true;
         state.error = null;
       })
-      .addCase(loginUser.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.verificationEmail = action.payload.email;
+      .addCase(verifyClientCode.fulfilled, (state, action) => {
+        state.verifyCodeLoading = false;
+        if (action.payload.sessionToken && action.payload.client) {
+          state.sessionToken = action.payload.sessionToken;
+          state.client = action.payload.client;
+          state.isAuthenticated = true;
+        }
       })
-      .addCase(loginUser.rejected, (state, action) => {
-        state.isLoading = false;
+      .addCase(verifyClientCode.rejected, (state, action) => {
+        state.verifyCodeLoading = false;
         state.error = action.payload as string;
-      })
-      // Verify
-      .addCase(verifyCode.pending, (state) => {
-        state.isLoading = true;
+      });
+
+    // Validate session
+    builder
+      .addCase(validateClientSession.pending, (state) => {
+        state.loading = true;
         state.error = null;
       })
-      .addCase(verifyCode.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.token = action.payload.token;
-        state.user = action.payload.user;
-        state.isAuthenticated = true;
-        state.verificationEmail = null;
-        localStorage.setItem("client_token", action.payload.token);
+      .addCase(validateClientSession.fulfilled, (state, action) => {
+        state.loading = false;
+        if (action.payload.client) {
+          state.client = action.payload.client;
+          state.isAuthenticated = true;
+        }
       })
-      .addCase(verifyCode.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = action.payload as string;
-      })
-      // Register
-      .addCase(registerUser.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(registerUser.fulfilled, (state) => {
-        state.isLoading = false;
-      })
-      .addCase(registerUser.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = action.payload as string;
-      })
-      // Get Current User
-      .addCase(getCurrentUser.pending, (state) => {
-        state.isLoading = true;
-      })
-      .addCase(getCurrentUser.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.user = action.payload;
-        state.isAuthenticated = true;
-      })
-      .addCase(getCurrentUser.rejected, (state, action) => {
-        state.isLoading = false;
+      .addCase(validateClientSession.rejected, (state, action) => {
+        state.loading = false;
+        state.sessionToken = null;
+        state.client = null;
         state.isAuthenticated = false;
-        state.token = null;
-        localStorage.removeItem("client_token");
+        state.error = action.payload as string;
+      });
+
+    // Logout
+    builder
+      .addCase(logoutClient.pending, (state) => {
+        state.loading = true;
+      })
+      .addCase(logoutClient.fulfilled, (state) => {
+        state.loading = false;
+        state.sessionToken = null;
+        state.client = null;
+        state.isAuthenticated = false;
+        state.error = null;
+      })
+      .addCase(logoutClient.rejected, (state) => {
+        state.loading = false;
+        state.sessionToken = null;
+        state.client = null;
+        state.isAuthenticated = false;
       });
   },
 });
 
-export const { logout, clearError } = clientAuthSlice.actions;
+export const { clearClientError, clearRedirectFlag } = clientAuthSlice.actions;
 
 // Selectors
 export const selectClientAuth = (state: RootState) => state.clientAuth;
-export const selectUser = (state: RootState) => state.clientAuth.user;
-export const selectIsAuthenticated = (state: RootState) =>
+export const selectClient = (state: RootState) => state.clientAuth.client;
+export const selectIsClientAuthenticated = (state: RootState) =>
   state.clientAuth.isAuthenticated;
-export const selectAuthLoading = (state: RootState) =>
-  state.clientAuth.isLoading;
-export const selectAuthError = (state: RootState) => state.clientAuth.error;
-export const selectVerificationEmail = (state: RootState) =>
-  state.clientAuth.verificationEmail;
+export const selectClientAuthLoading = (state: RootState) =>
+  state.clientAuth.loading;
+export const selectClientAuthError = (state: RootState) =>
+  state.clientAuth.error;
+export const selectShouldRedirectToWizard = (state: RootState) =>
+  state.clientAuth.shouldRedirectToWizard;
 
 export default clientAuthSlice.reducer;

@@ -11,6 +11,15 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
+  FileText,
+  File,
+  Image,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Check,
+  RotateCcw,
+  Download,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -31,6 +40,20 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -38,6 +61,9 @@ import {
   fetchLoanDetails,
   clearSelectedLoan,
 } from "@/store/slices/pipelineSlice";
+import { fetchTaskDocuments } from "@/store/slices/clientPortalSlice";
+import axios from "axios";
+import { toast } from "@/hooks/use-toast";
 
 const Pipeline = () => {
   const dispatch = useAppDispatch();
@@ -47,8 +73,22 @@ const Pipeline = () => {
     isLoading: loading,
     isLoadingDetails,
   } = useAppSelector((state) => state.pipeline);
+  const { sessionToken } = useAppSelector((state) => state.brokerAuth);
   const [searchQuery, setSearchQuery] = useState("");
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [taskDocuments, setTaskDocuments] = useState<
+    Record<
+      number,
+      { pdfs: any[]; images: { main: any; extra: any[] }; loading: boolean }
+    >
+  >({});
+  const [expandedTasks, setExpandedTasks] = useState<Record<number, boolean>>(
+    {},
+  );
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     dispatch(fetchLoans());
@@ -63,7 +103,181 @@ const Pipeline = () => {
     setIsPanelOpen(false);
     setTimeout(() => {
       dispatch(clearSelectedLoan());
+      setTaskDocuments({});
+      setExpandedTasks({});
     }, 300);
+  };
+
+  const handleViewTaskDocuments = async (taskId: number) => {
+    const isCurrentlyExpanded = expandedTasks[taskId];
+
+    // Toggle expansion
+    setExpandedTasks((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
+
+    // If collapsing or already loaded, don't fetch again
+    if (isCurrentlyExpanded || taskDocuments[taskId]) return;
+
+    // Set loading state
+    setTaskDocuments((prev) => ({
+      ...prev,
+      [taskId]: { pdfs: [], images: { main: null, extra: [] }, loading: true },
+    }));
+
+    try {
+      const result = await dispatch(fetchTaskDocuments(taskId)).unwrap();
+      console.log("Fetched documents for task", taskId, result);
+      setTaskDocuments((prev) => ({
+        ...prev,
+        [taskId]: {
+          pdfs: result.pdfs || [],
+          images: result.images || { main: null, extra: [] },
+          loading: false,
+        },
+      }));
+    } catch (error) {
+      console.error("Error fetching documents for task", taskId, error);
+      setTaskDocuments((prev) => ({
+        ...prev,
+        [taskId]: {
+          pdfs: [],
+          images: { main: null, extra: [] },
+          loading: false,
+        },
+      }));
+    }
+  };
+
+  const handleApproveTask = async (taskId: number) => {
+    try {
+      setIsSubmitting(true);
+      await axios.post(
+        `/api/tasks/${taskId}/approve`,
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+          },
+        },
+      );
+
+      toast({
+        title: "Task Approved",
+        description: "The task has been approved successfully.",
+      });
+
+      // Refresh loan details to update task status
+      if (selectedLoan) {
+        await dispatch(fetchLoanDetails(selectedLoan.id));
+      }
+    } catch (error: any) {
+      console.error("Error approving task:", error);
+      toast({
+        title: "Error",
+        description: error.response?.data?.error || "Failed to approve task",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleOpenReopenDialog = (taskId: number) => {
+    setSelectedTaskId(taskId);
+    setReopenReason("");
+    setReopenDialogOpen(true);
+  };
+
+  const handleReopenTask = async () => {
+    if (!selectedTaskId || !reopenReason.trim()) {
+      toast({
+        title: "Error",
+        description: "Please provide a reason for reopening the task",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await axios.post(
+        `/api/tasks/${selectedTaskId}/reopen`,
+        { reason: reopenReason },
+        {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+          },
+        },
+      );
+
+      toast({
+        title: "Task Reopened",
+        description: "The client will be notified to revise the task.",
+      });
+
+      setReopenDialogOpen(false);
+      setReopenReason("");
+      setSelectedTaskId(null);
+
+      // Refresh loan details to update task status
+      if (selectedLoan) {
+        await dispatch(fetchLoanDetails(selectedLoan.id));
+      }
+    } catch (error: any) {
+      console.error("Error reopening task:", error);
+      toast({
+        title: "Error",
+        description: error.response?.data?.error || "Failed to reopen task",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleExportMISMO = async () => {
+    if (!selectedLoan) return;
+
+    try {
+      toast({
+        title: "Generating MISMO File",
+        description: "Please wait while we prepare your file...",
+      });
+
+      const response = await axios.get(
+        `/api/loans/${selectedLoan.id}/export-mismo`,
+        {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+          },
+          responseType: "blob", // Important for file download
+        },
+      );
+
+      // Create blob URL and trigger download
+      const blob = new Blob([response.data], { type: "application/xml" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `MISMO_${selectedLoan.application_number}_${new Date().toISOString().split("T")[0]}.xml`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      toast({
+        title: "MISMO File Downloaded",
+        description: "The file has been downloaded successfully.",
+      });
+    } catch (error: any) {
+      console.error("Error exporting MISMO:", error);
+      toast({
+        title: "Export Failed",
+        description:
+          error.response?.data?.error ||
+          "Failed to generate MISMO file. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   const formatLoanType = (type: string) => {
@@ -142,6 +356,9 @@ const Pipeline = () => {
   const completedTasks =
     selectedLoan?.tasks.filter((t) => t.status === "completed").length || 0;
   const totalTasks = selectedLoan?.tasks.length || 0;
+  const approvedTasks =
+    selectedLoan?.tasks.filter((t) => t.status === "approved").length || 0;
+  const allTasksApproved = totalTasks > 0 && approvedTasks === totalTasks;
   const progressPercentage =
     totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
 
@@ -479,6 +696,23 @@ const Pipeline = () => {
                   </div>
                 </SheetHeader>
 
+                {/* MISMO Export Button - Only show when all tasks are approved */}
+                {allTasksApproved && (
+                  <div className="mt-4">
+                    <Button
+                      onClick={handleExportMISMO}
+                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-md"
+                      size="lg"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Export MISMO 3.4 for LendingPad
+                    </Button>
+                    <p className="text-xs text-center text-muted-foreground mt-2">
+                      ✓ All tasks approved • Ready for submission
+                    </p>
+                  </div>
+                )}
+
                 <div className="mt-6 space-y-6">
                   {/* Overview Card */}
                   <Card>
@@ -592,78 +826,288 @@ const Pipeline = () => {
                           </p>
                         ) : (
                           selectedLoan.tasks.map((task) => (
-                            <div
+                            <Collapsible
                               key={task.id}
-                              className={cn(
-                                "p-3 rounded-lg border transition-all",
-                                task.status === "completed" &&
-                                  "bg-emerald-50/50 dark:bg-emerald-950/20",
-                              )}
+                              open={expandedTasks[task.id]}
+                              onOpenChange={() =>
+                                handleViewTaskDocuments(task.id)
+                              }
                             >
-                              <div className="flex items-start gap-3">
-                                <div className="mt-0.5">
-                                  {task.status === "completed" ? (
-                                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                                  ) : task.status === "in_progress" ? (
-                                    <Clock className="h-4 w-4 text-blue-600" />
-                                  ) : task.status === "overdue" ? (
-                                    <AlertCircle className="h-4 w-4 text-red-600" />
-                                  ) : (
-                                    <div className="h-4 w-4 rounded-full border-2 border-muted-foreground" />
-                                  )}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-start justify-between gap-2">
-                                    <h4
-                                      className={cn(
-                                        "font-medium text-sm",
-                                        task.status === "completed" &&
-                                          "line-through text-muted-foreground",
-                                      )}
-                                    >
-                                      {task.title}
-                                    </h4>
-                                    <Badge
-                                      variant="outline"
-                                      className={cn(
-                                        "text-xs capitalize",
-                                        getTaskStatusColor(task.status),
-                                      )}
-                                    >
-                                      {task.status.replace("_", " ")}
-                                    </Badge>
-                                  </div>
-                                  {task.description && (
-                                    <p className="text-xs text-muted-foreground mt-1">
-                                      {task.description}
-                                    </p>
-                                  )}
-                                  <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                                    <span className="capitalize">
-                                      {task.task_type.replace("_", " ")}
-                                    </span>
-                                    {task.due_date && (
-                                      <>
-                                        <span>•</span>
-                                        <span>
-                                          Due{" "}
-                                          {new Date(
-                                            task.due_date,
-                                          ).toLocaleDateString()}
-                                        </span>
-                                      </>
+                              <div
+                                className={cn(
+                                  "p-3 rounded-lg border transition-all",
+                                  task.status === "completed" &&
+                                    "bg-emerald-50/50 dark:bg-emerald-950/20",
+                                )}
+                              >
+                                <div className="flex items-start gap-3">
+                                  <div className="mt-0.5">
+                                    {task.status === "completed" ? (
+                                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                    ) : task.status === "in_progress" ? (
+                                      <Clock className="h-4 w-4 text-blue-600" />
+                                    ) : task.status === "overdue" ? (
+                                      <AlertCircle className="h-4 w-4 text-red-600" />
+                                    ) : (
+                                      <div className="h-4 w-4 rounded-full border-2 border-muted-foreground" />
                                     )}
-                                    <span>•</span>
-                                    <Badge
-                                      variant="outline"
-                                      className="text-xs capitalize"
-                                    >
-                                      {task.priority}
-                                    </Badge>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <h4
+                                        className={cn(
+                                          "font-medium text-sm",
+                                          task.status === "completed" &&
+                                            "line-through text-muted-foreground",
+                                        )}
+                                      >
+                                        {task.title}
+                                      </h4>
+                                      <Badge
+                                        variant="outline"
+                                        className={cn(
+                                          "text-xs capitalize",
+                                          getTaskStatusColor(task.status),
+                                        )}
+                                      >
+                                        {task.status.replace("_", " ")}
+                                      </Badge>
+                                    </div>
+                                    {task.description && (
+                                      <p className="text-xs text-muted-foreground mt-1">
+                                        {task.description}
+                                      </p>
+                                    )}
+                                    <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                                      <span className="capitalize">
+                                        {task.task_type.replace("_", " ")}
+                                      </span>
+                                      {task.due_date && (
+                                        <>
+                                          <span>•</span>
+                                          <span>
+                                            Due{" "}
+                                            {new Date(
+                                              task.due_date,
+                                            ).toLocaleDateString()}
+                                          </span>
+                                        </>
+                                      )}
+                                      <span>•</span>
+                                      <Badge
+                                        variant="outline"
+                                        className="text-xs capitalize"
+                                      >
+                                        {task.priority}
+                                      </Badge>
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                      <CollapsibleTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 text-xs gap-1 hover:bg-primary/10"
+                                        >
+                                          <File className="h-3 w-3" />
+                                          View Documents
+                                          {expandedTasks[task.id] ? (
+                                            <ChevronUp className="h-3 w-3" />
+                                          ) : (
+                                            <ChevronDown className="h-3 w-3" />
+                                          )}
+                                        </Button>
+                                      </CollapsibleTrigger>
+
+                                      {/* Approve/Reopen buttons for completed tasks */}
+                                      {task.status === "completed" && (
+                                        <>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs gap-1 border-emerald-500 text-emerald-600 hover:bg-emerald-50"
+                                            onClick={() =>
+                                              handleApproveTask(task.id)
+                                            }
+                                            disabled={isSubmitting}
+                                          >
+                                            <Check className="h-3 w-3" />
+                                            Approve
+                                          </Button>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs gap-1 border-amber-500 text-amber-600 hover:bg-amber-50"
+                                            onClick={() =>
+                                              handleOpenReopenDialog(task.id)
+                                            }
+                                            disabled={isSubmitting}
+                                          >
+                                            <RotateCcw className="h-3 w-3" />
+                                            Reopen
+                                          </Button>
+                                        </>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
+
+                                <CollapsibleContent className="mt-3 pt-3 border-t space-y-3">
+                                  {taskDocuments[task.id]?.loading ? (
+                                    <p className="text-xs text-muted-foreground text-center py-4">
+                                      Loading documents...
+                                    </p>
+                                  ) : (
+                                    <>
+                                      {/* PDFs */}
+                                      {taskDocuments[task.id]?.pdfs &&
+                                        taskDocuments[task.id].pdfs.length >
+                                          0 && (
+                                          <div>
+                                            <h5 className="text-xs font-semibold mb-2 flex items-center gap-1">
+                                              <FileText className="h-3 w-3 text-red-500" />
+                                              PDFs (
+                                              {
+                                                taskDocuments[task.id].pdfs
+                                                  .length
+                                              }
+                                              )
+                                            </h5>
+                                            <div className="space-y-2">
+                                              {taskDocuments[task.id].pdfs.map(
+                                                (pdf: any, idx: number) => (
+                                                  <div
+                                                    key={idx}
+                                                    className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs"
+                                                  >
+                                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                      <FileText className="h-4 w-4 text-red-500 flex-shrink-0" />
+                                                      <span className="truncate">
+                                                        {pdf.filename}
+                                                      </span>
+                                                    </div>
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="sm"
+                                                      asChild
+                                                      className="h-6 px-2 flex-shrink-0"
+                                                    >
+                                                      <a
+                                                        href={`https://disruptinglabs.com${pdf.path}`}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                      >
+                                                        <ExternalLink className="h-3 w-3" />
+                                                      </a>
+                                                    </Button>
+                                                  </div>
+                                                ),
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                      {/* Images */}
+                                      {(taskDocuments[task.id]?.images.main ||
+                                        (taskDocuments[task.id]?.images.extra &&
+                                          taskDocuments[task.id].images.extra
+                                            .length > 0)) && (
+                                        <div>
+                                          <h5 className="text-xs font-semibold mb-2 flex items-center gap-1">
+                                            <Image className="h-3 w-3 text-blue-500" />
+                                            Images (
+                                            {(taskDocuments[task.id].images.main
+                                              ? 1
+                                              : 0) +
+                                              (taskDocuments[task.id].images
+                                                .extra?.length || 0)}
+                                            )
+                                          </h5>
+                                          <div className="space-y-2">
+                                            {taskDocuments[task.id].images
+                                              .main && (
+                                              <div className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
+                                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                  <Image className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                                                  <span className="truncate">
+                                                    {
+                                                      taskDocuments[task.id]
+                                                        .images.main.filename
+                                                    }
+                                                  </span>
+                                                </div>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  asChild
+                                                  className="h-6 px-2 flex-shrink-0"
+                                                >
+                                                  <a
+                                                    href={`https://disruptinglabs.com${taskDocuments[task.id].images.main.path}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                  >
+                                                    <ExternalLink className="h-3 w-3" />
+                                                  </a>
+                                                </Button>
+                                              </div>
+                                            )}
+                                            {taskDocuments[
+                                              task.id
+                                            ].images.extra?.map(
+                                              (img: any, idx: number) => (
+                                                <div
+                                                  key={idx}
+                                                  className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs"
+                                                >
+                                                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                    <Image className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                                                    <span className="truncate">
+                                                      {img.filename}
+                                                    </span>
+                                                  </div>
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    asChild
+                                                    className="h-6 px-2 flex-shrink-0"
+                                                  >
+                                                    <a
+                                                      href={`https://disruptinglabs.com${img.path}`}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                    >
+                                                      <ExternalLink className="h-3 w-3" />
+                                                    </a>
+                                                  </Button>
+                                                </div>
+                                              ),
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* Empty State */}
+                                      {(!taskDocuments[task.id] ||
+                                        ((!taskDocuments[task.id].pdfs ||
+                                          taskDocuments[task.id].pdfs.length ===
+                                            0) &&
+                                          !taskDocuments[task.id].images.main &&
+                                          (!taskDocuments[task.id].images
+                                            .extra ||
+                                            taskDocuments[task.id].images.extra
+                                              .length === 0))) && (
+                                        <div className="text-center py-4">
+                                          <File className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                                          <p className="text-xs text-muted-foreground">
+                                            No documents uploaded yet
+                                          </p>
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </CollapsibleContent>
                               </div>
-                            </div>
+                            </Collapsible>
                           ))
                         )}
                       </div>
@@ -690,6 +1134,44 @@ const Pipeline = () => {
             ) : null}
           </SheetContent>
         </Sheet>
+
+        {/* Reopen Task Dialog */}
+        <Dialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Reopen Task for Revision</DialogTitle>
+              <DialogDescription>
+                Please provide feedback explaining why this task needs to be
+                revised. The client will receive an email with your feedback.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <Textarea
+                placeholder="Example: The uploaded documents are not clear. Please re-upload high-quality scans..."
+                value={reopenReason}
+                onChange={(e) => setReopenReason(e.target.value)}
+                rows={5}
+                className="resize-none"
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setReopenDialogOpen(false)}
+                disabled={isSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleReopenTask}
+                disabled={isSubmitting || !reopenReason.trim()}
+                className="bg-amber-600 hover:bg-amber-700"
+              >
+                {isSubmitting ? "Reopening..." : "Reopen Task"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </>
   );

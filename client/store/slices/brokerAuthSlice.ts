@@ -22,8 +22,18 @@ interface BrokerAuthState {
   error: string | null;
 }
 
+// Helper to get user from localStorage
+const getSavedUser = (): BrokerUser | null => {
+  try {
+    const savedUser = localStorage.getItem("broker_user");
+    return savedUser ? JSON.parse(savedUser) : null;
+  } catch {
+    return null;
+  }
+};
+
 const initialState: BrokerAuthState = {
-  user: null,
+  user: getSavedUser(),
   sessionToken: localStorage.getItem("broker_session"),
   isAuthenticated: !!localStorage.getItem("broker_session"),
   loading: false,

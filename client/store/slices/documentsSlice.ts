@@ -1,76 +1,94 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import axios from "axios";
 import type { RootState } from "../index";
 
 interface Document {
   id: number;
-  application_id: number;
-  document_type: string;
-  document_name: string;
+  task_id: number;
+  field_id: number | null;
+  document_type: "pdf" | "image";
+  filename: string;
+  original_filename: string;
   file_path: string;
-  status: string;
-  created_at: string;
+  file_size: number | null;
+  uploaded_by_user_id: number | null;
+  uploaded_by_broker_id: number | null;
+  uploaded_at: string;
+  notes: string | null;
+  task_title: string;
+  task_type: string;
+  task_status: string;
+  application_number: string;
+  broker_id: number;
+  client_first_name: string;
+  client_last_name: string;
+  client_email: string;
+  broker_first_name: string | null;
+  broker_last_name: string | null;
 }
 
 interface DocumentsState {
   documents: Document[];
   isLoading: boolean;
   error: string | null;
+  searchQuery: string;
+  filterType: "all" | "pdf" | "image";
+  filterBroker: number | null;
 }
 
 const initialState: DocumentsState = {
   documents: [],
   isLoading: false,
   error: null,
+  searchQuery: "",
+  filterType: "all",
+  filterBroker: null,
 };
 
-export const fetchDocuments = createAsyncThunk(
+/**
+ * Fetch all documents
+ * Admin: sees all documents from all brokers
+ * Regular broker: sees only their own documents
+ */
+export const fetchAllDocuments = createAsyncThunk(
   "documents/fetchAll",
-  async (applicationId: number, { getState, rejectWithValue }) => {
+  async (_, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
-      const response = await fetch(
-        `/api/documents?applicationId=${applicationId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${auth.token}`,
-          },
-        },
+      const state = getState() as RootState;
+      const token = state.brokerAuth.sessionToken;
+
+      const response = await axios.get("/api/documents", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      return response.data.documents;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch documents",
       );
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Failed to fetch documents");
-      }
-
-      return await response.json();
-    } catch (error) {
-      return rejectWithValue("Network error");
     }
   },
 );
 
-export const uploadDocument = createAsyncThunk(
-  "documents/upload",
-  async (documentData: any, { getState, rejectWithValue }) => {
+/**
+ * Delete document
+ */
+export const deleteDocument = createAsyncThunk(
+  "documents/delete",
+  async (documentId: number, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
-      const response = await fetch("/api/documents", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`,
-        },
-        body: JSON.stringify(documentData),
+      const state = getState() as RootState;
+      const token = state.brokerAuth.sessionToken;
+
+      await axios.delete(`/api/tasks/documents/${documentId}`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Failed to upload document");
-      }
-
-      return await response.json();
-    } catch (error) {
-      return rejectWithValue("Network error");
+      return documentId;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to delete document",
+      );
     }
   },
 );
@@ -79,34 +97,54 @@ const documentsSlice = createSlice({
   name: "documents",
   initialState,
   reducers: {
-    clearDocuments: (state) => {
-      state.documents = [];
+    setSearchQuery: (state, action) => {
+      state.searchQuery = action.payload;
+    },
+    setFilterType: (state, action) => {
+      state.filterType = action.payload;
+    },
+    setFilterBroker: (state, action) => {
+      state.filterBroker = action.payload;
+    },
+    clearFilters: (state) => {
+      state.searchQuery = "";
+      state.filterType = "all";
+      state.filterBroker = null;
     },
   },
   extraReducers: (builder) => {
     builder
-      .addCase(fetchDocuments.pending, (state) => {
+      // Fetch all documents
+      .addCase(fetchAllDocuments.pending, (state) => {
         state.isLoading = true;
+        state.error = null;
       })
-      .addCase(fetchDocuments.fulfilled, (state, action) => {
+      .addCase(fetchAllDocuments.fulfilled, (state, action) => {
         state.isLoading = false;
         state.documents = action.payload;
       })
-      .addCase(fetchDocuments.rejected, (state, action) => {
+      .addCase(fetchAllDocuments.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload as string;
       })
-      .addCase(uploadDocument.fulfilled, (state, action) => {
-        state.documents.push(action.payload);
+      // Delete document
+      .addCase(deleteDocument.pending, (state) => {
+        state.isLoading = true;
+      })
+      .addCase(deleteDocument.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.documents = state.documents.filter(
+          (doc) => doc.id !== action.payload,
+        );
+      })
+      .addCase(deleteDocument.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
       });
   },
 });
 
-export const { clearDocuments } = documentsSlice.actions;
-
-export const selectDocuments = (state: { documents: DocumentsState }) =>
-  state.documents.documents;
-export const selectDocumentsLoading = (state: { documents: DocumentsState }) =>
-  state.documents.isLoading;
+export const { setSearchQuery, setFilterType, setFilterBroker, clearFilters } =
+  documentsSlice.actions;
 
 export default documentsSlice.reducer;

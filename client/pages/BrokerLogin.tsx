@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   Mail,
@@ -24,7 +24,16 @@ import { authPageMeta } from "@/lib/seo-helpers";
 export default function BrokerLogin() {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const { loading, error } = useAppSelector((state) => state.brokerAuth);
+  const { loading, error, isAuthenticated } = useAppSelector(
+    (state) => state.brokerAuth,
+  );
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/admin");
+    }
+  }, [isAuthenticated, navigate]);
 
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");

@@ -1,5 +1,5 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import React, { useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { motion, Variants } from "framer-motion";
 import {
   ArrowRight,
@@ -14,14 +14,26 @@ import {
   Award,
   Sparkles,
   TrendingUp,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import HeroBackground from "@/components/visuals/HeroBackground";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { useAppSelector } from "@/store/hooks";
+import { selectIsClientAuthenticated } from "@/store/slices/clientAuthSlice";
 
 const Index = () => {
+  const navigate = useNavigate();
+  const isClientAuthenticated = useAppSelector(selectIsClientAuthenticated);
+
+  // Redirect to client portal if already logged in
+  useEffect(() => {
+    if (isClientAuthenticated) {
+      navigate("/portal");
+    }
+  }, [isClientAuthenticated, navigate]);
   const containerVariants: Variants = {
     hidden: { opacity: 0 },
     visible: {
@@ -215,6 +227,19 @@ const Index = () => {
                   >
                     Get Pre-Approved
                     <ArrowRight className="ml-2 h-5 w-5" />
+                  </Button>
+                </Link>
+                <Link
+                  to="/client-login"
+                  className="flex-1 sm:flex-initial w-full sm:w-auto"
+                >
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="w-full h-14 px-8 text-lg font-semibold border-2 border-primary/20 hover:bg-primary/5 backdrop-blur-sm transition-all hover:scale-105 active:scale-95"
+                  >
+                    <FileText className="mr-2 h-5 w-5" />
+                    My Applications
                   </Button>
                 </Link>
                 <a href="tel:(562)337-0000" className="flex-1 sm:flex-initial">

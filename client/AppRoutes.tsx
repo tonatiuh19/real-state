@@ -1,11 +1,12 @@
 import { Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
-import ClientPortal from "./pages/ClientPortal";
 import BrokerLogin from "./pages/BrokerLogin";
+import ClientLogin from "./pages/ClientLogin";
 import ApplicationWizard from "./pages/ApplicationWizard";
 import NotFound from "./pages/NotFound";
 import AppLayout from "./components/layout/AppLayout";
 import AdminLayout from "./components/layout/AdminLayout";
+import ClientLayout from "./components/layout/ClientLayout";
 import AdminDashboard from "./pages/admin/Dashboard";
 import Pipeline from "./pages/admin/Pipeline";
 import Clients from "./pages/admin/Clients";
@@ -16,9 +17,12 @@ import Settings from "./pages/admin/Settings";
 import CommunicationTemplates from "./pages/admin/CommunicationTemplates";
 import Reports from "./pages/admin/Reports";
 import Compliance from "./pages/admin/Compliance";
-import AuditLogs from "./pages/admin/AuditLogs";
 import Notifications from "./pages/admin/Notifications";
 import Brokers from "./pages/admin/Brokers";
+import ClientDashboard from "./pages/client/Dashboard";
+import ClientLoans from "./pages/client/Loans";
+import ClientTasks from "./pages/client/Tasks";
+import ClientProfile from "./pages/client/Profile";
 
 const AppRoutes = () => (
   <Routes>
@@ -34,9 +38,33 @@ const AppRoutes = () => (
     <Route
       path="/portal"
       element={
-        <AppLayout showHeader={false} showFooter={false}>
-          <ClientPortal />
-        </AppLayout>
+        <ClientLayout>
+          <ClientDashboard />
+        </ClientLayout>
+      }
+    />
+    <Route
+      path="/portal/loans"
+      element={
+        <ClientLayout>
+          <ClientLoans />
+        </ClientLayout>
+      }
+    />
+    <Route
+      path="/portal/tasks"
+      element={
+        <ClientLayout>
+          <ClientTasks />
+        </ClientLayout>
+      }
+    />
+    <Route
+      path="/portal/profile"
+      element={
+        <ClientLayout>
+          <ClientProfile />
+        </ClientLayout>
       }
     />
     <Route
@@ -44,6 +72,15 @@ const AppRoutes = () => (
       element={
         <AppLayout showHeader={false} showFooter={false}>
           <BrokerLogin />
+        </AppLayout>
+      }
+    />
+    <Route path="/client-login" element={<ClientLogin />} />
+    <Route
+      path="/wizard"
+      element={
+        <AppLayout showHeader={false} showFooter={false}>
+          <ApplicationWizard />
         </AppLayout>
       }
     />
@@ -126,14 +163,6 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <Compliance />
-        </AdminLayout>
-      }
-    />
-    <Route
-      path="/admin/audit-logs"
-      element={
-        <AdminLayout>
-          <AuditLogs />
         </AdminLayout>
       }
     />

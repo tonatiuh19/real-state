@@ -38,6 +38,16 @@ import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, validateSession } from "@/store/slices/brokerAuthSlice";
 import { useNavigate, useLocation } from "react-router-dom";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -45,10 +55,20 @@ interface AdminLayoutProps {
 
 const AdminLayout = ({ children }: AdminLayoutProps) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, sessionToken } = useAppSelector((state) => state.brokerAuth);
+  const { user, sessionToken, isAuthenticated } = useAppSelector(
+    (state) => state.brokerAuth,
+  );
+
+  // Redirect to login if not authenticated
+  React.useEffect(() => {
+    if (!sessionToken) {
+      navigate("/broker-login");
+    }
+  }, [sessionToken, navigate]);
 
   // Validate session and load user data on mount
   React.useEffect(() => {
@@ -57,8 +77,9 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     }
   }, [dispatch, user, sessionToken]);
 
-  const handleLogout = () => {
-    dispatch(logout());
+  const handleLogout = async () => {
+    setShowLogoutConfirm(false);
+    await dispatch(logout());
     navigate("/broker-login");
   };
 
@@ -116,12 +137,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Compliance",
       icon: <Shield className="h-4 w-4" />,
       path: "/admin/compliance",
-    },
-    {
-      id: "audit-logs",
-      label: "Audit Logs",
-      icon: <History className="h-4 w-4" />,
-      path: "/admin/audit-logs",
     },
     {
       id: "notifications",
@@ -235,7 +250,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                    onClick={handleLogout}
+                    onClick={() => setShowLogoutConfirm(true)}
                   >
                     <LogOut className="h-4 w-4" />
                   </Button>
@@ -278,7 +293,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
-                    onClick={handleLogout}
+                    onClick={() => setShowLogoutConfirm(true)}
                   >
                     <LogOut className="h-4 w-4" />
                     Sign Out
@@ -292,6 +307,28 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto h-screen">{children}</main>
+
+      {/* Logout Confirmation Dialog */}
+      <AlertDialog open={showLogoutConfirm} onOpenChange={setShowLogoutConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sign Out</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to sign out? You'll need to log in again to
+              access your dashboard.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleLogout}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Sign Out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
