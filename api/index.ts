@@ -93,7 +93,7 @@ async function sendBrokerVerificationEmail(
       from:
         process.env.SMTP_FROM || `"Encore Mortgage" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: `${code} es tu código de verificación - Admin`,
+      subject: `${code} is your verification code - Admin`,
       html: emailBody,
     });
 
@@ -152,22 +152,22 @@ async function sendClientVerificationEmail(
         <div class="container">
           <div class="header">
             <h1>🏠 Encore Mortgage</h1>
-            <p>Bienvenido a tu Portal de Cliente</p>
+            <p>Welcome to Your Client Portal</p>
           </div>
           <div class="welcome">
-            <h2>Hola ${firstName},</h2>
-            <p>¡Bienvenido! Estamos emocionados de ayudarte en tu proceso de préstamo hipotecario.</p>
+            <h2>Hello ${firstName},</h2>
+            <p>Welcome! We're excited to help you with your mortgage loan process.</p>
           </div>
-          <p>Para acceder a tu portal de cliente, usa el siguiente código de verificación:</p>
+          <p>To access your client portal, use the following verification code:</p>
           <div class="code">${code}</div>
           <div class="info">
-            <p><strong>⏱️ Validez:</strong> Este código expirará en <strong>15 minutos</strong></p>
-            <p><strong>🔒 Seguridad:</strong> Nunca compartas este código con nadie</p>
+            <p><strong>⏱️ Validity:</strong> This code will expire in <strong>15 minutes</strong></p>
+            <p><strong>🔒 Security:</strong> Never share this code with anyone</p>
           </div>
-          <p style="color: #64748b; font-size: 14px;">Si no solicitaste este código, puedes ignorar este correo de forma segura.</p>
+          <p style="color: #64748b; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
           <div class="footer">
             <p><strong>Encore Mortgage</strong></p>
-            <p>Tu socio en el camino hacia tu nuevo hogar</p>
+            <p>Your partner on the path to your new home</p>
           </div>
         </div>
       </body>
@@ -178,7 +178,7 @@ async function sendClientVerificationEmail(
       from:
         process.env.SMTP_FROM || `"Encore Mortgage" <${process.env.SMTP_USER}>`,
       to: email,
-      subject: `${code} es tu código de acceso - Encore Mortgage`,
+      subject: `${code} is your access code - Encore Mortgage`,
       html: emailBody,
     });
 
