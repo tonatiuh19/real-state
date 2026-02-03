@@ -10,8 +10,31 @@ import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
 
+// Validate critical environment variables
+if (
+  !process.env.DB_HOST ||
+  !process.env.DB_USER ||
+  !process.env.DB_PASSWORD ||
+  !process.env.DB_NAME
+) {
+  throw new Error(
+    "Database environment variables are required: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME",
+  );
+}
+
+// JWT Secret with fallback (warn in production)
 const JWT_SECRET =
-  process.env.JWT_SECRET || "your-secret-key-change-in-production";
+  process.env.JWT_SECRET ||
+  (() => {
+    console.warn(
+      "⚠️  WARNING: Using default JWT_SECRET. Set JWT_SECRET in .env for production!",
+    );
+    return "default-jwt-secret-CHANGE-THIS-IN-PRODUCTION";
+  })();
+
+// Tenant Configuration
+// Encore Mortgage tenant ID (see database/schema.sql for reference)
+const ENCORE_TENANT_ID = 1;
 
 // Database connection pool
 const pool = mysql.createPool({
@@ -41,11 +64,13 @@ async function sendBrokerVerificationEmail(
     console.log("📧 Sending broker verification email");
     console.log("   Email:", email);
     console.log("   Name:", firstName);
+    console.log("   SMTP Host:", process.env.SMTP_HOST);
+    console.log("   SMTP From:", process.env.SMTP_FROM);
 
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || "mail.disruptinglabs.com",
-      port: parseInt(process.env.SMTP_PORT || "465"),
-      secure: process.env.SMTP_SECURE === "true" || true,
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD,
@@ -54,10 +79,12 @@ async function sendBrokerVerificationEmail(
 
     if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
       console.error("❌ SMTP credentials not configured!");
-      return;
+      throw new Error("SMTP credentials not configured");
     }
 
+    console.log("🔍 Verifying SMTP connection...");
     await transporter.verify();
+    console.log("✅ SMTP connection verified");
 
     const emailBody = `
       <!DOCTYPE html>
@@ -74,13 +101,13 @@ async function sendBrokerVerificationEmail(
       <body>
         <div class="container">
           <div class="header">
-            <h1>🛡️ Encore Mortgage Admin</h1>
+            <h1>Encore Mortgage Admin</h1>
             <p>Código de Verificación</p>
           </div>
           <h2>Hola ${firstName},</h2>
           <p>Tu código de verificación es:</p>
           <div class="code">${code}</div>
-          <p><strong>⏱️ Validez:</strong> Este código expirará en <strong>15 minutos</strong></p>
+          <p><strong>Validez:</strong> Este código expirará en <strong>15 minutos</strong></p>
           <div class="footer">
             <p><strong>Encore Mortgage</strong> - Panel de Administración</p>
           </div>
@@ -89,15 +116,17 @@ async function sendBrokerVerificationEmail(
       </html>
     `;
 
-    await transporter.sendMail({
-      from:
-        process.env.SMTP_FROM || `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+    console.log("📨 Sending email to:", email);
+    const info = await transporter.sendMail({
+      from: process.env.SMTP_FROM,
       to: email,
       subject: `${code} is your verification code - Admin`,
       html: emailBody,
     });
 
     console.log("✅ Broker verification email sent successfully!");
+    console.log("📧 Message ID:", info.messageId);
+    console.log("📬 Response:", info.response);
   } catch (error) {
     console.error("❌ Error sending broker email:", error);
     throw error;
@@ -118,9 +147,9 @@ async function sendClientVerificationEmail(
     console.log("   Name:", firstName);
 
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || "mail.disruptinglabs.com",
-      port: parseInt(process.env.SMTP_PORT || "465"),
-      secure: process.env.SMTP_SECURE === "true" || true,
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD,
@@ -175,8 +204,7 @@ async function sendClientVerificationEmail(
     `;
 
     await transporter.sendMail({
-      from:
-        process.env.SMTP_FROM || `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: process.env.SMTP_FROM,
       to: email,
       subject: `${code} is your access code - Encore Mortgage`,
       html: emailBody,
@@ -208,9 +236,9 @@ async function sendClientLoanWelcomeEmail(
     console.log("📧 Sending client loan welcome email");
 
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || "mail.disruptinglabs.com",
-      port: parseInt(process.env.SMTP_PORT || "465"),
-      secure: process.env.SMTP_SECURE === "true" || true,
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD,
@@ -265,7 +293,7 @@ async function sendClientLoanWelcomeEmail(
               <h2 style="color: #0c4a6e; font-size: 20px;">📋 Your Next Steps</h2>
               ${taskListHTML}
               <div style="text-align: center; margin: 32px 0;">
-                <a href="${process.env.CLIENT_URL || "http://localhost:5000"}/portal" style="display: inline-block; background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600;">Access Your Portal</a>
+                <a href="${process.env.CLIENT_URL}/portal" style="display: inline-block; background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600;">Access Your Portal</a>
               </div>
             </div>
           </div>
@@ -295,9 +323,9 @@ async function sendTaskReopenedEmail(
     console.log("📧 Sending task reopened email");
 
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || "mail.disruptinglabs.com",
-      port: parseInt(process.env.SMTP_PORT || "465"),
-      secure: process.env.SMTP_SECURE === "true" || true,
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD,
@@ -339,7 +367,7 @@ async function sendTaskReopenedEmail(
               </div>
 
               <div style="text-align: center; margin: 32px 0;">
-                <a href="${process.env.CLIENT_URL || "http://localhost:5000"}/portal" style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600; box-shadow: 0 4px 6px rgba(245, 158, 11, 0.3);">Review Task Now</a>
+                <a href="${process.env.CLIENT_URL}/portal" style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600; box-shadow: 0 4px 6px rgba(245, 158, 11, 0.3);">Review Task Now</a>
               </div>
 
               <div style="border-top: 1px solid #e2e8f0; margin-top: 32px; padding-top: 20px;">
@@ -398,8 +426,8 @@ const verifyClientSession = async (
 
       // Get client details
       const [clients] = await pool.query<any[]>(
-        "SELECT * FROM clients WHERE id = ? AND status = 'active'",
-        [decoded.clientId],
+        "SELECT * FROM clients WHERE id = ? AND status = 'active' AND tenant_id = ?",
+        [decoded.clientId, ENCORE_TENANT_ID],
       );
 
       if (clients.length === 0) {
@@ -461,8 +489,8 @@ const verifyBrokerSession = async (
 
       // Get broker details
       const [brokers] = await pool.query<any[]>(
-        "SELECT * FROM brokers WHERE id = ? AND status = 'active'",
-        [decoded.brokerId],
+        "SELECT * FROM brokers WHERE id = ? AND status = 'active' AND tenant_id = ?",
+        [decoded.brokerId, ENCORE_TENANT_ID],
       );
 
       if (brokers.length === 0) {
@@ -533,11 +561,12 @@ async function createAuditLog({
 
     await pool.query(
       `INSERT INTO audit_logs (
-        user_id, broker_id, actor_type, action, entity_type, entity_id, 
+        tenant_id, user_id, broker_id, actor_type, action, entity_type, entity_id, 
         changes, status, error_message, request_id, duration_ms, 
         ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
+        ENCORE_TENANT_ID,
         userId,
         brokerId,
         actorType,
@@ -622,8 +651,8 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
 
     // Check if broker exists and is active
     const [brokers] = await pool.query<any[]>(
-      "SELECT * FROM brokers WHERE email = ? AND status = 'active'",
-      [normalizedEmail],
+      "SELECT * FROM brokers WHERE email = ? AND status = 'active' AND tenant_id = ?",
+      [normalizedEmail, ENCORE_TENANT_ID],
     );
 
     if (brokers.length === 0) {
@@ -644,16 +673,26 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
     // Generate 6-digit code
     const code = Math.floor(100000 + Math.random() * 900000);
 
-    // Create new session with 15-minute expiry
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    // Create new session with 15-minute expiry (using MySQL time to avoid timezone issues)
     await pool.query(
       `INSERT INTO broker_sessions (broker_id, session_code, is_active, expires_at) 
-       VALUES (?, ?, TRUE, ?)`,
-      [broker.id, code, expiresAt],
+       VALUES (?, ?, TRUE, DATE_ADD(NOW(), INTERVAL 15 MINUTE))`,
+      [broker.id, code],
     );
 
+    console.log("✅ Session created with code:", code);
+
     // Send email with code
-    await sendBrokerVerificationEmail(normalizedEmail, code, broker.first_name);
+    try {
+      await sendBrokerVerificationEmail(
+        normalizedEmail,
+        code,
+        broker.first_name,
+      );
+    } catch (emailError) {
+      console.error("Failed to send verification email:", emailError);
+      // Continue anyway - the code is still valid
+    }
 
     res.json({
       success: true,
@@ -685,10 +724,15 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
       });
     }
 
+    // Normalize email to match send-code endpoint
+    const normalizedEmail = email.trim().toLowerCase();
+
+    console.log("🔍 Verifying broker code:", { email: normalizedEmail, code });
+
     // Check if broker exists
     const [brokers] = await pool.query<any[]>(
-      "SELECT * FROM brokers WHERE email = ? AND status = 'active'",
-      [email],
+      "SELECT * FROM brokers WHERE email = ? AND status = 'active' AND tenant_id = ?",
+      [normalizedEmail, ENCORE_TENANT_ID],
     );
 
     if (brokers.length === 0) {
@@ -702,11 +746,37 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
 
     // Check if code is valid
     const [sessions] = await pool.query<any[]>(
-      `SELECT * FROM broker_sessions 
+      `SELECT *, expires_at, NOW() as server_time FROM broker_sessions 
        WHERE broker_id = ? AND session_code = ? AND is_active = TRUE 
        AND expires_at > NOW()`,
       [broker.id, parseInt(code)],
     );
+
+    console.log("📊 Sessions found:", sessions.length);
+    if (sessions.length > 0) {
+      console.log("⏰ Session expires at:", sessions[0].expires_at);
+      console.log("🕐 Server time:", sessions[0].server_time);
+      console.log("✅ Code is valid!");
+    } else {
+      // Check if session exists without time constraint
+      const [allSessions] = await pool.query<any[]>(
+        `SELECT *, expires_at, NOW() as server_time, 
+         TIMESTAMPDIFF(SECOND, NOW(), expires_at) as seconds_until_expiry 
+         FROM broker_sessions 
+         WHERE broker_id = ? AND session_code = ?`,
+        [broker.id, parseInt(code)],
+      );
+      console.log("❌ No valid sessions. Debug info:");
+      console.log("   Total sessions found:", allSessions.length);
+      if (allSessions.length > 0) {
+        console.log("   Session details:", {
+          expires_at: allSessions[0].expires_at,
+          server_time: allSessions[0].server_time,
+          is_active: allSessions[0].is_active,
+          seconds_until_expiry: allSessions[0].seconds_until_expiry,
+        });
+      }
+    }
 
     if (sessions.length === 0) {
       return res.status(401).json({
@@ -728,9 +798,10 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
     );
 
     // Update last login
-    await pool.query("UPDATE brokers SET last_login = NOW() WHERE id = ?", [
-      broker.id,
-    ]);
+    await pool.query(
+      "UPDATE brokers SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
+      [broker.id, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -854,8 +925,8 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
 
     // Check if client exists
     const [clients] = await pool.query<any[]>(
-      "SELECT * FROM clients WHERE email = ? AND status = 'active'",
-      [normalizedEmail],
+      "SELECT * FROM clients WHERE email = ? AND status = 'active' AND tenant_id = ?",
+      [normalizedEmail, ENCORE_TENANT_ID],
     );
 
     if (clients.length === 0) {
@@ -876,12 +947,11 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
     // Generate 6-digit code
     const code = Math.floor(100000 + Math.random() * 900000);
 
-    // Create new session with 15-minute expiry
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    // Create new session with 15-minute expiry (using MySQL time to avoid timezone issues)
     await pool.query(
       `INSERT INTO user_sessions (user_id, session_code, is_active, expires_at) 
-       VALUES (?, ?, TRUE, ?)`,
-      [client.id, code, expiresAt],
+       VALUES (?, ?, TRUE, DATE_ADD(NOW(), INTERVAL 15 MINUTE))`,
+      [client.id, code],
     );
 
     // Send email with code
@@ -917,10 +987,15 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
       });
     }
 
+    // Normalize email to match send-code endpoint
+    const normalizedEmail = email.trim().toLowerCase();
+
+    console.log("🔍 Verifying client code:", { email: normalizedEmail, code });
+
     // Check if client exists
     const [clients] = await pool.query<any[]>(
-      "SELECT * FROM clients WHERE email = ? AND status = 'active'",
-      [email],
+      "SELECT * FROM clients WHERE email = ? AND status = 'active' AND tenant_id = ?",
+      [normalizedEmail, ENCORE_TENANT_ID],
     );
 
     if (clients.length === 0) {
@@ -934,11 +1009,37 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
 
     // Check if code is valid
     const [sessions] = await pool.query<any[]>(
-      `SELECT * FROM user_sessions 
+      `SELECT *, expires_at, NOW() as server_time FROM user_sessions 
        WHERE user_id = ? AND session_code = ? AND is_active = TRUE 
        AND expires_at > NOW()`,
       [client.id, parseInt(code)],
     );
+
+    console.log("📊 Sessions found:", sessions.length);
+    if (sessions.length > 0) {
+      console.log("⏰ Session expires at:", sessions[0].expires_at);
+      console.log("🕐 Server time:", sessions[0].server_time);
+      console.log("✅ Code is valid!");
+    } else {
+      // Check if session exists without time constraint
+      const [allSessions] = await pool.query<any[]>(
+        `SELECT *, expires_at, NOW() as server_time, 
+         TIMESTAMPDIFF(SECOND, NOW(), expires_at) as seconds_until_expiry 
+         FROM user_sessions 
+         WHERE user_id = ? AND session_code = ?`,
+        [client.id, parseInt(code)],
+      );
+      console.log("❌ No valid sessions. Debug info:");
+      console.log("   Total sessions found:", allSessions.length);
+      if (allSessions.length > 0) {
+        console.log("   Session details:", {
+          expires_at: allSessions[0].expires_at,
+          server_time: allSessions[0].server_time,
+          is_active: allSessions[0].is_active,
+          seconds_until_expiry: allSessions[0].seconds_until_expiry,
+        });
+      }
+    }
 
     if (sessions.length === 0) {
       return res.status(401).json({
@@ -959,9 +1060,10 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
     );
 
     // Update last login
-    await pool.query("UPDATE clients SET last_login = NOW() WHERE id = ?", [
-      client.id,
-    ]);
+    await pool.query(
+      "UPDATE clients SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
+      [client.id, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -1014,8 +1116,8 @@ const handleClientValidateSession: RequestHandler = async (req, res) => {
 
       // Get client details
       const [clients] = await pool.query<any[]>(
-        "SELECT * FROM clients WHERE id = ? AND status = 'active'",
-        [decoded.clientId],
+        "SELECT * FROM clients WHERE id = ? AND status = 'active' AND tenant_id = ?",
+        [decoded.clientId, ENCORE_TENANT_ID],
       );
 
       if (clients.length === 0) {
@@ -1163,8 +1265,8 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
 
     // Check if client exists
     let [existingClients] = await connection.query<any[]>(
-      "SELECT id FROM clients WHERE email = ?",
-      [client_email],
+      "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
+      [client_email, ENCORE_TENANT_ID],
     );
 
     let clientId: number;
@@ -1173,15 +1275,23 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       clientId = existingClients[0].id;
       // Update client info
       await connection.query(
-        "UPDATE clients SET first_name = ?, last_name = ?, phone = ?, assigned_broker_id = ? WHERE id = ?",
-        [client_first_name, client_last_name, client_phone, brokerId, clientId],
+        "UPDATE clients SET first_name = ?, last_name = ?, phone = ?, assigned_broker_id = ? WHERE id = ? AND tenant_id = ?",
+        [
+          client_first_name,
+          client_last_name,
+          client_phone,
+          brokerId,
+          clientId,
+          ENCORE_TENANT_ID,
+        ],
       );
     } else {
       // Create new client
       const [clientResult] = await connection.query<any>(
-        `INSERT INTO clients (email, first_name, last_name, phone, status, email_verified, assigned_broker_id, source) 
-         VALUES (?, ?, ?, ?, 'active', 0, ?, 'broker_created')`,
+        `INSERT INTO clients (tenant_id, email, first_name, last_name, phone, status, email_verified, assigned_broker_id, source) 
+         VALUES (?, ?, ?, ?, ?, 'active', 0, ?, 'broker_created')`,
         [
+          ENCORE_TENANT_ID,
           client_email,
           client_first_name,
           client_last_name,
@@ -1198,12 +1308,14 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
     // Create loan application
     const [loanResult] = await connection.query<any>(
       `INSERT INTO loan_applications (
-        application_number, client_user_id, broker_user_id, loan_type, loan_amount,
+        tenant_id, application_number, client_user_id, broker_user_id, loan_type, loan_amount,
         property_value, property_address, property_city, property_state, property_zip,
         property_type, down_payment, loan_purpose, status, current_step, total_steps,
         estimated_close_date, notes, submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, 8, ?, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, 8, ?, ?, NOW())`,
+
       [
+        ENCORE_TENANT_ID,
         applicationNumber,
         clientId,
         brokerId,
@@ -1238,10 +1350,11 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
 
       await connection.query(
         `INSERT INTO tasks (
-          application_id, title, description, task_type, status, priority,
+          tenant_id, application_id, title, description, task_type, status, priority,
           assigned_to_user_id, created_by_broker_id, due_date, template_id
-        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
         [
+          ENCORE_TENANT_ID,
           applicationId,
           task.title,
           task.description,
@@ -1264,9 +1377,10 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
 
     // Create notification for client
     await connection.query(
-      `INSERT INTO notifications (user_id, title, message, notification_type, action_url)
-       VALUES (?, ?, ?, 'info', '/portal')`,
+      `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
+       VALUES (?, ?, ?, ?, 'info', '/portal')`,
       [
+        ENCORE_TENANT_ID,
         clientId,
         "New Loan Application Created",
         `Your loan application ${applicationNumber} has been created. Please complete the assigned tasks.`,
@@ -1382,9 +1496,12 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
     // Admins can view any loan, regular brokers only their own
     const whereClause =
       brokerRole === "admin"
-        ? "WHERE la.id = ?"
-        : "WHERE la.id = ? AND la.broker_user_id = ?";
-    const queryParams = brokerRole === "admin" ? [loanId] : [loanId, brokerId];
+        ? "WHERE la.id = ? AND la.tenant_id = ?"
+        : "WHERE la.id = ? AND la.broker_user_id = ? AND la.tenant_id = ?";
+    const queryParams =
+      brokerRole === "admin"
+        ? [loanId, ENCORE_TENANT_ID]
+        : [loanId, brokerId, ENCORE_TENANT_ID];
 
     // Get loan details with client and broker info
     const [loans] = (await pool.query(
@@ -1469,9 +1586,9 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         COALESCE(SUM(loan_amount), 0) as totalPipelineValue,
         COUNT(*) as activeApplications
       FROM loan_applications
-      WHERE broker_user_id = ? 
+      WHERE broker_user_id = ? AND tenant_id = ?
         AND status NOT IN ('denied', 'cancelled', 'closed')`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get average closing days (from submitted to closed)
@@ -1479,12 +1596,12 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
       `SELECT 
         COALESCE(AVG(DATEDIFF(actual_close_date, submitted_at)), 0) as avgClosingDays
       FROM loan_applications
-      WHERE broker_user_id = ? 
+      WHERE broker_user_id = ? AND tenant_id = ?
         AND status = 'closed'
         AND actual_close_date IS NOT NULL
         AND submitted_at IS NOT NULL
         AND submitted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get closure rate (approved/closed vs denied/cancelled)
@@ -1493,9 +1610,9 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         COUNT(CASE WHEN status IN ('approved', 'closed') THEN 1 END) as successful,
         COUNT(CASE WHEN status IN ('denied', 'cancelled') THEN 1 END) as unsuccessful
       FROM loan_applications
-      WHERE broker_user_id = ?
+      WHERE broker_user_id = ? AND tenant_id = ?
         AND status IN ('approved', 'closed', 'denied', 'cancelled')`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     const successful = closureRateStats[0]?.successful || 0;
@@ -1510,11 +1627,11 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         COUNT(*) as applications,
         COUNT(CASE WHEN status IN ('approved', 'closed') THEN 1 END) as closed
       FROM loan_applications
-      WHERE broker_user_id = ?
+      WHERE broker_user_id = ? AND tenant_id = ?
         AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
       GROUP BY DATE(created_at)
       ORDER BY DATE(created_at) ASC`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get status breakdown
@@ -1523,11 +1640,11 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         status,
         COUNT(*) as count
       FROM loan_applications
-      WHERE broker_user_id = ?
+      WHERE broker_user_id = ? AND tenant_id = ?
         AND status NOT IN ('denied', 'cancelled')
       GROUP BY status
       ORDER BY count DESC`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     const stats = {
@@ -1584,10 +1701,10 @@ const handleGetClients: RequestHandler = async (req, res) => {
         SUM(CASE WHEN la.status IN ('submitted', 'under_review', 'documents_pending', 'underwriting', 'conditional_approval') THEN 1 ELSE 0 END) as active_applications
       FROM clients c
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
-      WHERE c.assigned_broker_id = ?
+      WHERE c.assigned_broker_id = ? AND c.tenant_id = ?
       GROUP BY c.id
       ORDER BY c.created_at DESC`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -1624,8 +1741,8 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
 
     // Check if requesting broker is admin or superadmin
     const [brokerRows] = (await connection.execute(
-      "SELECT role FROM brokers WHERE id = ?",
-      [brokerId],
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (brokerRows.length === 0) {
@@ -1656,8 +1773,9 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
         email_verified, 
         last_login
       FROM brokers 
-      WHERE status = 'active'
+      WHERE status = 'active' AND tenant_id = ?
       ORDER BY first_name, last_name`,
+      [ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -1715,8 +1833,8 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
 
     // Check if email already exists
     const [existing] = (await pool.query(
-      "SELECT id FROM brokers WHERE email = ?",
-      [email],
+      "SELECT id FROM brokers WHERE email = ? AND tenant_id = ?",
+      [email, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existing.length > 0) {
@@ -1729,9 +1847,10 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
     // Insert new broker
     const [result] = (await pool.query(
       `INSERT INTO brokers 
-        (email, first_name, last_name, phone, role, license_number, specializations, status, email_verified) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0)`,
+        (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)`,
       [
+        ENCORE_TENANT_ID,
         email,
         first_name,
         last_name,
@@ -1743,8 +1862,8 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
     )) as [ResultSetHeader, any];
 
     const [newBroker] = (await pool.query(
-      "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_at FROM brokers WHERE id = ?",
-      [result.insertId],
+      "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
+      [result.insertId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -1780,8 +1899,8 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
 
     // Check if requesting broker is admin
     const [adminCheck] = (await pool.query(
-      "SELECT role FROM brokers WHERE id = ?",
-      [brokerId],
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
@@ -1793,8 +1912,8 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
 
     // Check if target broker exists
     const [existing] = (await pool.query(
-      "SELECT id FROM brokers WHERE id = ?",
-      [targetBrokerId],
+      "SELECT id FROM brokers WHERE id = ? AND tenant_id = ?",
+      [targetBrokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existing.length === 0) {
@@ -1845,15 +1964,16 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     }
 
     values.push(targetBrokerId);
+    values.push(ENCORE_TENANT_ID);
 
     await pool.query(
-      `UPDATE brokers SET ${updates.join(", ")} WHERE id = ?`,
+      `UPDATE brokers SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
       values,
     );
 
     const [updatedBroker] = (await pool.query(
-      "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, last_login, created_at FROM brokers WHERE id = ?",
-      [targetBrokerId],
+      "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, last_login, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
+      [targetBrokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -1880,8 +2000,8 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
 
     // Check if requesting broker is admin
     const [adminCheck] = (await pool.query(
-      "SELECT role FROM brokers WHERE id = ?",
-      [brokerId],
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
@@ -1901,8 +2021,8 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
 
     // Check if target broker exists
     const [existing] = (await pool.query(
-      "SELECT id, first_name, last_name FROM brokers WHERE id = ?",
-      [targetBrokerId],
+      "SELECT id, first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ?",
+      [targetBrokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existing.length === 0) {
@@ -1913,9 +2033,10 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
     }
 
     // Instead of deleting, set status to inactive (soft delete)
-    await pool.query("UPDATE brokers SET status = 'inactive' WHERE id = ?", [
-      targetBrokerId,
-    ]);
+    await pool.query(
+      "UPDATE brokers SET status = 'inactive' WHERE id = ? AND tenant_id = ?",
+      [targetBrokerId, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -1953,9 +2074,9 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
         created_at,
         updated_at
       FROM task_templates
-      WHERE created_by_broker_id = ?
+      WHERE created_by_broker_id = ? AND tenant_id = ?
       ORDER BY order_index ASC, created_at DESC`,
-      [brokerId],
+      [brokerId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -2012,6 +2133,7 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
     // Insert task template
     const [result] = await pool.query<ResultSetHeader>(
       `INSERT INTO task_templates (
+        tenant_id,
         title,
         description,
         task_type,
@@ -2024,8 +2146,9 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
         has_custom_form,
         created_by_broker_id,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
+        ENCORE_TENANT_ID,
         title,
         description || null,
         task_type,
@@ -2044,8 +2167,8 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
 
     // Fetch the created template
     const [templates] = await pool.query<RowDataPacket[]>(
-      "SELECT * FROM task_templates WHERE id = ?",
-      [templateId],
+      "SELECT * FROM task_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -2139,7 +2262,7 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
         document_instructions = ?,
         has_custom_form = ?,
         updated_at = NOW() 
-      WHERE id = ?`,
+      WHERE id = ? AND tenant_id = ?`,
       [
         title,
         description || null,
@@ -2151,13 +2274,14 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
         document_instructions || null,
         has_custom_form || false,
         taskId,
+        ENCORE_TENANT_ID,
       ],
     );
 
     // Fetch updated template
     const [rows] = await pool.query<RowDataPacket[]>(
-      "SELECT * FROM task_templates WHERE id = ?",
-      [taskId],
+      "SELECT * FROM task_templates WHERE id = ? AND tenant_id = ?",
+      [taskId, ENCORE_TENANT_ID],
     );
 
     if (!Array.isArray(rows) || rows.length === 0) {
@@ -2193,8 +2317,8 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
 
     // Check if template exists
     const [existingRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id, title FROM task_templates WHERE id = ?",
-      [taskId],
+      "SELECT id, title FROM task_templates WHERE id = ? AND tenant_id = ?",
+      [taskId, ENCORE_TENANT_ID],
     );
 
     if (!Array.isArray(existingRows) || existingRows.length === 0) {
@@ -2205,7 +2329,10 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
     }
 
     // Delete template (task instances will have template_id set to NULL via CASCADE)
-    await pool.query("DELETE FROM task_templates WHERE id = ?", [taskId]);
+    await pool.query(
+      "DELETE FROM task_templates WHERE id = ? AND tenant_id = ?",
+      [taskId, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -2586,9 +2713,10 @@ const handleApproveTask: RequestHandler = async (req, res) => {
 
     // Create notification for client
     await pool.query(
-      `INSERT INTO notifications (user_id, title, message, notification_type, action_url)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
+        ENCORE_TENANT_ID,
         task.client_user_id,
         "Task Approved",
         `Your task "${task.title}" has been approved. Great job!`,
@@ -2599,9 +2727,10 @@ const handleApproveTask: RequestHandler = async (req, res) => {
 
     // Create audit log
     await pool.query(
-      `INSERT INTO audit_logs (broker_id, actor_type, action, entity_type, entity_id, changes, status)
-       VALUES (?, 'broker', 'approve_task', 'task', ?, ?, 'success')`,
+      `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, ?, 'broker', 'approve_task', 'task', ?, ?, 'success')`,
       [
+        ENCORE_TENANT_ID,
         brokerId,
         taskId,
         JSON.stringify({ status: "approved", approved_at: new Date() }),
@@ -2674,9 +2803,10 @@ const handleReopenTask: RequestHandler = async (req, res) => {
 
     // Create notification for client
     await pool.query(
-      `INSERT INTO notifications (user_id, title, message, notification_type, action_url)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
+        ENCORE_TENANT_ID,
         task.client_user_id,
         "Task Needs Revision",
         `Your task "${task.title}" needs to be revised. Please check the feedback.`,
@@ -2700,9 +2830,10 @@ const handleReopenTask: RequestHandler = async (req, res) => {
 
     // Create audit log
     await pool.query(
-      `INSERT INTO audit_logs (broker_id, actor_type, action, entity_type, entity_id, changes, status)
-       VALUES (?, 'broker', 'reopen_task', 'task', ?, ?, 'success')`,
+      `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, ?, 'broker', 'reopen_task', 'task', ?, ?, 'success')`,
       [
+        ENCORE_TENANT_ID,
         brokerId,
         taskId,
         JSON.stringify({
@@ -2801,9 +2932,10 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
 
     // Create audit log
     await pool.query(
-      `INSERT INTO audit_logs (broker_id, actor_type, action, entity_type, entity_id, changes, status)
-       VALUES (?, 'broker', 'generate_mismo', 'loan_application', ?, ?, 'success')`,
+      `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, ?, 'broker', 'generate_mismo', 'loan_application', ?, ?, 'success')`,
       [
+        ENCORE_TENANT_ID,
         brokerId,
         loanId,
         JSON.stringify({ filename, generated_at: new Date() }),
@@ -3136,7 +3268,9 @@ const handleGetEmailTemplates: RequestHandler = async (req, res) => {
         created_at,
         updated_at
       FROM email_templates
+      WHERE tenant_id = ?
       ORDER BY created_at DESC`,
+      [ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3172,9 +3306,10 @@ const handleCreateEmailTemplate: RequestHandler = async (req, res) => {
 
     const [result] = (await pool.query(
       `INSERT INTO email_templates 
-        (name, subject, body_html, body_text, template_type, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        (tenant_id, name, subject, body_html, body_text, template_type, is_active) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
+        ENCORE_TENANT_ID,
         name,
         subject,
         body_html,
@@ -3217,8 +3352,8 @@ const handleUpdateEmailTemplate: RequestHandler = async (req, res) => {
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id FROM email_templates WHERE id = ?",
-      [templateId],
+      "SELECT id FROM email_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
@@ -3265,15 +3400,16 @@ const handleUpdateEmailTemplate: RequestHandler = async (req, res) => {
     }
 
     values.push(templateId);
+    values.push(ENCORE_TENANT_ID);
 
     await pool.query(
-      `UPDATE email_templates SET ${updates.join(", ")} WHERE id = ?`,
+      `UPDATE email_templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
       values,
     );
 
     const [templates] = (await pool.query(
-      "SELECT * FROM email_templates WHERE id = ?",
-      [templateId],
+      "SELECT * FROM email_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3302,8 +3438,8 @@ const handleDeleteEmailTemplate: RequestHandler = async (req, res) => {
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id, name FROM email_templates WHERE id = ?",
-      [templateId],
+      "SELECT id, name FROM email_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
@@ -3313,7 +3449,10 @@ const handleDeleteEmailTemplate: RequestHandler = async (req, res) => {
       });
     }
 
-    await pool.query("DELETE FROM email_templates WHERE id = ?", [templateId]);
+    await pool.query(
+      "DELETE FROM email_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -3362,9 +3501,9 @@ const handleGetClientApplications: RequestHandler = async (req, res) => {
         (SELECT COUNT(*) FROM tasks WHERE application_id = la.id) as total_tasks
       FROM loan_applications la
       LEFT JOIN brokers b ON la.broker_user_id = b.id
-      WHERE la.client_user_id = ?
+      WHERE la.client_user_id = ? AND la.tenant_id = ?
       ORDER BY la.created_at DESC`,
-      [clientId],
+      [clientId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -3703,9 +3842,10 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
     }
 
     values.push(clientId);
+    values.push(ENCORE_TENANT_ID);
 
     await pool.query(
-      `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ?`,
+      `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ? AND tenant_id = ?`,
       values,
     );
 
@@ -3716,8 +3856,8 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
         address_street, address_city, address_state, address_zip,
         employment_status, income_type, annual_income,
         status, email_verified, phone_verified, created_at
-      FROM clients WHERE id = ?`,
-      [clientId],
+      FROM clients WHERE id = ? AND tenant_id = ?`,
+      [clientId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -3741,7 +3881,8 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
 const handleGetSmsTemplates: RequestHandler = async (req, res) => {
   try {
     const [templates] = (await pool.query(
-      "SELECT * FROM sms_templates ORDER BY created_at DESC",
+      "SELECT * FROM sms_templates WHERE tenant_id = ? ORDER BY created_at DESC",
+      [ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3788,9 +3929,15 @@ const handleCreateSmsTemplate: RequestHandler = async (req, res) => {
 
     const [result] = (await pool.query(
       `INSERT INTO sms_templates 
-        (name, body, template_type, is_active) 
-       VALUES (?, ?, ?, ?)`,
-      [name, body, template_type, is_active !== false ? 1 : 0],
+        (tenant_id, name, body, template_type, is_active) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        ENCORE_TENANT_ID,
+        name,
+        body,
+        template_type,
+        is_active !== false ? 1 : 0,
+      ],
     )) as [ResultSetHeader, any];
 
     const [templates] = (await pool.query(
@@ -3828,8 +3975,8 @@ const handleUpdateSmsTemplate: RequestHandler = async (req, res) => {
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id FROM sms_templates WHERE id = ?",
-      [templateId],
+      "SELECT id FROM sms_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
@@ -3876,15 +4023,16 @@ const handleUpdateSmsTemplate: RequestHandler = async (req, res) => {
     }
 
     values.push(templateId);
+    values.push(ENCORE_TENANT_ID);
 
     await pool.query(
-      `UPDATE sms_templates SET ${updates.join(", ")} WHERE id = ?`,
+      `UPDATE sms_templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
       values,
     );
 
     const [templates] = (await pool.query(
-      "SELECT * FROM sms_templates WHERE id = ?",
-      [templateId],
+      "SELECT * FROM sms_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3916,8 +4064,8 @@ const handleDeleteSmsTemplate: RequestHandler = async (req, res) => {
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id, name FROM sms_templates WHERE id = ?",
-      [templateId],
+      "SELECT id, name FROM sms_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
@@ -3927,7 +4075,10 @@ const handleDeleteSmsTemplate: RequestHandler = async (req, res) => {
       });
     }
 
-    await pool.query("DELETE FROM sms_templates WHERE id = ?", [templateId]);
+    await pool.query(
+      "DELETE FROM sms_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -3972,10 +4123,10 @@ const handleGetAuditLogs: RequestHandler = async (req, res) => {
       FROM audit_logs al
       LEFT JOIN brokers b ON al.broker_id = b.id
       LEFT JOIN clients c ON al.user_id = c.id
-      WHERE 1=1
+      WHERE al.tenant_id = ?
     `;
 
-    const queryParams: any[] = [];
+    const queryParams: any[] = [ENCORE_TENANT_ID];
 
     if (actor_type) {
       query += ` AND al.actor_type = ?`;
@@ -4013,8 +4164,8 @@ const handleGetAuditLogs: RequestHandler = async (req, res) => {
     const [logs] = await pool.query<RowDataPacket[]>(query, queryParams);
 
     // Get total count for pagination
-    let countQuery = `SELECT COUNT(*) as total FROM audit_logs WHERE 1=1`;
-    const countParams: any[] = [];
+    let countQuery = `SELECT COUNT(*) as total FROM audit_logs WHERE tenant_id = ?`;
+    const countParams: any[] = [ENCORE_TENANT_ID];
 
     if (actor_type) {
       countQuery += ` AND actor_type = ?`;
@@ -4087,23 +4238,28 @@ const handleGetAuditLogStats: RequestHandler = async (req, res) => {
 
     // Get various statistics
     const [totalLogs] = await pool.query<RowDataPacket[]>(
-      "SELECT COUNT(*) as count FROM audit_logs",
+      "SELECT COUNT(*) as count FROM audit_logs WHERE tenant_id = ?",
+      [ENCORE_TENANT_ID],
     );
 
     const [logsByStatus] = await pool.query<RowDataPacket[]>(
-      "SELECT status, COUNT(*) as count FROM audit_logs GROUP BY status",
+      "SELECT status, COUNT(*) as count FROM audit_logs WHERE tenant_id = ? GROUP BY status",
+      [ENCORE_TENANT_ID],
     );
 
     const [logsByActorType] = await pool.query<RowDataPacket[]>(
-      "SELECT actor_type, COUNT(*) as count FROM audit_logs GROUP BY actor_type",
+      "SELECT actor_type, COUNT(*) as count FROM audit_logs WHERE tenant_id = ? GROUP BY actor_type",
+      [ENCORE_TENANT_ID],
     );
 
     const [logsByAction] = await pool.query<RowDataPacket[]>(
       `SELECT action, COUNT(*) as count 
-       FROM audit_logs 
+       FROM audit_logs
+       WHERE tenant_id = ? 
        GROUP BY action 
        ORDER BY count DESC 
        LIMIT 10`,
+      [ENCORE_TENANT_ID],
     );
 
     const [recentActivity] = await pool.query<RowDataPacket[]>(
