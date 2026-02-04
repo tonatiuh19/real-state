@@ -63,7 +63,7 @@ const Clients = () => {
         <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-              <Users className="h-7 w-7 text-blue-500" />
+              <Users className="h-7 w-7 text-primary" />
               Clients
             </h1>
             <p className="text-sm text-muted-foreground">
@@ -125,7 +125,7 @@ const Clients = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-blue-500">
+                  <div className="text-2xl font-bold text-primary">
                     {Number(clientStats.activeApplications)}
                   </div>
                 </CardContent>
@@ -158,7 +158,7 @@ const Clients = () => {
                         <TableCell>
                           <div className="flex items-center gap-3">
                             <Avatar>
-                              <AvatarFallback className="bg-blue-500/10 text-blue-500 font-semibold">
+                              <AvatarFallback className="bg-primary/10 text-primary font-semibold">
                                 {getInitials(
                                   client.first_name,
                                   client.last_name,
@@ -195,7 +195,7 @@ const Clients = () => {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Badge className="text-xs bg-blue-500/10 text-blue-500 border-blue-500/20">
+                          <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
                             {client.active_applications} active
                           </Badge>
                         </TableCell>

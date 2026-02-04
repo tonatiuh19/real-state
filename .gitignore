@@ -32,8 +32,12 @@ dist-ssr
 
 .config/
 
-# Markdown files (except README)
+# Markdown files (except README and setup guides)
 *.md
 !README.md
 !.github/copilot-instructions.md
+!.github/copilot-instructions-client-template.md
+!CLIENT_SETUP_GUIDE.md
+!TENANT_ISOLATION_AUDIT.md
+!scripts/README.md
 .vercel

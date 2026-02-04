@@ -8,10 +8,12 @@ interface BrokerUser {
   last_name: string;
   phone?: string;
   role: string;
-  club_id?: number;
-  club_name?: string;
-  club_logo?: string;
-  is_active: boolean;
+  tenant_id: number;
+  status: "active" | "inactive" | "suspended";
+  license_number?: string;
+  specializations?: string[];
+  email_verified: boolean;
+  last_login?: string;
 }
 
 interface BrokerAuthState {

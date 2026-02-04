@@ -855,8 +855,8 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
 
       // Get broker details
       const [brokers] = await pool.query<any[]>(
-        "SELECT * FROM brokers WHERE id = ? AND status = 'active'",
-        [decoded.brokerId],
+        "SELECT * FROM brokers WHERE id = ? AND status = 'active' AND tenant_id = ?",
+        [decoded.brokerId, ENCORE_TENANT_ID],
       );
 
       if (brokers.length === 0) {
@@ -1812,8 +1812,8 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
 
     // Check if requesting broker is admin
     const [adminCheck] = (await pool.query(
-      "SELECT role FROM brokers WHERE id = ?",
-      [brokerId],
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [brokerId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
@@ -2125,8 +2125,8 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
 
     // Get max order_index to append new template at end
     const [maxOrder] = await pool.query<any[]>(
-      "SELECT COALESCE(MAX(order_index), 0) as max_order FROM task_templates WHERE created_by_broker_id = ?",
-      [brokerId],
+      "SELECT COALESCE(MAX(order_index), 0) as max_order FROM task_templates WHERE created_by_broker_id = ? AND tenant_id = ?",
+      [brokerId, ENCORE_TENANT_ID],
     );
     const orderIndex = (maxOrder[0]?.max_order || 0) + 1;
 
@@ -2599,8 +2599,11 @@ const handleUploadTaskDocument: RequestHandler = async (req, res) => {
     ]);
 
     const [documents] = await pool.query(
-      `SELECT * FROM task_documents WHERE id = ?`,
-      [(result as any).insertId],
+      `SELECT td.* FROM task_documents td 
+       INNER JOIN tasks t ON td.task_id = t.id 
+       INNER JOIN loan_applications la ON t.application_id = la.id 
+       WHERE td.id = ? AND la.tenant_id = ?`,
+      [(result as any).insertId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -2625,8 +2628,12 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
     const { taskId } = req.params;
 
     const [documents] = await pool.query(
-      `SELECT * FROM task_documents WHERE task_id = ? ORDER BY uploaded_at DESC`,
-      [taskId],
+      `SELECT td.* FROM task_documents td 
+       INNER JOIN tasks t ON td.task_id = t.id 
+       INNER JOIN loan_applications la ON t.application_id = la.id 
+       WHERE td.task_id = ? AND la.tenant_id = ? 
+       ORDER BY td.uploaded_at DESC`,
+      [taskId, ENCORE_TENANT_ID],
     );
 
     res.json({
@@ -2649,7 +2656,14 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
 
-    await pool.query(`DELETE FROM task_documents WHERE id = ?`, [documentId]);
+    // Verify document belongs to this tenant before deleting
+    await pool.query(
+      `DELETE td FROM task_documents td 
+       INNER JOIN tasks t ON td.task_id = t.id 
+       INNER JOIN loan_applications la ON t.application_id = la.id 
+       WHERE td.id = ? AND la.tenant_id = ?`,
+      [documentId, ENCORE_TENANT_ID],
+    );
 
     res.json({
       success: true,
@@ -3320,8 +3334,8 @@ const handleCreateEmailTemplate: RequestHandler = async (req, res) => {
     )) as [ResultSetHeader, any];
 
     const [templates] = (await pool.query(
-      "SELECT * FROM email_templates WHERE id = ?",
-      [result.insertId],
+      "SELECT * FROM email_templates WHERE id = ? AND tenant_id = ?",
+      [result.insertId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3589,10 +3603,10 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
       });
     }
 
-    // Verify task belongs to client
+    // Verify task belongs to client and tenant
     const [tasks] = await pool.query<any[]>(
-      "SELECT t.* FROM tasks t INNER JOIN loan_applications la ON t.application_id = la.id WHERE t.id = ? AND la.client_user_id = ?",
-      [taskId, clientId],
+      "SELECT t.* FROM tasks t INNER JOIN loan_applications la ON t.application_id = la.id WHERE t.id = ? AND la.client_user_id = ? AND la.tenant_id = ?",
+      [taskId, clientId, ENCORE_TENANT_ID],
     );
 
     if (tasks.length === 0) {
@@ -3941,8 +3955,8 @@ const handleCreateSmsTemplate: RequestHandler = async (req, res) => {
     )) as [ResultSetHeader, any];
 
     const [templates] = (await pool.query(
-      "SELECT * FROM sms_templates WHERE id = ?",
-      [result.insertId],
+      "SELECT * FROM sms_templates WHERE id = ? AND tenant_id = ?",
+      [result.insertId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({

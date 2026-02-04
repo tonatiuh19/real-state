@@ -72,7 +72,7 @@ const Dashboard = () => {
 
   const getStatusColor = (status: string) => {
     const colors: { [key: string]: string } = {
-      submitted: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+      submitted: "bg-primary/10 text-primary border-primary/20",
       under_review: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
       approved: "bg-green-500/10 text-green-500 border-green-500/20",
       documents_pending:

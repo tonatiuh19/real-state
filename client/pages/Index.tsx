@@ -132,7 +132,7 @@ const Index = () => {
 
         {/* Animated gradient orbs */}
         <div className="absolute top-20 left-10 h-72 w-72 rounded-full bg-primary/20 blur-3xl animate-pulse" />
-        <div className="absolute bottom-20 right-10 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl animate-pulse delay-700" />
+        <div className="absolute bottom-20 right-10 h-96 w-96 rounded-full bg-primary/10 blur-3xl animate-pulse delay-700" />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[600px] rounded-full bg-primary/5 blur-[120px]" />
 
         <div className="container relative z-10">
@@ -156,7 +156,7 @@ const Index = () => {
                 className="text-5xl font-black tracking-tight sm:text-6xl lg:text-7xl xl:text-8xl leading-[1.1]"
               >
                 Your Dream Home{" "}
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-blue-600 to-primary">
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-red-600 to-primary">
                   Starts Here
                 </span>
               </motion.h1>
@@ -223,7 +223,7 @@ const Index = () => {
                 <Link to="/apply" className="flex-1 sm:flex-initial">
                   <Button
                     size="lg"
-                    className="w-full sm:w-auto h-14 px-8 text-lg font-bold shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95 bg-gradient-to-r from-primary to-blue-600 hover:from-primary/90 hover:to-blue-600/90"
+                    className="w-full sm:w-auto h-14 px-8 text-lg font-bold shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95 bg-gradient-to-r from-primary to-red-600 hover:from-primary/90 hover:to-red-600/90"
                   >
                     Get Pre-Approved
                     <ArrowRight className="ml-2 h-5 w-5" />
@@ -356,8 +356,8 @@ const Index = () => {
                 <Card className="border-2 bg-white/90 backdrop-blur-xl shadow-xl">
                   <CardContent className="p-4">
                     <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 rounded-full bg-blue-500/10 flex items-center justify-center">
-                        <Home className="h-6 w-6 text-blue-600" />
+                      <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Home className="h-6 w-6 text-primary" />
                       </div>
                       <div>
                         <div className="text-sm font-medium text-muted-foreground">
