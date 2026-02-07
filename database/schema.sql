@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 03, 2026 at 01:58 AM
+-- Generation Time: Feb 04, 2026 at 03:43 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -94,7 +94,9 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (24, NULL, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-02 15:57:02'),
 (25, NULL, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-02 15:57:28'),
 (26, NULL, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-02 15:58:03'),
-(27, NULL, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-02 15:59:00');
+(27, NULL, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-02 15:59:00'),
+(28, 2, NULL, 7, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2026-02-03 17:36:50'),
+(29, 2, NULL, 7, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '2026-02-03 17:36:59');
 
 -- --------------------------------------------------------
 
@@ -124,11 +126,12 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `created_at`, `updated_at`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-02 16:47:50', NULL, NULL, '2026-01-20 18:56:12', '2026-02-02 16:47:50'),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-04 15:07:13', NULL, NULL, '2026-01-20 18:56:12', '2026-02-04 15:07:13'),
 (2, 1, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'admin', 'active', 0, '2026-01-21 00:14:12', '123457890', '[\"First-Time Home Buyers\"]', '2026-01-20 23:10:11', '2026-01-21 00:14:12'),
 (3, 1, 'teamdc@encoremortgage.org', 'Encore', 'Admin', NULL, 'admin', 'active', 0, '2026-01-21 11:06:11', NULL, NULL, '2026-01-21 00:08:17', '2026-01-21 11:06:11'),
 (4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-01-28 23:55:19', NULL, '[\"Investment Properties\", \"Refinancing\"]', '2026-01-21 00:08:54', '2026-01-28 23:55:19'),
-(6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-02 17:19:06', NULL, NULL, '2026-01-20 18:56:12', '2026-02-02 17:19:06');
+(6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-03 15:05:52', NULL, NULL, '2026-01-20 18:56:12', '2026-02-03 15:05:52'),
+(7, 2, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-03 17:35:50', NULL, NULL, '2026-02-03 14:59:53', '2026-02-03 17:35:50');
 
 -- --------------------------------------------------------
 
@@ -173,10 +176,11 @@ CREATE TABLE `broker_sessions` (
 --
 
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(6, 2, 457422, 1, NULL, NULL, '2026-01-21 12:29:02', '2026-01-21 06:14:02'),
 (9, 3, 761666, 1, NULL, NULL, '2026-01-21 23:20:38', '2026-01-21 17:05:37'),
 (28, 4, 884765, 1, NULL, NULL, '2026-01-29 12:09:56', '2026-01-29 05:54:56'),
-(38, 1, 306037, 1, NULL, NULL, '2026-02-03 08:04:16', '2026-02-03 07:49:16');
+(44, 2, 510149, 1, NULL, NULL, '2026-02-03 06:39:20', '2026-02-03 08:24:20'),
+(58, 7, 507399, 1, NULL, NULL, '2026-02-03 23:50:33', '2026-02-03 23:35:33'),
+(59, 1, 547747, 1, NULL, NULL, '2026-02-04 21:21:59', '2026-02-04 21:06:59');
 
 -- --------------------------------------------------------
 
@@ -189,11 +193,10 @@ CREATE TABLE `campaigns` (
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
-  `campaign_type` enum('email','sms','mixed') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `campaign_type` enum('email','sms','whatsapp','mixed') COLLATE utf8mb4_unicode_ci NOT NULL,
   `status` enum('draft','scheduled','active','paused','completed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `target_audience` json DEFAULT NULL,
-  `email_template_id` int(11) DEFAULT NULL,
-  `sms_template_id` int(11) DEFAULT NULL,
+  `template_id` int(11) DEFAULT NULL,
   `scheduled_start` datetime DEFAULT NULL,
   `scheduled_end` datetime DEFAULT NULL,
   `created_by_broker_id` int(11) DEFAULT NULL,
@@ -262,7 +265,7 @@ CREATE TABLE `clients` (
 --
 
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
-(10, 1, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-02 16:51:06', 1, 'broker_created', NULL, '2026-01-28 15:05:45', '2026-02-02 16:51:06');
+(10, 1, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-03 13:07:47', 1, 'broker_created', NULL, '2026-01-28 15:05:45', '2026-02-03 13:07:47');
 
 -- --------------------------------------------------------
 
@@ -279,17 +282,80 @@ CREATE TABLE `communications` (
   `from_broker_id` int(11) DEFAULT NULL,
   `to_user_id` int(11) DEFAULT NULL,
   `to_broker_id` int(11) DEFAULT NULL,
-  `communication_type` enum('email','sms','call','internal_note') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `communication_type` enum('email','sms','whatsapp','call','internal_note') COLLATE utf8mb4_unicode_ci NOT NULL,
   `direction` enum('inbound','outbound') COLLATE utf8mb4_unicode_ci NOT NULL,
   `subject` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `body` text COLLATE utf8mb4_unicode_ci,
   `status` enum('pending','sent','delivered','failed','read') COLLATE utf8mb4_unicode_ci DEFAULT 'pending',
   `external_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `thread_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `reply_to_id` int(11) DEFAULT NULL,
+  `message_type` enum('text','image','document','audio','video','template') COLLATE utf8mb4_unicode_ci DEFAULT 'text',
+  `template_id` int(11) DEFAULT NULL,
+  `delivery_status` enum('pending','sent','delivered','read','failed','rejected') COLLATE utf8mb4_unicode_ci DEFAULT 'pending',
+  `delivery_timestamp` datetime DEFAULT NULL,
+  `read_timestamp` datetime DEFAULT NULL,
+  `error_code` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `cost` decimal(10,4) DEFAULT NULL COMMENT 'Cost in USD for SMS/WhatsApp messages',
+  `provider_response` json DEFAULT NULL COMMENT 'Full provider response for debugging',
   `metadata` json DEFAULT NULL,
   `scheduled_at` datetime DEFAULT NULL,
   `sent_at` datetime DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Triggers `communications`
+--
+DELIMITER $$
+CREATE TRIGGER `update_conversation_thread` AFTER INSERT ON `communications` FOR EACH ROW BEGIN
+    DECLARE client_name_var VARCHAR(255) DEFAULT NULL;
+    DECLARE client_phone_var VARCHAR(20) DEFAULT NULL;
+    DECLARE client_email_var VARCHAR(255) DEFAULT NULL;
+    
+    -- Get client information
+    IF NEW.to_user_id IS NOT NULL THEN
+        SELECT CONCAT(first_name, ' ', last_name), phone_number, email
+        INTO client_name_var, client_phone_var, client_email_var
+        FROM clients WHERE id = NEW.to_user_id;
+    ELSEIF NEW.from_user_id IS NOT NULL THEN
+        SELECT CONCAT(first_name, ' ', last_name), phone_number, email
+        INTO client_name_var, client_phone_var, client_email_var
+        FROM clients WHERE id = NEW.from_user_id;
+    END IF;
+    
+    -- Upsert conversation thread
+    INSERT INTO conversation_threads (
+        tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
+        client_name, client_phone, client_email, last_message_at, 
+        last_message_preview, last_message_type, message_count, unread_count
+    ) VALUES (
+        NEW.tenant_id,
+        COALESCE(NEW.conversation_id, CONCAT('conv_', NEW.id)),
+        NEW.application_id,
+        NEW.lead_id,
+        COALESCE(NEW.to_user_id, NEW.from_user_id),
+        COALESCE(NEW.from_broker_id, NEW.to_broker_id),
+        client_name_var,
+        client_phone_var,
+        client_email_var,
+        NEW.created_at,
+        LEFT(NEW.body, 200),
+        NEW.communication_type,
+        1,
+        CASE WHEN NEW.direction = 'inbound' THEN 1 ELSE 0 END
+    ) ON DUPLICATE KEY UPDATE
+        last_message_at = NEW.created_at,
+        last_message_preview = LEFT(NEW.body, 200),
+        last_message_type = NEW.communication_type,
+        message_count = message_count + 1,
+        unread_count = unread_count + CASE WHEN NEW.direction = 'inbound' THEN 1 ELSE 0 END,
+        updated_at = NOW();
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -330,6 +396,35 @@ CREATE TABLE `compliance_checklist_items` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `conversation_threads`
+--
+
+CREATE TABLE `conversation_threads` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `application_id` int(11) DEFAULT NULL,
+  `lead_id` int(11) DEFAULT NULL,
+  `client_id` int(11) DEFAULT NULL,
+  `broker_id` int(11) NOT NULL,
+  `client_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `client_phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `client_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `last_message_at` datetime NOT NULL,
+  `last_message_preview` text COLLATE utf8mb4_unicode_ci,
+  `last_message_type` enum('email','sms','whatsapp','call','internal_note') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `message_count` int(11) DEFAULT '0',
+  `unread_count` int(11) DEFAULT '0',
+  `priority` enum('low','normal','high','urgent') COLLATE utf8mb4_unicode_ci DEFAULT 'normal',
+  `status` enum('active','archived','closed') COLLATE utf8mb4_unicode_ci DEFAULT 'active',
+  `tags` json DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `documents`
 --
 
@@ -353,34 +448,6 @@ CREATE TABLE `documents` (
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- --------------------------------------------------------
-
---
--- Table structure for table `email_templates`
---
-
-CREATE TABLE `email_templates` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) NOT NULL DEFAULT '1',
-  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `subject` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `body_html` text COLLATE utf8mb4_unicode_ci NOT NULL,
-  `body_text` text COLLATE utf8mb4_unicode_ci,
-  `template_type` enum('welcome','status_update','document_request','approval','denial','custom') COLLATE utf8mb4_unicode_ci NOT NULL,
-  `is_active` tinyint(1) DEFAULT '1',
-  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `email_templates`
---
-
-INSERT INTO `email_templates` (`id`, `tenant_id`, `name`, `subject`, `body_html`, `body_text`, `template_type`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 'Welcome Client', 'Welcome to Our Loan Services', '<p>Dear {{first_name}},</p><p>Welcome! We\'re excited to help you with your loan application.</p>', NULL, 'welcome', 1, '2026-01-20 18:56:12', '2026-01-20 18:56:12'),
-(2, 1, 'Application Submitted', 'Your Loan Application Has Been Received', '<p>Dear {{first_name}},</p><p>We have received your application #{{application_number}}. We will review it shortly.</p>', NULL, 'status_update', 1, '2026-01-20 18:56:12', '2026-01-20 18:56:12'),
-(3, 1, 'Documents Required', 'Additional Documents Needed', '<p>Dear {{first_name}},</p><p>Please upload the following documents to proceed with your application.</p>', NULL, 'document_request', 1, '2026-01-20 18:56:12', '2026-01-20 18:56:12');
 
 -- --------------------------------------------------------
 
@@ -495,23 +562,6 @@ CREATE TABLE `notifications` (
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
 (13, 1, 10, 'New Loan Application Created', 'Your loan application LA34345831 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-01-28 15:05:46', NULL),
 (14, 1, 10, 'Task Approved', 'Your task \"INE Verification\" has been approved. Great job!', 'success', 0, '/portal', '2026-01-28 15:07:46', NULL);
-
--- --------------------------------------------------------
-
---
--- Table structure for table `sms_templates`
---
-
-CREATE TABLE `sms_templates` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) NOT NULL DEFAULT '1',
-  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `body` varchar(1600) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `template_type` enum('reminder','status_update','document_request','custom') COLLATE utf8mb4_unicode_ci NOT NULL,
-  `is_active` tinyint(1) DEFAULT '1',
-  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -674,6 +724,7 @@ INSERT INTO `task_form_responses` (`id`, `task_id`, `field_id`, `field_value`, `
 
 CREATE TABLE `task_templates` (
   `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
   `task_type` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Custom task type from wizard',
@@ -693,8 +744,46 @@ CREATE TABLE `task_templates` (
 -- Dumping data for table `task_templates`
 --
 
-INSERT INTO `task_templates` (`id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`, `requires_documents`, `document_instructions`, `has_custom_form`) VALUES
-(22, 'INE Verification', 'Need the INE', 'document_verification', 'medium', 10, 1, 1, 1, '2026-01-23 22:40:43', '2026-01-23 22:40:43', 1, 'Please upload the INE', 1);
+INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`, `requires_documents`, `document_instructions`, `has_custom_form`) VALUES
+(22, 1, 'INE Verification', 'Need the INE', 'document_verification', 'medium', 10, 1, 1, 1, '2026-01-23 22:40:43', '2026-01-23 22:40:43', 1, 'Please upload the INE', 1);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `templates`
+--
+
+CREATE TABLE `templates` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `template_type` enum('email','sms','whatsapp') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `category` enum('welcome','reminder','update','follow_up','marketing','system') COLLATE utf8mb4_unicode_ci DEFAULT 'system',
+  `subject` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'For email templates',
+  `body` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `variables` json DEFAULT NULL COMMENT 'Available template variables',
+  `is_active` tinyint(1) DEFAULT '1',
+  `usage_count` int(11) DEFAULT '0',
+  `created_by_broker_id` int(11) NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `templates`
+--
+
+INSERT INTO `templates` (`id`, `tenant_id`, `name`, `description`, `template_type`, `category`, `subject`, `body`, `variables`, `is_active`, `usage_count`, `created_by_broker_id`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Welcome Email', 'Welcome new clients to the loan process', 'email', 'welcome', 'Welcome to Encore Mortgage - Your Loan Application', 'Dear {{client_name}},\n\nWelcome to Encore Mortgage! We\'re excited to help you with your loan application.\n\nYour application ID is: {{application_id}}\n\nNext steps:\n1. Complete all required documents\n2. Schedule your initial consultation\n3. We\'ll review your application within 24-48 hours\n\nIf you have any questions, please don\'t hesitate to contact us.\n\nBest regards,\n{{broker_name}}\nEncore Mortgage', '[\"client_name\", \"application_id\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(2, 1, 'Document Reminder SMS', 'Remind clients about pending documents', 'sms', 'reminder', NULL, 'Hi {{client_name}}, this is {{broker_name}} from Encore Mortgage. You have {{document_count}} pending documents for your loan application. Please upload them at your earliest convenience. Reply STOP to opt out.', '[\"client_name\", \"broker_name\", \"document_count\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(3, 1, 'Application Update WhatsApp', 'Update clients on application status via WhatsApp', 'whatsapp', 'update', NULL, 'Hi {{client_name}} 👋\n\nGreat news! Your loan application status has been updated to: *{{status}}*\n\n{{additional_notes}}\n\nNext steps: {{next_steps}}\n\nFeel free to reply with any questions!\n\n- {{broker_name}} at Encore Mortgage', '[\"client_name\", \"status\", \"additional_notes\", \"next_steps\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(4, 1, 'Loan Approved Email', 'Congratulate clients on loan approval', 'email', 'update', 'Congratulations! Your Loan Has Been Approved', 'Dear {{client_name}},\n\nCongratulations! 🎉\n\nWe\'re thrilled to inform you that your loan application #{{application_id}} has been APPROVED!\n\nLoan Details:\n- Loan Amount: ${{loan_amount}}\n- Interest Rate: {{interest_rate}}%\n- Closing Date: {{closing_date}}\n\nNext Steps:\n1. Review the loan documents we\'ll send shortly\n2. Schedule your closing appointment\n3. Prepare for your new home!\n\nThank you for choosing Encore Mortgage. We\'re excited to be part of your homeownership journey!\n\nBest regards,\n{{broker_name}}\nEncore Mortgage', '[\"client_name\", \"application_id\", \"loan_amount\", \"interest_rate\", \"closing_date\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(5, 1, 'Quick Update SMS', 'Send quick status updates via SMS', 'sms', 'update', NULL, 'Hi {{client_name}}! Quick update on your loan app #{{application_id}}: {{status_message}}. Questions? Call us! - {{broker_name}} at Encore Mortgage', '[\"client_name\", \"application_id\", \"status_message\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(6, 1, 'Document Upload Reminder WhatsApp', 'Friendly WhatsApp reminder for documents', 'whatsapp', 'reminder', NULL, 'Hi {{client_name}} 👋\n\nFriendly reminder: We\'re still waiting for {{missing_documents}} for your loan application.\n\nYou can upload them easily through your client portal: {{portal_link}}\n\nNeed help? Just reply here and I\'ll assist you right away!\n\n📋 Missing: {{missing_documents}}\n⏰ Needed by: {{due_date}}\n\nThanks!\n{{broker_name}} 🏠', '[\"client_name\", \"missing_documents\", \"portal_link\", \"due_date\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(7, 1, 'Welcome Client', NULL, 'email', 'welcome', 'Welcome to Our Loan Services', '<p>Dear {{first_name}},</p><p>Welcome! We\'re excited to help you with your loan application.</p>', '[]', 1, 0, 1, '2026-01-20 18:56:12', '2026-01-20 18:56:12'),
+(8, 1, 'Application Submitted', NULL, 'email', 'update', 'Your Loan Application Has Been Received', '<p>Dear {{first_name}},</p><p>We have received your application #{{application_number}}. We will review it shortly.</p>', '[]', 1, 0, 1, '2026-01-20 18:56:12', '2026-01-20 18:56:12'),
+(9, 1, 'Documents Required', NULL, 'email', 'reminder', 'Additional Documents Needed', '<p>Dear {{first_name}},</p><p>Please upload the following documents to proceed with your application.</p>', '[]', 1, 0, 1, '2026-01-20 18:56:12', '2026-01-20 18:56:12');
 
 -- --------------------------------------------------------
 
@@ -788,13 +877,6 @@ CREATE TABLE `user_sessions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
--- Dumping data for table `user_sessions`
---
-
-INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(15, 10, 913482, 1, NULL, NULL, '2026-02-02 23:15:45', '2026-02-02 23:00:45');
-
---
 -- Indexes for dumped tables
 --
 
@@ -857,12 +939,11 @@ ALTER TABLE `broker_sessions`
 --
 ALTER TABLE `campaigns`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `email_template_id` (`email_template_id`),
-  ADD KEY `sms_template_id` (`sms_template_id`),
   ADD KEY `created_by_broker_id` (`created_by_broker_id`),
   ADD KEY `idx_status` (`status`),
   ADD KEY `idx_campaign_type` (`campaign_type`),
-  ADD KEY `tenant_id` (`tenant_id`);
+  ADD KEY `tenant_id` (`tenant_id`),
+  ADD KEY `idx_template_id` (`template_id`);
 
 --
 -- Indexes for table `campaign_recipients`
@@ -899,7 +980,13 @@ ALTER TABLE `communications`
   ADD KEY `idx_lead_id` (`lead_id`),
   ADD KEY `idx_communication_type` (`communication_type`),
   ADD KEY `idx_created_at` (`created_at`),
-  ADD KEY `tenant_id` (`tenant_id`);
+  ADD KEY `tenant_id` (`tenant_id`),
+  ADD KEY `idx_conversation_id` (`conversation_id`),
+  ADD KEY `idx_thread_id` (`thread_id`),
+  ADD KEY `idx_reply_to_id` (`reply_to_id`),
+  ADD KEY `idx_message_type` (`message_type`),
+  ADD KEY `idx_delivery_status` (`delivery_status`),
+  ADD KEY `idx_delivery_timestamp` (`delivery_timestamp`);
 
 --
 -- Indexes for table `compliance_checklists`
@@ -919,6 +1006,23 @@ ALTER TABLE `compliance_checklist_items`
   ADD KEY `idx_checklist_id` (`checklist_id`);
 
 --
+-- Indexes for table `conversation_threads`
+--
+ALTER TABLE `conversation_threads`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_conversation_id` (`conversation_id`),
+  ADD KEY `idx_tenant_application` (`tenant_id`,`application_id`),
+  ADD KEY `idx_tenant_lead` (`tenant_id`,`lead_id`),
+  ADD KEY `idx_tenant_client` (`tenant_id`,`client_id`),
+  ADD KEY `idx_broker_id` (`broker_id`),
+  ADD KEY `idx_last_message_at` (`last_message_at`),
+  ADD KEY `idx_status` (`status`),
+  ADD KEY `idx_priority` (`priority`),
+  ADD KEY `fk_conversation_threads_application` (`application_id`),
+  ADD KEY `fk_conversation_threads_lead` (`lead_id`),
+  ADD KEY `fk_conversation_threads_client` (`client_id`);
+
+--
 -- Indexes for table `documents`
 --
 ALTER TABLE `documents`
@@ -929,14 +1033,6 @@ ALTER TABLE `documents`
   ADD KEY `idx_application_id` (`application_id`),
   ADD KEY `idx_document_type` (`document_type`),
   ADD KEY `idx_status` (`status`),
-  ADD KEY `tenant_id` (`tenant_id`);
-
---
--- Indexes for table `email_templates`
---
-ALTER TABLE `email_templates`
-  ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_template_type` (`template_type`),
   ADD KEY `tenant_id` (`tenant_id`);
 
 --
@@ -980,14 +1076,6 @@ ALTER TABLE `notifications`
   ADD KEY `idx_user_id` (`user_id`),
   ADD KEY `idx_is_read` (`is_read`),
   ADD KEY `idx_created_at` (`created_at`),
-  ADD KEY `tenant_id` (`tenant_id`);
-
---
--- Indexes for table `sms_templates`
---
-ALTER TABLE `sms_templates`
-  ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_template_type` (`template_type`),
   ADD KEY `tenant_id` (`tenant_id`);
 
 --
@@ -1051,7 +1139,18 @@ ALTER TABLE `task_templates`
   ADD KEY `idx_created_by_broker` (`created_by_broker_id`),
   ADD KEY `idx_active_order` (`is_active`,`order_index`),
   ADD KEY `idx_task_templates_requires_documents` (`requires_documents`),
-  ADD KEY `idx_task_templates_has_custom_form` (`has_custom_form`);
+  ADD KEY `idx_task_templates_has_custom_form` (`has_custom_form`),
+  ADD KEY `idx_task_templates_tenant` (`tenant_id`);
+
+--
+-- Indexes for table `templates`
+--
+ALTER TABLE `templates`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_tenant_type` (`tenant_id`,`template_type`),
+  ADD KEY `idx_category` (`category`),
+  ADD KEY `idx_active` (`is_active`),
+  ADD KEY `idx_created_by` (`created_by_broker_id`);
 
 --
 -- Indexes for table `tenants`
@@ -1093,13 +1192,13 @@ ALTER TABLE `application_status_history`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- AUTO_INCREMENT for table `brokers`
 --
 ALTER TABLE `brokers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `broker_profiles`
@@ -1111,7 +1210,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=39;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=60;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -1150,16 +1249,16 @@ ALTER TABLE `compliance_checklist_items`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `conversation_threads`
+--
+ALTER TABLE `conversation_threads`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `documents`
 --
 ALTER TABLE `documents`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `email_templates`
---
-ALTER TABLE `email_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `leads`
@@ -1184,12 +1283,6 @@ ALTER TABLE `loan_applications`
 --
 ALTER TABLE `notifications`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
-
---
--- AUTO_INCREMENT for table `sms_templates`
---
-ALTER TABLE `sms_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `system_settings`
@@ -1228,6 +1321,12 @@ ALTER TABLE `task_templates`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
 
 --
+-- AUTO_INCREMENT for table `templates`
+--
+ALTER TABLE `templates`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+
+--
 -- AUTO_INCREMENT for table `tenants`
 --
 ALTER TABLE `tenants`
@@ -1243,7 +1342,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
 
 --
 -- Constraints for dumped tables
@@ -1287,9 +1386,8 @@ ALTER TABLE `broker_sessions`
 -- Constraints for table `campaigns`
 --
 ALTER TABLE `campaigns`
-  ADD CONSTRAINT `campaigns_ibfk_1` FOREIGN KEY (`email_template_id`) REFERENCES `email_templates` (`id`) ON DELETE SET NULL,
-  ADD CONSTRAINT `campaigns_ibfk_2` FOREIGN KEY (`sms_template_id`) REFERENCES `sms_templates` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `campaigns_ibfk_3` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_campaigns_template` FOREIGN KEY (`template_id`) REFERENCES `templates` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_campaigns_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
 --
@@ -1316,6 +1414,7 @@ ALTER TABLE `communications`
   ADD CONSTRAINT `communications_ibfk_4` FOREIGN KEY (`from_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `communications_ibfk_5` FOREIGN KEY (`to_user_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `communications_ibfk_6` FOREIGN KEY (`to_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_communications_reply_to` FOREIGN KEY (`reply_to_id`) REFERENCES `communications` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_communications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
 --
@@ -1334,6 +1433,16 @@ ALTER TABLE `compliance_checklist_items`
   ADD CONSTRAINT `compliance_checklist_items_ibfk_2` FOREIGN KEY (`completed_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL;
 
 --
+-- Constraints for table `conversation_threads`
+--
+ALTER TABLE `conversation_threads`
+  ADD CONSTRAINT `fk_conversation_threads_application` FOREIGN KEY (`application_id`) REFERENCES `loan_applications` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_conversation_threads_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_conversation_threads_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_conversation_threads_lead` FOREIGN KEY (`lead_id`) REFERENCES `leads` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_conversation_threads_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
+
+--
 -- Constraints for table `documents`
 --
 ALTER TABLE `documents`
@@ -1342,12 +1451,6 @@ ALTER TABLE `documents`
   ADD CONSTRAINT `documents_ibfk_3` FOREIGN KEY (`uploaded_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `documents_ibfk_4` FOREIGN KEY (`reviewed_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_documents_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
-
---
--- Constraints for table `email_templates`
---
-ALTER TABLE `email_templates`
-  ADD CONSTRAINT `fk_email_templates_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `leads`
@@ -1377,12 +1480,6 @@ ALTER TABLE `loan_applications`
 ALTER TABLE `notifications`
   ADD CONSTRAINT `fk_notifications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE;
-
---
--- Constraints for table `sms_templates`
---
-ALTER TABLE `sms_templates`
-  ADD CONSTRAINT `fk_sms_templates_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `system_settings`
@@ -1427,7 +1524,15 @@ ALTER TABLE `task_form_responses`
 -- Constraints for table `task_templates`
 --
 ALTER TABLE `task_templates`
-  ADD CONSTRAINT `fk_task_template_broker` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `fk_task_template_broker` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_task_templates_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+--
+-- Constraints for table `templates`
+--
+ALTER TABLE `templates`
+  ADD CONSTRAINT `fk_templates_broker` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_templates_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `user_profiles`

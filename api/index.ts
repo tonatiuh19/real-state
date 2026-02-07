@@ -9,6 +9,7 @@ import mysql, {
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
+import twilio from "twilio";
 
 // Validate critical environment variables
 if (
@@ -3266,25 +3267,36 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
 };
 
 /**
- * Get all email templates
+ * Get all templates (unified for email, SMS, WhatsApp)
  */
-const handleGetEmailTemplates: RequestHandler = async (req, res) => {
+const handleGetTemplates: RequestHandler = async (req, res) => {
   try {
+    const { type } = req.query;
+
+    let whereClause = "WHERE tenant_id = ?";
+    const params: any[] = [ENCORE_TENANT_ID];
+
+    if (type && ["email", "sms", "whatsapp"].includes(type as string)) {
+      whereClause += " AND template_type = ?";
+      params.push(type);
+    }
+
     const [templates] = (await pool.query(
       `SELECT 
         id,
         name,
-        subject,
-        body_html,
-        body_text,
         template_type,
+        category,
+        subject,
+        body,
+        variables,
         is_active,
         created_at,
         updated_at
-      FROM email_templates
-      WHERE tenant_id = ?
+      FROM templates
+      ${whereClause}
       ORDER BY created_at DESC`,
-      [ENCORE_TENANT_ID],
+      params,
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3292,88 +3304,147 @@ const handleGetEmailTemplates: RequestHandler = async (req, res) => {
       templates,
     });
   } catch (error) {
-    console.error("Error fetching email templates:", error);
+    console.error("Error fetching templates:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to fetch email templates",
+        error instanceof Error ? error.message : "Failed to fetch templates",
     });
   }
 };
 
 /**
- * Create email template
+ * Create template (unified for email, SMS, WhatsApp)
  */
-const handleCreateEmailTemplate: RequestHandler = async (req, res) => {
+const handleCreateTemplate: RequestHandler = async (req, res) => {
   try {
-    const { name, subject, body_html, body_text, template_type, is_active } =
-      req.body;
+    const {
+      name,
+      template_type,
+      category,
+      subject,
+      body,
+      variables,
+      is_active,
+    } = req.body;
 
-    if (!name || !subject || !body_html || !template_type) {
+    if (!name || !template_type || !body) {
       return res.status(400).json({
         success: false,
-        error: "Name, subject, body_html, and template_type are required",
+        error: "Name, template_type, and body are required",
+      });
+    }
+
+    if (!["email", "sms", "whatsapp"].includes(template_type)) {
+      return res.status(400).json({
+        success: false,
+        error: "template_type must be email, sms, or whatsapp",
+      });
+    }
+
+    // For email templates, subject is required
+    if (template_type === "email" && !subject) {
+      return res.status(400).json({
+        success: false,
+        error: "Subject is required for email templates",
       });
     }
 
     const [result] = (await pool.query(
-      `INSERT INTO email_templates 
-        (tenant_id, name, subject, body_html, body_text, template_type, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO templates 
+        (tenant_id, name, template_type, category, subject, body, variables, is_active) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ENCORE_TENANT_ID,
         name,
-        subject,
-        body_html,
-        body_text || null,
         template_type,
+        category || "custom",
+        subject || null,
+        body,
+        variables ? JSON.stringify(variables) : JSON.stringify({}),
         is_active !== false ? 1 : 0,
       ],
     )) as [ResultSetHeader, any];
 
     const [templates] = (await pool.query(
-      "SELECT * FROM email_templates WHERE id = ? AND tenant_id = ?",
+      "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
       [result.insertId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
       success: true,
       template: templates[0],
-      message: "Email template created successfully",
+      message: "Template created successfully",
     });
   } catch (error) {
-    console.error("Error creating email template:", error);
+    console.error("Error creating template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to create email template",
+        error instanceof Error ? error.message : "Failed to create template",
     });
   }
 };
 
 /**
- * Update email template
+ * Get single template
  */
-const handleUpdateEmailTemplate: RequestHandler = async (req, res) => {
+const handleGetTemplate: RequestHandler = async (req, res) => {
   try {
     const { templateId } = req.params;
-    const { name, subject, body_html, body_text, template_type, is_active } =
-      req.body;
+
+    const [templates] = (await pool.query(
+      "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
+      [templateId, ENCORE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    if (templates.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Template not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      template: templates[0],
+    });
+  } catch (error) {
+    console.error("Error fetching template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to fetch template",
+    });
+  }
+};
+
+/**
+ * Update template (unified for email, SMS, WhatsApp)
+ */
+const handleUpdateTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const {
+      name,
+      template_type,
+      category,
+      subject,
+      body,
+      variables,
+      is_active,
+    } = req.body;
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id FROM email_templates WHERE id = ? AND tenant_id = ?",
+      "SELECT id FROM templates WHERE id = ? AND tenant_id = ?",
       [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "Email template not found",
+        error: "Template not found",
       });
     }
 
@@ -3385,21 +3456,31 @@ const handleUpdateEmailTemplate: RequestHandler = async (req, res) => {
       updates.push("name = ?");
       values.push(name);
     }
+    if (template_type !== undefined) {
+      if (!["email", "sms", "whatsapp"].includes(template_type)) {
+        return res.status(400).json({
+          success: false,
+          error: "template_type must be email, sms, or whatsapp",
+        });
+      }
+      updates.push("template_type = ?");
+      values.push(template_type);
+    }
+    if (category !== undefined) {
+      updates.push("category = ?");
+      values.push(category);
+    }
     if (subject !== undefined) {
       updates.push("subject = ?");
       values.push(subject);
     }
-    if (body_html !== undefined) {
-      updates.push("body_html = ?");
-      values.push(body_html);
+    if (body !== undefined) {
+      updates.push("body = ?");
+      values.push(body);
     }
-    if (body_text !== undefined) {
-      updates.push("body_text = ?");
-      values.push(body_text);
-    }
-    if (template_type !== undefined) {
-      updates.push("template_type = ?");
-      values.push(template_type);
+    if (variables !== undefined) {
+      updates.push("variables = ?");
+      values.push(JSON.stringify(variables));
     }
     if (is_active !== undefined) {
       updates.push("is_active = ?");
@@ -3417,69 +3498,65 @@ const handleUpdateEmailTemplate: RequestHandler = async (req, res) => {
     values.push(ENCORE_TENANT_ID);
 
     await pool.query(
-      `UPDATE email_templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
+      `UPDATE templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
       values,
     );
 
     const [templates] = (await pool.query(
-      "SELECT * FROM email_templates WHERE id = ? AND tenant_id = ?",
+      "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
       [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
       success: true,
       template: templates[0],
-      message: "Email template updated successfully",
+      message: "Template updated successfully",
     });
   } catch (error) {
-    console.error("Error updating email template:", error);
+    console.error("Error updating template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to update email template",
+        error instanceof Error ? error.message : "Failed to update template",
     });
   }
 };
 
 /**
- * Delete email template
+ * Delete template (unified for email, SMS, WhatsApp)
  */
-const handleDeleteEmailTemplate: RequestHandler = async (req, res) => {
+const handleDeleteTemplate: RequestHandler = async (req, res) => {
   try {
     const { templateId } = req.params;
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id, name FROM email_templates WHERE id = ? AND tenant_id = ?",
+      "SELECT id, name FROM templates WHERE id = ? AND tenant_id = ?",
       [templateId, ENCORE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "Email template not found",
+        error: "Template not found",
       });
     }
 
-    await pool.query(
-      "DELETE FROM email_templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
-    );
+    await pool.query("DELETE FROM templates WHERE id = ? AND tenant_id = ?", [
+      templateId,
+      ENCORE_TENANT_ID,
+    ]);
 
     res.json({
       success: true,
-      message: `Email template "${existingRows[0].name}" deleted successfully`,
+      message: `Template "${existingRows[0].name}" deleted successfully`,
     });
   } catch (error) {
-    console.error("Error deleting email template:", error);
+    console.error("Error deleting template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to delete email template",
+        error instanceof Error ? error.message : "Failed to delete template",
     });
   }
 };
@@ -3889,226 +3966,459 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
   }
 };
 
+// ==================== CONVERSATION HANDLERS ====================
+
 /**
- * Get all SMS templates
+ * GET /api/conversations
+ * Get all conversation threads for the broker
  */
-const handleGetSmsTemplates: RequestHandler = async (req, res) => {
+const handleGetConversations: RequestHandler = async (req, res) => {
   try {
-    const [templates] = (await pool.query(
-      "SELECT * FROM sms_templates WHERE tenant_id = ? ORDER BY created_at DESC",
-      [ENCORE_TENANT_ID],
+    const brokerId = (req as any).brokerId;
+    const { status = "active", limit = 50, offset = 0 } = req.query;
+
+    const [threads] = (await pool.query(
+      `SELECT ct.*, 
+              c.first_name as client_first_name, 
+              c.last_name as client_last_name,
+              la.application_number,
+              la.property_address
+       FROM conversation_threads ct
+       LEFT JOIN clients c ON ct.client_id = c.id
+       LEFT JOIN loan_applications la ON ct.application_id = la.id
+       WHERE ct.tenant_id = ? AND ct.broker_id = ? AND ct.status = ?
+       ORDER BY ct.last_message_at DESC
+       LIMIT ? OFFSET ?`,
+      [
+        ENCORE_TENANT_ID,
+        brokerId,
+        status,
+        parseInt(limit as string),
+        parseInt(offset as string),
+      ],
     )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      conversations: threads.map((thread: any) => ({
+        ...thread,
+        client_name:
+          thread.client_first_name && thread.client_last_name
+            ? `${thread.client_first_name} ${thread.client_last_name}`
+            : thread.client_name,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching conversations:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch conversations",
+    });
+  }
+};
+
+/**
+ * GET /api/conversations/:conversationId/messages
+ * Get all messages in a conversation
+ */
+const handleGetConversationMessages: RequestHandler = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { limit = 50, offset = 0 } = req.query;
+
+    const [messages] = (await pool.query(
+      `SELECT c.*, 
+              b.first_name as broker_first_name, 
+              b.last_name as broker_last_name,
+              cl.first_name as client_first_name, 
+              cl.last_name as client_last_name
+       FROM communications c
+       LEFT JOIN brokers b ON c.from_broker_id = b.id OR c.to_broker_id = b.id
+       LEFT JOIN clients cl ON c.from_user_id = cl.id OR c.to_user_id = cl.id
+       WHERE c.conversation_id = ? AND c.tenant_id = ?
+       ORDER BY c.created_at ASC
+       LIMIT ? OFFSET ?`,
+      [
+        conversationId,
+        ENCORE_TENANT_ID,
+        parseInt(limit as string),
+        parseInt(offset as string),
+      ],
+    )) as [RowDataPacket[], any];
+
+    // Mark messages as read
+    await pool.query(
+      `UPDATE communications 
+       SET delivery_status = 'read', read_timestamp = NOW()
+       WHERE conversation_id = ? AND direction = 'inbound' AND delivery_status != 'read'`,
+      [conversationId],
+    );
+
+    // Update unread count
+    await pool.query(
+      `UPDATE conversation_threads 
+       SET unread_count = 0 
+       WHERE conversation_id = ?`,
+      [conversationId],
+    );
+
+    res.json({
+      success: true,
+      messages: messages.map((msg: any) => ({
+        ...msg,
+        sender_name: msg.from_broker_id
+          ? `${msg.broker_first_name} ${msg.broker_last_name}`
+          : `${msg.client_first_name} ${msg.client_last_name}`,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching conversation messages:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to fetch messages",
+    });
+  }
+};
+
+/**
+ * POST /api/conversations/send-message
+ * Send a message via SMS, WhatsApp, or Email
+ */
+const handleSendMessage: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      to_user_id,
+      application_id,
+      communication_type,
+      body,
+      subject,
+      template_id,
+      conversation_id,
+    } = req.body;
+
+    // Validate required fields
+    if (!to_user_id || !communication_type || !body) {
+      return res.status(400).json({
+        success: false,
+        error: "to_user_id, communication_type, and body are required",
+      });
+    }
+
+    // Get client information
+    const [clientRows] = (await pool.query(
+      "SELECT * FROM clients WHERE id = ? AND tenant_id = ?",
+      [to_user_id, ENCORE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    if (clientRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Client not found",
+      });
+    }
+
+    const client = clientRows[0];
+    let deliveryResult = { success: true, external_id: null, cost: null };
+
+    // Send message based on type
+    try {
+      if (communication_type === "sms" || communication_type === "whatsapp") {
+        deliveryResult = await sendTwilioMessage({
+          to: client.phone_number,
+          body,
+          type: communication_type,
+        });
+      } else if (communication_type === "email") {
+        deliveryResult = await sendEmail({
+          to: client.email,
+          subject: subject || "Message from Encore Mortgage",
+          html: body.replace(/\n/g, "<br>"),
+        });
+      }
+    } catch (sendError) {
+      console.error(`Error sending ${communication_type}:`, sendError);
+      deliveryResult = {
+        success: false,
+        external_id: null,
+        cost: null,
+      } as any;
+    }
+
+    // Store message in database
+    const finalConversationId =
+      conversation_id || `conv_${application_id || "manual"}_${to_user_id}`;
+
+    const [result] = (await pool.query(
+      `INSERT INTO communications 
+        (tenant_id, application_id, from_broker_id, to_user_id, communication_type, 
+         direction, subject, body, status, external_id, conversation_id, 
+         delivery_status, delivery_timestamp, cost, error_message) 
+       VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        ENCORE_TENANT_ID,
+        application_id,
+        brokerId,
+        to_user_id,
+        communication_type,
+        subject,
+        body,
+        deliveryResult.success ? "sent" : "failed",
+        deliveryResult.external_id,
+        finalConversationId,
+        deliveryResult.success ? "sent" : "failed",
+        deliveryResult.success ? new Date() : null,
+        deliveryResult.cost,
+        deliveryResult.success ? null : (deliveryResult as any).error,
+      ],
+    )) as [ResultSetHeader, any];
+
+    // Log the action
+    await pool.query(
+      `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, created_at)
+       VALUES (?, ?, 'broker', ?, ?, ?, ?, NOW())`,
+      [
+        ENCORE_TENANT_ID,
+        brokerId,
+        `send_${communication_type}`,
+        "communication",
+        result.insertId,
+        JSON.stringify({
+          to_user_id,
+          communication_type,
+          body: body.substring(0, 100),
+        }),
+      ],
+    );
+
+    res.json({
+      success: true,
+      message: `${communication_type.toUpperCase()} ${deliveryResult.success ? "sent successfully" : "failed to send"}`,
+      communication_id: result.insertId,
+      delivery_status: deliveryResult.success ? "sent" : "failed",
+      cost: deliveryResult.cost,
+    });
+  } catch (error) {
+    console.error("Error sending message:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to send message",
+    });
+  }
+};
+
+/**
+ * GET /api/conversation-templates
+ * Get all conversation templates
+ */
+const handleGetConversationTemplates: RequestHandler = async (req, res) => {
+  try {
+    const { template_type, category } = req.query;
+
+    let query =
+      "SELECT * FROM templates WHERE tenant_id = ? AND is_active = true";
+    const params: any[] = [ENCORE_TENANT_ID];
+
+    if (template_type) {
+      query += " AND template_type = ?";
+      params.push(template_type);
+    }
+
+    if (category) {
+      query += " AND category = ?";
+      params.push(category);
+    }
+
+    query += " ORDER BY category, name";
+
+    const [templates] = (await pool.query(query, params)) as [
+      RowDataPacket[],
+      any,
+    ];
 
     res.json({
       success: true,
       templates: templates.map((template: any) => ({
         ...template,
+        variables: template.variables ? JSON.parse(template.variables) : [],
         is_active: Boolean(template.is_active),
       })),
     });
   } catch (error) {
-    console.error("Error fetching SMS templates:", error);
+    console.error("Error fetching conversation templates:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to fetch SMS templates",
+        error instanceof Error ? error.message : "Failed to fetch templates",
     });
   }
 };
 
 /**
- * Create SMS template
+ * POST /api/conversation-templates
+ * Create a new conversation template
  */
-const handleCreateSmsTemplate: RequestHandler = async (req, res) => {
+const handleCreateConversationTemplate: RequestHandler = async (req, res) => {
   try {
-    const { name, body, template_type, is_active } = req.body;
+    const brokerId = (req as any).brokerId;
+    const {
+      name,
+      description,
+      template_type,
+      category,
+      subject,
+      body,
+      variables,
+    } = req.body;
 
-    // Validate required fields
-    if (!name || !body || !template_type) {
+    if (!name || !template_type || !body) {
       return res.status(400).json({
         success: false,
-        error: "Name, body, and template_type are required",
-      });
-    }
-
-    // Check character limit (1600 as per schema)
-    if (body.length > 1600) {
-      return res.status(400).json({
-        success: false,
-        error: "SMS body cannot exceed 1600 characters",
+        error: "name, template_type, and body are required",
       });
     }
 
     const [result] = (await pool.query(
-      `INSERT INTO sms_templates 
-        (tenant_id, name, body, template_type, is_active) 
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO templates 
+        (tenant_id, name, description, template_type, category, subject, body, variables, created_by_broker_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ENCORE_TENANT_ID,
         name,
-        body,
+        description,
         template_type,
-        is_active !== false ? 1 : 0,
+        category || "system",
+        subject,
+        body,
+        JSON.stringify(variables || []),
+        brokerId,
       ],
     )) as [ResultSetHeader, any];
 
-    const [templates] = (await pool.query(
-      "SELECT * FROM sms_templates WHERE id = ? AND tenant_id = ?",
-      [result.insertId, ENCORE_TENANT_ID],
-    )) as [RowDataPacket[], any];
-
     res.json({
       success: true,
-      template: {
-        ...templates[0],
-        is_active: Boolean(templates[0].is_active),
-      },
-      message: "SMS template created successfully",
+      message: "Template created successfully",
+      template_id: result.insertId,
     });
   } catch (error) {
-    console.error("Error creating SMS template:", error);
+    console.error("Error creating conversation template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to create SMS template",
+        error instanceof Error ? error.message : "Failed to create template",
     });
   }
 };
 
-/**
- * Update SMS template
- */
-const handleUpdateSmsTemplate: RequestHandler = async (req, res) => {
+// Helper function to send SMS/WhatsApp via Twilio
+async function sendTwilioMessage({
+  to,
+  body,
+  type,
+}: {
+  to: string;
+  body: string;
+  type: "sms" | "whatsapp";
+}) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
+  const twilioWhatsApp = process.env.TWILIO_WHATSAPP_NUMBER;
+
+  if (!accountSid || !authToken || !twilioPhone) {
+    throw new Error("Twilio credentials not configured");
+  }
+
   try {
-    const { templateId } = req.params;
-    const { name, body, template_type, is_active } = req.body;
+    // Initialize Twilio client
+    const client = twilio(accountSid, authToken);
 
-    // Check if template exists
-    const [existingRows] = (await pool.query(
-      "SELECT id FROM sms_templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
-    )) as [RowDataPacket[], any];
+    const fromNumber =
+      type === "whatsapp"
+        ? `whatsapp:${twilioWhatsApp || twilioPhone}`
+        : twilioPhone;
+    const toNumber = type === "whatsapp" ? `whatsapp:${to}` : to;
 
-    if (existingRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "SMS template not found",
-      });
-    }
+    // Send message via Twilio
+    const message = await client.messages.create({
+      body,
+      from: fromNumber,
+      to: toNumber,
+    });
 
-    // Check character limit if body is being updated
-    if (body && body.length > 1600) {
-      return res.status(400).json({
-        success: false,
-        error: "SMS body cannot exceed 1600 characters",
-      });
-    }
-
-    // Build update query dynamically
-    const updates: string[] = [];
-    const values: any[] = [];
-
-    if (name !== undefined) {
-      updates.push("name = ?");
-      values.push(name);
-    }
-    if (body !== undefined) {
-      updates.push("body = ?");
-      values.push(body);
-    }
-    if (template_type !== undefined) {
-      updates.push("template_type = ?");
-      values.push(template_type);
-    }
-    if (is_active !== undefined) {
-      updates.push("is_active = ?");
-      values.push(is_active ? 1 : 0);
-    }
-
-    if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "No fields to update",
-      });
-    }
-
-    values.push(templateId);
-    values.push(ENCORE_TENANT_ID);
-
-    await pool.query(
-      `UPDATE sms_templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
-      values,
-    );
-
-    const [templates] = (await pool.query(
-      "SELECT * FROM sms_templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
-    )) as [RowDataPacket[], any];
-
-    res.json({
+    return {
       success: true,
-      template: {
-        ...templates[0],
-        is_active: Boolean(templates[0].is_active),
-      },
-      message: "SMS template updated successfully",
-    });
+      external_id: message.sid,
+      cost: Math.abs(parseFloat(message.price || "0")),
+    };
   } catch (error) {
-    console.error("Error updating SMS template:", error);
-    res.status(500).json({
+    console.error(`Twilio ${type} error:`, error);
+    return {
       success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to update SMS template",
-    });
+      external_id: null,
+      cost: null,
+      error: error instanceof Error ? error.message : `Failed to send ${type}`,
+    };
   }
-};
+}
 
-/**
- * Delete SMS template
- */
-const handleDeleteSmsTemplate: RequestHandler = async (req, res) => {
+// Helper function to send email
+async function sendEmail({
+  to,
+  subject,
+  html,
+}: {
+  to: string;
+  subject: string;
+  html: string;
+}) {
+  const emailHost = process.env.EMAIL_HOST || process.env.HOSTGATOR_SMTP_HOST;
+  const emailPort =
+    process.env.EMAIL_PORT || process.env.HOSTGATOR_SMTP_PORT || "587";
+  const emailUser = process.env.EMAIL_USER || process.env.HOSTGATOR_EMAIL_USER;
+  const emailPass = process.env.EMAIL_PASS || process.env.HOSTGATOR_EMAIL_PASS;
+
+  if (!emailHost || !emailUser || !emailPass) {
+    throw new Error("Email credentials not configured");
+  }
+
   try {
-    const { templateId } = req.params;
+    const transporter = nodemailer.createTransport({
+      host: emailHost,
+      port: parseInt(emailPort),
+      secure: false, // true for 465, false for other ports
+      auth: {
+        user: emailUser,
+        pass: emailPass,
+      },
+    });
 
-    // Check if template exists
-    const [existingRows] = (await pool.query(
-      "SELECT id, name FROM sms_templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
-    )) as [RowDataPacket[], any];
+    const info = await transporter.sendMail({
+      from: `"Encore Mortgage" <${emailUser}>`,
+      to,
+      subject,
+      html,
+    });
 
-    if (existingRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "SMS template not found",
-      });
-    }
-
-    await pool.query(
-      "DELETE FROM sms_templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
-    );
-
-    res.json({
+    return {
       success: true,
-      message: `SMS template "${existingRows[0].name}" deleted successfully`,
-    });
+      external_id: info.messageId,
+      cost: null, // Email typically doesn't have per-message costs
+    };
   } catch (error) {
-    console.error("Error deleting SMS template:", error);
-    res.status(500).json({
+    console.error("Email error:", error);
+    return {
       success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to delete SMS template",
-    });
+      external_id: null,
+      cost: null,
+      error: error instanceof Error ? error.message : "Failed to send email",
+    };
   }
-};
+}
 
 /**
  * GET /api/audit-logs
@@ -4732,26 +5042,23 @@ function createServer() {
     handleSubmitTaskForm,
   );
 
-  // Email template routes (require broker session)
+  // Template routes (require broker session) - unified for email, SMS, WhatsApp
+  expressApp.get("/api/templates", verifyBrokerSession, handleGetTemplates);
+  expressApp.post("/api/templates", verifyBrokerSession, handleCreateTemplate);
   expressApp.get(
-    "/api/email-templates",
+    "/api/templates/:templateId",
     verifyBrokerSession,
-    handleGetEmailTemplates,
-  );
-  expressApp.post(
-    "/api/email-templates",
-    verifyBrokerSession,
-    handleCreateEmailTemplate,
+    handleGetTemplate,
   );
   expressApp.put(
-    "/api/email-templates/:templateId",
+    "/api/templates/:templateId",
     verifyBrokerSession,
-    handleUpdateEmailTemplate,
+    handleUpdateTemplate,
   );
   expressApp.delete(
-    "/api/email-templates/:templateId",
+    "/api/templates/:templateId",
     verifyBrokerSession,
-    handleDeleteEmailTemplate,
+    handleDeleteTemplate,
   );
 
   // Client Portal routes (require client session)
@@ -4808,26 +5115,31 @@ function createServer() {
     handleDeleteTaskDocument,
   );
 
-  // SMS Templates routes
+  // Conversations routes
   expressApp.get(
-    "/api/sms-templates",
+    "/api/conversations",
     verifyBrokerSession,
-    handleGetSmsTemplates,
+    handleGetConversations,
+  );
+  expressApp.get(
+    "/api/conversations/:conversationId/messages",
+    verifyBrokerSession,
+    handleGetConversationMessages,
   );
   expressApp.post(
-    "/api/sms-templates",
+    "/api/conversations/send-message",
     verifyBrokerSession,
-    handleCreateSmsTemplate,
+    handleSendMessage,
   );
-  expressApp.put(
-    "/api/sms-templates/:templateId",
+  expressApp.get(
+    "/api/conversation-templates",
     verifyBrokerSession,
-    handleUpdateSmsTemplate,
+    handleGetConversationTemplates,
   );
-  expressApp.delete(
-    "/api/sms-templates/:templateId",
+  expressApp.post(
+    "/api/conversation-templates",
     verifyBrokerSession,
-    handleDeleteSmsTemplate,
+    handleCreateConversationTemplate,
   );
 
   // Audit Logs routes

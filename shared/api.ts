@@ -271,90 +271,49 @@ export interface UpdateClientProfileResponse {
 }
 
 /**
- * Email Template Types
+ * Unified Template Types (email, SMS, WhatsApp)
  */
-export interface EmailTemplate {
+export interface Template {
   id: number;
   name: string;
-  subject: string;
-  body_html: string;
-  body_text: string | null;
-  template_type:
-    | "welcome"
-    | "status_update"
-    | "document_request"
-    | "approval"
-    | "denial"
-    | "custom";
+  template_type: "email" | "sms" | "whatsapp";
+  category: "system" | "marketing" | "notification" | "custom";
+  subject?: string; // Only for email templates
+  body: string;
+  variables: Record<string, any>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export interface GetEmailTemplatesResponse {
+export interface GetTemplatesResponse {
   success: boolean;
-  templates: EmailTemplate[];
+  templates: Template[];
 }
 
-export interface CreateEmailTemplateRequest {
+export interface CreateTemplateRequest {
   name: string;
-  subject: string;
-  body_html: string;
-  body_text?: string;
-  template_type: string;
+  template_type: "email" | "sms" | "whatsapp";
+  category?: string;
+  subject?: string; // Required for email templates
+  body: string;
+  variables?: Record<string, any>;
   is_active?: boolean;
 }
 
-export interface UpdateEmailTemplateRequest {
+export interface UpdateTemplateRequest {
   name?: string;
+  template_type?: "email" | "sms" | "whatsapp";
+  category?: string;
   subject?: string;
-  body_html?: string;
-  body_text?: string;
-  template_type?: string;
-  is_active?: boolean;
-}
-
-export interface EmailTemplateResponse {
-  success: boolean;
-  template: EmailTemplate;
-  message?: string;
-}
-
-/**
- * SMS Template Types
- */
-export interface SmsTemplate {
-  id: number;
-  name: string;
-  body: string;
-  template_type: "reminder" | "status_update" | "document_request" | "custom";
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface GetSmsTemplatesResponse {
-  success: boolean;
-  templates: SmsTemplate[];
-}
-
-export interface CreateSmsTemplateRequest {
-  name: string;
-  body: string;
-  template_type: string;
-  is_active?: boolean;
-}
-
-export interface UpdateSmsTemplateRequest {
-  name?: string;
   body?: string;
-  template_type?: string;
+  variables?: Record<string, any>;
   is_active?: boolean;
 }
 
-export interface SmsTemplateResponse {
+export interface TemplateResponse {
   success: boolean;
-  template: SmsTemplate;
+  template: Template;
   message?: string;
 }
 
@@ -676,4 +635,180 @@ export interface UpdateTaskTemplateRequest extends CreateTaskRequest {
   document_instructions?: string;
   has_custom_form?: boolean;
   form_fields?: CreateTaskFormFieldRequest[];
+}
+
+// ==================== CONVERSATIONS TYPES ====================
+
+export interface ConversationThread {
+  id: number;
+  tenant_id: number;
+  conversation_id: string;
+  application_id?: number;
+  lead_id?: number;
+  client_id?: number;
+  broker_id: number;
+  client_name?: string;
+  client_phone?: string;
+  client_email?: string;
+  last_message_at: string;
+  last_message_preview?: string;
+  last_message_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
+  message_count: number;
+  unread_count: number;
+  priority: "low" | "normal" | "high" | "urgent";
+  status: "active" | "archived" | "closed";
+  tags?: string[];
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  client_first_name?: string;
+  client_last_name?: string;
+  application_number?: string;
+  property_address?: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  tenant_id: number;
+  application_id?: number;
+  lead_id?: number;
+  from_user_id?: number;
+  from_broker_id?: number;
+  to_user_id?: number;
+  to_broker_id?: number;
+  communication_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
+  direction: "inbound" | "outbound";
+  subject?: string;
+  body: string;
+  status: "pending" | "sent" | "delivered" | "failed" | "read";
+  external_id?: string;
+  metadata?: any;
+  conversation_id?: string;
+  thread_id?: string;
+  reply_to_id?: number;
+  message_type: "text" | "image" | "document" | "audio" | "video" | "template";
+  template_id?: number;
+  delivery_status:
+    | "pending"
+    | "sent"
+    | "delivered"
+    | "read"
+    | "failed"
+    | "rejected";
+  delivery_timestamp?: string;
+  read_timestamp?: string;
+  error_code?: string;
+  error_message?: string;
+  cost?: number;
+  provider_response?: any;
+  scheduled_at?: string;
+  sent_at?: string;
+  created_at: string;
+  // Joined fields
+  sender_name?: string;
+  broker_first_name?: string;
+  broker_last_name?: string;
+  client_first_name?: string;
+  client_last_name?: string;
+}
+
+export interface ConversationTemplate {
+  id: number;
+  tenant_id: number;
+  name: string;
+  description?: string;
+  template_type: "email" | "sms" | "whatsapp";
+  category:
+    | "welcome"
+    | "reminder"
+    | "update"
+    | "follow_up"
+    | "marketing"
+    | "system";
+  subject?: string;
+  body: string;
+  variables: string[];
+  is_active: boolean;
+  usage_count: number;
+  created_by_broker_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetConversationsRequest {
+  status?: "active" | "archived" | "closed";
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetConversationsResponse {
+  success: boolean;
+  conversations: ConversationThread[];
+}
+
+export interface GetConversationMessagesRequest {
+  conversationId: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetConversationMessagesResponse {
+  success: boolean;
+  messages: ConversationMessage[];
+}
+
+export interface SendMessageRequest {
+  to_user_id: number;
+  application_id?: number;
+  communication_type: "email" | "sms" | "whatsapp";
+  body: string;
+  subject?: string;
+  template_id?: number;
+  conversation_id?: string;
+}
+
+export interface SendMessageResponse {
+  success: boolean;
+  message: string;
+  communication_id: number;
+  delivery_status: "sent" | "failed";
+  cost?: number;
+}
+
+export interface GetConversationTemplatesRequest {
+  template_type?: "email" | "sms" | "whatsapp";
+  category?:
+    | "welcome"
+    | "reminder"
+    | "update"
+    | "follow_up"
+    | "marketing"
+    | "system";
+}
+
+export interface GetConversationTemplatesResponse {
+  success: boolean;
+  templates: ConversationTemplate[];
+}
+
+export interface CreateConversationTemplateRequest {
+  name: string;
+  description?: string;
+  template_type: "email" | "sms" | "whatsapp";
+  category?:
+    | "welcome"
+    | "reminder"
+    | "update"
+    | "follow_up"
+    | "marketing"
+    | "system";
+  subject?: string;
+  body: string;
+  variables?: string[];
+}
+
+export interface CreateConversationTemplateResponse {
+  success: boolean;
+  message: string;
+  template_id: number;
 }
