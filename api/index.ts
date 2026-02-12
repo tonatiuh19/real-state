@@ -34,8 +34,7 @@ const JWT_SECRET =
   })();
 
 // Tenant Configuration
-// Encore Mortgage tenant ID (see database/schema.sql for reference)
-const ENCORE_TENANT_ID = 1;
+const MORTGAGE_TENANT_ID = 1;
 
 // Database connection pool
 const pool = mysql.createPool({
@@ -428,7 +427,7 @@ const verifyClientSession = async (
       // Get client details
       const [clients] = await pool.query<any[]>(
         "SELECT * FROM clients WHERE id = ? AND status = 'active' AND tenant_id = ?",
-        [decoded.clientId, ENCORE_TENANT_ID],
+        [decoded.clientId, MORTGAGE_TENANT_ID],
       );
 
       if (clients.length === 0) {
@@ -491,7 +490,7 @@ const verifyBrokerSession = async (
       // Get broker details
       const [brokers] = await pool.query<any[]>(
         "SELECT * FROM brokers WHERE id = ? AND status = 'active' AND tenant_id = ?",
-        [decoded.brokerId, ENCORE_TENANT_ID],
+        [decoded.brokerId, MORTGAGE_TENANT_ID],
       );
 
       if (brokers.length === 0) {
@@ -567,7 +566,7 @@ async function createAuditLog({
         ip_address, user_agent, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         userId,
         brokerId,
         actorType,
@@ -653,7 +652,7 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
     // Check if broker exists and is active
     const [brokers] = await pool.query<any[]>(
       "SELECT * FROM brokers WHERE email = ? AND status = 'active' AND tenant_id = ?",
-      [normalizedEmail, ENCORE_TENANT_ID],
+      [normalizedEmail, MORTGAGE_TENANT_ID],
     );
 
     if (brokers.length === 0) {
@@ -733,7 +732,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
     // Check if broker exists
     const [brokers] = await pool.query<any[]>(
       "SELECT * FROM brokers WHERE email = ? AND status = 'active' AND tenant_id = ?",
-      [normalizedEmail, ENCORE_TENANT_ID],
+      [normalizedEmail, MORTGAGE_TENANT_ID],
     );
 
     if (brokers.length === 0) {
@@ -801,7 +800,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
     // Update last login
     await pool.query(
       "UPDATE brokers SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
-      [broker.id, ENCORE_TENANT_ID],
+      [broker.id, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -857,7 +856,7 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
       // Get broker details
       const [brokers] = await pool.query<any[]>(
         "SELECT * FROM brokers WHERE id = ? AND status = 'active' AND tenant_id = ?",
-        [decoded.brokerId, ENCORE_TENANT_ID],
+        [decoded.brokerId, MORTGAGE_TENANT_ID],
       );
 
       if (brokers.length === 0) {
@@ -927,7 +926,7 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
     // Check if client exists
     const [clients] = await pool.query<any[]>(
       "SELECT * FROM clients WHERE email = ? AND status = 'active' AND tenant_id = ?",
-      [normalizedEmail, ENCORE_TENANT_ID],
+      [normalizedEmail, MORTGAGE_TENANT_ID],
     );
 
     if (clients.length === 0) {
@@ -996,7 +995,7 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
     // Check if client exists
     const [clients] = await pool.query<any[]>(
       "SELECT * FROM clients WHERE email = ? AND status = 'active' AND tenant_id = ?",
-      [normalizedEmail, ENCORE_TENANT_ID],
+      [normalizedEmail, MORTGAGE_TENANT_ID],
     );
 
     if (clients.length === 0) {
@@ -1063,7 +1062,7 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
     // Update last login
     await pool.query(
       "UPDATE clients SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
-      [client.id, ENCORE_TENANT_ID],
+      [client.id, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -1118,7 +1117,7 @@ const handleClientValidateSession: RequestHandler = async (req, res) => {
       // Get client details
       const [clients] = await pool.query<any[]>(
         "SELECT * FROM clients WHERE id = ? AND status = 'active' AND tenant_id = ?",
-        [decoded.clientId, ENCORE_TENANT_ID],
+        [decoded.clientId, MORTGAGE_TENANT_ID],
       );
 
       if (clients.length === 0) {
@@ -1267,7 +1266,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
     // Check if client exists
     let [existingClients] = await connection.query<any[]>(
       "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
-      [client_email, ENCORE_TENANT_ID],
+      [client_email, MORTGAGE_TENANT_ID],
     );
 
     let clientId: number;
@@ -1283,7 +1282,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
           client_phone,
           brokerId,
           clientId,
-          ENCORE_TENANT_ID,
+          MORTGAGE_TENANT_ID,
         ],
       );
     } else {
@@ -1292,7 +1291,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         `INSERT INTO clients (tenant_id, email, first_name, last_name, phone, status, email_verified, assigned_broker_id, source) 
          VALUES (?, ?, ?, ?, ?, 'active', 0, ?, 'broker_created')`,
         [
-          ENCORE_TENANT_ID,
+          MORTGAGE_TENANT_ID,
           client_email,
           client_first_name,
           client_last_name,
@@ -1316,7 +1315,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, 8, ?, ?, NOW())`,
 
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         applicationNumber,
         clientId,
         brokerId,
@@ -1355,7 +1354,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
           assigned_to_user_id, created_by_broker_id, due_date, template_id
         ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
         [
-          ENCORE_TENANT_ID,
+          MORTGAGE_TENANT_ID,
           applicationId,
           task.title,
           task.description,
@@ -1381,7 +1380,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
        VALUES (?, ?, ?, ?, 'info', '/portal')`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         clientId,
         "New Loan Application Created",
         `Your loan application ${applicationNumber} has been created. Please complete the assigned tasks.`,
@@ -1501,8 +1500,8 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
         : "WHERE la.id = ? AND la.broker_user_id = ? AND la.tenant_id = ?";
     const queryParams =
       brokerRole === "admin"
-        ? [loanId, ENCORE_TENANT_ID]
-        : [loanId, brokerId, ENCORE_TENANT_ID];
+        ? [loanId, MORTGAGE_TENANT_ID]
+        : [loanId, brokerId, MORTGAGE_TENANT_ID];
 
     // Get loan details with client and broker info
     const [loans] = (await pool.query(
@@ -1589,7 +1588,7 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
       FROM loan_applications
       WHERE broker_user_id = ? AND tenant_id = ?
         AND status NOT IN ('denied', 'cancelled', 'closed')`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get average closing days (from submitted to closed)
@@ -1602,7 +1601,7 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         AND actual_close_date IS NOT NULL
         AND submitted_at IS NOT NULL
         AND submitted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get closure rate (approved/closed vs denied/cancelled)
@@ -1613,7 +1612,7 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
       FROM loan_applications
       WHERE broker_user_id = ? AND tenant_id = ?
         AND status IN ('approved', 'closed', 'denied', 'cancelled')`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     const successful = closureRateStats[0]?.successful || 0;
@@ -1632,7 +1631,7 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
       GROUP BY DATE(created_at)
       ORDER BY DATE(created_at) ASC`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get status breakdown
@@ -1645,7 +1644,7 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         AND status NOT IN ('denied', 'cancelled')
       GROUP BY status
       ORDER BY count DESC`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     const stats = {
@@ -1705,7 +1704,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
       WHERE c.assigned_broker_id = ? AND c.tenant_id = ?
       GROUP BY c.id
       ORDER BY c.created_at DESC`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -1743,7 +1742,7 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
     // Check if requesting broker is admin or superadmin
     const [brokerRows] = (await connection.execute(
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (brokerRows.length === 0) {
@@ -1776,7 +1775,7 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
       FROM brokers 
       WHERE status = 'active' AND tenant_id = ?
       ORDER BY first_name, last_name`,
-      [ENCORE_TENANT_ID],
+      [MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -1814,7 +1813,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
     // Check if requesting broker is admin
     const [adminCheck] = (await pool.query(
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
@@ -1835,7 +1834,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
     // Check if email already exists
     const [existing] = (await pool.query(
       "SELECT id FROM brokers WHERE email = ? AND tenant_id = ?",
-      [email, ENCORE_TENANT_ID],
+      [email, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existing.length > 0) {
@@ -1851,7 +1850,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
         (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         email,
         first_name,
         last_name,
@@ -1864,7 +1863,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
 
     const [newBroker] = (await pool.query(
       "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
-      [result.insertId, ENCORE_TENANT_ID],
+      [result.insertId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -1901,7 +1900,7 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     // Check if requesting broker is admin
     const [adminCheck] = (await pool.query(
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
@@ -1914,7 +1913,7 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     // Check if target broker exists
     const [existing] = (await pool.query(
       "SELECT id FROM brokers WHERE id = ? AND tenant_id = ?",
-      [targetBrokerId, ENCORE_TENANT_ID],
+      [targetBrokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existing.length === 0) {
@@ -1965,7 +1964,7 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     }
 
     values.push(targetBrokerId);
-    values.push(ENCORE_TENANT_ID);
+    values.push(MORTGAGE_TENANT_ID);
 
     await pool.query(
       `UPDATE brokers SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
@@ -1974,7 +1973,7 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
 
     const [updatedBroker] = (await pool.query(
       "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, last_login, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
-      [targetBrokerId, ENCORE_TENANT_ID],
+      [targetBrokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -2002,7 +2001,7 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
     // Check if requesting broker is admin
     const [adminCheck] = (await pool.query(
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
@@ -2023,7 +2022,7 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
     // Check if target broker exists
     const [existing] = (await pool.query(
       "SELECT id, first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ?",
-      [targetBrokerId, ENCORE_TENANT_ID],
+      [targetBrokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existing.length === 0) {
@@ -2036,7 +2035,7 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
     // Instead of deleting, set status to inactive (soft delete)
     await pool.query(
       "UPDATE brokers SET status = 'inactive' WHERE id = ? AND tenant_id = ?",
-      [targetBrokerId, ENCORE_TENANT_ID],
+      [targetBrokerId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2077,7 +2076,7 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
       FROM task_templates
       WHERE created_by_broker_id = ? AND tenant_id = ?
       ORDER BY order_index ASC, created_at DESC`,
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2127,7 +2126,7 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
     // Get max order_index to append new template at end
     const [maxOrder] = await pool.query<any[]>(
       "SELECT COALESCE(MAX(order_index), 0) as max_order FROM task_templates WHERE created_by_broker_id = ? AND tenant_id = ?",
-      [brokerId, ENCORE_TENANT_ID],
+      [brokerId, MORTGAGE_TENANT_ID],
     );
     const orderIndex = (maxOrder[0]?.max_order || 0) + 1;
 
@@ -2149,7 +2148,7 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
         created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         title,
         description || null,
         task_type,
@@ -2169,7 +2168,7 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
     // Fetch the created template
     const [templates] = await pool.query<RowDataPacket[]>(
       "SELECT * FROM task_templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
+      [templateId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2275,14 +2274,14 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
         document_instructions || null,
         has_custom_form || false,
         taskId,
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
       ],
     );
 
     // Fetch updated template
     const [rows] = await pool.query<RowDataPacket[]>(
       "SELECT * FROM task_templates WHERE id = ? AND tenant_id = ?",
-      [taskId, ENCORE_TENANT_ID],
+      [taskId, MORTGAGE_TENANT_ID],
     );
 
     if (!Array.isArray(rows) || rows.length === 0) {
@@ -2319,7 +2318,7 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
     // Check if template exists
     const [existingRows] = await pool.query<RowDataPacket[]>(
       "SELECT id, title FROM task_templates WHERE id = ? AND tenant_id = ?",
-      [taskId, ENCORE_TENANT_ID],
+      [taskId, MORTGAGE_TENANT_ID],
     );
 
     if (!Array.isArray(existingRows) || existingRows.length === 0) {
@@ -2332,7 +2331,7 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
     // Delete template (task instances will have template_id set to NULL via CASCADE)
     await pool.query(
       "DELETE FROM task_templates WHERE id = ? AND tenant_id = ?",
-      [taskId, ENCORE_TENANT_ID],
+      [taskId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2604,7 +2603,7 @@ const handleUploadTaskDocument: RequestHandler = async (req, res) => {
        INNER JOIN tasks t ON td.task_id = t.id 
        INNER JOIN loan_applications la ON t.application_id = la.id 
        WHERE td.id = ? AND la.tenant_id = ?`,
-      [(result as any).insertId, ENCORE_TENANT_ID],
+      [(result as any).insertId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2634,7 +2633,7 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
        INNER JOIN loan_applications la ON t.application_id = la.id 
        WHERE td.task_id = ? AND la.tenant_id = ? 
        ORDER BY td.uploaded_at DESC`,
-      [taskId, ENCORE_TENANT_ID],
+      [taskId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2663,7 +2662,7 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
        INNER JOIN tasks t ON td.task_id = t.id 
        INNER JOIN loan_applications la ON t.application_id = la.id 
        WHERE td.id = ? AND la.tenant_id = ?`,
-      [documentId, ENCORE_TENANT_ID],
+      [documentId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2731,7 +2730,7 @@ const handleApproveTask: RequestHandler = async (req, res) => {
       `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         task.client_user_id,
         "Task Approved",
         `Your task "${task.title}" has been approved. Great job!`,
@@ -2745,7 +2744,7 @@ const handleApproveTask: RequestHandler = async (req, res) => {
       `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
        VALUES (?, ?, 'broker', 'approve_task', 'task', ?, ?, 'success')`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         brokerId,
         taskId,
         JSON.stringify({ status: "approved", approved_at: new Date() }),
@@ -2821,7 +2820,7 @@ const handleReopenTask: RequestHandler = async (req, res) => {
       `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         task.client_user_id,
         "Task Needs Revision",
         `Your task "${task.title}" needs to be revised. Please check the feedback.`,
@@ -2848,7 +2847,7 @@ const handleReopenTask: RequestHandler = async (req, res) => {
       `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
        VALUES (?, ?, 'broker', 'reopen_task', 'task', ?, ?, 'success')`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         brokerId,
         taskId,
         JSON.stringify({
@@ -2950,7 +2949,7 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
       `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
        VALUES (?, ?, 'broker', 'generate_mismo', 'loan_application', ?, ?, 'success')`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         brokerId,
         loanId,
         JSON.stringify({ filename, generated_at: new Date() }),
@@ -3274,7 +3273,7 @@ const handleGetTemplates: RequestHandler = async (req, res) => {
     const { type } = req.query;
 
     let whereClause = "WHERE tenant_id = ?";
-    const params: any[] = [ENCORE_TENANT_ID];
+    const params: any[] = [MORTGAGE_TENANT_ID];
 
     if (type && ["email", "sms", "whatsapp"].includes(type as string)) {
       whereClause += " AND template_type = ?";
@@ -3355,7 +3354,7 @@ const handleCreateTemplate: RequestHandler = async (req, res) => {
         (tenant_id, name, template_type, category, subject, body, variables, is_active) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         name,
         template_type,
         category || "custom",
@@ -3368,7 +3367,7 @@ const handleCreateTemplate: RequestHandler = async (req, res) => {
 
     const [templates] = (await pool.query(
       "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
-      [result.insertId, ENCORE_TENANT_ID],
+      [result.insertId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3395,7 +3394,7 @@ const handleGetTemplate: RequestHandler = async (req, res) => {
 
     const [templates] = (await pool.query(
       "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
+      [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (templates.length === 0) {
@@ -3438,7 +3437,7 @@ const handleUpdateTemplate: RequestHandler = async (req, res) => {
     // Check if template exists
     const [existingRows] = (await pool.query(
       "SELECT id FROM templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
+      [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
@@ -3495,7 +3494,7 @@ const handleUpdateTemplate: RequestHandler = async (req, res) => {
     }
 
     values.push(templateId);
-    values.push(ENCORE_TENANT_ID);
+    values.push(MORTGAGE_TENANT_ID);
 
     await pool.query(
       `UPDATE templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
@@ -3504,7 +3503,7 @@ const handleUpdateTemplate: RequestHandler = async (req, res) => {
 
     const [templates] = (await pool.query(
       "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
+      [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3532,7 +3531,7 @@ const handleDeleteTemplate: RequestHandler = async (req, res) => {
     // Check if template exists
     const [existingRows] = (await pool.query(
       "SELECT id, name FROM templates WHERE id = ? AND tenant_id = ?",
-      [templateId, ENCORE_TENANT_ID],
+      [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
@@ -3544,7 +3543,7 @@ const handleDeleteTemplate: RequestHandler = async (req, res) => {
 
     await pool.query("DELETE FROM templates WHERE id = ? AND tenant_id = ?", [
       templateId,
-      ENCORE_TENANT_ID,
+      MORTGAGE_TENANT_ID,
     ]);
 
     res.json({
@@ -3594,7 +3593,7 @@ const handleGetClientApplications: RequestHandler = async (req, res) => {
       LEFT JOIN brokers b ON la.broker_user_id = b.id
       WHERE la.client_user_id = ? AND la.tenant_id = ?
       ORDER BY la.created_at DESC`,
-      [clientId, ENCORE_TENANT_ID],
+      [clientId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -3683,7 +3682,7 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
     // Verify task belongs to client and tenant
     const [tasks] = await pool.query<any[]>(
       "SELECT t.* FROM tasks t INNER JOIN loan_applications la ON t.application_id = la.id WHERE t.id = ? AND la.client_user_id = ? AND la.tenant_id = ?",
-      [taskId, clientId, ENCORE_TENANT_ID],
+      [taskId, clientId, MORTGAGE_TENANT_ID],
     );
 
     if (tasks.length === 0) {
@@ -3933,7 +3932,7 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
     }
 
     values.push(clientId);
-    values.push(ENCORE_TENANT_ID);
+    values.push(MORTGAGE_TENANT_ID);
 
     await pool.query(
       `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ? AND tenant_id = ?`,
@@ -3948,7 +3947,7 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
         employment_status, income_type, annual_income,
         status, email_verified, phone_verified, created_at
       FROM clients WHERE id = ? AND tenant_id = ?`,
-      [clientId, ENCORE_TENANT_ID],
+      [clientId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -3990,7 +3989,7 @@ const handleGetConversations: RequestHandler = async (req, res) => {
        ORDER BY ct.last_message_at DESC
        LIMIT ? OFFSET ?`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         brokerId,
         status,
         parseInt(limit as string),
@@ -4043,7 +4042,7 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
        LIMIT ? OFFSET ?`,
       [
         conversationId,
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         parseInt(limit as string),
         parseInt(offset as string),
       ],
@@ -4112,7 +4111,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     // Get client information
     const [clientRows] = (await pool.query(
       "SELECT * FROM clients WHERE id = ? AND tenant_id = ?",
-      [to_user_id, ENCORE_TENANT_ID],
+      [to_user_id, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (clientRows.length === 0) {
@@ -4160,7 +4159,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
          delivery_status, delivery_timestamp, cost, error_message) 
        VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         application_id,
         brokerId,
         to_user_id,
@@ -4182,7 +4181,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, created_at)
        VALUES (?, ?, 'broker', ?, ?, ?, ?, NOW())`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         brokerId,
         `send_${communication_type}`,
         "communication",
@@ -4221,7 +4220,7 @@ const handleGetConversationTemplates: RequestHandler = async (req, res) => {
 
     let query =
       "SELECT * FROM templates WHERE tenant_id = ? AND is_active = true";
-    const params: any[] = [ENCORE_TENANT_ID];
+    const params: any[] = [MORTGAGE_TENANT_ID];
 
     if (template_type) {
       query += " AND template_type = ?";
@@ -4287,7 +4286,7 @@ const handleCreateConversationTemplate: RequestHandler = async (req, res) => {
         (tenant_id, name, description, template_type, category, subject, body, variables, created_by_broker_id) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        ENCORE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
         name,
         description,
         template_type,
@@ -4450,7 +4449,7 @@ const handleGetAuditLogs: RequestHandler = async (req, res) => {
       WHERE al.tenant_id = ?
     `;
 
-    const queryParams: any[] = [ENCORE_TENANT_ID];
+    const queryParams: any[] = [MORTGAGE_TENANT_ID];
 
     if (actor_type) {
       query += ` AND al.actor_type = ?`;
@@ -4489,7 +4488,7 @@ const handleGetAuditLogs: RequestHandler = async (req, res) => {
 
     // Get total count for pagination
     let countQuery = `SELECT COUNT(*) as total FROM audit_logs WHERE tenant_id = ?`;
-    const countParams: any[] = [ENCORE_TENANT_ID];
+    const countParams: any[] = [MORTGAGE_TENANT_ID];
 
     if (actor_type) {
       countQuery += ` AND actor_type = ?`;
@@ -4563,17 +4562,17 @@ const handleGetAuditLogStats: RequestHandler = async (req, res) => {
     // Get various statistics
     const [totalLogs] = await pool.query<RowDataPacket[]>(
       "SELECT COUNT(*) as count FROM audit_logs WHERE tenant_id = ?",
-      [ENCORE_TENANT_ID],
+      [MORTGAGE_TENANT_ID],
     );
 
     const [logsByStatus] = await pool.query<RowDataPacket[]>(
       "SELECT status, COUNT(*) as count FROM audit_logs WHERE tenant_id = ? GROUP BY status",
-      [ENCORE_TENANT_ID],
+      [MORTGAGE_TENANT_ID],
     );
 
     const [logsByActorType] = await pool.query<RowDataPacket[]>(
       "SELECT actor_type, COUNT(*) as count FROM audit_logs WHERE tenant_id = ? GROUP BY actor_type",
-      [ENCORE_TENANT_ID],
+      [MORTGAGE_TENANT_ID],
     );
 
     const [logsByAction] = await pool.query<RowDataPacket[]>(
@@ -4583,7 +4582,7 @@ const handleGetAuditLogStats: RequestHandler = async (req, res) => {
        GROUP BY action 
        ORDER BY count DESC 
        LIMIT 10`,
-      [ENCORE_TENANT_ID],
+      [MORTGAGE_TENANT_ID],
     );
 
     const [recentActivity] = await pool.query<RowDataPacket[]>(
