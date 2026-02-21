@@ -9,11 +9,12 @@ import notificationsReducer from "./slices/notificationsSlice";
 import pipelineReducer from "./slices/pipelineSlice";
 import clientsReducer from "./slices/clientsSlice";
 import brokersReducer from "./slices/brokersSlice";
+import communicationTemplatesReducer from "./slices/communicationTemplatesSlice";
+import conversationsReducer from "./slices/conversationsSlice";
 import dashboardReducer from "./slices/dashboardSlice";
 import clientPortalReducer from "./slices/clientPortalSlice";
 import auditLogsReducer from "./slices/auditLogsSlice";
 import reportsReducer from "./slices/reportsSlice";
-import conversationsReducer from "./slices/conversationsSlice";
 
 export const store = configureStore({
   reducer: {
@@ -27,11 +28,12 @@ export const store = configureStore({
     pipeline: pipelineReducer,
     clients: clientsReducer,
     brokers: brokersReducer,
+    communicationTemplates: communicationTemplatesReducer,
+    conversations: conversationsReducer,
     dashboard: dashboardReducer,
     clientPortal: clientPortalReducer,
     auditLogs: auditLogsReducer,
     reports: reportsReducer,
-    conversations: conversationsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
@@ -40,6 +42,7 @@ export const store = configureStore({
         ignoredActions: [
           "clientAuth/login/fulfilled",
           "clientAuth/verify/fulfilled",
+          "brokerAuth/verifyCode/fulfilled",
         ],
         // Ignore these field paths in all actions
         ignoredActionPaths: ["meta.arg", "payload.timestamp"],

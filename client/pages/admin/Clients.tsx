@@ -1,5 +1,5 @@
-import React, { useEffect } from "react";
-import { Users, Search, Mail, Phone } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Users, Search, Mail, Phone, Trash2 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
@@ -20,16 +20,31 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { fetchClients } from "@/store/slices/clientsSlice";
+import { fetchClients, deleteClient } from "@/store/slices/clientsSlice";
+import { useToast } from "@/hooks/use-toast";
 
 const Clients = () => {
   const dispatch = useAppDispatch();
+  const { toast } = useToast();
   const { clients, isLoading: loading } = useAppSelector(
     (state) => state.clients,
   );
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [clientToDelete, setClientToDelete] = useState<any>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     dispatch(fetchClients());
@@ -37,6 +52,37 @@ const Clients = () => {
 
   const getInitials = (firstName: string, lastName: string) => {
     return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+  };
+
+  const handleDeleteClick = (client: any) => {
+    setClientToDelete(client);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!clientToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      await dispatch(deleteClient(clientToDelete.id)).unwrap();
+
+      toast({
+        title: "Client Deleted",
+        description: `${clientToDelete.first_name} ${clientToDelete.last_name} has been deleted successfully.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Cannot Delete Client",
+        description:
+          error ||
+          "This client has associated data that must be handled first.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+      setDeleteDialogOpen(false);
+      setClientToDelete(null);
+    }
   };
 
   const clientStats = {
@@ -150,6 +196,7 @@ const Clients = () => {
                       <TableHead>Active</TableHead>
                       <TableHead>Date of Birth</TableHead>
                       <TableHead>SSN</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -205,6 +252,18 @@ const Clients = () => {
                         <TableCell>
                           <span className="text-sm font-mono">N/A</span>
                         </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDeleteClick(client)}
+                            disabled={isDeleting}
+                            className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Delete
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -213,6 +272,50 @@ const Clients = () => {
             </Card>
           </div>
         )}
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Client</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>
+                  Are you sure you want to delete "{clientToDelete?.first_name}{" "}
+                  {clientToDelete?.last_name}"?
+                </p>
+                {clientToDelete && (
+                  <div className="p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-500">
+                    <div className="text-sm">
+                      <p className="font-semibold">Warning:</p>
+                      <p>
+                        This client has {clientToDelete.total_applications}{" "}
+                        total applications and{" "}
+                        {clientToDelete.active_applications} active
+                        applications.
+                      </p>
+                      <p className="mt-1">
+                        All associated data must be reassigned or completed
+                        before deletion.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="bg-destructive hover:bg-destructive/90"
+              >
+                {isDeleting ? "Deleting..." : "Delete Client"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </>
   );

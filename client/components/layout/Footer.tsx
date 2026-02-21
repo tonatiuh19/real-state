@@ -1,7 +1,6 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import {
-  ShieldCheck,
   Mail,
   Phone,
   MapPin,
@@ -17,13 +16,12 @@ const Footer = () => {
       <div className="container py-12 md:py-16">
         <div className="grid grid-cols-1 gap-8 md:grid-cols-4">
           <div className="space-y-4">
-            <Link to="/" className="flex items-center space-x-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <ShieldCheck className="h-5 w-5" />
-              </div>
-              <span className="text-xl font-bold tracking-tight">
-                Encore Mortgage
-              </span>
+            <Link to="/" className="flex items-center">
+              <img
+                src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+                alt="Encore Mortgage"
+                className="h-10 w-auto"
+              />
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed">
               Your trusted partner in personalized mortgage solutions. Making

@@ -12,13 +12,13 @@ import {
   ChevronRight,
   Building2,
   Mail,
+  MessageCircle,
   FileText,
   History,
   TrendingUp,
   Shield,
   Bell,
   UserCog,
-  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -38,7 +38,6 @@ import {
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, validateSession } from "@/store/slices/brokerAuthSlice";
-import { fetchConversations } from "@/store/slices/conversationsSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   AlertDialog,
@@ -64,7 +63,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   const { user, sessionToken, isAuthenticated } = useAppSelector(
     (state) => state.brokerAuth,
   );
-  const { unreadCount } = useAppSelector((state) => state.conversations);
 
   // Redirect to login if not authenticated
   React.useEffect(() => {
@@ -78,11 +76,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     if (!user && sessionToken) {
       dispatch(validateSession());
     }
-    // Fetch conversations to get unread count (but not on conversations page to avoid duplicate calls)
-    if (sessionToken && !location.pathname.includes("/conversations")) {
-      dispatch(fetchConversations(undefined));
-    }
-  }, [dispatch, user, sessionToken, location.pathname]);
+  }, [dispatch, user, sessionToken]);
 
   const handleLogout = async () => {
     setShowLogoutConfirm(false);
@@ -128,9 +122,15 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       path: "/admin/documents",
     },
     {
+      id: "communication-templates",
+      label: "Communications",
+      icon: <Mail className="h-4 w-4" />,
+      path: "/admin/communication-templates",
+    },
+    {
       id: "conversations",
       label: "Conversations",
-      icon: <MessageSquare className="h-4 w-4" />,
+      icon: <MessageCircle className="h-4 w-4" />,
       path: "/admin/conversations",
     },
     {
@@ -178,17 +178,11 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
         <div className="flex h-16 items-center justify-between px-4 border-b">
           {!sidebarCollapsed ? (
             <>
-              <div className="flex items-center gap-2.5">
-                <Building2 className="h-6 w-6 text-primary" />
-                <div className="flex flex-col">
-                  <span className="text-sm font-bold leading-tight">
-                    Encore
-                  </span>
-                  <span className="text-xs text-muted-foreground leading-tight">
-                    Mortgage
-                  </span>
-                </div>
-              </div>
+              <img
+                src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+                alt="Encore Mortgage"
+                className="h-10 w-auto"
+              />
               <Button
                 variant="ghost"
                 size="icon"
@@ -199,15 +193,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               </Button>
             </>
           ) : (
-            <div className="flex items-center justify-between w-full">
-              <Button
-                variant="ghost"
-                size="icon"
+            <div className="flex items-center justify-center w-full">
+              <img
+                src="https://disruptinglabs.com/data/encore/assets/images/favicon/favicon.ico"
+                alt="Encore Mortgage"
+                className="h-6 w-auto cursor-pointer"
                 onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                className="h-8 w-8 hover:bg-primary/10 mx-auto"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+              />
             </div>
           )}
         </div>
@@ -219,7 +211,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               key={item.id}
               variant={location.pathname === item.path ? "secondary" : "ghost"}
               className={cn(
-                "w-full gap-3 relative",
+                "w-full gap-3",
                 sidebarCollapsed ? "justify-center px-2" : "justify-start",
                 location.pathname === item.path
                   ? "bg-primary/10 text-primary hover:bg-primary/20"
@@ -228,26 +220,8 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               onClick={() => navigate(item.path)}
               title={sidebarCollapsed ? item.label : undefined}
             >
-              <div className="flex items-center gap-3 w-full">
-                {item.icon}
-                {!sidebarCollapsed && (
-                  <>
-                    <span className="flex-1 text-left">{item.label}</span>
-                    {item.id === "conversations" && unreadCount > 0 && (
-                      <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white bg-red-600 rounded-full">
-                        {unreadCount > 99 ? "99+" : unreadCount}
-                      </span>
-                    )}
-                  </>
-                )}
-                {sidebarCollapsed &&
-                  item.id === "conversations" &&
-                  unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-white bg-red-600 rounded-full min-w-[18px]">
-                      {unreadCount > 9 ? "9+" : unreadCount}
-                    </span>
-                  )}
-              </div>
+              {item.icon}
+              {!sidebarCollapsed && item.label}
             </Button>
           ))}
         </div>

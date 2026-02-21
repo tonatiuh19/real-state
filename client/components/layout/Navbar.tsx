@@ -10,7 +10,6 @@ import {
   LogOut,
   Menu,
   X,
-  ShieldCheck,
   ChevronRight,
   User,
 } from "lucide-react";
@@ -81,12 +80,11 @@ const Navbar = () => {
               to="/"
               className="flex items-center space-x-2 transition-transform hover:scale-105"
             >
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary shadow-lg shadow-primary/20 text-primary-foreground">
-                <ShieldCheck className="h-5 w-5" />
-              </div>
-              <span className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">
-                Encore Mortgage
-              </span>
+              <img
+                src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+                alt="Encore Mortgage"
+                className="h-10 w-auto"
+              />
             </Link>
             <div className="hidden md:flex md:ml-10 md:gap-8">
               {navLinks.map((link) => (

@@ -14,6 +14,7 @@ import Tasks from "./pages/admin/Tasks";
 import Marketing from "./pages/admin/Marketing";
 import Documents from "./pages/admin/Documents";
 import Settings from "./pages/admin/Settings";
+import CommunicationTemplates from "./pages/admin/CommunicationTemplates";
 import Conversations from "./pages/admin/Conversations";
 import Reports from "./pages/admin/Reports";
 import Compliance from "./pages/admin/Compliance";
@@ -139,6 +140,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <Documents />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/communication-templates"
+      element={
+        <AdminLayout>
+          <CommunicationTemplates />
         </AdminLayout>
       }
     />

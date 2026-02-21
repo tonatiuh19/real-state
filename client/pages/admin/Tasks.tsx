@@ -128,9 +128,9 @@ const Tasks = () => {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "completed":
-        return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
+        return <CheckCircle2 className="h-4 w-4 text-primary" />;
       case "in_progress":
-        return <Clock className="h-4 w-4 text-blue-500" />;
+        return <Clock className="h-4 w-4 text-primary" />;
       case "pending":
         return <AlertCircle className="h-4 w-4 text-amber-500" />;
       default:
@@ -192,7 +192,7 @@ const Tasks = () => {
         <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-              <CheckCircle2 className="h-7 w-7 text-emerald-500" />
+              <CheckCircle2 className="h-7 w-7 text-primary" />
               Task Templates
             </h1>
             <p className="text-sm text-muted-foreground">
@@ -206,7 +206,7 @@ const Tasks = () => {
             </div>
             <Button
               onClick={() => setWizardOpen(true)}
-              className="bg-emerald-500 hover:bg-emerald-600 gap-2"
+              className="bg-primary gap-2"
             >
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">New Task</span>
@@ -238,7 +238,7 @@ const Tasks = () => {
               </p>
               <Button
                 onClick={() => setWizardOpen(true)}
-                className="bg-emerald-500 hover:bg-emerald-600 gap-2"
+                className="bg-primary gap-2"
               >
                 <Plus className="h-4 w-4" />
                 Create Your First Task

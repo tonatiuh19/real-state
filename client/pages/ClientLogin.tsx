@@ -11,7 +11,6 @@ import {
   FileText,
   TrendingUp,
   Zap,
-  Crown,
   Home,
   X,
 } from "lucide-react";
@@ -160,12 +159,13 @@ const ClientLogin = () => {
           <div>
             <button
               onClick={() => navigate("/")}
-              className="flex items-center gap-3 group transition-transform hover:scale-105"
+              className="transition-transform hover:scale-105"
             >
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm shadow-xl">
-                <Crown className="h-7 w-7" />
-              </div>
-              <span className="text-2xl font-bold">Encore Mortgage</span>
+              <img
+                src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+                alt="Encore Mortgage"
+                className="h-20 w-auto brightness-0 invert"
+              />
             </button>
           </div>
 
@@ -308,19 +308,13 @@ const ClientLogin = () => {
         >
           {/* Header */}
           <div className="text-center mb-8">
-            <motion.div
-              animate={{
-                rotate: [0, 5, -5, 0],
-              }}
-              transition={{
-                duration: 4,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="inline-flex items-center justify-center rounded-3xl bg-gradient-to-br from-primary to-primary/60 p-4 shadow-lg shadow-primary/25 mb-6"
-            >
-              <Crown className="h-8 w-8 text-white" />
-            </motion.div>
+            <div className="flex justify-center mb-6 lg:hidden">
+              <img
+                src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+                alt="Encore Mortgage"
+                className="h-10 w-auto"
+              />
+            </div>
             <h2 className="text-3xl font-bold mb-2">
               {step === "email" ? "Client Portal Access" : "Verify Your Email"}
             </h2>

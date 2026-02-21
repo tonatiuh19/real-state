@@ -29,10 +29,10 @@ export const fetchNotifications = createAsyncThunk(
   "notifications/fetchAll",
   async (_, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch("/api/notifications", {
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
       });
 
@@ -52,13 +52,13 @@ export const markAsRead = createAsyncThunk(
   "notifications/markAsRead",
   async (notificationId: number, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch(
         `/api/notifications/${notificationId}/read`,
         {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${auth.token}`,
+            Authorization: `Bearer ${sessionToken}`,
           },
         },
       );
@@ -81,11 +81,11 @@ export const markAllAsRead = createAsyncThunk(
   "notifications/markAllAsRead",
   async (_, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch("/api/notifications/read-all", {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
       });
 

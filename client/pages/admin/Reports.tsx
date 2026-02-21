@@ -159,8 +159,8 @@ const Reports = () => {
     }).format(value || 0);
   };
 
-  const formatPercent = (value: number) => {
-    return `${(value || 0).toFixed(1)}%`;
+  const formatPercent = (value: number | string | null | undefined) => {
+    return `${(parseFloat(value as string) || 0).toFixed(1)}%`;
   };
 
   return (
@@ -175,7 +175,7 @@ const Reports = () => {
         <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-              <TrendingUp className="h-7 w-7 text-emerald-500" />
+              <TrendingUp className="h-7 w-7 text-primary" />
               Reports & Analytics
             </h1>
             <p className="text-sm text-muted-foreground">

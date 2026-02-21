@@ -34,10 +34,10 @@ export const fetchApplications = createAsyncThunk(
   "applications/fetchAll",
   async (_, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch("/api/applications", {
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
       });
 
@@ -58,10 +58,10 @@ export const fetchApplicationById = createAsyncThunk(
   "applications/fetchById",
   async (id: number, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch(`/api/applications/${id}`, {
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
       });
 
@@ -82,12 +82,12 @@ export const createApplication = createAsyncThunk(
   "applications/create",
   async (applicationData: any, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch("/api/applications", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify(applicationData),
       });
@@ -112,12 +112,12 @@ export const updateApplication = createAsyncThunk(
     { getState, rejectWithValue },
   ) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch(`/api/applications/${id}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify(updates),
       });
@@ -138,11 +138,11 @@ export const submitApplication = createAsyncThunk(
   "applications/submit",
   async (id: number, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch(`/api/applications/${id}/submit`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
       });
 

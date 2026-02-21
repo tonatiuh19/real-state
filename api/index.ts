@@ -8,8 +8,8 @@ import mysql, {
 } from "mysql2/promise";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
-import crypto from "crypto";
 import twilio from "twilio";
+import crypto from "crypto";
 
 // Validate critical environment variables
 if (
@@ -36,6 +36,25 @@ const JWT_SECRET =
 // Tenant Configuration
 const MORTGAGE_TENANT_ID = 1;
 
+// Initialize Twilio client (if credentials are provided)
+let twilioClient: any = null;
+
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+  try {
+    twilioClient = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN,
+    );
+    console.log("✅ Twilio client initialized successfully");
+  } catch (error) {
+    console.warn("⚠️  Warning: Failed to initialize Twilio client:", error);
+  }
+} else {
+  console.warn(
+    "⚠️  Warning: Twilio credentials not found. SMS/WhatsApp functionality will be disabled.",
+  );
+}
+
 // Database connection pool
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -47,6 +66,257 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
 });
+
+// =====================================================
+// DATA INTEGRITY HELPERS
+// =====================================================
+
+/**
+ * Check if a parent entity can be safely deleted without breaking referential integrity
+ * @param parentTable - The table containing the parent record
+ * @param parentId - The ID of the parent record to check
+ * @param childChecks - Array of child table checks
+ * @returns Object with canDelete flag and violation details
+ */
+async function checkDeletionSafety(
+  parentTable: string,
+  parentId: number,
+  childChecks: Array<{
+    table: string;
+    foreignKey: string;
+    tenantFilter?: boolean;
+    friendlyName: string;
+  }>,
+): Promise<{
+  canDelete: boolean;
+  violations: Array<{
+    table: string;
+    count: number;
+    friendlyName: string;
+    sample?: string[];
+  }>;
+}> {
+  const violations = [];
+
+  for (const check of childChecks) {
+    const tenantCondition = check.tenantFilter ? ` AND tenant_id = ?` : "";
+    const params = check.tenantFilter
+      ? [parentId, MORTGAGE_TENANT_ID]
+      : [parentId];
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as count FROM ${check.table} WHERE ${check.foreignKey} = ?${tenantCondition}`,
+      params,
+    );
+
+    const count = rows[0]?.count || 0;
+    if (count > 0) {
+      violations.push({
+        table: check.table,
+        count,
+        friendlyName: check.friendlyName,
+      });
+    }
+  }
+
+  return {
+    canDelete: violations.length === 0,
+    violations,
+  };
+}
+
+// =====================================================
+// COMMUNICATION HELPERS
+// =====================================================
+
+/**
+ * Send SMS message via Twilio
+ */
+async function sendSMSMessage(
+  to: string,
+  body: string,
+  metadata?: any,
+): Promise<{
+  success: boolean;
+  external_id?: string;
+  error?: string;
+  cost?: number;
+  provider_response?: any;
+}> {
+  if (!twilioClient) {
+    return {
+      success: false,
+      error: "Twilio not configured - SMS sending disabled",
+    };
+  }
+
+  try {
+    // Normalize phone number
+    const normalizedPhone = to.startsWith("+")
+      ? to
+      : `+1${to.replace(/\D/g, "")}`;
+
+    const message = await twilioClient.messages.create({
+      body,
+      to: normalizedPhone,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      ...metadata,
+    });
+
+    return {
+      success: true,
+      external_id: message.sid,
+      cost: parseFloat(message.price || "0"),
+      provider_response: {
+        sid: message.sid,
+        status: message.status,
+        direction: message.direction,
+        uri: message.uri,
+      },
+    };
+  } catch (error: any) {
+    console.error("❌ SMS sending failed:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to send SMS",
+      provider_response: error,
+    };
+  }
+}
+
+/**
+ * Send WhatsApp message via Twilio
+ */
+async function sendWhatsAppMessage(
+  to: string,
+  body: string,
+  metadata?: any,
+): Promise<{
+  success: boolean;
+  external_id?: string;
+  error?: string;
+  cost?: number;
+  provider_response?: any;
+}> {
+  if (!twilioClient) {
+    return {
+      success: false,
+      error: "Twilio not configured - WhatsApp sending disabled",
+    };
+  }
+
+  try {
+    // Normalize phone number for WhatsApp
+    const normalizedPhone = to.startsWith("+")
+      ? to
+      : `+1${to.replace(/\D/g, "")}`;
+    const whatsappNumber = `whatsapp:${normalizedPhone}`;
+    const whatsappFrom = `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER}`;
+
+    const message = await twilioClient.messages.create({
+      body,
+      to: whatsappNumber,
+      from: whatsappFrom,
+      ...metadata,
+    });
+
+    return {
+      success: true,
+      external_id: message.sid,
+      cost: parseFloat(message.price || "0"),
+      provider_response: {
+        sid: message.sid,
+        status: message.status,
+        direction: message.direction,
+        uri: message.uri,
+      },
+    };
+  } catch (error: any) {
+    console.error("❌ WhatsApp sending failed:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to send WhatsApp message",
+      provider_response: error,
+    };
+  }
+}
+
+/**
+ * Send Email message via SMTP
+ */
+async function sendEmailMessage(
+  to: string,
+  subject: string,
+  body: string,
+  isHTML: boolean = false,
+): Promise<{
+  success: boolean;
+  external_id?: string;
+  error?: string;
+  provider_response?: any;
+}> {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
+      return {
+        success: false,
+        error: "SMTP credentials not configured",
+      };
+    }
+
+    const mailOptions = {
+      from: process.env.SMTP_FROM,
+      to: to,
+      subject: subject,
+      [isHTML ? "html" : "text"]: body,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+
+    return {
+      success: true,
+      external_id: info.messageId,
+      provider_response: {
+        messageId: info.messageId,
+        response: info.response,
+        envelope: info.envelope,
+      },
+    };
+  } catch (error: any) {
+    console.error("❌ Email sending failed:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to send email",
+      provider_response: error,
+    };
+  }
+}
+
+/**
+ * Process template variables in message body
+ */
+function processTemplateVariables(
+  template: string,
+  variables: Record<string, any>,
+): string {
+  let processed = template;
+
+  for (const [key, value] of Object.entries(variables)) {
+    const placeholder = `{{${key}}}`;
+    processed = processed.replace(new RegExp(placeholder, "g"), value || "");
+  }
+
+  return processed;
+}
 
 // =====================================================
 // EMAIL HELPER
@@ -101,7 +371,7 @@ async function sendBrokerVerificationEmail(
       <body>
         <div class="container">
           <div class="header">
-            <h1>Encore Mortgage Admin</h1>
+            <h1>The Mortgage Professionals Admin</h1>
             <p>Código de Verificación</p>
           </div>
           <h2>Hola ${firstName},</h2>
@@ -109,7 +379,7 @@ async function sendBrokerVerificationEmail(
           <div class="code">${code}</div>
           <p><strong>Validez:</strong> Este código expirará en <strong>15 minutos</strong></p>
           <div class="footer">
-            <p><strong>Encore Mortgage</strong> - Panel de Administración</p>
+            <p><strong>The Mortgage Professionals</strong> - Panel de Administración</p>
           </div>
         </div>
       </body>
@@ -180,7 +450,7 @@ async function sendClientVerificationEmail(
       <body>
         <div class="container">
           <div class="header">
-            <h1>🏠 Encore Mortgage</h1>
+            <h1>🏠 The Mortgage Professionals</h1>
             <p>Welcome to Your Client Portal</p>
           </div>
           <div class="welcome">
@@ -195,7 +465,7 @@ async function sendClientVerificationEmail(
           </div>
           <p style="color: #64748b; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
           <div class="footer">
-            <p><strong>Encore Mortgage</strong></p>
+            <p><strong>The Mortgage Professionals</strong></p>
             <p>Your partner on the path to your new home</p>
           </div>
         </div>
@@ -206,7 +476,7 @@ async function sendClientVerificationEmail(
     await transporter.sendMail({
       from: process.env.SMTP_FROM,
       to: email,
-      subject: `${code} is your access code - Encore Mortgage`,
+      subject: `${code} is your access code - The Mortgage Professionals`,
       html: emailBody,
     });
 
@@ -269,7 +539,7 @@ async function sendClientLoanWelcomeEmail(
       .join("");
 
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: `"The Mortgage Professionals" <${process.env.SMTP_USER}>`,
       to: email,
       subject: `Your Loan Application ${applicationNumber} - Next Steps`,
       html: `
@@ -281,7 +551,7 @@ async function sendClientLoanWelcomeEmail(
               <div style="background: white; width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
                 <div style="font-size: 40px;">🏡</div>
               </div>
-              <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">Welcome to Encore Mortgage!</h1>
+              <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">Welcome to The Mortgage Professionals!</h1>
             </div>
             <div style="padding: 40px 30px;">
               <p style="color: #334155; font-size: 16px;">Hi <strong>${firstName}</strong>,</p>
@@ -333,7 +603,7 @@ async function sendTaskReopenedEmail(
     });
 
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: `"The Mortgage Professionals" <${process.env.SMTP_USER}>`,
       to: email,
       subject: `Task Needs Revision: ${taskTitle}`,
       html: `
@@ -601,7 +871,7 @@ const handleHealth: RequestHandler = async (_req, res) => {
     await pool.query("SELECT 1");
     res.json({
       success: true,
-      message: "Encore Mortgage API is running",
+      message: "The Mortgage Professionals API is running",
       timestamp: new Date().toISOString(),
       database: "connected",
     });
@@ -1429,11 +1699,189 @@ const handleGetLoans: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
 
-    // Admins see all loans, regular brokers see only their own
-    const whereClause =
-      brokerRole === "admin" ? "" : "WHERE la.broker_user_id = ?";
-    const queryParams = brokerRole === "admin" ? [] : [brokerId];
+    // Extract query parameters for filtering
+    const {
+      status,
+      priority,
+      loanType,
+      dateRange,
+      search,
+      sortBy = "created_at",
+      sortOrder = "DESC",
+      page = "1",
+      limit = "100",
+    } = req.query;
 
+    // Build base WHERE clause for authorization
+    let whereClause =
+      brokerRole === "admin"
+        ? "WHERE la.tenant_id = ?"
+        : "WHERE la.broker_user_id = ? AND la.tenant_id = ?";
+
+    const baseParams =
+      brokerRole === "admin"
+        ? [MORTGAGE_TENANT_ID]
+        : [brokerId, MORTGAGE_TENANT_ID];
+
+    const subqueryParams = [
+      MORTGAGE_TENANT_ID, // For first subquery (next_task)
+      MORTGAGE_TENANT_ID, // For second subquery (completed_tasks)
+      MORTGAGE_TENANT_ID, // For third subquery (total_tasks)
+    ];
+
+    const queryParams = [...baseParams];
+
+    // Add status filter
+    if (status && status !== "all") {
+      whereClause += ` AND la.status = ?`;
+      queryParams.push(status as string);
+    }
+
+    // Add priority filter
+    if (priority && priority !== "all") {
+      whereClause += ` AND la.priority = ?`;
+      queryParams.push(priority as string);
+    }
+
+    // Add loan type filter
+    if (loanType && loanType !== "all") {
+      whereClause += ` AND la.loan_type = ?`;
+      queryParams.push(loanType as string);
+    }
+
+    // Add date range filter
+    if (dateRange && dateRange !== "all") {
+      const now = new Date();
+      let startDate: Date;
+
+      switch (dateRange) {
+        case "today":
+          startDate = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            now.getDate(),
+          );
+          break;
+        case "week":
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case "month":
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        case "quarter":
+          const quarter = Math.floor(now.getMonth() / 3);
+          startDate = new Date(now.getFullYear(), quarter * 3, 1);
+          break;
+        default:
+          startDate = new Date(0);
+      }
+
+      if (dateRange !== "all") {
+        whereClause += ` AND la.created_at >= ?`;
+        queryParams.push(
+          startDate.toISOString().slice(0, 19).replace("T", " "),
+        );
+      }
+    }
+
+    // Add search filter
+    if (search) {
+      whereClause += ` AND (
+        c.first_name LIKE ? OR 
+        c.last_name LIKE ? OR 
+        la.application_number LIKE ? OR
+        CONCAT(c.first_name, ' ', c.last_name) LIKE ?
+      )`;
+      const searchTerm = `%${search}%`;
+      queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    // Build ORDER BY clause
+    const validSortColumns = [
+      "created_at",
+      "loan_amount",
+      "status",
+      "priority",
+      "estimated_close_date",
+    ];
+    const sortColumn = validSortColumns.includes(sortBy as string)
+      ? sortBy
+      : "created_at";
+    const order =
+      (sortOrder as string).toUpperCase() === "ASC" ? "ASC" : "DESC";
+    const orderClause = `ORDER BY la.${sortColumn} ${order}`;
+
+    // Calculate pagination
+    const pageNum = Math.max(1, parseInt(page as string));
+    const limitNum = Math.min(Math.max(1, parseInt(limit as string)), 100);
+    const offset = (pageNum - 1) * limitNum;
+
+    // Get total count for pagination
+    const countQueryParams =
+      brokerRole === "admin"
+        ? [MORTGAGE_TENANT_ID]
+        : [brokerId, MORTGAGE_TENANT_ID];
+
+    // Add filter parameters to count query
+    if (status && status !== "all") {
+      countQueryParams.push(status as string);
+    }
+    if (priority && priority !== "all") {
+      countQueryParams.push(priority as string);
+    }
+    if (loanType && loanType !== "all") {
+      countQueryParams.push(loanType as string);
+    }
+    if (dateRange && dateRange !== "all") {
+      const now = new Date();
+      let startDate: Date;
+
+      switch (dateRange) {
+        case "today":
+          startDate = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            now.getDate(),
+          );
+          break;
+        case "week":
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case "month":
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        case "quarter":
+          const quarter = Math.floor(now.getMonth() / 3);
+          startDate = new Date(now.getFullYear(), quarter * 3, 1);
+          break;
+        default:
+          startDate = new Date(0);
+      }
+
+      if (dateRange !== "all") {
+        countQueryParams.push(
+          startDate.toISOString().slice(0, 19).replace("T", " "),
+        );
+      }
+    }
+    if (search) {
+      const searchTerm = `%${search}%`;
+      countQueryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    const [countResult] = await pool.query<any[]>(
+      `SELECT COUNT(*) as total
+       FROM loan_applications la
+       INNER JOIN clients c ON la.client_user_id = c.id
+       LEFT JOIN brokers b ON la.broker_user_id = b.id
+       ${whereClause}`,
+      countQueryParams,
+    );
+
+    const totalLoans = countResult[0].total;
+    const totalPages = Math.ceil(totalLoans / limitNum);
+
+    // Get loans with all enhancements
     const [loans] = await pool.query<any[]>(
       `SELECT 
         la.id,
@@ -1443,36 +1891,62 @@ const handleGetLoans: RequestHandler = async (req, res) => {
         la.status,
         la.priority,
         la.estimated_close_date,
+        la.property_address,
         la.created_at,
+        la.updated_at,
         c.first_name as client_first_name,
         c.last_name as client_last_name,
         c.email as client_email,
+        c.phone as client_phone,
         b.first_name as broker_first_name,
         b.last_name as broker_last_name,
+        b.email as broker_email,
         (SELECT title 
          FROM tasks 
          WHERE application_id = la.id 
            AND status IN ('pending', 'in_progress')
+           AND tenant_id = ?
          ORDER BY order_index ASC, due_date ASC 
          LIMIT 1) as next_task,
         (SELECT COUNT(*) 
          FROM tasks 
          WHERE application_id = la.id 
-           AND status = 'completed') as completed_tasks,
+           AND status = 'completed'
+           AND tenant_id = ?) as completed_tasks,
         (SELECT COUNT(*) 
          FROM tasks 
-         WHERE application_id = la.id) as total_tasks
+         WHERE application_id = la.id
+           AND tenant_id = ?) as total_tasks,
+        (SELECT COUNT(*) 
+         FROM documents d
+         WHERE d.application_id = la.id) as document_count
       FROM loan_applications la
       INNER JOIN clients c ON la.client_user_id = c.id
       LEFT JOIN brokers b ON la.broker_user_id = b.id
       ${whereClause}
-      ORDER BY la.created_at DESC`,
-      queryParams,
+      ${orderClause}
+      LIMIT ? OFFSET ?`,
+      [...queryParams, ...subqueryParams, limitNum, offset],
     );
 
     res.json({
       success: true,
       loans,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalLoans,
+        totalPages,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
+      },
+      filters: {
+        status,
+        priority,
+        loanType,
+        dateRange,
+        search,
+      },
     });
   } catch (error) {
     console.error("Error fetching loans:", error);
@@ -1716,6 +2190,96 @@ const handleGetClients: RequestHandler = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to fetch clients",
+    });
+  }
+};
+
+/**
+ * Delete client with comprehensive safety guards
+ */
+const handleDeleteClient: RequestHandler = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const brokerId = (req as any).brokerId;
+
+    // Check if client exists and belongs to this broker
+    const [clientRows] = await pool.query<RowDataPacket[]>(
+      `SELECT c.*, COUNT(DISTINCT la.id) as total_applications
+       FROM clients c 
+       LEFT JOIN loan_applications la ON c.id = la.client_user_id
+       WHERE c.id = ? AND c.assigned_broker_id = ? AND c.tenant_id = ?
+       GROUP BY c.id`,
+      [clientId, brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    if (!Array.isArray(clientRows) || clientRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Client not found or not accessible",
+      });
+    }
+
+    const client = clientRows[0];
+
+    // Use the safety check utility
+    const safetyCheck = await checkDeletionSafety(
+      "clients",
+      parseInt(clientId.toString()),
+      [
+        {
+          table: "loan_applications",
+          foreignKey: "client_user_id",
+          tenantFilter: true,
+          friendlyName: "loan applications",
+        },
+        {
+          table: "tasks",
+          foreignKey: "assigned_to_user_id",
+          tenantFilter: true,
+          friendlyName: "assigned tasks",
+        },
+      ],
+    );
+
+    if (!safetyCheck.canDelete) {
+      const totalViolations = safetyCheck.violations.reduce(
+        (sum, v) => sum + v.count,
+        0,
+      );
+      return res.status(400).json({
+        success: false,
+        error:
+          "Cannot delete client: Client has associated data that must be handled first",
+        details: {
+          client_name: `${client.first_name} ${client.last_name}`,
+          client_email: client.email,
+          violations: safetyCheck.violations,
+          message: `This client has ${totalViolations} associated records. Please reassign or complete these items before deletion.`,
+        },
+      });
+    }
+
+    console.log(
+      `🗑️ Deleting client ${clientId} "${client.first_name} ${client.last_name}"`,
+    );
+
+    // Safe to delete
+    await pool.query(
+      "DELETE FROM clients WHERE id = ? AND assigned_broker_id = ? AND tenant_id = ?",
+      [clientId, brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    console.log(`✅ Successfully deleted client ${clientId}`);
+
+    res.json({
+      success: true,
+      message: `Client "${client.first_name} ${client.last_name}" deleted successfully`,
+    });
+  } catch (error) {
+    console.error("Error deleting client:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to delete client",
     });
   }
 };
@@ -1999,10 +2563,10 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
     const { brokerId: targetBrokerId } = req.params;
 
     // Check if requesting broker is admin
-    const [adminCheck] = (await pool.query(
+    const [adminCheck] = await pool.query<RowDataPacket[]>(
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
       [brokerId, MORTGAGE_TENANT_ID],
-    )) as [RowDataPacket[], any];
+    );
 
     if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
       return res.status(403).json({
@@ -2012,18 +2576,18 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
     }
 
     // Prevent self-deletion
-    if (parseInt(targetBrokerId) === brokerId) {
+    if (parseInt(targetBrokerId.toString()) === brokerId) {
       return res.status(400).json({
         success: false,
         error: "Cannot delete your own account",
       });
     }
 
-    // Check if target broker exists
-    const [existing] = (await pool.query(
-      "SELECT id, first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ?",
+    // Check if target broker exists and get details
+    const [existing] = await pool.query<RowDataPacket[]>(
+      "SELECT id, first_name, last_name, email, status FROM brokers WHERE id = ? AND tenant_id = ?",
       [targetBrokerId, MORTGAGE_TENANT_ID],
-    )) as [RowDataPacket[], any];
+    );
 
     if (existing.length === 0) {
       return res.status(404).json({
@@ -2032,15 +2596,69 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
       });
     }
 
-    // Instead of deleting, set status to inactive (soft delete)
+    const targetBroker = existing[0];
+
+    // Check for dependencies (informational - we still allow soft delete)
+    const safetyCheck = await checkDeletionSafety(
+      "brokers",
+      parseInt(targetBrokerId.toString()),
+      [
+        {
+          table: "clients",
+          foreignKey: "assigned_broker_id",
+          tenantFilter: true,
+          friendlyName: "assigned clients",
+        },
+        {
+          table: "loan_applications",
+          foreignKey: "assigned_broker_id",
+          tenantFilter: true,
+          friendlyName: "loan applications",
+        },
+        {
+          table: "task_templates",
+          foreignKey: "created_by_broker_id",
+          tenantFilter: true,
+          friendlyName: "created task templates",
+        },
+      ],
+    );
+
+    console.log(
+      `🔒 Deactivating broker ${targetBrokerId} "${targetBroker.first_name} ${targetBroker.last_name}"`,
+    );
+    if (safetyCheck.violations.length > 0) {
+      console.log(
+        `⚠️ Broker has dependencies that will be preserved:`,
+        safetyCheck.violations,
+      );
+    }
+
+    // Soft delete - set status to inactive (preserve data integrity)
     await pool.query(
-      "UPDATE brokers SET status = 'inactive' WHERE id = ? AND tenant_id = ?",
+      "UPDATE brokers SET status = 'inactive', updated_at = NOW() WHERE id = ? AND tenant_id = ?",
       [targetBrokerId, MORTGAGE_TENANT_ID],
     );
 
+    console.log(`✅ Successfully deactivated broker ${targetBrokerId}`);
+
     res.json({
       success: true,
-      message: `Broker ${existing[0].first_name} ${existing[0].last_name} has been deactivated`,
+      message: `Broker "${targetBroker.first_name} ${targetBroker.last_name}" has been deactivated successfully`,
+      details: {
+        action: "deactivated", // Not fully deleted, just deactivated
+        broker_name: `${targetBroker.first_name} ${targetBroker.last_name}`,
+        broker_id: targetBroker.id,
+        status: "inactive",
+        dependencies:
+          safetyCheck.violations.length > 0
+            ? safetyCheck.violations
+            : undefined,
+        note:
+          safetyCheck.violations.length > 0
+            ? "Broker was deactivated but associated data remains intact"
+            : "Broker was deactivated with no dependencies",
+      },
     });
   } catch (error) {
     console.error("Error deleting broker:", error);
@@ -2130,6 +2748,10 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
     );
     const orderIndex = (maxOrder[0]?.max_order || 0) + 1;
 
+    // Note: requires_documents and has_custom_form are separate flags
+    // requires_documents = true will auto-create document upload fields
+    // has_custom_form = true indicates user-defined custom fields exist
+
     // Insert task template
     const [result] = await pool.query<ResultSetHeader>(
       `INSERT INTO task_templates (
@@ -2165,6 +2787,33 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
 
     const templateId = result.insertId;
 
+    // If requires_documents is true, automatically create basic document upload fields
+    if (requires_documents) {
+      console.log(
+        `📄 Creating default document upload fields for template ${templateId}`,
+      );
+
+      // Create front and back document upload fields
+      await pool.query(
+        `INSERT INTO task_form_fields (
+          task_template_id,
+          field_name,
+          field_label,
+          field_type,
+          is_required,
+          order_index,
+          help_text
+        ) VALUES 
+        (?, 'document_front', 'Document - Front', 'file_pdf', 1, 0, 'Upload the front side of the required document'),
+        (?, 'document_back', 'Document - Back', 'file_pdf', 1, 1, 'Upload the back side of the required document')`,
+        [templateId, templateId],
+      );
+
+      console.log(
+        `✅ Created default document upload fields for template ${templateId}`,
+      );
+    }
+
     // Fetch the created template
     const [templates] = await pool.query<RowDataPacket[]>(
       "SELECT * FROM task_templates WHERE id = ? AND tenant_id = ?",
@@ -2191,18 +2840,87 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
 const handleUpdateTask: RequestHandler = async (req, res) => {
   try {
     const { taskId } = req.params;
-    const { status } = req.body;
+    const { status, comment } = req.body;
+    const brokerId = (req as any).brokerId;
+    const tenantId = (req as any).tenantId || MORTGAGE_TENANT_ID;
 
+    // Validate required fields for status changes
+    if (status && !comment) {
+      return res.status(400).json({
+        success: false,
+        error: "Comment is required when manually changing task status",
+      });
+    }
+
+    // Get current task info for audit
+    const [currentTaskRows] = (await pool.query(
+      "SELECT status, title, application_id FROM tasks WHERE id = ? AND tenant_id = ?",
+      [taskId, tenantId],
+    )) as [any[], any];
+
+    if (!currentTaskRows || currentTaskRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Task not found",
+      });
+    }
+
+    const currentTask = currentTaskRows[0];
     const completedAt = status === "completed" ? new Date() : null;
+    const statusChangedAt =
+      status && status !== currentTask.status ? new Date() : null;
 
+    // Update task with new fields
     await pool.query(
-      "UPDATE tasks SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?",
-      [status, completedAt, taskId],
+      `UPDATE tasks SET 
+        status = ?, 
+        completed_at = ?, 
+        status_change_reason = ?, 
+        status_changed_by_broker_id = ?, 
+        status_changed_at = ?, 
+        updated_at = NOW() 
+      WHERE id = ? AND tenant_id = ?`,
+      [
+        status || currentTask.status,
+        completedAt,
+        comment || null,
+        statusChangedAt ? brokerId : null,
+        statusChangedAt,
+        taskId,
+        tenantId,
+      ],
     );
+
+    // Log the status change for audit purposes
+    if (status && status !== currentTask.status) {
+      await pool.query(
+        `INSERT INTO audit_logs (
+          tenant_id, broker_id, actor_type, action, entity_type, entity_id, 
+          changes, status, created_at
+        ) VALUES (?, ?, 'broker', 'update_task_status', 'task', ?, ?, 'success', NOW())`,
+        [
+          tenantId,
+          brokerId,
+          taskId,
+          JSON.stringify({
+            from_status: currentTask.status,
+            to_status: status,
+            comment: comment,
+            task_title: currentTask.title,
+            application_id: currentTask.application_id,
+            changed_at: statusChangedAt,
+          }),
+        ],
+      );
+    }
 
     res.json({
       success: true,
       message: "Task updated successfully",
+      audit: {
+        status_changed: status && status !== currentTask.status,
+        comment_added: !!comment,
+      },
     });
   } catch (error) {
     console.error("Error updating task:", error);
@@ -2219,6 +2937,12 @@ const handleUpdateTask: RequestHandler = async (req, res) => {
 const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
   try {
     const { taskId } = req.params;
+    const brokerId = (req as any).brokerId;
+    console.log(
+      `🔄 API: Updating task template ${taskId} by broker ${brokerId}`,
+    );
+    console.log(`🔄 API: Request body:`, req.body);
+
     const {
       title,
       description,
@@ -2249,8 +2973,23 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
       });
     }
 
+    // Note: requires_documents and has_custom_form are separate flags
+    // requires_documents = true will auto-create document upload fields
+    // has_custom_form = true indicates user-defined custom fields exist
+
+    // Check if we need to create default document fields
+    const wasRequiringDocuments = await pool.query<RowDataPacket[]>(
+      "SELECT requires_documents FROM task_templates WHERE id = ? AND tenant_id = ?",
+      [taskId, MORTGAGE_TENANT_ID],
+    );
+
+    const previouslyRequiredDocuments =
+      wasRequiringDocuments[0]?.[0]?.requires_documents;
+    const nowRequiresDocuments = requires_documents;
+
     // Update task template in database
-    await pool.query(
+    console.log(`🔄 API: Executing UPDATE query for task ${taskId}`);
+    const updateResult = await pool.query(
       `UPDATE task_templates SET 
         title = ?, 
         description = ?, 
@@ -2277,6 +3016,44 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
         MORTGAGE_TENANT_ID,
       ],
     );
+    console.log(
+      `✅ API: Task template updated, affected rows:`,
+      (updateResult as any)[0].affectedRows,
+    );
+
+    // If requires_documents was just enabled and there are no existing form fields, create default ones
+    if (nowRequiresDocuments && !previouslyRequiredDocuments) {
+      const [existingFields] = await pool.query<RowDataPacket[]>(
+        "SELECT COUNT(*) as count FROM task_form_fields WHERE task_template_id = ?",
+        [taskId],
+      );
+
+      if (existingFields[0].count === 0) {
+        console.log(
+          `📄 Creating default document upload fields for template ${taskId}`,
+        );
+
+        // Create front and back document upload fields
+        await pool.query(
+          `INSERT INTO task_form_fields (
+            task_template_id,
+            field_name,
+            field_label,
+            field_type,
+            is_required,
+            order_index,
+            help_text
+          ) VALUES 
+          (?, 'document_front', 'Document - Front', 'file_pdf', 1, 0, 'Upload the front side of the required document'),
+          (?, 'document_back', 'Document - Back', 'file_pdf', 1, 1, 'Upload the back side of the required document')`,
+          [taskId, taskId],
+        );
+
+        console.log(
+          `✅ Created default document upload fields for template ${taskId}`,
+        );
+      }
+    }
 
     // Fetch updated template
     const [rows] = await pool.query<RowDataPacket[]>(
@@ -2285,12 +3062,14 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
     );
 
     if (!Array.isArray(rows) || rows.length === 0) {
+      console.log(`❌ API: Task template ${taskId} not found after update`);
       return res.status(404).json({
         success: false,
         error: "Task template not found after update",
       });
     }
 
+    console.log(`✅ API: Sending updated task template:`, rows[0]);
     res.json({
       success: true,
       message: "Task template updated successfully",
@@ -2328,15 +3107,79 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
       });
     }
 
-    // Delete template (task instances will have template_id set to NULL via CASCADE)
+    const template = existingRows[0];
+
+    // GUARD 1: Check if template is being used by any active tasks
+    const [activeTasksRows] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as count, 
+              COUNT(CASE WHEN status IN ('pending', 'in_progress', 'completed', 'pending_approval') THEN 1 END) as active_count
+       FROM tasks 
+       WHERE template_id = ? AND tenant_id = ?`,
+      [taskId, MORTGAGE_TENANT_ID],
+    );
+
+    const totalTasks = activeTasksRows[0]?.count || 0;
+    const activeTasks = activeTasksRows[0]?.active_count || 0;
+
+    if (totalTasks > 0) {
+      // Get sample applications using this template
+      const [sampleRows] = await pool.query<RowDataPacket[]>(
+        `SELECT DISTINCT la.application_number, la.id as loan_id
+         FROM tasks t
+         INNER JOIN loan_applications la ON t.application_id = la.id
+         WHERE t.template_id = ? AND t.tenant_id = ?
+         LIMIT 3`,
+        [taskId, MORTGAGE_TENANT_ID],
+      );
+
+      const sampleApps = sampleRows
+        .map((row) => row.application_number)
+        .join(", ");
+
+      return res.status(400).json({
+        success: false,
+        error:
+          "Cannot delete task template: It is currently being used by existing loan applications",
+        details: {
+          template_name: template.title,
+          total_tasks: totalTasks,
+          active_tasks: activeTasks,
+          sample_applications: sampleApps,
+          message:
+            activeTasks > 0
+              ? `This template has ${activeTasks} active tasks. Please complete or reassign these tasks before deletion.`
+              : `This template has been used in ${totalTasks} completed tasks. To maintain data integrity, templates with task history cannot be deleted.`,
+        },
+      });
+    }
+
+    // GUARD 2: Double-check no orphaned relationships will be created
+    const [formFieldsRows] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) as count FROM task_form_fields WHERE task_template_id = ?",
+      [taskId],
+    );
+
+    const formFieldsCount = formFieldsRows[0]?.count || 0;
+    console.log(
+      `🗑️ Deleting task template ${taskId} "${template.title}" with ${formFieldsCount} form fields`,
+    );
+
+    // Safe to delete - no active tasks using this template
     await pool.query(
       "DELETE FROM task_templates WHERE id = ? AND tenant_id = ?",
       [taskId, MORTGAGE_TENANT_ID],
     );
 
+    console.log(
+      `✅ Successfully deleted task template ${taskId} and its ${formFieldsCount} form fields`,
+    );
+
     res.json({
       success: true,
-      message: "Task template deleted successfully",
+      message: `Task template "${template.title}" deleted successfully`,
+      details: {
+        deleted_form_fields: formFieldsCount,
+      },
     });
   } catch (error) {
     console.error("Error deleting task template:", error);
@@ -2351,10 +3194,150 @@ const handleDeleteTaskTemplate: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Delete individual task instance from a loan application
+ */
+const handleDeleteTaskInstance: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const brokerId = (req as any).brokerId;
+
+    // Check if task exists and get its details
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      `SELECT t.*, la.application_number, la.client_user_id 
+       FROM tasks t 
+       INNER JOIN loan_applications la ON t.application_id = la.id
+       WHERE t.id = ? AND t.tenant_id = ?`,
+      [taskId, MORTGAGE_TENANT_ID],
+    );
+
+    if (!Array.isArray(taskRows) || taskRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Task not found",
+      });
+    }
+
+    const task = taskRows[0];
+
+    // GUARD 1: Check if task is in progress or completed - these might need special handling
+    if (task.status === "in_progress") {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot delete task in progress",
+        details: {
+          task_title: task.title,
+          current_status: task.status,
+          message:
+            "Tasks that are in progress should be completed or canceled before deletion.",
+        },
+      });
+    }
+
+    // GUARD 2: Check if task has completed work that should be preserved
+    const [documentsRows] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) as count FROM task_documents WHERE task_id = ?",
+      [taskId],
+    );
+
+    const [responsesRows] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) as count FROM task_form_responses WHERE task_id = ?",
+      [taskId],
+    );
+
+    const documentsCount = documentsRows[0]?.count || 0;
+    const responsesCount = responsesRows[0]?.count || 0;
+
+    if (
+      (task.status === "completed" || task.status === "approved") &&
+      (documentsCount > 0 || responsesCount > 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot delete completed task with submitted work",
+        details: {
+          task_title: task.title,
+          application_number: task.application_number,
+          documents_count: documentsCount,
+          responses_count: responsesCount,
+          message:
+            "This task has submitted documents or form responses. To maintain data integrity, completed tasks with work cannot be deleted.",
+        },
+      });
+    }
+
+    console.log(
+      `🗑️ Deleting task instance ${taskId} "${task.title}" from application ${task.application_number}`,
+    );
+    console.log(
+      `📊 Task has ${documentsCount} documents and ${responsesCount} form responses`,
+    );
+
+    // Begin transaction for safe deletion
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // Delete related documents first (CASCADE should handle this, but being explicit)
+      if (documentsCount > 0) {
+        await connection.query("DELETE FROM task_documents WHERE task_id = ?", [
+          taskId,
+        ]);
+        console.log(`🗑️ Deleted ${documentsCount} task documents`);
+      }
+
+      // Delete form responses
+      if (responsesCount > 0) {
+        await connection.query(
+          "DELETE FROM task_form_responses WHERE task_id = ?",
+          [taskId],
+        );
+        console.log(`🗑️ Deleted ${responsesCount} form responses`);
+      }
+
+      // Finally delete the task itself
+      await connection.query(
+        "DELETE FROM tasks WHERE id = ? AND tenant_id = ?",
+        [taskId, MORTGAGE_TENANT_ID],
+      );
+
+      await connection.commit();
+      console.log(
+        `✅ Successfully deleted task ${taskId} and all related data`,
+      );
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    res.json({
+      success: true,
+      message: `Task "${task.title}" deleted successfully`,
+      details: {
+        application_number: task.application_number,
+        deleted_documents: documentsCount,
+        deleted_responses: responsesCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting task instance:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to delete task instance",
+    });
+  }
+};
+
+/**
  * Create task form fields for a template
  */
 const handleCreateTaskFormFields: RequestHandler = async (req, res) => {
   try {
+    const brokerId = (req as any).brokerId;
     console.log("📥 API: handleCreateTaskFormFields called");
     const { taskId } = req.params;
     const { form_fields } = req.body;
@@ -2377,47 +3360,148 @@ const handleCreateTaskFormFields: RequestHandler = async (req, res) => {
       await connection.beginTransaction();
       console.log("🔄 API: Transaction started");
 
-      // Update task template to indicate it has custom form
-      await connection.query(
-        `UPDATE task_templates SET has_custom_form = 1 WHERE id = ?`,
+      // Update task template to indicate it has custom form ONLY if there are non-document fields
+      const hasActualCustomFields = form_fields.some(
+        (field) =>
+          field.field_type !== "file_pdf" && field.field_type !== "file_image",
+      );
+
+      if (hasActualCustomFields) {
+        await connection.query(
+          `UPDATE task_templates SET has_custom_form = 1 WHERE id = ? AND created_by_broker_id = ? AND tenant_id = ?`,
+          [taskId, brokerId, MORTGAGE_TENANT_ID],
+        );
+        console.log(
+          "✅ API: Updated task_templates.has_custom_form = 1 for task",
+          taskId,
+          "because it has actual custom fields",
+        );
+      } else {
+        console.log(
+          "ℹ️ API: NOT updating has_custom_form because all fields are document uploads for task",
+          taskId,
+        );
+      }
+
+      // CRITICAL: DO NOT delete form fields that may have existing responses!
+      // Instead, update existing fields and only insert truly new ones
+
+      // Get existing form fields for this task template
+      const [existingFields] = await connection.query<RowDataPacket[]>(
+        `SELECT * FROM task_form_fields WHERE task_template_id = ? ORDER BY order_index ASC`,
         [taskId],
       );
+
       console.log(
-        "✅ API: Updated task_templates.has_custom_form = 1 for task",
-        taskId,
+        `🔍 API: Found ${existingFields.length} existing form fields for task ${taskId}`,
       );
 
-      // Insert form fields
+      // Process form fields: UPDATE existing, INSERT new ones
       const insertedFields = [];
-      for (const field of form_fields) {
-        console.log(
-          `🔄 API: Inserting field: ${field.field_label} (${field.field_type})`,
-        );
 
-        const [result] = await connection.query(
-          `INSERT INTO task_form_fields 
-          (task_template_id, field_name, field_label, field_type, field_options, 
-           is_required, placeholder, validation_rules, order_index, help_text)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            taskId,
-            field.field_name,
-            field.field_label,
-            field.field_type,
-            field.field_options ? JSON.stringify(field.field_options) : null,
-            field.is_required ?? true,
-            field.placeholder || null,
-            field.validation_rules
-              ? JSON.stringify(field.validation_rules)
-              : null,
-            field.order_index || 0,
-            field.help_text || null,
-          ],
-        );
+      for (let i = 0; i < form_fields.length; i++) {
+        const field = form_fields[i];
+        const existingField = existingFields[i]; // Match by index/order
 
-        const insertedId = (result as any).insertId;
-        console.log(`✅ API: Field inserted with ID: ${insertedId}`);
-        insertedFields.push({ id: insertedId, ...field });
+        if (existingField) {
+          // UPDATE existing field to preserve foreign key relationships
+          console.log(
+            `🔄 API: Updating existing field ID ${existingField.id}: ${field.field_label} (${field.field_type})`,
+          );
+
+          await connection.query(
+            `UPDATE task_form_fields SET 
+              field_name = ?, field_label = ?, field_type = ?, field_options = ?, 
+              is_required = ?, placeholder = ?, validation_rules = ?, order_index = ?, help_text = ?
+             WHERE id = ?`,
+            [
+              field.field_name,
+              field.field_label,
+              field.field_type,
+              field.field_options ? JSON.stringify(field.field_options) : null,
+              field.is_required ?? true,
+              field.placeholder || null,
+              field.validation_rules
+                ? JSON.stringify(field.validation_rules)
+                : null,
+              field.order_index || i,
+              field.help_text || null,
+              existingField.id,
+            ],
+          );
+
+          console.log(`✅ API: Updated existing field ID ${existingField.id}`);
+          insertedFields.push({ id: existingField.id, ...field });
+
+          // Audit log for field update
+          await createAuditLog({
+            actorType: "broker",
+            actorId: brokerId,
+            action: "update_task_form_field",
+            entityType: "task_form_field",
+            entityId: existingField.id,
+            changes: {
+              field_name: {
+                from: existingField.field_name,
+                to: field.field_name,
+              },
+              field_label: {
+                from: existingField.field_label,
+                to: field.field_label,
+              },
+              field_type: {
+                from: existingField.field_type,
+                to: field.field_type,
+              },
+              task_template_id: taskId,
+            },
+          });
+        } else {
+          // INSERT new field
+          console.log(
+            `➕ API: Inserting new field: ${field.field_label} (${field.field_type})`,
+          );
+
+          const [result] = await connection.query(
+            `INSERT INTO task_form_fields 
+            (task_template_id, field_name, field_label, field_type, field_options, 
+             is_required, placeholder, validation_rules, order_index, help_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              taskId,
+              field.field_name,
+              field.field_label,
+              field.field_type,
+              field.field_options ? JSON.stringify(field.field_options) : null,
+              field.is_required ?? true,
+              field.placeholder || null,
+              field.validation_rules
+                ? JSON.stringify(field.validation_rules)
+                : null,
+              field.order_index || i,
+              field.help_text || null,
+            ],
+          );
+
+          const insertedId = (result as any).insertId;
+          console.log(`✅ API: New field inserted with ID: ${insertedId}`);
+          insertedFields.push({ id: insertedId, ...field });
+
+          // Audit log for new field creation
+          await createAuditLog({
+            actorType: "broker",
+            actorId: brokerId,
+            action: "create_task_form_field",
+            entityType: "task_form_field",
+            entityId: insertedId,
+            changes: {
+              field_name: field.field_name,
+              field_label: field.field_label,
+              field_type: field.field_type,
+              task_template_id: taskId,
+            },
+          });
+        }
       }
 
       await connection.commit();
@@ -2460,10 +3544,11 @@ const handleGetTaskFormFields: RequestHandler = async (req, res) => {
     const { taskId } = req.params;
 
     const [fields] = await pool.query(
-      `SELECT * FROM task_form_fields 
-       WHERE task_template_id = ? 
-       ORDER BY order_index ASC`,
-      [taskId],
+      `SELECT tff.* FROM task_form_fields tff
+       INNER JOIN task_templates tt ON tff.task_template_id = tt.id
+       WHERE tff.task_template_id = ? AND tt.tenant_id = ?
+       ORDER BY tff.order_index ASC`,
+      [taskId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -2601,8 +3686,7 @@ const handleUploadTaskDocument: RequestHandler = async (req, res) => {
     const [documents] = await pool.query(
       `SELECT td.* FROM task_documents td 
        INNER JOIN tasks t ON td.task_id = t.id 
-       INNER JOIN loan_applications la ON t.application_id = la.id 
-       WHERE td.id = ? AND la.tenant_id = ?`,
+       WHERE td.id = ? AND t.tenant_id = ?`,
       [(result as any).insertId, MORTGAGE_TENANT_ID],
     );
 
@@ -2630,8 +3714,7 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
     const [documents] = await pool.query(
       `SELECT td.* FROM task_documents td 
        INNER JOIN tasks t ON td.task_id = t.id 
-       INNER JOIN loan_applications la ON t.application_id = la.id 
-       WHERE td.task_id = ? AND la.tenant_id = ? 
+       WHERE td.task_id = ? AND t.tenant_id = ? 
        ORDER BY td.uploaded_at DESC`,
       [taskId, MORTGAGE_TENANT_ID],
     );
@@ -2656,14 +3739,7 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
 
-    // Verify document belongs to this tenant before deleting
-    await pool.query(
-      `DELETE td FROM task_documents td 
-       INNER JOIN tasks t ON td.task_id = t.id 
-       INNER JOIN loan_applications la ON t.application_id = la.id 
-       WHERE td.id = ? AND la.tenant_id = ?`,
-      [documentId, MORTGAGE_TENANT_ID],
-    );
+    await pool.query(`DELETE FROM task_documents WHERE id = ?`, [documentId]);
 
     res.json({
       success: true,
@@ -3266,36 +4342,26 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
 };
 
 /**
- * Get all templates (unified for email, SMS, WhatsApp)
+ * Get all email templates
  */
-const handleGetTemplates: RequestHandler = async (req, res) => {
+const handleGetEmailTemplates: RequestHandler = async (req, res) => {
   try {
-    const { type } = req.query;
-
-    let whereClause = "WHERE tenant_id = ?";
-    const params: any[] = [MORTGAGE_TENANT_ID];
-
-    if (type && ["email", "sms", "whatsapp"].includes(type as string)) {
-      whereClause += " AND template_type = ?";
-      params.push(type);
-    }
-
     const [templates] = (await pool.query(
       `SELECT 
         id,
         name,
+        subject,
+        body AS body_html,
+        NULL AS body_text,
         template_type,
         category,
-        subject,
-        body,
-        variables,
         is_active,
         created_at,
         updated_at
       FROM templates
-      ${whereClause}
+      WHERE tenant_id = ? AND template_type = 'email'
       ORDER BY created_at DESC`,
-      params,
+      [MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -3303,147 +4369,105 @@ const handleGetTemplates: RequestHandler = async (req, res) => {
       templates,
     });
   } catch (error) {
-    console.error("Error fetching templates:", error);
+    console.error("Error fetching email templates:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error ? error.message : "Failed to fetch templates",
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch email templates",
     });
   }
 };
 
 /**
- * Create template (unified for email, SMS, WhatsApp)
+ * Create email template
  */
-const handleCreateTemplate: RequestHandler = async (req, res) => {
+const handleCreateEmailTemplate: RequestHandler = async (req, res) => {
   try {
     const {
       name,
-      template_type,
-      category,
       subject,
-      body,
-      variables,
+      body_html,
+      body_text,
+      template_type,
       is_active,
+      category,
     } = req.body;
+    const brokerId = (req as any).brokerId || 1;
 
-    if (!name || !template_type || !body) {
+    if (!name || !subject || !body_html) {
       return res.status(400).json({
         success: false,
-        error: "Name, template_type, and body are required",
-      });
-    }
-
-    if (!["email", "sms", "whatsapp"].includes(template_type)) {
-      return res.status(400).json({
-        success: false,
-        error: "template_type must be email, sms, or whatsapp",
-      });
-    }
-
-    // For email templates, subject is required
-    if (template_type === "email" && !subject) {
-      return res.status(400).json({
-        success: false,
-        error: "Subject is required for email templates",
+        error: "Name, subject, and body_html are required",
       });
     }
 
     const [result] = (await pool.query(
       `INSERT INTO templates 
-        (tenant_id, name, template_type, category, subject, body, variables, is_active) 
+        (tenant_id, name, subject, body, template_type, category, is_active, created_by_broker_id) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         MORTGAGE_TENANT_ID,
         name,
-        template_type,
-        category || "custom",
-        subject || null,
-        body,
-        variables ? JSON.stringify(variables) : JSON.stringify({}),
+        subject,
+        body_html,
+        template_type || "email",
+        category || "system",
         is_active !== false ? 1 : 0,
+        brokerId,
       ],
     )) as [ResultSetHeader, any];
 
     const [templates] = (await pool.query(
-      "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
+      `SELECT id, name, subject, body AS body_html, NULL AS body_text, template_type, category, is_active, created_at, updated_at
+       FROM templates WHERE id = ? AND tenant_id = ?`,
       [result.insertId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
       success: true,
       template: templates[0],
-      message: "Template created successfully",
+      message: "Email template created successfully",
     });
   } catch (error) {
-    console.error("Error creating template:", error);
+    console.error("Error creating email template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error ? error.message : "Failed to create template",
+        error instanceof Error
+          ? error.message
+          : "Failed to create email template",
     });
   }
 };
 
 /**
- * Get single template
+ * Update email template
  */
-const handleGetTemplate: RequestHandler = async (req, res) => {
-  try {
-    const { templateId } = req.params;
-
-    const [templates] = (await pool.query(
-      "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
-      [templateId, MORTGAGE_TENANT_ID],
-    )) as [RowDataPacket[], any];
-
-    if (templates.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "Template not found",
-      });
-    }
-
-    res.json({
-      success: true,
-      template: templates[0],
-    });
-  } catch (error) {
-    console.error("Error fetching template:", error);
-    res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error ? error.message : "Failed to fetch template",
-    });
-  }
-};
-
-/**
- * Update template (unified for email, SMS, WhatsApp)
- */
-const handleUpdateTemplate: RequestHandler = async (req, res) => {
+const handleUpdateEmailTemplate: RequestHandler = async (req, res) => {
   try {
     const { templateId } = req.params;
     const {
       name,
-      template_type,
-      category,
       subject,
-      body,
-      variables,
+      body_html,
+      body_text,
+      template_type,
       is_active,
+      category,
     } = req.body;
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id FROM templates WHERE id = ? AND tenant_id = ?",
+      "SELECT id FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'email'",
       [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "Template not found",
+        error: "Email template not found",
       });
     }
 
@@ -3455,31 +4479,21 @@ const handleUpdateTemplate: RequestHandler = async (req, res) => {
       updates.push("name = ?");
       values.push(name);
     }
-    if (template_type !== undefined) {
-      if (!["email", "sms", "whatsapp"].includes(template_type)) {
-        return res.status(400).json({
-          success: false,
-          error: "template_type must be email, sms, or whatsapp",
-        });
-      }
-      updates.push("template_type = ?");
-      values.push(template_type);
+    if (subject !== undefined) {
+      updates.push("subject = ?");
+      values.push(subject);
+    }
+    if (body_html !== undefined) {
+      updates.push("body = ?");
+      values.push(body_html);
     }
     if (category !== undefined) {
       updates.push("category = ?");
       values.push(category);
     }
-    if (subject !== undefined) {
-      updates.push("subject = ?");
-      values.push(subject);
-    }
-    if (body !== undefined) {
-      updates.push("body = ?");
-      values.push(body);
-    }
-    if (variables !== undefined) {
-      updates.push("variables = ?");
-      values.push(JSON.stringify(variables));
+    if (template_type !== undefined) {
+      updates.push("template_type = ?");
+      values.push(template_type);
     }
     if (is_active !== undefined) {
       updates.push("is_active = ?");
@@ -3502,42 +4516,45 @@ const handleUpdateTemplate: RequestHandler = async (req, res) => {
     );
 
     const [templates] = (await pool.query(
-      "SELECT * FROM templates WHERE id = ? AND tenant_id = ?",
+      `SELECT id, name, subject, body AS body_html, NULL AS body_text, template_type, category, is_active, created_at, updated_at
+       FROM templates WHERE id = ? AND tenant_id = ?`,
       [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
       success: true,
       template: templates[0],
-      message: "Template updated successfully",
+      message: "Email template updated successfully",
     });
   } catch (error) {
-    console.error("Error updating template:", error);
+    console.error("Error updating email template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error ? error.message : "Failed to update template",
+        error instanceof Error
+          ? error.message
+          : "Failed to update email template",
     });
   }
 };
 
 /**
- * Delete template (unified for email, SMS, WhatsApp)
+ * Delete email template
  */
-const handleDeleteTemplate: RequestHandler = async (req, res) => {
+const handleDeleteEmailTemplate: RequestHandler = async (req, res) => {
   try {
     const { templateId } = req.params;
 
     // Check if template exists
     const [existingRows] = (await pool.query(
-      "SELECT id, name FROM templates WHERE id = ? AND tenant_id = ?",
+      "SELECT id, name FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'email'",
       [templateId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     if (existingRows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "Template not found",
+        error: "Email template not found",
       });
     }
 
@@ -3548,14 +4565,16 @@ const handleDeleteTemplate: RequestHandler = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Template "${existingRows[0].name}" deleted successfully`,
+      message: `Email template "${existingRows[0].name}" deleted successfully`,
     });
   } catch (error) {
-    console.error("Error deleting template:", error);
+    console.error("Error deleting email template:", error);
     res.status(500).json({
       success: false,
       error:
-        error instanceof Error ? error.message : "Failed to delete template",
+        error instanceof Error
+          ? error.message
+          : "Failed to delete email template",
     });
   }
 };
@@ -3587,13 +4606,13 @@ const handleGetClientApplications: RequestHandler = async (req, res) => {
         b.last_name as broker_last_name,
         b.phone as broker_phone,
         b.email as broker_email,
-        (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND status = 'completed') as completed_tasks,
-        (SELECT COUNT(*) FROM tasks WHERE application_id = la.id) as total_tasks
+        (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND status = 'completed' AND tenant_id = ?) as completed_tasks,
+        (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND tenant_id = ?) as total_tasks
       FROM loan_applications la
       LEFT JOIN brokers b ON la.broker_user_id = b.id
       WHERE la.client_user_id = ? AND la.tenant_id = ?
       ORDER BY la.created_at DESC`,
-      [clientId, MORTGAGE_TENANT_ID],
+      [clientId, MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -3679,9 +4698,9 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
       });
     }
 
-    // Verify task belongs to client and tenant
+    // Verify task belongs to client
     const [tasks] = await pool.query<any[]>(
-      "SELECT t.* FROM tasks t INNER JOIN loan_applications la ON t.application_id = la.id WHERE t.id = ? AND la.client_user_id = ? AND la.tenant_id = ?",
+      "SELECT t.* FROM tasks t INNER JOIN loan_applications la ON t.application_id = la.id WHERE t.id = ? AND la.client_user_id = ? AND t.tenant_id = ?",
       [taskId, clientId, MORTGAGE_TENANT_ID],
     );
 
@@ -3758,13 +4777,13 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
     if (task.template_id) {
       const [fields] = await pool.query<any[]>(
         `SELECT * FROM task_form_fields 
-         WHERE task_template_id = ? 
+         WHERE task_template_id = ? AND tenant_id = ?
          ORDER BY order_index`,
-        [task.template_id],
+        [task.template_id, MORTGAGE_TENANT_ID],
       );
       formFields = fields;
       console.log(
-        `✅ Found ${fields.length} form fields for template ${task.template_id}`,
+        `✅ Found ${fields.length} form fields for template ${task.template_id} (tenant ${MORTGAGE_TENANT_ID})`,
       );
     } else {
       console.warn(
@@ -3781,13 +4800,15 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
         CASE WHEN td.id IS NOT NULL THEN 1 ELSE 0 END as is_uploaded
        FROM task_form_fields tff
        LEFT JOIN task_documents td ON td.task_id = ? AND td.field_id = tff.id
-       WHERE tff.task_template_id = ? 
+       WHERE tff.task_template_id = ? AND tff.tenant_id = ?
        AND (tff.field_type = 'file_pdf' OR tff.field_type = 'file_image')
        ORDER BY tff.order_index`,
-      [taskId, task.template_id || 0],
+      [taskId, task.template_id || 0, MORTGAGE_TENANT_ID],
     );
 
-    console.log(`📄 Found ${documents.length} document fields`);
+    console.log(
+      `📄 Found ${documents.length} document fields for template ${task.template_id || 0} (tenant ${MORTGAGE_TENANT_ID})`,
+    );
 
     res.json({
       success: true,
@@ -3965,459 +4986,1003 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
   }
 };
 
-// ==================== CONVERSATION HANDLERS ====================
-
 /**
- * GET /api/conversations
- * Get all conversation threads for the broker
+ * Get all SMS templates
  */
-const handleGetConversations: RequestHandler = async (req, res) => {
+const handleGetSmsTemplates: RequestHandler = async (req, res) => {
   try {
-    const brokerId = (req as any).brokerId;
-    const { status = "active", limit = 50, offset = 0 } = req.query;
-
-    const [threads] = (await pool.query(
-      `SELECT ct.*, 
-              c.first_name as client_first_name, 
-              c.last_name as client_last_name,
-              la.application_number,
-              la.property_address
-       FROM conversation_threads ct
-       LEFT JOIN clients c ON ct.client_id = c.id
-       LEFT JOIN loan_applications la ON ct.application_id = la.id
-       WHERE ct.tenant_id = ? AND ct.broker_id = ? AND ct.status = ?
-       ORDER BY ct.last_message_at DESC
-       LIMIT ? OFFSET ?`,
-      [
-        MORTGAGE_TENANT_ID,
-        brokerId,
-        status,
-        parseInt(limit as string),
-        parseInt(offset as string),
-      ],
+    const [templates] = (await pool.query(
+      `SELECT id, name, body, template_type, category, is_active, created_at, updated_at
+       FROM templates
+       WHERE tenant_id = ? AND template_type = 'sms'
+       ORDER BY created_at DESC`,
+      [MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     res.json({
       success: true,
-      conversations: threads.map((thread: any) => ({
-        ...thread,
-        client_name:
-          thread.client_first_name && thread.client_last_name
-            ? `${thread.client_first_name} ${thread.client_last_name}`
-            : thread.client_name,
+      templates: templates.map((template: any) => ({
+        ...template,
+        is_active: Boolean(template.is_active),
       })),
     });
   } catch (error) {
-    console.error("Error fetching conversations:", error);
+    console.error("Error fetching SMS templates:", error);
     res.status(500).json({
       success: false,
       error:
         error instanceof Error
           ? error.message
-          : "Failed to fetch conversations",
+          : "Failed to fetch SMS templates",
+    });
+  }
+};
+
+/**
+ * Create SMS template
+ */
+const handleCreateSmsTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { name, body, template_type, is_active, category } = req.body;
+    const brokerId = (req as any).brokerId || 1;
+
+    // Validate required fields
+    if (!name || !body) {
+      return res.status(400).json({
+        success: false,
+        error: "Name and body are required",
+      });
+    }
+
+    // Check character limit
+    if (body.length > 1600) {
+      return res.status(400).json({
+        success: false,
+        error: "SMS body cannot exceed 1600 characters",
+      });
+    }
+
+    const [result] = (await pool.query(
+      `INSERT INTO templates 
+        (tenant_id, name, body, template_type, category, is_active, created_by_broker_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        name,
+        body,
+        template_type || "sms",
+        category || "system",
+        is_active !== false ? 1 : 0,
+        brokerId,
+      ],
+    )) as [ResultSetHeader, any];
+
+    const [templates] = (await pool.query(
+      `SELECT id, name, body, template_type, category, is_active, created_at, updated_at
+       FROM templates WHERE id = ? AND tenant_id = ?`,
+      [result.insertId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      template: {
+        ...templates[0],
+        is_active: Boolean(templates[0].is_active),
+      },
+      message: "SMS template created successfully",
+    });
+  } catch (error) {
+    console.error("Error creating SMS template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to create SMS template",
+    });
+  }
+};
+
+/**
+ * Update SMS template
+ */
+const handleUpdateSmsTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const { name, body, template_type, is_active } = req.body;
+
+    // Check if template exists
+    const [existingRows] = (await pool.query(
+      "SELECT id FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'sms'",
+      [templateId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    if (existingRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "SMS template not found",
+      });
+    }
+
+    // Check character limit if body is being updated
+    if (body && body.length > 1600) {
+      return res.status(400).json({
+        success: false,
+        error: "SMS body cannot exceed 1600 characters",
+      });
+    }
+
+    // Build update query dynamically
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (name !== undefined) {
+      updates.push("name = ?");
+      values.push(name);
+    }
+    if (body !== undefined) {
+      updates.push("body = ?");
+      values.push(body);
+    }
+    if (template_type !== undefined) {
+      updates.push("template_type = ?");
+      values.push(template_type);
+    }
+    if (is_active !== undefined) {
+      updates.push("is_active = ?");
+      values.push(is_active ? 1 : 0);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No fields to update",
+      });
+    }
+
+    values.push(templateId);
+    values.push(MORTGAGE_TENANT_ID);
+
+    await pool.query(
+      `UPDATE templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
+      values,
+    );
+
+    const [templates] = (await pool.query(
+      `SELECT id, name, body, template_type, category, is_active, created_at, updated_at
+       FROM templates WHERE id = ? AND tenant_id = ?`,
+      [templateId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      template: {
+        ...templates[0],
+        is_active: Boolean(templates[0].is_active),
+      },
+      message: "SMS template updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating SMS template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to update SMS template",
+    });
+  }
+};
+
+/**
+ * Delete SMS template
+ */
+const handleDeleteSmsTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+
+    // Check if template exists
+    const [existingRows] = (await pool.query(
+      "SELECT id, name FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'sms'",
+      [templateId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    if (existingRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "SMS template not found",
+      });
+    }
+
+    await pool.query("DELETE FROM templates WHERE id = ? AND tenant_id = ?", [
+      templateId,
+      MORTGAGE_TENANT_ID,
+    ]);
+
+    res.json({
+      success: true,
+      message: `SMS template "${existingRows[0].name}" deleted successfully`,
+    });
+  } catch (error) {
+    console.error("Error deleting SMS template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to delete SMS template",
+    });
+  }
+};
+
+// =====================================================
+// CONVERSATION HANDLERS
+// =====================================================
+
+/**
+ * GET /api/conversations/threads
+ * Get conversation threads with filters and pagination
+ */
+const handleGetConversationThreads: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      page = 1,
+      limit = 20,
+      status = "all",
+      priority,
+      search,
+    } = req.query;
+
+    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+
+    let whereConditions = ["ct.tenant_id = ?", "ct.broker_id = ?"];
+    let queryParams: any[] = [MORTGAGE_TENANT_ID, brokerId];
+
+    if (status !== "all") {
+      whereConditions.push("ct.status = ?");
+      queryParams.push(status);
+    }
+
+    if (priority) {
+      whereConditions.push("ct.priority = ?");
+      queryParams.push(priority);
+    }
+
+    if (search) {
+      whereConditions.push(
+        "(ct.client_name LIKE ? OR ct.client_email LIKE ? OR ct.client_phone LIKE ?)",
+      );
+      const searchTerm = `%${search}%`;
+      queryParams.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    const whereClause = whereConditions.join(" AND ");
+
+    // Get threads with client information
+    const threadsQuery = `
+      SELECT 
+        ct.*,
+        la.application_number,
+        CONCAT(c.first_name, ' ', c.last_name) as client_full_name,
+        c.email as client_email_current,
+        c.phone as client_phone_current
+      FROM conversation_threads ct
+      LEFT JOIN loan_applications la ON ct.application_id = la.id
+      LEFT JOIN clients c ON ct.client_id = c.id
+      WHERE ${whereClause}
+      ORDER BY ct.last_message_at DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    queryParams.push(parseInt(limit as string), offset);
+
+    const [threads] = await pool.query<RowDataPacket[]>(
+      threadsQuery,
+      queryParams,
+    );
+
+    // Get total count
+    const countQuery = `
+      SELECT COUNT(*) as total 
+      FROM conversation_threads ct 
+      WHERE ${whereClause}
+    `;
+    const [countResult] = await pool.query<RowDataPacket[]>(
+      countQuery,
+      queryParams.slice(0, -2), // Remove limit and offset from params
+    );
+
+    const total = countResult[0]?.total || 0;
+    const totalPages = Math.ceil(total / parseInt(limit as string));
+
+    res.json({
+      success: true,
+      threads: threads.map((thread) => ({
+        ...thread,
+        tags: thread.tags ? JSON.parse(thread.tags) : [],
+      })),
+      pagination: {
+        page: parseInt(page as string),
+        limit: parseInt(limit as string),
+        total,
+        totalPages,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching conversation threads:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch conversation threads",
     });
   }
 };
 
 /**
  * GET /api/conversations/:conversationId/messages
- * Get all messages in a conversation
+ * Get messages for a specific conversation
  */
 const handleGetConversationMessages: RequestHandler = async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { limit = 50, offset = 0 } = req.query;
+    const { page = 1, limit = 50 } = req.query;
+    const brokerId = (req as any).brokerId;
 
-    const [messages] = (await pool.query(
-      `SELECT c.*, 
-              b.first_name as broker_first_name, 
-              b.last_name as broker_last_name,
-              cl.first_name as client_first_name, 
-              cl.last_name as client_last_name
-       FROM communications c
-       LEFT JOIN brokers b ON c.from_broker_id = b.id OR c.to_broker_id = b.id
-       LEFT JOIN clients cl ON c.from_user_id = cl.id OR c.to_user_id = cl.id
-       WHERE c.conversation_id = ? AND c.tenant_id = ?
-       ORDER BY c.created_at ASC
-       LIMIT ? OFFSET ?`,
-      [
-        conversationId,
-        MORTGAGE_TENANT_ID,
-        parseInt(limit as string),
-        parseInt(offset as string),
-      ],
-    )) as [RowDataPacket[], any];
+    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-    // Mark messages as read
-    await pool.query(
-      `UPDATE communications 
-       SET delivery_status = 'read', read_timestamp = NOW()
-       WHERE conversation_id = ? AND direction = 'inbound' AND delivery_status != 'read'`,
+    // Verify broker has access to this conversation
+    const [threadCheck] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_threads 
+       WHERE conversation_id = ? AND broker_id = ? AND tenant_id = ?`,
+      [conversationId, brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    if (threadCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation not found or access denied",
+      });
+    }
+
+    // Get messages
+    const [messages] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        c.*,
+        t.name as template_name,
+        COALESCE(CONCAT(b.first_name, ' ', b.last_name), 'System') as sender_name,
+        COALESCE(CONCAT(cl.first_name, ' ', cl.last_name), 'Client') as recipient_name
+      FROM communications c
+      LEFT JOIN templates t ON c.template_id = t.id
+      LEFT JOIN brokers b ON c.from_broker_id = b.id
+      LEFT JOIN clients cl ON c.to_user_id = cl.id
+      WHERE c.conversation_id = ? AND c.tenant_id = ?
+      ORDER BY c.created_at DESC
+      LIMIT ? OFFSET ?`,
+      [conversationId, MORTGAGE_TENANT_ID, parseInt(limit as string), offset],
+    );
+
+    // Get thread info
+    const [threadInfo] = await pool.query<RowDataPacket[]>(
+      `SELECT ct.*, 
+              la.application_number,
+              CONCAT(cl.first_name, ' ', cl.last_name) as client_full_name
+       FROM conversation_threads ct
+       LEFT JOIN loan_applications la ON ct.application_id = la.id
+       LEFT JOIN clients cl ON ct.client_id = cl.id
+       WHERE ct.conversation_id = ?`,
       [conversationId],
     );
 
-    // Update unread count
-    await pool.query(
-      `UPDATE conversation_threads 
-       SET unread_count = 0 
-       WHERE conversation_id = ?`,
+    // Get total message count
+    const [countResult] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) as total FROM communications WHERE conversation_id = ?",
       [conversationId],
     );
+
+    const total = countResult[0]?.total || 0;
+    const totalPages = Math.ceil(total / parseInt(limit as string));
 
     res.json({
       success: true,
-      messages: messages.map((msg: any) => ({
+      messages: messages.map((msg) => ({
         ...msg,
-        sender_name: msg.from_broker_id
-          ? `${msg.broker_first_name} ${msg.broker_last_name}`
-          : `${msg.client_first_name} ${msg.client_last_name}`,
+        metadata: msg.metadata ? JSON.parse(msg.metadata) : null,
+        provider_response: msg.provider_response
+          ? JSON.parse(msg.provider_response)
+          : null,
       })),
+      thread: {
+        ...threadInfo[0],
+        tags: threadInfo[0]?.tags ? JSON.parse(threadInfo[0].tags) : [],
+      },
+      pagination: {
+        page: parseInt(page as string),
+        limit: parseInt(limit as string),
+        total,
+        totalPages,
+      },
     });
   } catch (error) {
     console.error("Error fetching conversation messages:", error);
     res.status(500).json({
       success: false,
-      error:
-        error instanceof Error ? error.message : "Failed to fetch messages",
+      message: "Failed to fetch conversation messages",
     });
   }
 };
 
 /**
- * POST /api/conversations/send-message
- * Send a message via SMS, WhatsApp, or Email
+ * POST /api/conversations/send
+ * Send a new message (SMS, WhatsApp, or Email)
  */
 const handleSendMessage: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const {
-      to_user_id,
-      application_id,
-      communication_type,
-      body,
-      subject,
-      template_id,
       conversation_id,
+      application_id,
+      lead_id,
+      client_id,
+      communication_type,
+      recipient_phone,
+      recipient_email,
+      subject,
+      body,
+      template_id,
+      message_type = "text",
+      scheduled_at,
     } = req.body;
 
-    // Validate required fields
-    if (!to_user_id || !communication_type || !body) {
+    // Validation
+    if (!communication_type || !body) {
       return res.status(400).json({
         success: false,
-        error: "to_user_id, communication_type, and body are required",
+        message: "communication_type and body are required",
       });
     }
 
-    // Get client information
-    const [clientRows] = (await pool.query(
-      "SELECT * FROM clients WHERE id = ? AND tenant_id = ?",
-      [to_user_id, MORTGAGE_TENANT_ID],
-    )) as [RowDataPacket[], any];
-
-    if (clientRows.length === 0) {
-      return res.status(404).json({
+    if (!["email", "sms", "whatsapp"].includes(communication_type)) {
+      return res.status(400).json({
         success: false,
-        error: "Client not found",
+        message: "Invalid communication_type. Must be email, sms, or whatsapp",
       });
     }
 
-    const client = clientRows[0];
-    let deliveryResult = { success: true, external_id: null, cost: null };
+    // Validate recipient info
+    if (
+      communication_type === "email" &&
+      !recipient_email &&
+      !client_id &&
+      !application_id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "recipient_email is required for email communications",
+      });
+    }
 
-    // Send message based on type
-    try {
-      if (communication_type === "sms" || communication_type === "whatsapp") {
-        deliveryResult = await sendTwilioMessage({
-          to: client.phone_number,
-          body,
-          type: communication_type,
-        });
-      } else if (communication_type === "email") {
-        deliveryResult = await sendEmail({
-          to: client.email,
-          subject: subject || "Message from Encore Mortgage",
-          html: body.replace(/\n/g, "<br>"),
-        });
+    if (
+      ["sms", "whatsapp"].includes(communication_type) &&
+      !recipient_phone &&
+      !client_id &&
+      !application_id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "recipient_phone is required for SMS/WhatsApp communications",
+      });
+    }
+
+    // Get recipient info if not provided but client_id or application_id is provided
+    let finalRecipientEmail = recipient_email;
+    let finalRecipientPhone = recipient_phone;
+
+    if (!finalRecipientEmail || !finalRecipientPhone) {
+      let clientQuery = "";
+      let clientParams: any[] = [];
+
+      if (client_id) {
+        clientQuery =
+          "SELECT email, phone FROM clients WHERE id = ? AND tenant_id = ?";
+        clientParams = [client_id, MORTGAGE_TENANT_ID];
+      } else if (application_id) {
+        clientQuery = `
+          SELECT c.email, c.phone 
+          FROM clients c 
+          JOIN loan_applications la ON c.id = la.client_user_id 
+          WHERE la.id = ? AND la.tenant_id = ?
+        `;
+        clientParams = [application_id, MORTGAGE_TENANT_ID];
       }
-    } catch (sendError) {
-      console.error(`Error sending ${communication_type}:`, sendError);
-      deliveryResult = {
-        success: false,
-        external_id: null,
-        cost: null,
-      } as any;
+
+      if (clientQuery) {
+        const [clientInfo] = await pool.query<RowDataPacket[]>(
+          clientQuery,
+          clientParams,
+        );
+
+        if (clientInfo.length > 0) {
+          finalRecipientEmail = finalRecipientEmail || clientInfo[0].email;
+          finalRecipientPhone = finalRecipientPhone || clientInfo[0].phone;
+        }
+      }
     }
 
-    // Store message in database
-    const finalConversationId =
-      conversation_id || `conv_${application_id || "manual"}_${to_user_id}`;
+    // Generate conversation_id if not provided
+    let finalConversationId = conversation_id;
+    if (!finalConversationId) {
+      finalConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
 
+    // Process template if provided
+    let processedBody = body;
+    let processedSubject = subject;
+
+    if (template_id && message_type === "template") {
+      const [templates] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM templates WHERE id = ? AND tenant_id = ?`,
+        [template_id, MORTGAGE_TENANT_ID],
+      );
+
+      if (templates.length > 0) {
+        const template = templates[0];
+
+        // Get template variables (you can extend this based on your needs)
+        const templateVariables = {
+          client_name: finalRecipientEmail?.split("@")[0] || "Client",
+          broker_name: "Broker", // You can get this from the broker's info
+          application_id: application_id || "",
+          current_date: new Date().toLocaleDateString(),
+        };
+
+        processedBody = processTemplateVariables(
+          template.body,
+          templateVariables,
+        );
+        if (template.subject && communication_type === "email") {
+          processedSubject = processTemplateVariables(
+            template.subject,
+            templateVariables,
+          );
+        }
+      }
+    }
+
+    // Insert communication record
     const [result] = (await pool.query(
-      `INSERT INTO communications 
-        (tenant_id, application_id, from_broker_id, to_user_id, communication_type, 
-         direction, subject, body, status, external_id, conversation_id, 
-         delivery_status, delivery_timestamp, cost, error_message) 
-       VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO communications (
+        tenant_id, application_id, lead_id, from_broker_id, to_user_id,
+        communication_type, direction, subject, body, status,
+        conversation_id, message_type, template_id, scheduled_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         MORTGAGE_TENANT_ID,
-        application_id,
+        application_id || null,
+        lead_id || null,
         brokerId,
-        to_user_id,
+        client_id || null,
         communication_type,
-        subject,
-        body,
-        deliveryResult.success ? "sent" : "failed",
-        deliveryResult.external_id,
+        "outbound",
+        processedSubject || null,
+        processedBody,
+        scheduled_at ? "pending" : "pending",
         finalConversationId,
-        deliveryResult.success ? "sent" : "failed",
-        deliveryResult.success ? new Date() : null,
-        deliveryResult.cost,
-        deliveryResult.success ? null : (deliveryResult as any).error,
+        message_type,
+        template_id || null,
+        scheduled_at || null,
       ],
     )) as [ResultSetHeader, any];
 
-    // Log the action
+    const communicationId = result.insertId;
+
+    // Send the actual message
+    let sendResult: any = { success: false, error: "Unknown error" };
+
+    if (scheduled_at) {
+      // For scheduled messages, just mark as pending
+      sendResult = { success: true };
+    } else {
+      // Send immediately
+      switch (communication_type) {
+        case "sms":
+          if (finalRecipientPhone) {
+            sendResult = await sendSMSMessage(
+              finalRecipientPhone,
+              processedBody,
+            );
+          } else {
+            sendResult = { success: false, error: "No phone number available" };
+          }
+          break;
+
+        case "whatsapp":
+          if (finalRecipientPhone) {
+            sendResult = await sendWhatsAppMessage(
+              finalRecipientPhone,
+              processedBody,
+            );
+          } else {
+            sendResult = { success: false, error: "No phone number available" };
+          }
+          break;
+
+        case "email":
+          if (finalRecipientEmail) {
+            sendResult = await sendEmailMessage(
+              finalRecipientEmail,
+              processedSubject || "Message from Mortgage Professional",
+              processedBody,
+              false, // You can make this configurable for HTML emails
+            );
+          } else {
+            sendResult = {
+              success: false,
+              error: "No email address available",
+            };
+          }
+          break;
+
+        default:
+          sendResult = { success: false, error: "Invalid communication type" };
+      }
+    }
+
+    // Update communication record with sending results
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+
+    if (sendResult.success) {
+      updateFields.push("status = ?", "delivery_status = ?", "sent_at = NOW()");
+      updateValues.push("sent", "sent");
+
+      if (sendResult.external_id) {
+        updateFields.push("external_id = ?");
+        updateValues.push(sendResult.external_id);
+      }
+
+      if (sendResult.cost) {
+        updateFields.push("cost = ?");
+        updateValues.push(sendResult.cost);
+      }
+
+      if (sendResult.provider_response) {
+        updateFields.push("provider_response = ?");
+        updateValues.push(JSON.stringify(sendResult.provider_response));
+      }
+    } else {
+      updateFields.push(
+        "status = ?",
+        "delivery_status = ?",
+        "error_message = ?",
+      );
+      updateValues.push("failed", "failed", sendResult.error);
+
+      if (sendResult.provider_response) {
+        updateFields.push("provider_response = ?");
+        updateValues.push(JSON.stringify(sendResult.provider_response));
+      }
+    }
+
+    updateValues.push(communicationId);
+
     await pool.query(
-      `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, created_at)
-       VALUES (?, ?, 'broker', ?, ?, ?, ?, NOW())`,
+      `UPDATE communications SET ${updateFields.join(", ")} WHERE id = ?`,
+      updateValues,
+    );
+
+    // Create audit log entry
+    await pool.query(
+      `INSERT INTO audit_logs (
+        tenant_id, broker_id, actor_type, action, entity_type, entity_id, 
+        changes, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         MORTGAGE_TENANT_ID,
         brokerId,
+        "broker",
         `send_${communication_type}`,
         "communication",
-        result.insertId,
+        communicationId,
         JSON.stringify({
-          to_user_id,
-          communication_type,
-          body: body.substring(0, 100),
+          recipient:
+            communication_type === "email"
+              ? finalRecipientEmail
+              : finalRecipientPhone,
+          template_used: template_id ? true : false,
+          scheduled: scheduled_at ? true : false,
         }),
+        sendResult.success ? "success" : "failure",
       ],
     );
 
+    if (!sendResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: `Failed to send ${communication_type}: ${sendResult.error}`,
+        communication_id: communicationId,
+        conversation_id: finalConversationId,
+      });
+    }
+
     res.json({
       success: true,
-      message: `${communication_type.toUpperCase()} ${deliveryResult.success ? "sent successfully" : "failed to send"}`,
-      communication_id: result.insertId,
-      delivery_status: deliveryResult.success ? "sent" : "failed",
-      cost: deliveryResult.cost,
+      message: "Message sent successfully",
+      communication_id: communicationId,
+      conversation_id: finalConversationId,
+      external_id: sendResult.external_id,
+      cost: sendResult.cost,
     });
   } catch (error) {
     console.error("Error sending message:", error);
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : "Failed to send message",
+      message: "Failed to send message",
     });
   }
 };
 
 /**
- * GET /api/conversation-templates
- * Get all conversation templates
+ * PUT /api/conversations/:conversationId
+ * Update conversation thread (status, priority, tags)
  */
-const handleGetConversationTemplates: RequestHandler = async (req, res) => {
+const handleUpdateConversation: RequestHandler = async (req, res) => {
   try {
-    const { template_type, category } = req.query;
+    const { conversationId } = req.params;
+    const { status, priority, tags } = req.body;
+    const brokerId = (req as any).brokerId;
 
-    let query =
-      "SELECT * FROM templates WHERE tenant_id = ? AND is_active = true";
-    const params: any[] = [MORTGAGE_TENANT_ID];
+    // Verify broker has access to this conversation
+    const [threadCheck] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_threads 
+       WHERE conversation_id = ? AND broker_id = ? AND tenant_id = ?`,
+      [conversationId, brokerId, MORTGAGE_TENANT_ID],
+    );
 
-    if (template_type) {
-      query += " AND template_type = ?";
-      params.push(template_type);
+    if (threadCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation not found or access denied",
+      });
     }
 
-    if (category) {
-      query += " AND category = ?";
-      params.push(category);
+    const updateFields: string[] = [];
+    const updateValues: any[] = [];
+
+    if (status && ["active", "archived", "closed"].includes(status)) {
+      updateFields.push("status = ?");
+      updateValues.push(status);
     }
 
-    query += " ORDER BY category, name";
+    if (priority && ["low", "normal", "high", "urgent"].includes(priority)) {
+      updateFields.push("priority = ?");
+      updateValues.push(priority);
+    }
 
-    const [templates] = (await pool.query(query, params)) as [
-      RowDataPacket[],
-      any,
-    ];
+    if (tags !== undefined) {
+      updateFields.push("tags = ?");
+      updateValues.push(JSON.stringify(tags));
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid fields to update",
+      });
+    }
+
+    updateFields.push("updated_at = NOW()");
+    updateValues.push(conversationId);
+
+    await pool.query(
+      `UPDATE conversation_threads SET ${updateFields.join(", ")} 
+       WHERE conversation_id = ?`,
+      updateValues,
+    );
+
+    // Get updated thread
+    const [updatedThread] = await pool.query<RowDataPacket[]>(
+      `SELECT ct.*, 
+              la.application_number,
+              CONCAT(cl.first_name, ' ', cl.last_name) as client_full_name
+       FROM conversation_threads ct
+       LEFT JOIN loan_applications la ON ct.application_id = la.id
+       LEFT JOIN clients cl ON ct.client_id = cl.id
+       WHERE ct.conversation_id = ?`,
+      [conversationId],
+    );
 
     res.json({
       success: true,
-      templates: templates.map((template: any) => ({
-        ...template,
-        variables: template.variables ? JSON.parse(template.variables) : [],
-        is_active: Boolean(template.is_active),
-      })),
+      thread: {
+        ...updatedThread[0],
+        tags: updatedThread[0]?.tags ? JSON.parse(updatedThread[0].tags) : [],
+      },
+    });
+  } catch (error) {
+    console.error("Error updating conversation:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update conversation",
+    });
+  }
+};
+
+/**
+ * GET /api/conversations/templates
+ * Get communication templates for sending messages
+ */
+const handleGetConversationTemplates: RequestHandler = async (req, res) => {
+  try {
+    const { type } = req.query;
+
+    let whereCondition = "WHERE tenant_id = ? AND is_active = 1";
+    const queryParams: any[] = [MORTGAGE_TENANT_ID];
+
+    if (type && ["email", "sms", "whatsapp"].includes(type as string)) {
+      whereCondition += " AND template_type = ?";
+      queryParams.push(type);
+    }
+
+    const [templates] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        id,
+        name,
+        description,
+        template_type,
+        category,
+        subject,
+        body,
+        variables,
+        created_at,
+        updated_at
+      FROM templates
+      ${whereCondition}
+      ORDER BY category, name`,
+      queryParams,
+    );
+
+    res.json({
+      success: true,
+      templates: templates.map((template) => {
+        let variables = [];
+        if (template.variables) {
+          try {
+            const parsed = JSON.parse(template.variables);
+            variables = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            // Handle legacy comma-separated strings
+            variables = String(template.variables)
+              .split(",")
+              .map((v: string) => v.trim())
+              .filter(Boolean);
+          }
+        }
+        return {
+          ...template,
+          variables,
+        };
+      }),
     });
   } catch (error) {
     console.error("Error fetching conversation templates:", error);
     res.status(500).json({
       success: false,
-      error:
-        error instanceof Error ? error.message : "Failed to fetch templates",
+      message: "Failed to fetch conversation templates",
     });
   }
 };
 
 /**
- * POST /api/conversation-templates
- * Create a new conversation template
+ * GET /api/conversations/stats
+ * Get conversation statistics for dashboard
  */
-const handleCreateConversationTemplate: RequestHandler = async (req, res) => {
+const handleGetConversationStats: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
-    const {
-      name,
-      description,
-      template_type,
-      category,
-      subject,
-      body,
-      variables,
-    } = req.body;
 
-    if (!name || !template_type || !body) {
-      return res.status(400).json({
-        success: false,
-        error: "name, template_type, and body are required",
-      });
-    }
+    // Total conversations
+    const [totalResult] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as total FROM conversation_threads 
+       WHERE broker_id = ? AND tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
 
-    const [result] = (await pool.query(
-      `INSERT INTO templates 
-        (tenant_id, name, description, template_type, category, subject, body, variables, created_by_broker_id) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        MORTGAGE_TENANT_ID,
-        name,
-        description,
-        template_type,
-        category || "system",
-        subject,
-        body,
-        JSON.stringify(variables || []),
-        brokerId,
-      ],
-    )) as [ResultSetHeader, any];
+    // Active conversations
+    const [activeResult] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as active FROM conversation_threads 
+       WHERE broker_id = ? AND tenant_id = ? AND status = 'active'`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    // Unread messages
+    const [unreadResult] = await pool.query<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(unread_count), 0) as unread 
+       FROM conversation_threads 
+       WHERE broker_id = ? AND tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    // Today's messages
+    const [todayResult] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as today_messages 
+       FROM communications 
+       WHERE from_broker_id = ? AND tenant_id = ? 
+         AND DATE(created_at) = CURDATE()`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    // Channel breakdown
+    const [channelResult] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        communication_type,
+        COUNT(*) as count
+      FROM communications c
+      JOIN conversation_threads ct ON c.conversation_id = ct.conversation_id
+      WHERE ct.broker_id = ? AND c.tenant_id = ?
+        AND c.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+      GROUP BY communication_type`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    // Priority breakdown
+    const [priorityResult] = await pool.query<RowDataPacket[]>(
+      `SELECT 
+        priority,
+        COUNT(*) as count
+      FROM conversation_threads 
+      WHERE broker_id = ? AND tenant_id = ?
+      GROUP BY priority`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    // Calculate average response time (mock for now)
+    const avgResponseTime = 45; // 45 minutes average
+
+    const stats = {
+      total_conversations: totalResult[0]?.total || 0,
+      active_conversations: activeResult[0]?.active || 0,
+      unread_messages: unreadResult[0]?.unread || 0,
+      today_messages: todayResult[0]?.today_messages || 0,
+      response_time_avg: avgResponseTime,
+      channels: {
+        email: 0,
+        sms: 0,
+        whatsapp: 0,
+      },
+      by_priority: {
+        low: 0,
+        normal: 0,
+        high: 0,
+        urgent: 0,
+      },
+    };
+
+    // Fill channel data
+    channelResult.forEach((row) => {
+      if (row.communication_type in stats.channels) {
+        (stats.channels as any)[row.communication_type] = row.count;
+      }
+    });
+
+    // Fill priority data
+    priorityResult.forEach((row) => {
+      if (row.priority in stats.by_priority) {
+        (stats.by_priority as any)[row.priority] = row.count;
+      }
+    });
 
     res.json({
       success: true,
-      message: "Template created successfully",
-      template_id: result.insertId,
+      stats,
     });
   } catch (error) {
-    console.error("Error creating conversation template:", error);
+    console.error("Error fetching conversation stats:", error);
     res.status(500).json({
       success: false,
-      error:
-        error instanceof Error ? error.message : "Failed to create template",
+      message: "Failed to fetch conversation statistics",
     });
   }
 };
-
-// Helper function to send SMS/WhatsApp via Twilio
-async function sendTwilioMessage({
-  to,
-  body,
-  type,
-}: {
-  to: string;
-  body: string;
-  type: "sms" | "whatsapp";
-}) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
-  const twilioWhatsApp = process.env.TWILIO_WHATSAPP_NUMBER;
-
-  if (!accountSid || !authToken || !twilioPhone) {
-    throw new Error("Twilio credentials not configured");
-  }
-
-  try {
-    // Initialize Twilio client
-    const client = twilio(accountSid, authToken);
-
-    const fromNumber =
-      type === "whatsapp"
-        ? `whatsapp:${twilioWhatsApp || twilioPhone}`
-        : twilioPhone;
-    const toNumber = type === "whatsapp" ? `whatsapp:${to}` : to;
-
-    // Send message via Twilio
-    const message = await client.messages.create({
-      body,
-      from: fromNumber,
-      to: toNumber,
-    });
-
-    return {
-      success: true,
-      external_id: message.sid,
-      cost: Math.abs(parseFloat(message.price || "0")),
-    };
-  } catch (error) {
-    console.error(`Twilio ${type} error:`, error);
-    return {
-      success: false,
-      external_id: null,
-      cost: null,
-      error: error instanceof Error ? error.message : `Failed to send ${type}`,
-    };
-  }
-}
-
-// Helper function to send email
-async function sendEmail({
-  to,
-  subject,
-  html,
-}: {
-  to: string;
-  subject: string;
-  html: string;
-}) {
-  const emailHost = process.env.EMAIL_HOST || process.env.HOSTGATOR_SMTP_HOST;
-  const emailPort =
-    process.env.EMAIL_PORT || process.env.HOSTGATOR_SMTP_PORT || "587";
-  const emailUser = process.env.EMAIL_USER || process.env.HOSTGATOR_EMAIL_USER;
-  const emailPass = process.env.EMAIL_PASS || process.env.HOSTGATOR_EMAIL_PASS;
-
-  if (!emailHost || !emailUser || !emailPass) {
-    throw new Error("Email credentials not configured");
-  }
-
-  try {
-    const transporter = nodemailer.createTransport({
-      host: emailHost,
-      port: parseInt(emailPort),
-      secure: false, // true for 465, false for other ports
-      auth: {
-        user: emailUser,
-        pass: emailPass,
-      },
-    });
-
-    const info = await transporter.sendMail({
-      from: `"Encore Mortgage" <${emailUser}>`,
-      to,
-      subject,
-      html,
-    });
-
-    return {
-      success: true,
-      external_id: info.messageId,
-      cost: null, // Email typically doesn't have per-message costs
-    };
-  } catch (error) {
-    console.error("Email error:", error);
-    return {
-      success: false,
-      external_id: null,
-      cost: null,
-      error: error instanceof Error ? error.message : "Failed to send email",
-    };
-  }
-}
 
 /**
  * GET /api/audit-logs
@@ -4645,17 +6210,17 @@ const handleGetReportsOverview: RequestHandler = async (req, res) => {
         AVG(CAST(loan_amount AS DECIMAL(15,2))) as avg_loan_amount,
         SUM(CAST(loan_amount AS DECIMAL(15,2))) as total_loan_volume
       FROM loan_applications 
-      WHERE broker_user_id = ?${dateFilter}`,
-      [brokerId, ...dateParams],
+      WHERE broker_user_id = ? AND tenant_id = ?${dateFilter}`,
+      [brokerId, MORTGAGE_TENANT_ID, ...dateParams],
     );
 
     // Loans by type
     const [loansByType] = await pool.query<RowDataPacket[]>(
       `SELECT loan_type, COUNT(*) as count 
        FROM loan_applications 
-       WHERE broker_user_id = ?${dateFilter}
+       WHERE broker_user_id = ? AND tenant_id = ?${dateFilter}
        GROUP BY loan_type`,
-      [brokerId, ...dateParams],
+      [brokerId, MORTGAGE_TENANT_ID, ...dateParams],
     );
 
     // Loans by status over time
@@ -4665,11 +6230,11 @@ const handleGetReportsOverview: RequestHandler = async (req, res) => {
         status,
         COUNT(*) as count
        FROM loan_applications 
-       WHERE broker_user_id = ?${dateFilter}
+       WHERE broker_user_id = ? AND tenant_id = ?${dateFilter}
        GROUP BY DATE(created_at), status
        ORDER BY date DESC
        LIMIT 30`,
-      [brokerId, ...dateParams],
+      [brokerId, MORTGAGE_TENANT_ID, ...dateParams],
     );
 
     // Client statistics
@@ -4773,10 +6338,10 @@ const handleGetRevenueReport: RequestHandler = async (req, res) => {
         AVG(CAST(loan_amount AS DECIMAL(15,2))) as avg_amount,
         loan_type
       FROM loan_applications 
-      WHERE broker_user_id = ?${dateFilter}
+      WHERE broker_user_id = ? AND tenant_id = ?${dateFilter}
       GROUP BY period, loan_type
       ORDER BY period DESC`,
-      [dateFormat, brokerId, ...dateParams],
+      [dateFormat, brokerId, MORTGAGE_TENANT_ID, ...dateParams],
     );
 
     res.json({
@@ -4818,8 +6383,8 @@ const handleGetPerformanceReport: RequestHandler = async (req, res) => {
         SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
         ROUND((SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) / COUNT(*)) * 100, 2) as approval_rate
       FROM loan_applications 
-      WHERE broker_user_id = ?${dateFilter}`,
-      [brokerId, ...dateParams],
+      WHERE broker_user_id = ? AND tenant_id = ?${dateFilter}`,
+      [brokerId, MORTGAGE_TENANT_ID, ...dateParams],
     );
 
     // Average processing time
@@ -4828,9 +6393,9 @@ const handleGetPerformanceReport: RequestHandler = async (req, res) => {
         AVG(DATEDIFF(updated_at, created_at)) as avg_days,
         status
       FROM loan_applications 
-      WHERE broker_user_id = ?${dateFilter}
+      WHERE broker_user_id = ? AND tenant_id = ?${dateFilter}
       GROUP BY status`,
-      [brokerId, ...dateParams],
+      [brokerId, MORTGAGE_TENANT_ID, ...dateParams],
     );
 
     // Task completion rate
@@ -4960,6 +6525,11 @@ function createServer() {
     handleGenerateMISMO,
   );
   expressApp.get("/api/clients", verifyBrokerSession, handleGetClients);
+  expressApp.delete(
+    "/api/clients/:clientId",
+    verifyBrokerSession,
+    handleDeleteClient,
+  );
   expressApp.get("/api/brokers", verifyBrokerSession, handleGetBrokers);
   expressApp.post("/api/brokers", verifyBrokerSession, handleCreateBroker);
   expressApp.put(
@@ -4984,6 +6554,13 @@ function createServer() {
     "/api/tasks/:taskId",
     verifyBrokerSession,
     handleDeleteTaskTemplate,
+  );
+
+  // Task instance management (different from templates)
+  expressApp.delete(
+    "/api/tasks/instance/:taskId",
+    verifyBrokerSession,
+    handleDeleteTaskInstance,
   );
 
   // Task approval routes
@@ -5041,23 +6618,26 @@ function createServer() {
     handleSubmitTaskForm,
   );
 
-  // Template routes (require broker session) - unified for email, SMS, WhatsApp
-  expressApp.get("/api/templates", verifyBrokerSession, handleGetTemplates);
-  expressApp.post("/api/templates", verifyBrokerSession, handleCreateTemplate);
+  // Email template routes (require broker session)
   expressApp.get(
-    "/api/templates/:templateId",
+    "/api/email-templates",
     verifyBrokerSession,
-    handleGetTemplate,
+    handleGetEmailTemplates,
+  );
+  expressApp.post(
+    "/api/email-templates",
+    verifyBrokerSession,
+    handleCreateEmailTemplate,
   );
   expressApp.put(
-    "/api/templates/:templateId",
+    "/api/email-templates/:templateId",
     verifyBrokerSession,
-    handleUpdateTemplate,
+    handleUpdateEmailTemplate,
   );
   expressApp.delete(
-    "/api/templates/:templateId",
+    "/api/email-templates/:templateId",
     verifyBrokerSession,
-    handleDeleteTemplate,
+    handleDeleteEmailTemplate,
   );
 
   // Client Portal routes (require client session)
@@ -5114,11 +6694,33 @@ function createServer() {
     handleDeleteTaskDocument,
   );
 
-  // Conversations routes
+  // SMS Templates routes
   expressApp.get(
-    "/api/conversations",
+    "/api/sms-templates",
     verifyBrokerSession,
-    handleGetConversations,
+    handleGetSmsTemplates,
+  );
+  expressApp.post(
+    "/api/sms-templates",
+    verifyBrokerSession,
+    handleCreateSmsTemplate,
+  );
+  expressApp.put(
+    "/api/sms-templates/:templateId",
+    verifyBrokerSession,
+    handleUpdateSmsTemplate,
+  );
+  expressApp.delete(
+    "/api/sms-templates/:templateId",
+    verifyBrokerSession,
+    handleDeleteSmsTemplate,
+  );
+
+  // Conversation routes
+  expressApp.get(
+    "/api/conversations/threads",
+    verifyBrokerSession,
+    handleGetConversationThreads,
   );
   expressApp.get(
     "/api/conversations/:conversationId/messages",
@@ -5126,19 +6728,24 @@ function createServer() {
     handleGetConversationMessages,
   );
   expressApp.post(
-    "/api/conversations/send-message",
+    "/api/conversations/send",
     verifyBrokerSession,
     handleSendMessage,
   );
+  expressApp.put(
+    "/api/conversations/:conversationId",
+    verifyBrokerSession,
+    handleUpdateConversation,
+  );
   expressApp.get(
-    "/api/conversation-templates",
+    "/api/conversations/templates",
     verifyBrokerSession,
     handleGetConversationTemplates,
   );
-  expressApp.post(
-    "/api/conversation-templates",
+  expressApp.get(
+    "/api/conversations/stats",
     verifyBrokerSession,
-    handleCreateConversationTemplate,
+    handleGetConversationStats,
   );
 
   // Audit Logs routes

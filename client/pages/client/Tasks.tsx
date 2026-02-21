@@ -162,7 +162,7 @@ const Tasks = () => {
                     {isApproved ? (
                       <CheckCircle2 className="h-5 w-5 text-green-600" />
                     ) : isPendingApproval ? (
-                      <FileQuestion className="h-5 w-5 text-primary" />
+                      <FileQuestion className="h-5 w-5 text-blue-500" />
                     ) : isReopened ? (
                       <RotateCcw className="h-5 w-5 text-amber-500" />
                     ) : task.status === "in_progress" ? (
@@ -199,7 +199,7 @@ const Tasks = () => {
                     </Badge>
                   )}
                   {isPendingApproval && !isApproved && (
-                    <Badge className="bg-primary text-white">
+                    <Badge className="bg-blue-500 text-white">
                       Pending Review
                     </Badge>
                   )}

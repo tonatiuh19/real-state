@@ -327,7 +327,7 @@ const ClientLoginModal: React.FC<ClientLoginModalProps> = ({
                     </div>
                     <div className="relative flex justify-center text-xs">
                       <span className="bg-background px-4 text-muted-foreground font-medium">
-                        New to Encore?
+                        New to The Mortgage Professionals?
                       </span>
                     </div>
                   </div>

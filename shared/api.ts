@@ -66,6 +66,23 @@ export interface LoanTask {
   due_date: string | null;
   completed_at: string | null;
   created_at: string;
+  status_change_reason?: string | null;
+  status_changed_by_broker_id?: number | null;
+  status_changed_at?: string | null;
+}
+
+export interface UpdateTaskRequest {
+  status?: string;
+  comment?: string;
+}
+
+export interface UpdateTaskResponse {
+  success: boolean;
+  message: string;
+  audit: {
+    status_changed: boolean;
+    comment_added: boolean;
+  };
 }
 
 export interface LoanDetails {
@@ -271,49 +288,90 @@ export interface UpdateClientProfileResponse {
 }
 
 /**
- * Unified Template Types (email, SMS, WhatsApp)
+ * Email Template Types
  */
-export interface Template {
+export interface EmailTemplate {
   id: number;
   name: string;
-  template_type: "email" | "sms" | "whatsapp";
-  category: "system" | "marketing" | "notification" | "custom";
-  subject?: string; // Only for email templates
-  body: string;
-  variables: Record<string, any>;
+  subject: string;
+  body_html: string;
+  body_text: string | null;
+  template_type:
+    | "welcome"
+    | "status_update"
+    | "document_request"
+    | "approval"
+    | "denial"
+    | "custom";
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export interface GetTemplatesResponse {
+export interface GetEmailTemplatesResponse {
   success: boolean;
-  templates: Template[];
+  templates: EmailTemplate[];
 }
 
-export interface CreateTemplateRequest {
+export interface CreateEmailTemplateRequest {
   name: string;
-  template_type: "email" | "sms" | "whatsapp";
-  category?: string;
-  subject?: string; // Required for email templates
-  body: string;
-  variables?: Record<string, any>;
+  subject: string;
+  body_html: string;
+  body_text?: string;
+  template_type: string;
   is_active?: boolean;
 }
 
-export interface UpdateTemplateRequest {
+export interface UpdateEmailTemplateRequest {
   name?: string;
-  template_type?: "email" | "sms" | "whatsapp";
-  category?: string;
   subject?: string;
-  body?: string;
-  variables?: Record<string, any>;
+  body_html?: string;
+  body_text?: string;
+  template_type?: string;
   is_active?: boolean;
 }
 
-export interface TemplateResponse {
+export interface EmailTemplateResponse {
   success: boolean;
-  template: Template;
+  template: EmailTemplate;
+  message?: string;
+}
+
+/**
+ * SMS Template Types
+ */
+export interface SmsTemplate {
+  id: number;
+  name: string;
+  body: string;
+  template_type: "reminder" | "status_update" | "document_request" | "custom";
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetSmsTemplatesResponse {
+  success: boolean;
+  templates: SmsTemplate[];
+}
+
+export interface CreateSmsTemplateRequest {
+  name: string;
+  body: string;
+  template_type: string;
+  is_active?: boolean;
+}
+
+export interface UpdateSmsTemplateRequest {
+  name?: string;
+  body?: string;
+  template_type?: string;
+  is_active?: boolean;
+}
+
+export interface SmsTemplateResponse {
+  success: boolean;
+  template: SmsTemplate;
   message?: string;
 }
 
@@ -502,6 +560,21 @@ export interface GetLoansResponse {
     completed_tasks: number;
     total_tasks: number;
   }>;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  filters?: {
+    status?: string;
+    priority?: string;
+    loanType?: string;
+    dateRange?: string;
+    search?: string;
+  };
 }
 
 export interface GetClientsResponse {
@@ -637,57 +710,50 @@ export interface UpdateTaskTemplateRequest extends CreateTaskRequest {
   form_fields?: CreateTaskFormFieldRequest[];
 }
 
-// ==================== CONVERSATIONS TYPES ====================
-
+/**
+ * Conversation & Communication Types
+ */
 export interface ConversationThread {
   id: number;
-  tenant_id: number;
   conversation_id: string;
-  application_id?: number;
-  lead_id?: number;
-  client_id?: number;
+  application_id?: number | null;
+  lead_id?: number | null;
+  client_id?: number | null;
   broker_id: number;
-  client_name?: string;
-  client_phone?: string;
-  client_email?: string;
+  client_name?: string | null;
+  client_phone?: string | null;
+  client_email?: string | null;
   last_message_at: string;
-  last_message_preview?: string;
+  last_message_preview?: string | null;
   last_message_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
   message_count: number;
   unread_count: number;
   priority: "low" | "normal" | "high" | "urgent";
   status: "active" | "archived" | "closed";
-  tags?: string[];
+  tags?: string[] | null;
   created_at: string;
   updated_at: string;
-  // Joined fields
-  client_first_name?: string;
-  client_last_name?: string;
-  application_number?: string;
-  property_address?: string;
 }
 
-export interface ConversationMessage {
+export interface Communication {
   id: number;
-  tenant_id: number;
-  application_id?: number;
-  lead_id?: number;
-  from_user_id?: number;
-  from_broker_id?: number;
-  to_user_id?: number;
-  to_broker_id?: number;
+  application_id?: number | null;
+  lead_id?: number | null;
+  from_user_id?: number | null;
+  from_broker_id?: number | null;
+  to_user_id?: number | null;
+  to_broker_id?: number | null;
   communication_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
   direction: "inbound" | "outbound";
-  subject?: string;
+  subject?: string | null;
   body: string;
   status: "pending" | "sent" | "delivered" | "failed" | "read";
-  external_id?: string;
-  metadata?: any;
-  conversation_id?: string;
-  thread_id?: string;
-  reply_to_id?: number;
+  external_id?: string | null;
+  conversation_id?: string | null;
+  thread_id?: string | null;
+  reply_to_id?: number | null;
   message_type: "text" | "image" | "document" | "audio" | "video" | "template";
-  template_id?: number;
+  template_id?: number | null;
   delivery_status:
     | "pending"
     | "sent"
@@ -695,29 +761,99 @@ export interface ConversationMessage {
     | "read"
     | "failed"
     | "rejected";
-  delivery_timestamp?: string;
-  read_timestamp?: string;
-  error_code?: string;
-  error_message?: string;
-  cost?: number;
-  provider_response?: any;
-  scheduled_at?: string;
-  sent_at?: string;
+  delivery_timestamp?: string | null;
+  read_timestamp?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  cost?: number | null;
+  provider_response?: any | null;
+  metadata?: any | null;
+  scheduled_at?: string | null;
+  sent_at?: string | null;
   created_at: string;
-  // Joined fields
-  sender_name?: string;
-  broker_first_name?: string;
-  broker_last_name?: string;
-  client_first_name?: string;
-  client_last_name?: string;
+}
+
+export interface GetConversationThreadsRequest {
+  page?: number;
+  limit?: number;
+  status?: "active" | "archived" | "closed" | "all";
+  priority?: "low" | "normal" | "high" | "urgent";
+  search?: string;
+}
+
+export interface GetConversationThreadsResponse {
+  success: boolean;
+  threads: ConversationThread[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface GetConversationMessagesRequest {
+  conversation_id: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface GetConversationMessagesResponse {
+  success: boolean;
+  messages: Communication[];
+  thread: ConversationThread;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SendMessageRequest {
+  conversation_id?: string;
+  application_id?: number;
+  lead_id?: number;
+  client_id?: number;
+  communication_type: "email" | "sms" | "whatsapp";
+  recipient_phone?: string;
+  recipient_email?: string;
+  subject?: string;
+  body: string;
+  template_id?: number;
+  message_type?: "text" | "template";
+  scheduled_at?: string;
+}
+
+export interface SendMessageResponse {
+  success: boolean;
+  message: string;
+  communication_id: number;
+  conversation_id: string;
+  external_id?: string;
+  cost?: number;
+}
+
+export interface UpdateConversationRequest {
+  conversation_id: string;
+  status?: "active" | "archived" | "closed";
+  priority?: "low" | "normal" | "high" | "urgent";
+  tags?: string[];
+}
+
+export interface UpdateConversationResponse {
+  success: boolean;
+  thread: ConversationThread;
 }
 
 export interface ConversationTemplate {
   id: number;
-  tenant_id: number;
   name: string;
-  description?: string;
   template_type: "email" | "sms" | "whatsapp";
+  subject?: string;
+  body: string;
+  body_html?: string;
+  body_text?: string;
   category:
     | "welcome"
     | "reminder"
@@ -725,65 +861,10 @@ export interface ConversationTemplate {
     | "follow_up"
     | "marketing"
     | "system";
-  subject?: string;
-  body: string;
   variables: string[];
   is_active: boolean;
-  usage_count: number;
-  created_by_broker_id: number;
   created_at: string;
   updated_at: string;
-}
-
-export interface GetConversationsRequest {
-  status?: "active" | "archived" | "closed";
-  limit?: number;
-  offset?: number;
-}
-
-export interface GetConversationsResponse {
-  success: boolean;
-  conversations: ConversationThread[];
-}
-
-export interface GetConversationMessagesRequest {
-  conversationId: string;
-  limit?: number;
-  offset?: number;
-}
-
-export interface GetConversationMessagesResponse {
-  success: boolean;
-  messages: ConversationMessage[];
-}
-
-export interface SendMessageRequest {
-  to_user_id: number;
-  application_id?: number;
-  communication_type: "email" | "sms" | "whatsapp";
-  body: string;
-  subject?: string;
-  template_id?: number;
-  conversation_id?: string;
-}
-
-export interface SendMessageResponse {
-  success: boolean;
-  message: string;
-  communication_id: number;
-  delivery_status: "sent" | "failed";
-  cost?: number;
-}
-
-export interface GetConversationTemplatesRequest {
-  template_type?: "email" | "sms" | "whatsapp";
-  category?:
-    | "welcome"
-    | "reminder"
-    | "update"
-    | "follow_up"
-    | "marketing"
-    | "system";
 }
 
 export interface GetConversationTemplatesResponse {
@@ -791,24 +872,26 @@ export interface GetConversationTemplatesResponse {
   templates: ConversationTemplate[];
 }
 
-export interface CreateConversationTemplateRequest {
-  name: string;
-  description?: string;
-  template_type: "email" | "sms" | "whatsapp";
-  category?:
-    | "welcome"
-    | "reminder"
-    | "update"
-    | "follow_up"
-    | "marketing"
-    | "system";
-  subject?: string;
-  body: string;
-  variables?: string[];
+export interface ConversationStats {
+  total_conversations: number;
+  active_conversations: number;
+  unread_messages: number;
+  today_messages: number;
+  response_time_avg: number;
+  channels: {
+    email: number;
+    sms: number;
+    whatsapp: number;
+  };
+  by_priority: {
+    low: number;
+    normal: number;
+    high: number;
+    urgent: number;
+  };
 }
 
-export interface CreateConversationTemplateResponse {
+export interface GetConversationStatsResponse {
   success: boolean;
-  message: string;
-  template_id: number;
+  stats: ConversationStats;
 }

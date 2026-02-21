@@ -182,7 +182,7 @@ export default function Brokers() {
   const getRoleBadgeColor = (role: string) => {
     return role === "admin"
       ? "bg-purple-100 text-purple-800 hover:bg-purple-100"
-      : "bg-primary/10 text-primary hover:bg-primary/20";
+      : "bg-blue-100 text-blue-800 hover:bg-blue-100";
   };
 
   return (

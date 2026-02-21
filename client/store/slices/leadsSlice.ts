@@ -32,10 +32,10 @@ export const fetchLeads = createAsyncThunk(
   "leads/fetchAll",
   async (_, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch("/api/leads", {
         headers: {
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
       });
 
@@ -55,12 +55,12 @@ export const createLead = createAsyncThunk(
   "leads/create",
   async (leadData: any, { getState, rejectWithValue }) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch("/api/leads", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify(leadData),
       });
@@ -84,12 +84,12 @@ export const updateLead = createAsyncThunk(
     { getState, rejectWithValue },
   ) => {
     try {
-      const { auth } = getState() as RootState;
+      const { sessionToken } = (getState() as RootState).brokerAuth;
       const response = await fetch(`/api/leads/${id}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify(updates),
       });
