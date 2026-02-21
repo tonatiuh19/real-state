@@ -9,7 +9,6 @@ import {
   LogOut,
   Menu,
   X,
-  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -105,12 +104,13 @@ const ClientLayout = ({ children }: ClientLayoutProps) => {
           {/* Logo */}
           <Link
             to="/portal"
-            className="flex items-center gap-2 transition-transform hover:scale-105"
+            className="flex items-center transition-opacity hover:opacity-80"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-lg shadow-primary/20">
-              <Sparkles className="h-5 w-5 text-white" />
-            </div>
-            <span className="text-xl font-bold">Encore Portal</span>
+            <img
+              src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+              alt="The Mortgage Professionals"
+              className="h-9 w-auto"
+            />
           </Link>
 
           {/* Desktop Navigation */}

@@ -11,14 +11,14 @@ import AdminDashboard from "./pages/admin/Dashboard";
 import Pipeline from "./pages/admin/Pipeline";
 import Clients from "./pages/admin/Clients";
 import Tasks from "./pages/admin/Tasks";
-import Marketing from "./pages/admin/Marketing";
+// import Marketing from "./pages/admin/Marketing";
 import Documents from "./pages/admin/Documents";
 import Settings from "./pages/admin/Settings";
 import CommunicationTemplates from "./pages/admin/CommunicationTemplates";
 import Conversations from "./pages/admin/Conversations";
 import Reports from "./pages/admin/Reports";
-import Compliance from "./pages/admin/Compliance";
-import Notifications from "./pages/admin/Notifications";
+// import Compliance from "./pages/admin/Compliance";
+// import Notifications from "./pages/admin/Notifications";
 import Brokers from "./pages/admin/Brokers";
 import ClientDashboard from "./pages/client/Dashboard";
 import ClientLoans from "./pages/client/Loans";
@@ -127,14 +127,14 @@ const AppRoutes = () => (
         </AdminLayout>
       }
     />
-    <Route
+    {/* <Route
       path="/admin/marketing"
       element={
         <AdminLayout>
           <Marketing />
         </AdminLayout>
       }
-    />
+    /> */}
     <Route
       path="/admin/documents"
       element={
@@ -167,22 +167,22 @@ const AppRoutes = () => (
         </AdminLayout>
       }
     />
-    <Route
+    {/* <Route
       path="/admin/compliance"
       element={
         <AdminLayout>
           <Compliance />
         </AdminLayout>
       }
-    />
-    <Route
+    /> */}
+    {/* <Route
       path="/admin/notifications"
       element={
         <AdminLayout>
           <Notifications />
         </AdminLayout>
       }
-    />
+    /> */}
     <Route
       path="/admin/brokers"
       element={

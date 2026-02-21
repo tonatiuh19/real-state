@@ -72,6 +72,7 @@ import {
   createTask,
   fetchTasks,
 } from "@/store/slices/tasksSlice";
+import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
 import axios from "axios";
 import { toast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -93,12 +94,18 @@ export function LoanOverlay({
   const dispatch = useAppDispatch();
   const { sessionToken } = useAppSelector((state) => state.brokerAuth);
   const { tasks: taskTemplates } = useAppSelector((state) => state.tasks);
+  const { emailTemplates } = useAppSelector(
+    (state) => state.communicationTemplates,
+  );
 
   const [taskDocuments, setTaskDocuments] = useState<
     Record<
       number,
       { pdfs: any[]; images: { main: any; extra: any[] }; loading: boolean }
     >
+  >({});
+  const [taskFormResponses, setTaskFormResponses] = useState<
+    Record<number, { loading: boolean; responses: any[] }>
   >({});
   const [expandedTasks, setExpandedTasks] = useState<Record<number, boolean>>(
     {},
@@ -112,6 +119,8 @@ export function LoanOverlay({
   const [taskToDelete, setTaskToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [reopenReason, setReopenReason] = useState("");
+  const [selectedReopenTemplateId, setSelectedReopenTemplateId] =
+    useState<string>("");
   const [statusChangeDialogOpen, setStatusChangeDialogOpen] = useState(false);
   const [statusChangeComment, setStatusChangeComment] = useState("");
   const [pendingStatusChange, setPendingStatusChange] = useState<{
@@ -138,21 +147,36 @@ export function LoanOverlay({
 
     setTaskDocuments((prev) => ({
       ...prev,
-      [taskId]: {
-        pdfs: [],
-        images: { main: null, extra: [] },
-        loading: true,
-      },
+      [taskId]: { pdfs: [], images: { main: null, extra: [] }, loading: true },
+    }));
+    setTaskFormResponses((prev) => ({
+      ...prev,
+      [taskId]: { loading: true, responses: [] },
     }));
 
     try {
-      const result = await dispatch(fetchTaskDocuments(taskId)).unwrap();
+      const [docsResult] = await Promise.all([
+        dispatch(fetchTaskDocuments(taskId)).unwrap(),
+        axios
+          .get(`/api/tasks/${taskId}/responses`, {
+            headers: { Authorization: `Bearer ${sessionToken}` },
+          })
+          .then((r) =>
+            setTaskFormResponses((prev) => ({
+              ...prev,
+              [taskId]: { loading: false, responses: r.data.responses || [] },
+            })),
+          )
+          .catch(() =>
+            setTaskFormResponses((prev) => ({
+              ...prev,
+              [taskId]: { loading: false, responses: [] },
+            })),
+          ),
+      ]);
       setTaskDocuments((prev) => ({
         ...prev,
-        [taskId]: {
-          ...result,
-          loading: false,
-        },
+        [taskId]: { ...docsResult, loading: false },
       }));
     } catch (error) {
       console.error("Error fetching documents:", error);
@@ -267,7 +291,9 @@ export function LoanOverlay({
   const handleOpenReopenDialog = (taskId: number) => {
     setSelectedTaskId(taskId);
     setReopenReason("");
+    setSelectedReopenTemplateId("");
     setReopenDialogOpen(true);
+    dispatch(fetchEmailTemplates());
   };
 
   const handleReopenTask = async () => {
@@ -302,6 +328,7 @@ export function LoanOverlay({
       setReopenDialogOpen(false);
       setSelectedTaskId(null);
       setReopenReason("");
+      setSelectedReopenTemplateId("");
 
       // Refresh loan details
       if (selectedLoan) {
@@ -454,10 +481,12 @@ export function LoanOverlay({
   };
 
   const toggleTask = (taskId: number) => {
-    setExpandedTasks((prev) => ({
-      ...prev,
-      [taskId]: !prev[taskId],
-    }));
+    const willOpen = !expandedTasks[taskId];
+    setExpandedTasks((prev) => ({ ...prev, [taskId]: willOpen }));
+    // Auto-load documents + responses the first time a task is expanded
+    if (willOpen && !taskDocuments[taskId]) {
+      handleViewTaskDocuments(taskId);
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -989,8 +1018,8 @@ export function LoanOverlay({
                                   </Button>
                                 </CollapsibleTrigger>
 
-                                {/* Approve/Reopen buttons for completed tasks */}
-                                {task.status === "completed" && (
+                                {/* Approve/Reopen buttons for tasks pending approval */}
+                                {task.status === "pending_approval" && (
                                   <>
                                     <Button
                                       variant="outline"
@@ -1040,14 +1069,54 @@ export function LoanOverlay({
                             <div className="space-y-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
                               {taskDocuments[task.id]?.loading ? (
                                 <p className="text-xs text-gray-500">
-                                  Loading documents...
+                                  Loading…
                                 </p>
                               ) : (
                                 <>
-                                  {/* PDFs */}
+                                  {/* ── Form Responses ─────────────────── */}
+                                  {taskFormResponses[
+                                    task.id
+                                  ]?.responses?.filter(
+                                    (r) =>
+                                      r.field_value !== null &&
+                                      r.field_value !== undefined &&
+                                      r.field_value !== "",
+                                  ).length > 0 && (
+                                    <div>
+                                      <h6 className="text-xs font-semibold mb-2 text-gray-700 flex items-center gap-1">
+                                        <FileText className="h-3 w-3 text-blue-600" />
+                                        Form Responses
+                                      </h6>
+                                      <div className="space-y-2">
+                                        {taskFormResponses[task.id].responses
+                                          .filter(
+                                            (r) =>
+                                              r.field_value !== null &&
+                                              r.field_value !== undefined &&
+                                              r.field_value !== "",
+                                          )
+                                          .map((r: any) => (
+                                            <div
+                                              key={r.field_id}
+                                              className="bg-white p-2 rounded border border-gray-200"
+                                            >
+                                              <p className="text-xs text-gray-500 font-medium">
+                                                {r.field_label}
+                                              </p>
+                                              <p className="text-xs text-gray-800 mt-0.5 break-words">
+                                                {r.field_value}
+                                              </p>
+                                            </div>
+                                          ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* ── PDF Documents ──────────────────── */}
                                   {taskDocuments[task.id]?.pdfs?.length > 0 && (
                                     <div>
-                                      <h6 className="text-xs font-semibold mb-2 text-gray-700">
+                                      <h6 className="text-xs font-semibold mb-2 text-gray-700 flex items-center gap-1">
+                                        <File className="h-3 w-3 text-red-600" />
                                         PDF Documents
                                       </h6>
                                       <div className="space-y-2">
@@ -1057,17 +1126,17 @@ export function LoanOverlay({
                                               key={idx}
                                               className="flex items-center justify-between bg-white p-2 rounded border border-gray-200"
                                             >
-                                              <div className="flex items-center gap-2">
-                                                <File className="h-3 w-3 text-red-600" />
-                                                <span className="text-xs text-gray-700">
-                                                  {doc.document_name}
+                                              <div className="flex items-center gap-2 min-w-0">
+                                                <File className="h-3 w-3 text-red-600 shrink-0" />
+                                                <span className="text-xs text-gray-700 truncate">
+                                                  {doc.filename}
                                                 </span>
                                               </div>
                                               <a
-                                                href={doc.file_url}
+                                                href={doc.path}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                                                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 shrink-0 ml-2"
                                               >
                                                 <ExternalLink className="h-3 w-3" />
                                                 View
@@ -1079,32 +1148,37 @@ export function LoanOverlay({
                                     </div>
                                   )}
 
-                                  {/* Images */}
+                                  {/* ── Images ─────────────────────────── */}
                                   {(taskDocuments[task.id]?.images?.main ||
                                     taskDocuments[task.id]?.images?.extra
                                       ?.length > 0) && (
                                     <div>
-                                      <h6 className="text-xs font-semibold mb-1">
+                                      <h6 className="text-xs font-semibold mb-2 text-gray-700 flex items-center gap-1">
+                                        <Image className="h-3 w-3 text-blue-600" />
                                         Images
                                       </h6>
                                       <div className="space-y-1">
                                         {taskDocuments[task.id]?.images
                                           ?.main && (
-                                          <div className="flex items-center gap-2">
-                                            <Image className="h-3 w-3 text-blue-600" />
-                                            <span className="text-xs">
-                                              Main image
-                                            </span>
+                                          <div className="flex items-center justify-between bg-white p-2 rounded border border-gray-200">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                              <Image className="h-3 w-3 text-blue-600 shrink-0" />
+                                              <span className="text-xs text-gray-700 truncate">
+                                                {taskDocuments[task.id].images
+                                                  .main.filename || "Image"}
+                                              </span>
+                                            </div>
                                             <a
                                               href={
                                                 taskDocuments[task.id].images
-                                                  .main.file_url
+                                                  .main.path
                                               }
                                               target="_blank"
                                               rel="noopener noreferrer"
-                                              className="text-xs text-primary hover:underline"
+                                              className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 shrink-0 ml-2"
                                             >
                                               <ExternalLink className="h-3 w-3" />
+                                              View
                                             </a>
                                           </div>
                                         )}
@@ -1114,19 +1188,23 @@ export function LoanOverlay({
                                           (img: any, idx: number) => (
                                             <div
                                               key={idx}
-                                              className="flex items-center gap-2"
+                                              className="flex items-center justify-between bg-white p-2 rounded border border-gray-200"
                                             >
-                                              <Image className="h-3 w-3 text-blue-600" />
-                                              <span className="text-xs">
-                                                Extra image {idx + 1}
-                                              </span>
+                                              <div className="flex items-center gap-2 min-w-0">
+                                                <Image className="h-3 w-3 text-blue-600 shrink-0" />
+                                                <span className="text-xs text-gray-700 truncate">
+                                                  {img.filename ||
+                                                    `Image ${idx + 2}`}
+                                                </span>
+                                              </div>
                                               <a
-                                                href={img.file_url}
+                                                href={img.path}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="text-xs text-primary hover:underline"
+                                                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 shrink-0 ml-2"
                                               >
                                                 <ExternalLink className="h-3 w-3" />
+                                                View
                                               </a>
                                             </div>
                                           ),
@@ -1135,13 +1213,17 @@ export function LoanOverlay({
                                     </div>
                                   )}
 
-                                  {/* No documents message */}
+                                  {/* ── Empty state ────────────────────── */}
                                   {!taskDocuments[task.id]?.pdfs?.length &&
                                     !taskDocuments[task.id]?.images?.main &&
                                     !taskDocuments[task.id]?.images?.extra
-                                      ?.length && (
+                                      ?.length &&
+                                    !taskFormResponses[
+                                      task.id
+                                    ]?.responses?.filter((r) => r.field_value)
+                                      .length && (
                                       <p className="text-xs text-muted-foreground">
-                                        No documents uploaded yet
+                                        No documents or form responses yet.
                                       </p>
                                     )}
                                 </>
@@ -1152,7 +1234,7 @@ export function LoanOverlay({
                                 onClick={() => handleViewTaskDocuments(task.id)}
                                 className="h-7 text-xs w-full mt-2 hover:bg-gray-100 transition-colors duration-200"
                               >
-                                Refresh Documents
+                                Refresh
                               </Button>
                             </div>
                           </CollapsibleContent>
@@ -1223,12 +1305,59 @@ export function LoanOverlay({
             revised. The client will receive an email with your feedback.
           </DialogDescription>
           <div className="space-y-4 py-4">
-            <Textarea
-              placeholder="Example: The uploaded documents are not clear. Please re-upload high-quality scans..."
-              value={reopenReason}
-              onChange={(e) => setReopenReason(e.target.value)}
-              className="min-h-[100px]"
-            />
+            {/* Template selector */}
+            {/*             {emailTemplates.length > 0 && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">
+                  Use a message template
+                </label>
+                <Select
+                  value={selectedReopenTemplateId}
+                  onValueChange={(value) => {
+                    setSelectedReopenTemplateId(value);
+                    if (value) {
+                      const tpl = emailTemplates.find(
+                        (t) => String(t.id) === value,
+                      );
+                      if (tpl) {
+                        // Use plain text body if available, else strip HTML tags
+                        const body =
+                          tpl.body_text ||
+                          tpl.body_html.replace(/<[^>]*>/g, "").trim();
+                        setReopenReason(body);
+                      }
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a template (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {emailTemplates
+                      .filter((t) => t.is_active)
+                      .map((tpl) => (
+                        <SelectItem key={tpl.id} value={String(tpl.id)}>
+                          {tpl.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Selecting a template will pre-fill the message below.
+                </p>
+              </div>
+            )} */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">
+                Feedback message <span className="text-destructive">*</span>
+              </label>
+              <Textarea
+                placeholder="Example: The uploaded documents are not clear. Please re-upload high-quality scans..."
+                value={reopenReason}
+                onChange={(e) => setReopenReason(e.target.value)}
+                className="min-h-[120px]"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button

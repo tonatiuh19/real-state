@@ -30,17 +30,24 @@ export interface TaskDetails {
   loan_amount: number;
   formFields: Array<{
     id: number;
+    field_name: string;
     field_type: string;
     field_label: string;
-    field_description?: string;
+    /** Actual DB column: help_text */
+    help_text?: string;
     placeholder?: string;
-    required: boolean;
-    options?: string;
+    /** Actual DB column: is_required */
+    is_required: boolean;
+    /** Actual DB column: field_options (JSON or comma-separated) */
+    field_options?: any;
+    order_index?: number;
   }>;
   requiredDocuments: Array<{
     id: number;
     document_type: string;
     description?: string;
+    field_type?: string;
+    is_required?: boolean;
     is_uploaded: boolean;
   }>;
 }
@@ -324,7 +331,7 @@ export const completeTask = createAsyncThunk(
 
       const response = await axios.patch(
         `/api/client/tasks/${taskId}`,
-        { status: "completed" },
+        { status: "pending_approval" },
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -356,6 +363,9 @@ export const fetchTaskDocuments = createAsyncThunk(
 
       // Transform database response to match expected format
       const documents = response.data.documents || [];
+      const BASE = "https://disruptinglabs.com/data/api";
+      const fullUrl = (p: string) =>
+        p ? (p.startsWith("http") ? p : `${BASE}${p}`) : "";
       const pdfs = documents.filter((doc: any) => doc.document_type === "pdf");
       const images = documents.filter(
         (doc: any) => doc.document_type === "image",
@@ -364,21 +374,21 @@ export const fetchTaskDocuments = createAsyncThunk(
       return {
         taskId,
         pdfs: pdfs.map((doc: any) => ({
-          filename: doc.filename,
-          path: doc.file_path,
+          filename: doc.original_filename || doc.filename,
+          path: fullUrl(doc.file_path),
           size: doc.file_size,
           uploaded_at: doc.uploaded_at,
         })),
         images: {
           main: images[0]
             ? {
-                filename: images[0].filename,
-                path: images[0].file_path,
+                filename: images[0].original_filename || images[0].filename,
+                path: fullUrl(images[0].file_path),
               }
             : null,
           extra: images.slice(1).map((doc: any) => ({
-            filename: doc.filename,
-            path: doc.file_path,
+            filename: doc.original_filename || doc.filename,
+            path: fullUrl(doc.file_path),
           })),
         },
       };
@@ -412,6 +422,7 @@ export const saveTaskDocumentMetadata = createAsyncThunk(
           `/api/client/tasks/${taskId}/documents`,
           {
             task_id: taskId,
+            field_id: file.fieldId || null,
             document_type: documentType,
             filename: file.filename,
             original_filename: file.original_name || file.filename,
@@ -553,12 +564,12 @@ const clientPortalSlice = createSlice({
     builder.addCase(completeTask.fulfilled, (state, action) => {
       const task = state.tasks.find((t) => t.id === action.payload.taskId);
       if (task) {
-        console.log(`🎉 Task ${action.payload.taskId} completed!`);
-        task.status = "completed";
+        console.log(`🎉 Task ${action.payload.taskId} submitted for approval!`);
+        task.status = "pending_approval";
         task.completed_at = new Date().toISOString();
       }
       state.taskDetails = null;
-      // Clear draft when task is completed
+      // Clear draft when task is submitted
       delete state.taskFormDrafts[action.payload.taskId];
     });
   },

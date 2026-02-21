@@ -1623,7 +1623,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                   type="button"
                   onClick={handleNextStep}
                   disabled={!canProceedToNextStep()}
-                  className="bg-emerald-500 hover:bg-emerald-600"
+                  className="bg-primary"
                 >
                   Next
                   <ChevronRight className="h-4 w-4 ml-2" />

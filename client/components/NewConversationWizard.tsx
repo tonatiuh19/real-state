@@ -9,7 +9,6 @@ import {
   Zap,
   User,
   ChevronRight,
-  X,
   Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -613,30 +612,18 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
       <Dialog open={isOpen} onOpenChange={onClose}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden">
           <DialogHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <DialogTitle>Start New Conversation</DialogTitle>
-                <DialogDescription>
-                  Step{" "}
-                  {[
-                    "method",
-                    "template",
-                    "recipient",
-                    "compose",
-                    "preview",
-                  ].indexOf(currentStep) + 1}{" "}
-                  of {conversationMethod === "blank" ? "4" : "5"}
-                </DialogDescription>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onClose}
-                className="h-8 w-8 p-0"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <DialogTitle>Start New Conversation</DialogTitle>
+            <DialogDescription>
+              Step{" "}
+              {[
+                "method",
+                "template",
+                "recipient",
+                "compose",
+                "preview",
+              ].indexOf(currentStep) + 1}{" "}
+              of {conversationMethod === "blank" ? "4" : "5"}
+            </DialogDescription>
           </DialogHeader>
 
           <Separator />

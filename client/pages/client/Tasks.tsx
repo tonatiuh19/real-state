@@ -357,7 +357,10 @@ const Tasks = () => {
       )}
 
       {/* Tasks Tabs */}
-      <Tabs defaultValue="pending" className="space-y-6">
+      <Tabs
+        defaultValue={inProgressTasks.length > 0 ? "in-progress" : "pending"}
+        className="space-y-6"
+      >
         <TabsList className="grid w-full grid-cols-3 lg:w-[400px]">
           <TabsTrigger value="pending" className="gap-2">
             <Clock className="h-4 w-4" />

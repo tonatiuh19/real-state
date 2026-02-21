@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 19, 2026 at 06:40 PM
+-- Generation Time: Feb 21, 2026 at 05:10 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -37,6 +37,14 @@ CREATE TABLE `application_status_history` (
   `notes` text COLLATE utf8mb4_unicode_ci,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `application_status_history`
+--
+
+INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `from_status`, `to_status`, `changed_by_broker_id`, `notes`, `created_at`) VALUES
+(1, 1, 17, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-02-21 16:58:34'),
+(2, 1, 17, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-02-21 17:09:35');
 
 -- --------------------------------------------------------
 
@@ -114,7 +122,28 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (44, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-13 23:51:37'),
 (45, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-13 23:54:45'),
 (46, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 10:59:23'),
-(47, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 10:59:50');
+(47, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 10:59:50'),
+(48, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 20:36:22'),
+(49, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 20:37:14'),
+(50, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 21:47:06'),
+(51, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 21:47:47'),
+(52, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 21:48:11'),
+(53, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 21:53:06'),
+(54, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 21:53:23'),
+(55, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-19 21:58:14'),
+(56, 1, NULL, 1, 'broker', 'update_task_form_field', 'task_form_field', 30, '{\"field_name\": {\"to\": \"front\", \"from\": \"document_front\"}, \"field_type\": {\"to\": \"file_pdf\", \"from\": \"file_pdf\"}, \"field_label\": {\"to\": \"Front\", \"from\": \"Document - Front\"}, \"task_template_id\": \"30\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-20 18:04:36'),
+(57, 1, NULL, 1, 'broker', 'update_task_form_field', 'task_form_field', 31, '{\"field_name\": {\"to\": \"back\", \"from\": \"document_back\"}, \"field_type\": {\"to\": \"file_pdf\", \"from\": \"file_pdf\"}, \"field_label\": {\"to\": \"Back\", \"from\": \"Document - Back\"}, \"task_template_id\": \"30\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-20 18:04:36'),
+(58, 1, NULL, 1, 'broker', 'create_task_form_field', 'task_form_field', 32, '{\"field_name\": \"license_number\", \"field_type\": \"text\", \"field_label\": \"License Number\", \"task_template_id\": \"30\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-20 18:04:36'),
+(59, 1, NULL, 1, 'broker', 'schema_migration', 'pipeline_step_templates', NULL, '{\"action\": \"create_table\", \"migration\": \"20260220_add_pipeline_step_templates\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-20 18:37:57'),
+(60, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:17:15'),
+(61, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:17:16'),
+(62, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:35:58'),
+(63, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:36:10'),
+(64, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:36:19'),
+(65, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:38:40'),
+(66, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 21:21:46'),
+(67, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 21:25:20'),
+(68, 1, NULL, 1, 'broker', 'update_task_form_field', 'task_form_field', 33, '{\"field_name\": {\"to\": \"attach_the_document\", \"from\": \"document_front\"}, \"field_type\": {\"to\": \"file_pdf\", \"from\": \"file_pdf\"}, \"field_label\": {\"to\": \"Attach the document\", \"from\": \"Document - Front\"}, \"task_template_id\": \"31\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-21 15:44:15');
 
 -- --------------------------------------------------------
 
@@ -144,10 +173,10 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `created_at`, `updated_at`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-04 15:07:13', NULL, NULL, '2026-01-20 18:56:12', '2026-02-04 15:07:13'),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-20 21:13:28', NULL, NULL, '2026-01-20 18:56:12', '2026-02-20 21:13:28'),
 (2, 1, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'admin', 'active', 0, '2026-01-21 00:14:12', '123457890', '[\"First-Time Home Buyers\"]', '2026-01-20 23:10:11', '2026-01-21 00:14:12'),
 (3, 1, 'teamdc@encoremortgage.org', 'Encore', 'Admin', NULL, 'admin', 'active', 0, '2026-01-21 11:06:11', NULL, NULL, '2026-01-21 00:08:17', '2026-01-21 11:06:11'),
-(4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-19 10:59:14', NULL, '[\"Investment Properties\", \"Refinancing\"]', '2026-01-21 00:08:54', '2026-02-19 10:59:14'),
+(4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-19 21:52:19', NULL, '[\"Investment Properties\", \"Refinancing\"]', '2026-01-21 00:08:54', '2026-02-19 21:52:19'),
 (6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-12 18:14:25', NULL, NULL, '2026-01-20 18:56:12', '2026-02-12 18:14:25'),
 (7, 2, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-13 00:04:37', NULL, NULL, '2026-02-03 14:59:53', '2026-02-13 00:04:37');
 
@@ -196,9 +225,9 @@ CREATE TABLE `broker_sessions` (
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
 (9, 3, 761666, 1, NULL, NULL, '2026-01-21 23:20:38', '2026-01-21 17:05:37'),
 (44, 2, 510149, 1, NULL, NULL, '2026-02-03 06:39:20', '2026-02-03 08:24:20'),
-(59, 1, 547747, 1, NULL, NULL, '2026-02-04 21:21:59', '2026-02-04 21:06:59'),
 (63, 6, 303837, 1, NULL, NULL, '2026-02-13 00:29:10', '2026-02-13 00:14:10'),
-(66, 4, 607001, 1, NULL, NULL, '2026-02-19 17:13:49', '2026-02-19 16:58:49');
+(68, 4, 877679, 1, NULL, NULL, '2026-02-20 04:06:58', '2026-02-20 03:51:58'),
+(70, 1, 488985, 1, NULL, NULL, '2026-02-21 03:28:02', '2026-02-21 03:13:02');
 
 -- --------------------------------------------------------
 
@@ -283,8 +312,8 @@ CREATE TABLE `clients` (
 --
 
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
-(10, 1, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-03 13:07:47', 1, 'broker_created', NULL, '2026-01-28 15:05:45', '2026-02-03 13:07:47'),
-(14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41');
+(14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
+(16, 1, 'tonatiuh.gom@gmail.com', '', 'Felix', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-21 16:58:27', 1, 'broker_created', NULL, '2026-02-21 16:57:12', '2026-02-21 16:58:27');
 
 -- --------------------------------------------------------
 
@@ -553,8 +582,8 @@ CREATE TABLE `loan_applications` (
 --
 
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `created_at`, `updated_at`, `submitted_at`) VALUES
-(11, 1, 'LA34345831', 10, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-01-28 15:05:46', '2026-01-28 15:05:46', '2026-01-28 15:05:46'),
-(15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41');
+(15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
+(17, 1, 'LA14632791', 16, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'under_review', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-02-21 16:57:13', '2026-02-21 17:09:35', '2026-02-21 16:57:13');
 
 -- --------------------------------------------------------
 
@@ -580,9 +609,26 @@ CREATE TABLE `notifications` (
 --
 
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
-(13, 1, 10, 'New Loan Application Created', 'Your loan application LA34345831 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-01-28 15:05:46', NULL),
-(14, 1, 10, 'Task Approved', 'Your task \"INE Verification\" has been approved. Great job!', 'success', 0, '/portal', '2026-01-28 15:07:46', NULL),
-(18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL);
+(18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL),
+(20, 1, 16, 'New Loan Application Created', 'Your loan application LA14632791 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-21 16:57:13', NULL);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `pipeline_step_templates`
+--
+
+CREATE TABLE `pipeline_step_templates` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `pipeline_step` enum('draft','submitted','under_review','documents_pending','underwriting','conditional_approval','approved','denied','closed','cancelled') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `communication_type` enum('email','sms','whatsapp') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `template_id` int(11) NOT NULL,
+  `is_active` tinyint(1) DEFAULT '1',
+  `created_by_broker_id` int(11) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -655,8 +701,9 @@ CREATE TABLE `tasks` (
 --
 
 INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`, `approval_status`, `approved_by_broker_id`, `approved_at`, `reopened_by_broker_id`, `reopened_at`, `reopen_reason`, `status_change_reason`, `status_changed_by_broker_id`, `status_changed_at`) VALUES
-(19, 1, 22, 0, 11, 'INE Verification', 'Need the INE', 'document_verification', 'approved', 'medium', 10, NULL, 1, '2026-02-07 15:05:46', '2026-01-28 15:07:15', '2026-01-28 15:05:46', '2026-01-28 15:07:46', 1, '2026-01-28 15:07:14', 1, 0, 'approved', 1, '2026-01-28 15:07:46', NULL, NULL, NULL, NULL, NULL, NULL),
-(23, 2, 29, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+(23, 2, 29, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(26, 1, 30, 0, 17, 'Document Verification', 'License', 'document_verification', 'pending_approval', 'high', 16, NULL, 1, '2026-02-23 16:57:13', '2026-02-21 17:09:35', '2026-02-21 16:57:13', '2026-02-21 17:09:34', 1, '2026-02-21 17:09:29', 1, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(27, 1, 31, 0, 17, 'Document Verification', 'Attach something', 'document_verification', 'pending', 'medium', 16, NULL, 1, '2026-03-06 16:57:13', NULL, '2026-02-21 16:57:13', '2026-02-21 16:57:13', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -684,8 +731,8 @@ CREATE TABLE `task_documents` (
 --
 
 INSERT INTO `task_documents` (`id`, `task_id`, `field_id`, `document_type`, `filename`, `original_filename`, `file_path`, `file_size`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `uploaded_at`, `notes`) VALUES
-(7, 19, NULL, 'pdf', 'adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_697a7a8217f64.pdf', 'adquiramexico.com.mx_multipagos_portal_payment_voucher_tr=YXgeVjQzpFmulnzaMCJhdBUeEEAmulava&dp=ZmFsc2U%3D.pdf', '/data/encore/19/pdfs/adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_697a7a8217f64.pdf', 93081, NULL, NULL, '2026-01-28 15:07:14', NULL),
-(8, 19, NULL, 'pdf', 'adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_697a7a821838c.pdf', 'adquiramexico.com.mx_multipagos_portal_payment_voucher_tr=YXgeVjQzpFmulnzaMCJhdBUeEEAmulava&dp=ZmFsc2U%3D.pdf', '/data/encore/19/pdfs/adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_697a7a821838c.pdf', 93081, NULL, NULL, '2026-01-28 15:07:14', NULL);
+(3, 26, 30, 'pdf', '432210306231__1__699a3b2cabffa.pdf', '432210306231 (1).pdf', '/data/encore/26/pdfs/432210306231__1__699a3b2cabffa.pdf', 303662, 16, NULL, '2026-02-21 17:09:32', NULL),
+(4, 26, 31, 'pdf', '432210306231__1__699a3b2e5af85.pdf', '432210306231 (1).pdf', '/data/encore/26/pdfs/432210306231__1__699a3b2e5af85.pdf', 303662, 16, NULL, '2026-02-21 17:09:34', NULL);
 
 -- --------------------------------------------------------
 
@@ -713,11 +760,13 @@ CREATE TABLE `task_form_fields` (
 --
 
 INSERT INTO `task_form_fields` (`id`, `task_template_id`, `field_name`, `field_label`, `field_type`, `field_options`, `is_required`, `placeholder`, `validation_rules`, `order_index`, `help_text`, `created_at`) VALUES
-(7, 22, 'front', 'Front', 'file_pdf', NULL, 1, NULL, NULL, 0, NULL, '2026-01-23 22:40:43'),
-(8, 22, 'back', 'Back', 'file_pdf', NULL, 1, NULL, NULL, 1, NULL, '2026-01-23 22:40:43'),
-(9, 22, 'enter_license_number', 'Enter License Number', 'text', NULL, 1, 'Enter License Number', NULL, 2, NULL, '2026-01-23 22:40:43'),
 (28, 29, 'ine_front', 'INE Front', 'file_pdf', NULL, 1, NULL, NULL, 0, NULL, '2026-02-11 20:55:10'),
-(29, 29, 'ine_back', 'INE Back', 'file_pdf', NULL, 1, NULL, NULL, 1, NULL, '2026-02-11 20:55:10');
+(29, 29, 'ine_back', 'INE Back', 'file_pdf', NULL, 1, NULL, NULL, 1, NULL, '2026-02-11 20:55:10'),
+(30, 30, 'front', 'Front', 'file_pdf', NULL, 1, NULL, NULL, 0, NULL, '2026-02-20 18:04:35'),
+(31, 30, 'back', 'Back', 'file_pdf', NULL, 1, NULL, NULL, 1, NULL, '2026-02-20 18:04:35'),
+(32, 30, 'license_number', 'License Number', 'text', NULL, 1, 'Enter your license number', NULL, 2, NULL, '2026-02-20 18:04:36'),
+(33, 31, 'attach_the_document', 'Attach the document', 'file_pdf', NULL, 1, NULL, NULL, 0, NULL, '2026-02-21 15:44:15'),
+(34, 31, 'document_back', 'Document - Back', 'file_pdf', NULL, 1, NULL, NULL, 1, 'Upload the back side of the required document', '2026-02-21 15:44:15');
 
 -- --------------------------------------------------------
 
@@ -741,7 +790,7 @@ CREATE TABLE `task_form_responses` (
 --
 
 INSERT INTO `task_form_responses` (`id`, `task_id`, `field_id`, `field_value`, `submitted_by_user_id`, `submitted_by_broker_id`, `submitted_at`, `updated_at`) VALUES
-(5, 19, 9, NULL, NULL, NULL, '2026-01-28 15:07:14', '2026-01-28 15:07:14');
+(2, 26, 32, NULL, NULL, NULL, '2026-02-21 17:09:29', '2026-02-21 17:09:29');
 
 -- --------------------------------------------------------
 
@@ -772,8 +821,9 @@ CREATE TABLE `task_templates` (
 --
 
 INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`, `requires_documents`, `document_instructions`, `has_custom_form`) VALUES
-(22, 1, 'INE Verification', 'Need the INE', 'document_verification', 'medium', 10, 1, 1, 1, '2026-01-23 22:40:43', '2026-01-23 22:40:43', 1, 'Please upload the INE', 1),
-(29, 2, 'INE Document Verification', NULL, 'document_verification', 'medium', NULL, 1, 1, 6, '2026-02-11 20:55:10', '2026-02-11 20:56:13', 1, NULL, 0);
+(29, 2, 'INE Document Verification', NULL, 'document_verification', 'medium', NULL, 1, 1, 6, '2026-02-11 20:55:10', '2026-02-11 20:56:13', 1, NULL, 0),
+(30, 1, 'Document Verification', 'License', 'document_verification', 'high', 2, 1, 1, 1, '2026-02-20 18:04:35', '2026-02-20 18:04:35', 1, NULL, 1),
+(31, 1, 'Document Verification', 'Attach something', 'document_verification', 'medium', 13, 2, 1, 1, '2026-02-21 15:44:15', '2026-02-21 15:44:15', 1, NULL, 0);
 
 -- --------------------------------------------------------
 
@@ -900,6 +950,13 @@ CREATE TABLE `user_sessions` (
   `expires_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `user_sessions`
+--
+
+INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
+(2, 16, 244335, 1, NULL, NULL, '2026-02-21 23:13:15', '2026-02-21 22:58:15');
 
 --
 -- Indexes for dumped tables
@@ -1112,6 +1169,16 @@ ALTER TABLE `notifications`
   ADD KEY `tenant_id` (`tenant_id`);
 
 --
+-- Indexes for table `pipeline_step_templates`
+--
+ALTER TABLE `pipeline_step_templates`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_tenant_step_channel` (`tenant_id`,`pipeline_step`,`communication_type`),
+  ADD KEY `idx_pipeline_step_templates_tenant` (`tenant_id`),
+  ADD KEY `idx_pipeline_step_templates_step` (`pipeline_step`),
+  ADD KEY `fk_pst_template` (`template_id`);
+
+--
 -- Indexes for table `system_settings`
 --
 ALTER TABLE `system_settings`
@@ -1225,13 +1292,13 @@ ALTER TABLE `user_sessions`
 -- AUTO_INCREMENT for table `application_status_history`
 --
 ALTER TABLE `application_status_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=48;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
 
 --
 -- AUTO_INCREMENT for table `brokers`
@@ -1249,7 +1316,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=67;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=71;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -1267,7 +1334,7 @@ ALTER TABLE `campaign_recipients`
 -- AUTO_INCREMENT for table `clients`
 --
 ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
 
 --
 -- AUTO_INCREMENT for table `communications`
@@ -1315,13 +1382,19 @@ ALTER TABLE `lead_activities`
 -- AUTO_INCREMENT for table `loan_applications`
 --
 ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
+
+--
+-- AUTO_INCREMENT for table `pipeline_step_templates`
+--
+ALTER TABLE `pipeline_step_templates`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `system_settings`
@@ -1333,37 +1406,37 @@ ALTER TABLE `system_settings`
 -- AUTO_INCREMENT for table `tasks`
 --
 ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
 
 --
 -- AUTO_INCREMENT for table `task_documents`
 --
 ALTER TABLE `task_documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `task_form_fields`
 --
 ALTER TABLE `task_form_fields`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
 
 --
 -- AUTO_INCREMENT for table `task_form_responses`
 --
 ALTER TABLE `task_form_responses`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `task_templates`
 --
 ALTER TABLE `task_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
 
 --
 -- AUTO_INCREMENT for table `templates`
 --
 ALTER TABLE `templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `tenants`
@@ -1381,7 +1454,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- Constraints for dumped tables
@@ -1519,6 +1592,12 @@ ALTER TABLE `loan_applications`
 ALTER TABLE `notifications`
   ADD CONSTRAINT `fk_notifications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `pipeline_step_templates`
+--
+ALTER TABLE `pipeline_step_templates`
+  ADD CONSTRAINT `fk_pst_template` FOREIGN KEY (`template_id`) REFERENCES `templates` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `system_settings`

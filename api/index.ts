@@ -358,30 +358,56 @@ async function sendBrokerVerificationEmail(
 
     const emailBody = `
       <!DOCTYPE html>
-      <html>
+      <html lang="es">
       <head>
-        <style>
-          body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }
-          .container { background-color: white; border-radius: 10px; padding: 30px; max-width: 600px; margin: 0 auto; }
-          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-          .code { font-size: 36px; font-weight: bold; color: #667eea; text-align: center; padding: 25px; background-color: #f0f0f0; border-radius: 8px; margin: 25px 0; letter-spacing: 8px; }
-          .footer { color: #666; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
-        </style>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Código de Verificación</title>
       </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>The Mortgage Professionals Admin</h1>
-            <p>Código de Verificación</p>
-          </div>
-          <h2>Hola ${firstName},</h2>
-          <p>Tu código de verificación es:</p>
-          <div class="code">${code}</div>
-          <p><strong>Validez:</strong> Este código expirará en <strong>15 minutos</strong></p>
-          <div class="footer">
-            <p><strong>The Mortgage Professionals</strong> - Panel de Administración</p>
-          </div>
-        </div>
+      <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+              <!-- LOGO HEADER -->
+              <tr>
+                <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                  <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                </td>
+              </tr>
+              <!-- BODY -->
+              <tr>
+                <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                  <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hola ${firstName},</h2>
+                  <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Tu código de verificación para el panel de administración es:</p>
+                  <!-- CODE BOX -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="background-color:#fff0f2;border:2px dashed #e8192c;border-radius:12px;padding:24px;text-align:center;">
+                        <span style="font-size:42px;font-weight:800;letter-spacing:14px;color:#e8192c;display:inline-block;">${code}</span>
+                      </td>
+                    </tr>
+                  </table>
+                  <!-- VALIDITY -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;">
+                    <tr>
+                      <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;">
+                        <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>⏱️ Validez:</strong> Este código expirará en <strong>15 minutos</strong>.</p>
+                        <p style="margin:0;color:#64748b;font-size:13px;">Si no solicitaste este código, puedes ignorar este correo.</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+              <!-- FOOTER -->
+              <tr>
+                <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                  <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                  <p style="margin:0;color:#94a3b8;font-size:12px;">Panel de Administración</p>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+        </table>
       </body>
       </html>
     `;
@@ -435,40 +461,66 @@ async function sendClientVerificationEmail(
 
     const emailBody = `
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
-        <style>
-          body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }
-          .container { background-color: white; border-radius: 10px; padding: 30px; max-width: 600px; margin: 0 auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-          .code { font-size: 36px; font-weight: bold; color: #3b82f6; text-align: center; padding: 25px; background-color: #eff6ff; border-radius: 8px; margin: 25px 0; letter-spacing: 8px; border: 2px dashed #3b82f6; }
-          .welcome { font-size: 18px; color: #333; margin-bottom: 20px; }
-          .info { background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3b82f6; }
-          .footer { color: #666; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
-        </style>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Verification Code</title>
       </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🏠 The Mortgage Professionals</h1>
-            <p>Welcome to Your Client Portal</p>
-          </div>
-          <div class="welcome">
-            <h2>Hello ${firstName},</h2>
-            <p>Welcome! We're excited to help you with your mortgage loan process.</p>
-          </div>
-          <p>To access your client portal, use the following verification code:</p>
-          <div class="code">${code}</div>
-          <div class="info">
-            <p><strong>⏱️ Validity:</strong> This code will expire in <strong>15 minutes</strong></p>
-            <p><strong>🔒 Security:</strong> Never share this code with anyone</p>
-          </div>
-          <p style="color: #64748b; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
-          <div class="footer">
-            <p><strong>The Mortgage Professionals</strong></p>
-            <p>Your partner on the path to your new home</p>
-          </div>
-        </div>
+      <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+              <!-- LOGO HEADER -->
+              <tr>
+                <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                  <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                </td>
+              </tr>
+              <!-- BODY -->
+              <tr>
+                <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                  <h2 style="margin:0 0 4px 0;color:#0f172a;font-size:22px;font-weight:700;">Hello ${firstName},</h2>
+                  <p style="margin:0 0 8px 0;color:#475569;font-size:15px;line-height:1.6;">Welcome! We're excited to help you with your mortgage process.</p>
+                  <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Use the following code to access your client portal:</p>
+                  <!-- CODE BOX -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="background-color:#fff0f2;border:2px dashed #e8192c;border-radius:12px;padding:24px;text-align:center;">
+                        <span style="font-size:42px;font-weight:800;letter-spacing:14px;color:#e8192c;display:inline-block;">${code}</span>
+                      </td>
+                    </tr>
+                  </table>
+                  <!-- INFO -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;">
+                    <tr>
+                      <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;">
+                        <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>⏱️ Validity:</strong> This code expires in <strong>15 minutes</strong>.</p>
+                        <p style="margin:0;color:#64748b;font-size:13px;"><strong>🔒 Security:</strong> Never share this code with anyone.</p>
+                      </td>
+                    </tr>
+                  </table>
+                  <!-- CTA -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
+                    <tr>
+                      <td align="center">
+                        <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to Client Login</a>
+                      </td>
+                    </tr>
+                  </table>
+                  <p style="margin:20px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">If you didn't request this code, you can safely ignore this email.</p>
+                </td>
+              </tr>
+              <!-- FOOTER -->
+              <tr>
+                <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                  <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                  <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+        </table>
       </body>
       </html>
     `;
@@ -476,7 +528,7 @@ async function sendClientVerificationEmail(
     await transporter.sendMail({
       from: process.env.SMTP_FROM,
       to: email,
-      subject: `${code} is your access code - The Mortgage Professionals`,
+      subject: `${code} is your access code - Encore Mortgage`,
       html: emailBody,
     });
 
@@ -518,55 +570,95 @@ async function sendClientLoanWelcomeEmail(
     const taskListHTML = tasks
       .map(
         (task) => `
-        <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-left: 4px solid #0ea5e9; padding: 16px; margin: 12px 0; border-radius: 8px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <h3 style="margin: 0; color: #0c4a6e; font-size: 16px; font-weight: 600;">${task.title}</h3>
-            <span style="background: ${
-              task.priority === "urgent"
-                ? "#dc2626"
-                : task.priority === "high"
-                  ? "#f59e0b"
-                  : task.priority === "medium"
-                    ? "#0ea5e9"
-                    : "#10b981"
-            }; color: white; padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">${task.priority}</span>
-          </div>
-          <p style="margin: 8px 0; color: #475569; font-size: 14px; line-height: 1.5;">${task.description}</p>
-          <p style="margin: 8px 0 0 0; color: #64748b; font-size: 12px;">📅 Due: ${new Date(task.due_date).toLocaleDateString()}</p>
-        </div>
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:10px 0;">
+          <tr>
+            <td style="background-color:#fff0f2;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 16px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-bottom:6px;">
+                    <strong style="color:#0f172a;font-size:14px;">${task.title}</strong>
+                    &nbsp;&nbsp;<span style="background-color:${
+                      task.priority === "urgent"
+                        ? "#dc2626"
+                        : task.priority === "high"
+                          ? "#f59e0b"
+                          : task.priority === "medium"
+                            ? "#e8192c"
+                            : "#10b981"
+                    };color:#ffffff;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;">${task.priority}</span>
+                  </td>
+                </tr>
+                <tr><td style="color:#475569;font-size:13px;line-height:1.5;padding-bottom:6px;">${task.description}</td></tr>
+                <tr><td style="color:#94a3b8;font-size:12px;">📅 Due: ${new Date(task.due_date).toLocaleDateString()}</td></tr>
+              </table>
+            </td>
+          </tr>
+        </table>
       `,
       )
       .join("");
 
     const mailOptions = {
-      from: `"The Mortgage Professionals" <${process.env.SMTP_USER}>`,
+      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
       to: email,
       subject: `Your Loan Application ${applicationNumber} - Next Steps`,
       html: `
         <!DOCTYPE html>
-        <html>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc;">
-          <div style="max-width: 600px; margin: 40px auto; background: white; border-radius: 16px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);">
-            <div style="background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%); padding: 40px 30px; text-align: center; border-radius: 16px 16px 0 0;">
-              <div style="background: white; width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
-                <div style="font-size: 40px;">🏡</div>
-              </div>
-              <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">Welcome to The Mortgage Professionals!</h1>
-            </div>
-            <div style="padding: 40px 30px;">
-              <p style="color: #334155; font-size: 16px;">Hi <strong>${firstName}</strong>,</p>
-              <p style="color: #475569; font-size: 15px;">Your loan application for <strong>$${loanAmount}</strong> has been created.</p>
-              <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-radius: 12px; padding: 20px; margin: 24px 0; text-align: center;">
-                <p style="margin: 0; color: #166534; font-size: 14px;">Application Number</p>
-                <p style="margin: 8px 0 0 0; color: #15803d; font-size: 24px; font-weight: 700;">${applicationNumber}</p>
-              </div>
-              <h2 style="color: #0c4a6e; font-size: 20px;">📋 Your Next Steps</h2>
-              ${taskListHTML}
-              <div style="text-align: center; margin: 32px 0;">
-                <a href="${process.env.CLIENT_URL}/portal" style="display: inline-block; background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600;">Access Your Portal</a>
-              </div>
-            </div>
-          </div>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Your Loan Application</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <h2 style="margin:0 0 6px 0;color:#0f172a;font-size:22px;font-weight:700;">Welcome, ${firstName}! 🏡</h2>
+                    <p style="margin:0 0 6px 0;color:#475569;font-size:15px;line-height:1.6;">Your loan application has been successfully created.</p>
+                    <p style="margin:0 0 28px 0;color:#475569;font-size:15px;">Loan amount: <strong style="color:#0f172a;">$${loanAmount}</strong></p>
+                    <!-- APP NUMBER -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#fff0f2;border:1px solid #fecdd3;border-radius:12px;padding:18px;text-align:center;">
+                          <p style="margin:0 0 6px 0;color:#e8192c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;">Application Number</p>
+                          <p style="margin:0;color:#0f172a;font-size:28px;font-weight:800;letter-spacing:1px;">${applicationNumber}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- TASKS -->
+                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:15px;font-weight:700;">📋 Your Next Steps</p>
+                    ${taskListHTML}
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:32px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Log In to Your Portal</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">You will need your email to verify your identity on first login.</p>
+                  </td>
+                </tr>
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
         </body>
         </html>
       `,
@@ -603,50 +695,77 @@ async function sendTaskReopenedEmail(
     });
 
     const mailOptions = {
-      from: `"The Mortgage Professionals" <${process.env.SMTP_USER}>`,
+      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
       to: email,
       subject: `Task Needs Revision: ${taskTitle}`,
       html: `
         <!DOCTYPE html>
-        <html>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc;">
-          <div style="max-width: 600px; margin: 40px auto; background: white; border-radius: 16px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);">
-            <div style="background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%); padding: 40px 30px; text-align: center; border-radius: 16px 16px 0 0;">
-              <div style="background: white; width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
-                <div style="font-size: 40px;">📝</div>
-              </div>
-              <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">Task Needs Revision</h1>
-            </div>
-            <div style="padding: 40px 30px;">
-              <p style="color: #334155; font-size: 16px;">Hi <strong>${firstName}</strong>,</p>
-              <p style="color: #475569; font-size: 15px;">Your task <strong>"${taskTitle}"</strong> has been reviewed and needs some revisions before it can be approved.</p>
-              
-              <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-left: 4px solid #f59e0b; border-radius: 8px; padding: 20px; margin: 24px 0;">
-                <h3 style="margin: 0 0 12px 0; color: #92400e; font-size: 16px; font-weight: 600;">📋 Feedback from Your Loan Officer</h3>
-                <p style="margin: 0; color: #78350f; font-size: 14px; line-height: 1.6;">${reason}</p>
-              </div>
-
-              <div style="background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-radius: 12px; padding: 20px; margin: 24px 0;">
-                <h3 style="margin: 0 0 12px 0; color: #1e40af; font-size: 14px; font-weight: 600;">✅ What to Do Next</h3>
-                <ol style="margin: 0; padding-left: 20px; color: #1e3a8a;">
-                  <li style="margin: 8px 0; font-size: 14px;">Log in to your client portal</li>
-                  <li style="margin: 8px 0; font-size: 14px;">Review the feedback above</li>
-                  <li style="margin: 8px 0; font-size: 14px;">Make the necessary updates or corrections</li>
-                  <li style="margin: 8px 0; font-size: 14px;">Resubmit the task for review</li>
-                </ol>
-              </div>
-
-              <div style="text-align: center; margin: 32px 0;">
-                <a href="${process.env.CLIENT_URL}/portal" style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 12px; font-weight: 600; box-shadow: 0 4px 6px rgba(245, 158, 11, 0.3);">Review Task Now</a>
-              </div>
-
-              <div style="border-top: 1px solid #e2e8f0; margin-top: 32px; padding-top: 20px;">
-                <p style="margin: 0; color: #64748b; font-size: 13px; text-align: center;">
-                  If you have any questions, please don't hesitate to contact your loan officer.
-                </p>
-              </div>
-            </div>
-          </div>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Task Needs Revision</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <h2 style="margin:0 0 6px 0;color:#0f172a;font-size:22px;font-weight:700;">📝 Task Needs Revision</h2>
+                    <p style="margin:0 0 4px 0;color:#475569;font-size:15px;line-height:1.6;">Hi <strong style="color:#0f172a;">${firstName}</strong>,</p>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Your task <strong style="color:#0f172a;">&ldquo;${taskTitle}&rdquo;</strong> has been reviewed and needs some revisions before it can be approved.</p>
+                    <!-- FEEDBACK BOX -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:16px;">
+                      <tr>
+                        <td style="background-color:#fff0f2;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:16px 18px;">
+                          <p style="margin:0 0 8px 0;color:#e8192c;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">📋 Feedback from Your Loan Officer</p>
+                          <p style="margin:0;color:#0f172a;font-size:14px;line-height:1.7;">${reason}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- NEXT STEPS -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:16px 18px;">
+                          <p style="margin:0 0 10px 0;color:#0f172a;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">✅ What to Do Next</p>
+                          <ol style="margin:0;padding-left:18px;color:#475569;">
+                            <li style="margin:6px 0;font-size:14px;">Log in to your client portal</li>
+                            <li style="margin:6px 0;font-size:14px;">Review the feedback above</li>
+                            <li style="margin:6px 0;font-size:14px;">Make the necessary updates or corrections</li>
+                            <li style="margin:6px 0;font-size:14px;">Resubmit the task for review</li>
+                          </ol>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center">
+                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Review Task Now</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">If you have any questions, please contact your loan officer.</p>
+                  </td>
+                </tr>
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
         </body>
         </html>
       `,
@@ -656,6 +775,105 @@ async function sendTaskReopenedEmail(
     console.log("✅ Task reopened email sent!");
   } catch (error) {
     console.error("❌ Error sending task reopened email:", error);
+    throw error;
+  }
+}
+
+async function sendTaskApprovedEmail(
+  email: string,
+  firstName: string,
+  taskTitle: string,
+): Promise<void> {
+  try {
+    console.log("📧 Sending task approved email");
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    const mailOptions = {
+      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: `Task Approved: ${taskTitle}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Task Approved</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #16a34a;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <!-- APPROVAL BADGE -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <div style="display:inline-block;background-color:#dcfce7;border-radius:50%;padding:20px;">
+                            <span style="font-size:40px;line-height:1;">✅</span>
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                    <h2 style="margin:0 0 6px 0;color:#0f172a;font-size:22px;font-weight:700;text-align:center;">Task Approved!</h2>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;text-align:center;">Great work, <strong style="color:#0f172a;">${firstName}</strong>!</p>
+                    <!-- TASK BOX -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td style="background-color:#f0fdf4;border-left:4px solid #16a34a;border-radius:0 8px 8px 0;padding:16px 18px;">
+                          <p style="margin:0 0 4px 0;color:#16a34a;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">✔ Approved Task</p>
+                          <p style="margin:0;color:#0f172a;font-size:15px;font-weight:600;">${taskTitle}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Your loan officer has reviewed and approved this task. Your application is moving forward — keep up the great work!</p>
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center">
+                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#16a34a;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">View My Portal</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">If you have any questions, please contact your loan officer.</p>
+                  </td>
+                </tr>
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("✅ Task approved email sent!");
+  } catch (error) {
+    console.error("❌ Error sending task approved email:", error);
     throw error;
   }
 }
@@ -871,7 +1089,7 @@ const handleHealth: RequestHandler = async (_req, res) => {
     await pool.query("SELECT 1");
     res.json({
       success: true,
-      message: "The Mortgage Professionals API is running",
+      message: "Encore Mortgage API is running",
       timestamp: new Date().toISOString(),
       database: "connected",
     });
@@ -2042,6 +2260,112 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
       success: false,
       error:
         error instanceof Error ? error.message : "Failed to fetch loan details",
+    });
+  }
+};
+
+/**
+ * PATCH /api/loans/:loanId/status
+ * Update loan pipeline status and automatically trigger communication templates
+ * configured for that step via Pipeline Automation.
+ */
+const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const loanId = parseInt(req.params.loanId);
+    const { status: newStatus, notes } = req.body;
+
+    const VALID_STATUSES = [
+      "draft",
+      "submitted",
+      "under_review",
+      "documents_pending",
+      "underwriting",
+      "conditional_approval",
+      "approved",
+      "denied",
+      "closed",
+      "cancelled",
+    ];
+
+    if (!newStatus || !VALID_STATUSES.includes(newStatus)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`,
+      });
+    }
+
+    // Verify ownership (admin can update any, broker only their own)
+    const whereClause =
+      brokerRole === "admin"
+        ? "WHERE id = ? AND tenant_id = ?"
+        : "WHERE id = ? AND broker_user_id = ? AND tenant_id = ?";
+    const queryParams =
+      brokerRole === "admin"
+        ? [loanId, MORTGAGE_TENANT_ID]
+        : [loanId, brokerId, MORTGAGE_TENANT_ID];
+
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, status FROM loan_applications ${whereClause}`,
+      queryParams,
+    );
+
+    if (loanRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Loan not found",
+      });
+    }
+
+    const fromStatus = loanRows[0].status;
+
+    if (fromStatus === newStatus) {
+      return res.status(400).json({
+        success: false,
+        error: "Loan is already in that status",
+      });
+    }
+
+    // Update the loan status
+    await pool.query(
+      "UPDATE loan_applications SET status = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?",
+      [newStatus, loanId, MORTGAGE_TENANT_ID],
+    );
+
+    // Record status change history
+    await pool.query(
+      `INSERT INTO application_status_history
+         (tenant_id, application_id, from_status, to_status, changed_by_broker_id, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        loanId,
+        fromStatus,
+        newStatus,
+        brokerId,
+        notes || null,
+      ],
+    );
+
+    // Fire pipeline automation asynchronously (non-blocking)
+    triggerPipelineAutomation(loanId, newStatus, brokerId).catch((err) =>
+      console.error("Pipeline automation error:", err),
+    );
+
+    res.json({
+      success: true,
+      loan_id: loanId,
+      from_status: fromStatus,
+      to_status: newStatus,
+      message: "Loan status updated. Pipeline automation triggered.",
+    });
+  } catch (error) {
+    console.error("Error updating loan status:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to update loan status",
     });
   }
 };
@@ -3597,7 +3921,7 @@ const handleSubmitTaskForm: RequestHandler = async (req, res) => {
           [
             taskId,
             response.field_id,
-            response.field_value,
+            response.response_value ?? response.field_value ?? null,
             userId || null,
             brokerId || null,
           ],
@@ -3649,8 +3973,9 @@ const handleUploadTaskDocument: RequestHandler = async (req, res) => {
       file_size,
       notes,
     } = req.body;
-    const userId = (req as any).userId;
-    const brokerId = (req as any).brokerId;
+    // Support both broker auth (userId/brokerId) and client auth (clientId)
+    const userId = (req as any).userId || (req as any).clientId || null;
+    const brokerId = (req as any).brokerId || null;
 
     if (!task_id || !document_type || !filename || !file_path) {
       return res.status(400).json({
@@ -3705,6 +4030,35 @@ const handleUploadTaskDocument: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Get task form responses (broker view) — returns fields + submitted values
+ */
+const handleGetTaskFormResponses: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT tff.id AS field_id, tff.field_label, tff.field_type, tff.is_required,
+              tfr.field_value, tfr.submitted_at
+       FROM task_form_fields tff
+       LEFT JOIN task_form_responses tfr ON tfr.field_id = tff.id AND tfr.task_id = ?
+       WHERE tff.task_template_id = (
+         SELECT template_id FROM tasks WHERE id = ? AND tenant_id = ?
+       )
+       AND tff.field_type NOT IN ('file_pdf', 'file_image')
+       ORDER BY tff.order_index ASC`,
+      [taskId, taskId, MORTGAGE_TENANT_ID],
+    );
+
+    res.json({ success: true, responses: rows });
+  } catch (error) {
+    console.error("❌ Error getting task form responses:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to get form responses" });
+  }
+};
+
+/**
  * Get task documents
  */
 const handleGetTaskDocuments: RequestHandler = async (req, res) => {
@@ -3755,6 +4109,98 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Auto-sync loan application status based on the aggregate status of its tasks.
+ * Only updates if the loan is in an auto-managed transitional state.
+ *
+ * Mapping rules:
+ *  - any task in_progress | reopened  → documents_pending  (client actively working)
+ *  - any task pending_approval        → under_review        (broker should review)
+ *  - all tasks approved               → underwriting        (ready for underwriting)
+ *  - all tasks still pending          → submitted           (no work started yet)
+ */
+const syncLoanStatusFromTasks = async (
+  applicationId: number | string,
+  brokerId?: number,
+): Promise<void> => {
+  try {
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      "SELECT id, status FROM loan_applications WHERE id = ? AND tenant_id = ?",
+      [applicationId, MORTGAGE_TENANT_ID],
+    );
+    if (!Array.isArray(loanRows) || loanRows.length === 0) return;
+
+    const currentStatus = loanRows[0].status;
+    const loanId = loanRows[0].id as number;
+
+    // Only auto-manage transitional statuses; leave final decisions alone
+    const AUTO_MANAGED = [
+      "draft",
+      "submitted",
+      "documents_pending",
+      "under_review",
+      "underwriting",
+    ];
+    if (!AUTO_MANAGED.includes(currentStatus)) return;
+
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      "SELECT status FROM tasks WHERE application_id = ? AND tenant_id = ?",
+      [applicationId, MORTGAGE_TENANT_ID],
+    );
+    if (!Array.isArray(taskRows) || taskRows.length === 0) return;
+
+    const statuses: string[] = taskRows.map((t) => t.status as string);
+    const hasInProgress = statuses.some(
+      (s) => s === "in_progress" || s === "reopened",
+    );
+    const hasPendingApproval = statuses.some((s) => s === "pending_approval");
+    const allApprovedOrCancelled = statuses.every(
+      (s) => s === "approved" || s === "cancelled",
+    );
+    const allPending = statuses.every((s) => s === "pending");
+
+    let newStatus: string | null = null;
+
+    if (hasInProgress) {
+      newStatus = "documents_pending";
+    } else if (hasPendingApproval) {
+      newStatus = "under_review";
+    } else if (allApprovedOrCancelled) {
+      newStatus = "underwriting";
+    } else if (allPending) {
+      // Nothing started yet — keep loan at submitted
+      newStatus = "submitted";
+    }
+    // Mixed (some approved, some still pending) — don't change loan status
+
+    if (newStatus && newStatus !== currentStatus) {
+      await pool.query(
+        "UPDATE loan_applications SET status = ?, updated_at = NOW() WHERE id = ?",
+        [newStatus, loanId],
+      );
+      await pool.query(
+        `INSERT INTO application_status_history
+           (tenant_id, application_id, from_status, to_status, changed_by_broker_id, notes)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          loanId,
+          currentStatus,
+          newStatus,
+          brokerId || null,
+          "Auto-updated based on task statuses",
+        ],
+      );
+      console.log(
+        `✅ Loan ${loanId} auto-status: ${currentStatus} → ${newStatus}`,
+      );
+    }
+  } catch (err) {
+    console.error("❌ syncLoanStatusFromTasks error:", err);
+    // Non-blocking — never throw
+  }
+};
+
+/**
  * Approve a completed task
  */
 const handleApproveTask: RequestHandler = async (req, res) => {
@@ -3781,11 +4227,11 @@ const handleApproveTask: RequestHandler = async (req, res) => {
 
     const task = taskRows[0];
 
-    // Verify task is completed
-    if (task.status !== "completed") {
+    // Verify task is pending approval (client submitted it)
+    if (!["completed", "pending_approval"].includes(task.status)) {
       return res.status(400).json({
         success: false,
-        error: "Task must be completed before approval",
+        error: "Task must be submitted by the client before approval",
       });
     }
 
@@ -3826,6 +4272,21 @@ const handleApproveTask: RequestHandler = async (req, res) => {
         JSON.stringify({ status: "approved", approved_at: new Date() }),
       ],
     );
+
+    // Send approval email to client
+    try {
+      await sendTaskApprovedEmail(
+        task.client_email,
+        task.first_name,
+        task.title,
+      );
+    } catch (emailError) {
+      console.error("Failed to send approval email:", emailError);
+      // Don't fail the request if email fails
+    }
+
+    // Sync loan status based on all task states
+    await syncLoanStatusFromTasks(task.application_id, brokerId);
 
     res.json({
       success: true,
@@ -3933,6 +4394,9 @@ const handleReopenTask: RequestHandler = async (req, res) => {
         }),
       ],
     );
+
+    // Sync loan status based on all task states
+    await syncLoanStatusFromTasks(task.application_id, brokerId);
 
     res.json({
       success: true,
@@ -4612,7 +5076,7 @@ const handleGetClientApplications: RequestHandler = async (req, res) => {
       LEFT JOIN brokers b ON la.broker_user_id = b.id
       WHERE la.client_user_id = ? AND la.tenant_id = ?
       ORDER BY la.created_at DESC`,
-      [clientId, MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
+      [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, clientId, MORTGAGE_TENANT_ID],
     );
 
     res.json({
@@ -4690,7 +5154,7 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
     const { status } = req.body;
 
     // Validate status
-    if (!["in_progress", "completed"].includes(status)) {
+    if (!["in_progress", "completed", "pending_approval"].includes(status)) {
       return res.status(400).json({
         success: false,
         error:
@@ -4711,12 +5175,17 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
       });
     }
 
-    const completedAt = status === "completed" ? new Date() : null;
+    // Map 'completed' from client to 'pending_approval' so broker must approve
+    const actualStatus = status === "completed" ? "pending_approval" : status;
+    const completedAt = actualStatus === "pending_approval" ? new Date() : null;
 
     await pool.query(
       "UPDATE tasks SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?",
-      [status, completedAt, taskId],
+      [actualStatus, completedAt, taskId],
     );
+
+    // Sync loan status based on all task states (non-blocking)
+    syncLoanStatusFromTasks(tasks[0].application_id).catch(() => {});
 
     res.json({
       success: true,
@@ -4773,17 +5242,18 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
     });
 
     // Get form fields if template has custom form
+    // NOTE: task_form_fields has no tenant_id column — filter only by task_template_id
     let formFields = [];
     if (task.template_id) {
       const [fields] = await pool.query<any[]>(
         `SELECT * FROM task_form_fields 
-         WHERE task_template_id = ? AND tenant_id = ?
+         WHERE task_template_id = ?
          ORDER BY order_index`,
-        [task.template_id, MORTGAGE_TENANT_ID],
+        [task.template_id],
       );
       formFields = fields;
       console.log(
-        `✅ Found ${fields.length} form fields for template ${task.template_id} (tenant ${MORTGAGE_TENANT_ID})`,
+        `✅ Found ${fields.length} form fields for template ${task.template_id}`,
       );
     } else {
       console.warn(
@@ -4797,17 +5267,19 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
         tff.id,
         tff.field_name as document_type,
         tff.field_label as description,
+        tff.field_type,
+        tff.is_required,
         CASE WHEN td.id IS NOT NULL THEN 1 ELSE 0 END as is_uploaded
        FROM task_form_fields tff
        LEFT JOIN task_documents td ON td.task_id = ? AND td.field_id = tff.id
-       WHERE tff.task_template_id = ? AND tff.tenant_id = ?
+       WHERE tff.task_template_id = ?
        AND (tff.field_type = 'file_pdf' OR tff.field_type = 'file_image')
        ORDER BY tff.order_index`,
-      [taskId, task.template_id || 0, MORTGAGE_TENANT_ID],
+      [taskId, task.template_id || 0],
     );
 
     console.log(
-      `📄 Found ${documents.length} document fields for template ${task.template_id || 0} (tenant ${MORTGAGE_TENANT_ID})`,
+      `📄 Found ${documents.length} document fields for template ${task.template_id || 0}`,
     );
 
     res.json({
@@ -5214,6 +5686,517 @@ const handleDeleteSmsTemplate: RequestHandler = async (req, res) => {
     });
   }
 };
+
+// =====================================================
+// WHATSAPP TEMPLATE HANDLERS
+// =====================================================
+
+/**
+ * GET /api/whatsapp-templates
+ */
+const handleGetWhatsappTemplates: RequestHandler = async (req, res) => {
+  try {
+    const [templates] = (await pool.query(
+      `SELECT id, name, body, template_type, category, is_active, created_at, updated_at
+       FROM templates
+       WHERE tenant_id = ? AND template_type = 'whatsapp'
+       ORDER BY created_at DESC`,
+      [MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      templates: templates.map((t: any) => ({
+        ...t,
+        is_active: Boolean(t.is_active),
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching WhatsApp templates:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch WhatsApp templates",
+    });
+  }
+};
+
+/**
+ * POST /api/whatsapp-templates
+ */
+const handleCreateWhatsappTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { name, body, template_type, is_active, category } = req.body;
+    const brokerId = (req as any).brokerId || 1;
+
+    if (!name || !body) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Name and body are required" });
+    }
+
+    const [result] = (await pool.query(
+      `INSERT INTO templates (tenant_id, name, body, template_type, category, is_active, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        name,
+        body,
+        template_type || "whatsapp",
+        category || "system",
+        is_active !== false ? 1 : 0,
+        brokerId,
+      ],
+    )) as [ResultSetHeader, any];
+
+    const [rows] = (await pool.query(
+      `SELECT id, name, body, template_type, category, is_active, created_at, updated_at
+       FROM templates WHERE id = ? AND tenant_id = ?`,
+      [result.insertId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      template: { ...rows[0], is_active: Boolean(rows[0].is_active) },
+      message: "WhatsApp template created successfully",
+    });
+  } catch (error) {
+    console.error("Error creating WhatsApp template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to create WhatsApp template",
+    });
+  }
+};
+
+/**
+ * PUT /api/whatsapp-templates/:templateId
+ */
+const handleUpdateWhatsappTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const { name, body, template_type, is_active } = req.body;
+
+    const [existingRows] = (await pool.query(
+      "SELECT id FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'whatsapp'",
+      [templateId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    if (existingRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "WhatsApp template not found" });
+    }
+
+    const updates: string[] = [];
+    const values: any[] = [];
+    if (name !== undefined) {
+      updates.push("name = ?");
+      values.push(name);
+    }
+    if (body !== undefined) {
+      updates.push("body = ?");
+      values.push(body);
+    }
+    if (template_type !== undefined) {
+      updates.push("template_type = ?");
+      values.push(template_type);
+    }
+    if (is_active !== undefined) {
+      updates.push("is_active = ?");
+      values.push(is_active ? 1 : 0);
+    }
+
+    if (updates.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
+    }
+
+    values.push(templateId, MORTGAGE_TENANT_ID);
+    await pool.query(
+      `UPDATE templates SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
+      values,
+    );
+
+    const [rows] = (await pool.query(
+      `SELECT id, name, body, template_type, category, is_active, created_at, updated_at
+       FROM templates WHERE id = ? AND tenant_id = ?`,
+      [templateId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      template: { ...rows[0], is_active: Boolean(rows[0].is_active) },
+      message: "WhatsApp template updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating WhatsApp template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to update WhatsApp template",
+    });
+  }
+};
+
+/**
+ * DELETE /api/whatsapp-templates/:templateId
+ */
+const handleDeleteWhatsappTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+
+    const [existingRows] = (await pool.query(
+      "SELECT id, name FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'whatsapp'",
+      [templateId, MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    if (existingRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "WhatsApp template not found" });
+    }
+
+    await pool.query("DELETE FROM templates WHERE id = ? AND tenant_id = ?", [
+      templateId,
+      MORTGAGE_TENANT_ID,
+    ]);
+
+    res.json({
+      success: true,
+      message: `WhatsApp template "${existingRows[0].name}" deleted successfully`,
+    });
+  } catch (error) {
+    console.error("Error deleting WhatsApp template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to delete WhatsApp template",
+    });
+  }
+};
+
+// =====================================================
+// PIPELINE STEP TEMPLATES HANDLERS
+// =====================================================
+
+/**
+ * GET /api/pipeline-step-templates
+ * Returns all pipeline step→template assignments for the tenant,
+ * with template name/body/subject joined for convenience.
+ */
+const handleGetPipelineStepTemplates: RequestHandler = async (req, res) => {
+  try {
+    const [rows] = (await pool.query(
+      `SELECT
+         pst.id, pst.tenant_id, pst.pipeline_step, pst.communication_type,
+         pst.template_id, pst.is_active, pst.created_by_broker_id,
+         pst.created_at, pst.updated_at,
+         t.name  AS template_name,
+         t.body  AS template_body,
+         t.subject AS template_subject
+       FROM pipeline_step_templates pst
+       JOIN templates t ON t.id = pst.template_id
+       WHERE pst.tenant_id = ?
+       ORDER BY pst.pipeline_step, pst.communication_type`,
+      [MORTGAGE_TENANT_ID],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      assignments: rows.map((r: any) => ({
+        ...r,
+        is_active: Boolean(r.is_active),
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching pipeline step templates:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch pipeline step templates",
+    });
+  }
+};
+
+/**
+ * PUT /api/pipeline-step-templates
+ * Upserts (insert or replace) a single step→channel→template assignment.
+ * Body: { pipeline_step, communication_type, template_id, is_active? }
+ */
+const handleUpsertPipelineStepTemplate: RequestHandler = async (req, res) => {
+  try {
+    const {
+      pipeline_step,
+      communication_type,
+      template_id,
+      is_active = true,
+    } = req.body;
+    const brokerId = (req as any).brokerId || 1;
+
+    if (!pipeline_step || !communication_type || !template_id) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "pipeline_step, communication_type, and template_id are required",
+      });
+    }
+
+    const validSteps = [
+      "draft",
+      "submitted",
+      "under_review",
+      "documents_pending",
+      "underwriting",
+      "conditional_approval",
+      "approved",
+      "denied",
+      "closed",
+      "cancelled",
+    ];
+    const validChannels = ["email", "sms", "whatsapp"];
+
+    if (!validSteps.includes(pipeline_step)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid pipeline_step" });
+    }
+    if (!validChannels.includes(communication_type)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid communication_type" });
+    }
+
+    // Validate template exists and matches channel type
+    const [tmplRows] = (await pool.query(
+      "SELECT id FROM templates WHERE id = ? AND tenant_id = ? AND template_type = ?",
+      [template_id, MORTGAGE_TENANT_ID, communication_type],
+    )) as [RowDataPacket[], any];
+
+    if (tmplRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `No ${communication_type} template found with id ${template_id}`,
+      });
+    }
+
+    // Upsert via INSERT ... ON DUPLICATE KEY UPDATE
+    await pool.query(
+      `INSERT INTO pipeline_step_templates
+         (tenant_id, pipeline_step, communication_type, template_id, is_active, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         template_id = VALUES(template_id),
+         is_active   = VALUES(is_active),
+         updated_at  = CURRENT_TIMESTAMP`,
+      [
+        MORTGAGE_TENANT_ID,
+        pipeline_step,
+        communication_type,
+        template_id,
+        is_active ? 1 : 0,
+        brokerId,
+      ],
+    );
+
+    const [rows] = (await pool.query(
+      `SELECT
+         pst.id, pst.tenant_id, pst.pipeline_step, pst.communication_type,
+         pst.template_id, pst.is_active, pst.created_by_broker_id,
+         pst.created_at, pst.updated_at,
+         t.name  AS template_name,
+         t.body  AS template_body,
+         t.subject AS template_subject
+       FROM pipeline_step_templates pst
+       JOIN templates t ON t.id = pst.template_id
+       WHERE pst.tenant_id = ? AND pst.pipeline_step = ? AND pst.communication_type = ?`,
+      [MORTGAGE_TENANT_ID, pipeline_step, communication_type],
+    )) as [RowDataPacket[], any];
+
+    res.json({
+      success: true,
+      assignment: { ...rows[0], is_active: Boolean(rows[0].is_active) },
+      message: "Pipeline step template saved successfully",
+    });
+  } catch (error) {
+    console.error("Error upserting pipeline step template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to save pipeline step template",
+    });
+  }
+};
+
+/**
+ * DELETE /api/pipeline-step-templates/:step/:channel
+ * Removes the assignment for a given step + channel.
+ */
+const handleDeletePipelineStepTemplate: RequestHandler = async (req, res) => {
+  try {
+    const { step, channel } = req.params;
+
+    const [result] = (await pool.query(
+      "DELETE FROM pipeline_step_templates WHERE tenant_id = ? AND pipeline_step = ? AND communication_type = ?",
+      [MORTGAGE_TENANT_ID, step, channel],
+    )) as [ResultSetHeader, any];
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Assignment not found",
+      });
+    }
+
+    res.json({ success: true, message: "Assignment removed successfully" });
+  } catch (error) {
+    console.error("Error deleting pipeline step template:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to delete pipeline step template",
+    });
+  }
+};
+
+/**
+ * Trigger pipeline automation when a loan status changes.
+ * Queries pipeline_step_templates for the new status and dispatches
+ * each configured channel (email / SMS / WhatsApp) using the assigned template.
+ * This function is intentionally non-throwing — failures are logged only.
+ */
+async function triggerPipelineAutomation(
+  loanId: number,
+  newStatus: string,
+  brokerId: number,
+): Promise<void> {
+  try {
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+         la.id, la.application_number, la.loan_amount,
+         c.id AS client_id, c.first_name, c.last_name, c.email, c.phone,
+         b.first_name AS broker_first_name, b.last_name AS broker_last_name
+       FROM loan_applications la
+       INNER JOIN clients c ON la.client_user_id = c.id
+       LEFT JOIN brokers b ON la.broker_user_id = b.id
+       WHERE la.id = ? AND la.tenant_id = ?`,
+      [loanId, MORTGAGE_TENANT_ID],
+    );
+
+    if (loanRows.length === 0) return;
+    const loan = loanRows[0];
+
+    const [assignments] = await pool.query<RowDataPacket[]>(
+      `SELECT pst.communication_type, pst.template_id,
+              t.name AS template_name, t.subject, t.body
+       FROM pipeline_step_templates pst
+       INNER JOIN templates t ON pst.template_id = t.id AND t.is_active = 1
+       WHERE pst.tenant_id = ? AND pst.pipeline_step = ? AND pst.is_active = 1`,
+      [MORTGAGE_TENANT_ID, newStatus],
+    );
+
+    if (assignments.length === 0) return;
+
+    const statusLabel = newStatus
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const variables: Record<string, string> = {
+      client_name: `${loan.first_name} ${loan.last_name}`,
+      first_name: loan.first_name,
+      last_name: loan.last_name,
+      application_number: loan.application_number,
+      application_id: String(loan.id),
+      loan_amount: new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+      }).format(parseFloat(loan.loan_amount)),
+      status: statusLabel,
+      broker_name: loan.broker_first_name
+        ? `${loan.broker_first_name} ${loan.broker_last_name}`
+        : "Your Loan Officer",
+    };
+
+    for (const assignment of assignments) {
+      const body = processTemplateVariables(assignment.body, variables);
+      const subject = processTemplateVariables(
+        assignment.subject || assignment.template_name,
+        variables,
+      );
+
+      let sendResult: {
+        success: boolean;
+        external_id?: string;
+        error?: string;
+        cost?: number;
+      } = { success: false, error: "No phone/email on file" };
+
+      if (assignment.communication_type === "email") {
+        if (!loan.email) continue;
+        sendResult = await sendEmailMessage(loan.email, subject, body, true);
+      } else if (assignment.communication_type === "sms") {
+        if (!loan.phone) continue;
+        sendResult = await sendSMSMessage(loan.phone, body);
+      } else if (assignment.communication_type === "whatsapp") {
+        if (!loan.phone) continue;
+        sendResult = await sendWhatsAppMessage(loan.phone, body);
+      }
+
+      console.log(
+        `📤 Pipeline automation [${newStatus}] ${assignment.communication_type}: ${
+          sendResult.success ? "✅ sent" : `❌ failed — ${sendResult.error}`
+        }`,
+      );
+
+      // Log to communications table
+      await pool.query(
+        `INSERT INTO communications
+           (tenant_id, application_id, from_broker_id, to_user_id,
+            communication_type, direction, subject, body, status,
+            external_id, template_id, delivery_status, cost, sent_at)
+         VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          MORTGAGE_TENANT_ID,
+          loanId,
+          brokerId,
+          loan.client_id,
+          assignment.communication_type,
+          assignment.communication_type === "email" ? subject : null,
+          body,
+          sendResult.success ? "sent" : "failed",
+          sendResult.external_id || null,
+          assignment.template_id,
+          sendResult.success ? "sent" : "failed",
+          sendResult.cost || null,
+        ],
+      );
+
+      // Increment template usage count
+      await pool.query(
+        "UPDATE templates SET usage_count = usage_count + 1 WHERE id = ?",
+        [assignment.template_id],
+      );
+    }
+  } catch (err) {
+    console.error("❌ Pipeline automation trigger failed:", err);
+  }
+}
 
 // =====================================================
 // CONVERSATION HANDLERS
@@ -6519,6 +7502,11 @@ function createServer() {
     verifyBrokerSession,
     handleGetLoanDetails,
   );
+  expressApp.patch(
+    "/api/loans/:loanId/status",
+    verifyBrokerSession,
+    handleUpdateLoanStatus,
+  );
   expressApp.get(
     "/api/loans/:loanId/export-mismo",
     verifyBrokerSession,
@@ -6585,6 +7573,13 @@ function createServer() {
     "/api/tasks/:taskId/form-fields",
     verifyBrokerSession,
     handleGetTaskFormFields,
+  );
+
+  // Task form responses (broker review)
+  expressApp.get(
+    "/api/tasks/:taskId/responses",
+    verifyBrokerSession,
+    handleGetTaskFormResponses,
   );
 
   // Task documents routes (broker and client can access)
@@ -6714,6 +7709,45 @@ function createServer() {
     "/api/sms-templates/:templateId",
     verifyBrokerSession,
     handleDeleteSmsTemplate,
+  );
+
+  // WhatsApp Template routes
+  expressApp.get(
+    "/api/whatsapp-templates",
+    verifyBrokerSession,
+    handleGetWhatsappTemplates,
+  );
+  expressApp.post(
+    "/api/whatsapp-templates",
+    verifyBrokerSession,
+    handleCreateWhatsappTemplate,
+  );
+  expressApp.put(
+    "/api/whatsapp-templates/:templateId",
+    verifyBrokerSession,
+    handleUpdateWhatsappTemplate,
+  );
+  expressApp.delete(
+    "/api/whatsapp-templates/:templateId",
+    verifyBrokerSession,
+    handleDeleteWhatsappTemplate,
+  );
+
+  // Pipeline Step Templates routes
+  expressApp.get(
+    "/api/pipeline-step-templates",
+    verifyBrokerSession,
+    handleGetPipelineStepTemplates,
+  );
+  expressApp.put(
+    "/api/pipeline-step-templates",
+    verifyBrokerSession,
+    handleUpsertPipelineStepTemplate,
+  );
+  expressApp.delete(
+    "/api/pipeline-step-templates/:step/:channel",
+    verifyBrokerSession,
+    handleDeletePipelineStepTemplate,
   );
 
   // Conversation routes

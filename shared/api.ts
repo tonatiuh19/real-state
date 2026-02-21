@@ -376,6 +376,106 @@ export interface SmsTemplateResponse {
 }
 
 /**
+ * WhatsApp Template Types
+ */
+export interface WhatsappTemplate {
+  id: number;
+  name: string;
+  body: string;
+  template_type:
+    | "reminder"
+    | "status_update"
+    | "update"
+    | "follow_up"
+    | "custom";
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetWhatsappTemplatesResponse {
+  success: boolean;
+  templates: WhatsappTemplate[];
+}
+
+export interface CreateWhatsappTemplateRequest {
+  name: string;
+  body: string;
+  template_type: string;
+  is_active?: boolean;
+}
+
+export interface UpdateWhatsappTemplateRequest {
+  name?: string;
+  body?: string;
+  template_type?: string;
+  is_active?: boolean;
+}
+
+export interface WhatsappTemplateResponse {
+  success: boolean;
+  template: WhatsappTemplate;
+  message?: string;
+}
+
+/**
+ * Pipeline Step Templates Types
+ * Maps a communication template to a specific loan pipeline step + channel.
+ */
+export type LoanPipelineStep =
+  | "draft"
+  | "submitted"
+  | "under_review"
+  | "documents_pending"
+  | "underwriting"
+  | "conditional_approval"
+  | "approved"
+  | "denied"
+  | "closed"
+  | "cancelled";
+
+export type CommunicationType = "email" | "sms" | "whatsapp";
+
+export interface PipelineStepTemplate {
+  id: number;
+  tenant_id: number;
+  pipeline_step: LoanPipelineStep;
+  communication_type: CommunicationType;
+  template_id: number;
+  is_active: boolean;
+  created_by_broker_id: number | null;
+  created_at: string;
+  updated_at: string;
+  // Joined from templates table
+  template_name?: string;
+  template_body?: string;
+  template_subject?: string | null;
+}
+
+export interface GetPipelineStepTemplatesResponse {
+  success: boolean;
+  assignments: PipelineStepTemplate[];
+}
+
+export interface UpsertPipelineStepTemplateRequest {
+  pipeline_step: LoanPipelineStep;
+  communication_type: CommunicationType;
+  template_id: number;
+  is_active?: boolean;
+}
+
+export interface UpsertPipelineStepTemplateResponse {
+  success: boolean;
+  assignment: PipelineStepTemplate;
+  message?: string;
+}
+
+export interface DeletePipelineStepTemplateResponse {
+  success: boolean;
+  message?: string;
+}
+
+/**
  * Dashboard Statistics Types
  */
 export interface DashboardStats {

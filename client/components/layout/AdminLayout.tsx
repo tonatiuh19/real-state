@@ -109,12 +109,12 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       icon: <CheckCircle2 className="h-4 w-4" />,
       path: "/admin/tasks",
     },
-    {
-      id: "marketing",
-      label: "Marketing & Campaigns",
-      icon: <Megaphone className="h-4 w-4" />,
-      path: "/admin/marketing",
-    },
+    // {
+    //   id: "marketing",
+    //   label: "Marketing & Campaigns",
+    //   icon: <Megaphone className="h-4 w-4" />,
+    //   path: "/admin/marketing",
+    // },
     {
       id: "documents",
       label: "Documents",
@@ -139,18 +139,18 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       icon: <TrendingUp className="h-4 w-4" />,
       path: "/admin/reports",
     },
-    {
-      id: "compliance",
-      label: "Compliance",
-      icon: <Shield className="h-4 w-4" />,
-      path: "/admin/compliance",
-    },
-    {
-      id: "notifications",
-      label: "Notifications",
-      icon: <Bell className="h-4 w-4" />,
-      path: "/admin/notifications",
-    },
+    // {
+    //   id: "compliance",
+    //   label: "Compliance",
+    //   icon: <Shield className="h-4 w-4" />,
+    //   path: "/admin/compliance",
+    // },
+    // {
+    //   id: "notifications",
+    //   label: "Notifications",
+    //   icon: <Bell className="h-4 w-4" />,
+    //   path: "/admin/notifications",
+    // },
     {
       id: "brokers",
       label: "Broker Management",

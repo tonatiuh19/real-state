@@ -37,6 +37,7 @@ import {
   User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { IS_DEV } from "@/lib/env";
 import { useToast } from "@/hooks/use-toast";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -422,7 +423,7 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
   // Available active task templates
   const activeTemplates = taskTemplates.filter((t) => t.is_active);
 
-  const isDev = import.meta.env.DEV;
+  const isDev = IS_DEV;
 
   return (
     <Dialog
