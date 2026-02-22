@@ -600,9 +600,11 @@ export interface TaskTemplate {
   requires_documents?: boolean;
   document_instructions?: string | null;
   has_custom_form?: boolean;
+  has_signing?: boolean;
   created_at: string;
   updated_at: string;
   form_fields?: TaskFormField[];
+  sign_document?: TaskSignDocument | null;
 }
 
 export interface Task {
@@ -807,7 +809,80 @@ export interface UpdateTaskTemplateRequest extends CreateTaskRequest {
   requires_documents?: boolean;
   document_instructions?: string;
   has_custom_form?: boolean;
+  has_signing?: boolean;
   form_fields?: CreateTaskFormFieldRequest[];
+}
+
+/**
+ * Document Signing Types
+ */
+export interface SignatureZone {
+  id: string;
+  page: number;
+  x: number; // percentage (0-100) from left of page
+  y: number; // percentage (0-100) from top of page
+  width: number; // percentage (0-100) of page width
+  height: number; // percentage (0-100) of page height
+  label: string;
+}
+
+export interface TaskSignDocument {
+  id: number;
+  task_template_id: number;
+  file_path: string;
+  original_filename: string;
+  file_size: number | null;
+  signature_zones: SignatureZone[];
+  uploaded_by_broker_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskSignature {
+  id: number;
+  task_id: number;
+  sign_document_id: number;
+  zone_id: string;
+  signature_data: string; // base64 PNG
+  signed_by_user_id: number | null;
+  signed_at: string;
+}
+
+export interface SaveSignDocumentRequest {
+  file_path: string;
+  original_filename: string;
+  file_size?: number;
+  signature_zones: SignatureZone[];
+}
+
+export interface SaveSignDocumentResponse {
+  success: boolean;
+  sign_document: TaskSignDocument;
+  message: string;
+}
+
+export interface GetSignDocumentResponse {
+  success: boolean;
+  sign_document: TaskSignDocument | null;
+}
+
+export interface SubmitSignaturesRequest {
+  signatures: Array<{
+    zone_id: string;
+    signature_data: string; // base64 PNG
+  }>;
+}
+
+export interface SubmitSignaturesResponse {
+  success: boolean;
+  message: string;
+  signatures_count: number;
+}
+
+export interface GetTaskSignaturesResponse {
+  success: boolean;
+  signatures: TaskSignature[];
+  sign_document: TaskSignDocument | null;
 }
 
 /**

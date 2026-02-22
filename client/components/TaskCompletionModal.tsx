@@ -31,6 +31,7 @@ import {
   Home as HomeIcon,
   ClipboardList,
   AlertCircle,
+  PenTool,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -39,7 +40,9 @@ import {
   uploadTaskDocument,
   saveTaskDocumentMetadata,
   completeTask,
+  submitTaskSignatures,
 } from "@/store/slices/clientPortalSlice";
+import PDFSigningViewer from "@/components/PDFSigningViewer";
 import { toast } from "@/hooks/use-toast";
 
 interface TaskCompletionModalProps {
@@ -643,76 +646,119 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
             </DialogHeader>
 
             <div className="space-y-6 mt-2">
-              {/* ── SECTION 1: Input Fields ── */}
-              {hasInputs && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <ClipboardList className="h-4 w-4 text-primary shrink-0" />
-                    <h3 className="font-semibold text-sm">
-                      Fill in the Information
-                    </h3>
+              {/* ── SIGNING: Document Signing Type ── */}
+              {taskDetails?.task_type === "document_signing" ? (
+                taskDetails.sign_document ? (
+                  <PDFSigningViewer
+                    pdfUrl={taskDetails.sign_document.file_path}
+                    zones={taskDetails.sign_document.signature_zones ?? []}
+                    existingSignatures={taskDetails.existing_signatures}
+                    isSubmitting={isSubmitting}
+                    onSubmit={async (signatures) => {
+                      if (!taskId) return;
+                      setIsSubmitting(true);
+                      try {
+                        const result = await dispatch(
+                          submitTaskSignatures({ taskId, signatures }),
+                        );
+                        if (submitTaskSignatures.fulfilled.match(result)) {
+                          setIsDone(true);
+                        } else {
+                          toast({
+                            title: "Submission failed",
+                            description:
+                              "Could not submit signatures. Please try again.",
+                            variant: "destructive",
+                          });
+                        }
+                      } finally {
+                        setIsSubmitting(false);
+                      }
+                    }}
+                  />
+                ) : (
+                  <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-sm text-amber-700 dark:text-amber-400">
+                      The signing document is not yet ready. Please contact your
+                      broker.
+                    </p>
                   </div>
-                  <Separator />
-                  {inputFields.map((field) => renderInputField(field))}
-                </div>
-              )}
-
-              {/* ── SECTION 2: File Uploads ── */}
-              {hasFiles && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Upload className="h-4 w-4 text-primary shrink-0" />
-                    <h3 className="font-semibold text-sm">
-                      Upload Required Documents
-                    </h3>
-                    <span className="text-xs text-muted-foreground">
-                      ({uploadedFiles.size}/{fileFields.length} uploaded)
-                    </span>
-                  </div>
-                  <Separator />
-                  <div className="space-y-5">
-                    {fileFields.map((field) => renderFileField(field))}
-                  </div>
-                </div>
-              )}
-
-              {/* ── No content — direct completion ── */}
-              {!hasInputs && !hasFiles && !taskDetailsLoading && (
-                <div className="flex items-center gap-3 p-4 bg-muted/40 border rounded-lg">
-                  <AlertCircle className="h-5 w-5 text-muted-foreground shrink-0" />
-                  <p className="text-sm text-muted-foreground">
-                    No additional information is required. Click below to mark
-                    this task as complete.
-                  </p>
-                </div>
-              )}
-
-              {/* ── Actions ── */}
-              <div className="flex gap-3 pt-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={onClose}
-                  disabled={isSubmitting}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleSubmit}
-                  disabled={isSubmitting || !isFormReady}
-                  className="flex-1"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Submitting…
-                    </>
-                  ) : (
-                    "Complete Task"
+                )
+              ) : (
+                <>
+                  {/* ── SECTION 1: Input Fields ── */}
+                  {hasInputs && (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2">
+                        <ClipboardList className="h-4 w-4 text-primary shrink-0" />
+                        <h3 className="font-semibold text-sm">
+                          Fill in the Information
+                        </h3>
+                      </div>
+                      <Separator />
+                      {inputFields.map((field) => renderInputField(field))}
+                    </div>
                   )}
-                </Button>
-              </div>
+
+                  {/* ── SECTION 2: File Uploads ── */}
+                  {hasFiles && (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2">
+                        <Upload className="h-4 w-4 text-primary shrink-0" />
+                        <h3 className="font-semibold text-sm">
+                          Upload Required Documents
+                        </h3>
+                        <span className="text-xs text-muted-foreground">
+                          ({uploadedFiles.size}/{fileFields.length} uploaded)
+                        </span>
+                      </div>
+                      <Separator />
+                      <div className="space-y-5">
+                        {fileFields.map((field) => renderFileField(field))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── No content — direct completion ── */}
+                  {!hasInputs && !hasFiles && !taskDetailsLoading && (
+                    <div className="flex items-center gap-3 p-4 bg-muted/40 border rounded-lg">
+                      <AlertCircle className="h-5 w-5 text-muted-foreground shrink-0" />
+                      <p className="text-sm text-muted-foreground">
+                        No additional information is required. Click below to
+                        mark this task as complete.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* ── Actions ── */}
+                  <div className="flex gap-3 pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={onClose}
+                      disabled={isSubmitting}
+                      className="flex-1"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleSubmit}
+                      disabled={isSubmitting || !isFormReady}
+                      className="flex-1"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Submitting…
+                        </>
+                      ) : (
+                        "Complete Task"
+                      )}
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           </>
         )}

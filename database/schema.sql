@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 21, 2026 at 05:10 PM
+-- Generation Time: Feb 21, 2026 at 08:11 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -43,8 +43,8 @@ CREATE TABLE `application_status_history` (
 --
 
 INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `from_status`, `to_status`, `changed_by_broker_id`, `notes`, `created_at`) VALUES
-(1, 1, 17, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-02-21 16:58:34'),
-(2, 1, 17, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-02-21 17:09:35');
+(11, 1, 19, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-02-21 20:10:14'),
+(12, 1, 19, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-02-21 20:10:27');
 
 -- --------------------------------------------------------
 
@@ -143,7 +143,10 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (65, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 19:38:40'),
 (66, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 21:21:46'),
 (67, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-20 21:25:20'),
-(68, 1, NULL, 1, 'broker', 'update_task_form_field', 'task_form_field', 33, '{\"field_name\": {\"to\": \"attach_the_document\", \"from\": \"document_front\"}, \"field_type\": {\"to\": \"file_pdf\", \"from\": \"file_pdf\"}, \"field_label\": {\"to\": \"Attach the document\", \"from\": \"Document - Front\"}, \"task_template_id\": \"31\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-21 15:44:15');
+(68, 1, NULL, 1, 'broker', 'update_task_form_field', 'task_form_field', 33, '{\"field_name\": {\"to\": \"attach_the_document\", \"from\": \"document_front\"}, \"field_type\": {\"to\": \"file_pdf\", \"from\": \"file_pdf\"}, \"field_label\": {\"to\": \"Attach the document\", \"from\": \"Document - Front\"}, \"task_template_id\": \"31\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-21 15:44:15'),
+(69, 1, NULL, 1, 'broker', 'reopen_task', 'task', 28, '{\"reason\": \"Please re-upload the documents\", \"status\": \"reopened\", \"reopened_at\": \"2026-02-21T23:36:00.144Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-21 17:36:00'),
+(70, 1, NULL, 1, 'broker', 'approve_task', 'task', 28, '{\"status\": \"approved\", \"approved_at\": \"2026-02-21T23:41:31.107Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-21 17:41:31'),
+(71, 1, NULL, 1, 'broker', 'approve_task', 'task', 29, '{\"status\": \"approved\", \"approved_at\": \"2026-02-21T23:49:48.257Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-21 17:49:48');
 
 -- --------------------------------------------------------
 
@@ -313,7 +316,7 @@ CREATE TABLE `clients` (
 
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
 (14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
-(16, 1, 'tonatiuh.gom@gmail.com', '', 'Felix', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-21 16:58:27', 1, 'broker_created', NULL, '2026-02-21 16:57:12', '2026-02-21 16:58:27');
+(18, 1, 'tonatiuh.gom@gmail.com', '', 'Felix', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-21 20:10:09', 1, 'broker_created', NULL, '2026-02-21 20:09:32', '2026-02-21 20:10:09');
 
 -- --------------------------------------------------------
 
@@ -583,7 +586,7 @@ CREATE TABLE `loan_applications` (
 
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `created_at`, `updated_at`, `submitted_at`) VALUES
 (15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
-(17, 1, 'LA14632791', 16, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'under_review', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-02-21 16:57:13', '2026-02-21 17:09:35', '2026-02-21 16:57:13');
+(19, 1, 'LA26172925', 18, 1, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'under_review', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', '2026-02-21 20:09:33', '2026-02-21 20:10:27', '2026-02-21 20:09:33');
 
 -- --------------------------------------------------------
 
@@ -610,7 +613,7 @@ CREATE TABLE `notifications` (
 
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
 (18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL),
-(20, 1, 16, 'New Loan Application Created', 'Your loan application LA14632791 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-21 16:57:13', NULL);
+(25, 1, 18, 'New Loan Application Created', 'Your loan application LA26172925 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-21 20:09:33', NULL);
 
 -- --------------------------------------------------------
 
@@ -702,8 +705,7 @@ CREATE TABLE `tasks` (
 
 INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`, `approval_status`, `approved_by_broker_id`, `approved_at`, `reopened_by_broker_id`, `reopened_at`, `reopen_reason`, `status_change_reason`, `status_changed_by_broker_id`, `status_changed_at`) VALUES
 (23, 2, 29, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(26, 1, 30, 0, 17, 'Document Verification', 'License', 'document_verification', 'pending_approval', 'high', 16, NULL, 1, '2026-02-23 16:57:13', '2026-02-21 17:09:35', '2026-02-21 16:57:13', '2026-02-21 17:09:34', 1, '2026-02-21 17:09:29', 1, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(27, 1, 31, 0, 17, 'Document Verification', 'Attach something', 'document_verification', 'pending', 'medium', 16, NULL, 1, '2026-03-06 16:57:13', NULL, '2026-02-21 16:57:13', '2026-02-21 16:57:13', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+(30, 1, 32, 0, 19, 'Document Signing', '', 'document_signing', 'pending_approval', 'medium', 18, NULL, 1, '2026-03-06 20:09:33', '2026-02-21 20:10:26', '2026-02-21 20:09:33', '2026-02-21 20:10:26', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -725,14 +727,6 @@ CREATE TABLE `task_documents` (
   `uploaded_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `notes` text COLLATE utf8mb4_unicode_ci
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Document attachments for tasks';
-
---
--- Dumping data for table `task_documents`
---
-
-INSERT INTO `task_documents` (`id`, `task_id`, `field_id`, `document_type`, `filename`, `original_filename`, `file_path`, `file_size`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `uploaded_at`, `notes`) VALUES
-(3, 26, 30, 'pdf', '432210306231__1__699a3b2cabffa.pdf', '432210306231 (1).pdf', '/data/encore/26/pdfs/432210306231__1__699a3b2cabffa.pdf', 303662, 16, NULL, '2026-02-21 17:09:32', NULL),
-(4, 26, 31, 'pdf', '432210306231__1__699a3b2e5af85.pdf', '432210306231 (1).pdf', '/data/encore/26/pdfs/432210306231__1__699a3b2e5af85.pdf', 303662, 16, NULL, '2026-02-21 17:09:34', NULL);
 
 -- --------------------------------------------------------
 
@@ -785,12 +779,55 @@ CREATE TABLE `task_form_responses` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Submitted responses for task form fields';
 
+-- --------------------------------------------------------
+
 --
--- Dumping data for table `task_form_responses`
+-- Table structure for table `task_signatures`
 --
 
-INSERT INTO `task_form_responses` (`id`, `task_id`, `field_id`, `field_value`, `submitted_by_user_id`, `submitted_by_broker_id`, `submitted_at`, `updated_at`) VALUES
-(2, 26, 32, NULL, NULL, NULL, '2026-02-21 17:09:29', '2026-02-21 17:09:29');
+CREATE TABLE `task_signatures` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `task_id` int(11) NOT NULL COMMENT 'References tasks.id (task instance)',
+  `sign_document_id` int(11) NOT NULL COMMENT 'References task_sign_documents.id',
+  `zone_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Zone identifier from signature_zones JSON',
+  `signature_data` longtext COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Base64 encoded PNG from signature canvas',
+  `signed_by_user_id` int(11) DEFAULT NULL COMMENT 'Client user who signed',
+  `signed_at` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Client signature responses for document signing tasks';
+
+--
+-- Dumping data for table `task_signatures`
+--
+
+INSERT INTO `task_signatures` (`id`, `tenant_id`, `task_id`, `sign_document_id`, `zone_id`, `signature_data`, `signed_by_user_id`, `signed_at`) VALUES
+(1, 1, 30, 1, 'zone_1771724626618', 'data:image/png;base64,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', 18, '2026-02-21 20:10:26');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `task_sign_documents`
+--
+
+CREATE TABLE `task_sign_documents` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `task_template_id` int(11) NOT NULL COMMENT 'References task_templates.id',
+  `file_path` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Full URL or path on external server (disruptinglabs)',
+  `original_filename` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `file_size` bigint(20) DEFAULT NULL COMMENT 'File size in bytes',
+  `signature_zones` json DEFAULT NULL COMMENT 'Array of zone objects [{id, page, x, y, width, height, label}]',
+  `uploaded_by_broker_id` int(11) NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PDF documents with signature zone definitions for signing task templates';
+
+--
+-- Dumping data for table `task_sign_documents`
+--
+
+INSERT INTO `task_sign_documents` (`id`, `tenant_id`, `task_template_id`, `file_path`, `original_filename`, `file_size`, `signature_zones`, `uploaded_by_broker_id`, `created_at`, `updated_at`) VALUES
+(1, 1, 32, 'https://disruptinglabs.com/data/api/data/encore-sign-templates/90001/pdfs/adquiramexico_com_mx_multipagos_portal_payment_voucher_tr_YXgeVjQzpFmulnzaMCJhdBUeEEAmulava_dp_ZmFsc2U_3D_699a5f45bd973.pdf', 'adquiramexico.com.mx_multipagos_portal_payment_voucher_tr=YXgeVjQzpFmulnzaMCJhdBUeEEAmulava&dp=ZmFsc2U%3D.pdf', 93081, '[{\"x\": 26.692307692307693, \"y\": 83.70986920332936, \"id\": \"zone_1771724626618\", \"page\": 1, \"label\": \"Signature 1\", \"width\": 47.38461538461539, \"height\": 10.344827586206904}]', 1, '2026-02-21 19:44:00', '2026-02-21 19:44:00');
 
 -- --------------------------------------------------------
 
@@ -813,17 +850,19 @@ CREATE TABLE `task_templates` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `requires_documents` tinyint(1) DEFAULT '0' COMMENT 'Whether this task requires document uploads',
   `document_instructions` text COLLATE utf8mb4_unicode_ci COMMENT 'Instructions for required documents',
-  `has_custom_form` tinyint(1) DEFAULT '0' COMMENT 'Whether this task has custom form fields'
+  `has_custom_form` tinyint(1) DEFAULT '0' COMMENT 'Whether this task has custom form fields',
+  `has_signing` tinyint(1) DEFAULT '0' COMMENT 'Whether this task requires document signing (has signing zones)'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Reusable task templates for loan workflows';
 
 --
 -- Dumping data for table `task_templates`
 --
 
-INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`, `requires_documents`, `document_instructions`, `has_custom_form`) VALUES
-(29, 2, 'INE Document Verification', NULL, 'document_verification', 'medium', NULL, 1, 1, 6, '2026-02-11 20:55:10', '2026-02-11 20:56:13', 1, NULL, 0),
-(30, 1, 'Document Verification', 'License', 'document_verification', 'high', 2, 1, 1, 1, '2026-02-20 18:04:35', '2026-02-20 18:04:35', 1, NULL, 1),
-(31, 1, 'Document Verification', 'Attach something', 'document_verification', 'medium', 13, 2, 1, 1, '2026-02-21 15:44:15', '2026-02-21 15:44:15', 1, NULL, 0);
+INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_type`, `priority`, `default_due_days`, `order_index`, `is_active`, `created_by_broker_id`, `created_at`, `updated_at`, `requires_documents`, `document_instructions`, `has_custom_form`, `has_signing`) VALUES
+(29, 2, 'INE Document Verification', NULL, 'document_verification', 'medium', NULL, 1, 1, 6, '2026-02-11 20:55:10', '2026-02-11 20:56:13', 1, NULL, 0, 0),
+(30, 1, 'Document Verification', 'License', 'document_verification', 'high', 2, 1, 1, 1, '2026-02-20 18:04:35', '2026-02-20 18:04:35', 1, NULL, 1, 0),
+(31, 1, 'Document Verification', 'Attach something', 'document_verification', 'medium', 13, 2, 1, 1, '2026-02-21 15:44:15', '2026-02-21 15:44:15', 1, NULL, 0, 0),
+(32, 1, 'Document Signing', NULL, 'document_signing', 'medium', 13, 3, 1, 1, '2026-02-21 19:44:00', '2026-02-21 20:04:47', 0, NULL, 0, 1);
 
 -- --------------------------------------------------------
 
@@ -956,7 +995,7 @@ CREATE TABLE `user_sessions` (
 --
 
 INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(2, 16, 244335, 1, NULL, NULL, '2026-02-21 23:13:15', '2026-02-21 22:58:15');
+(4, 18, 621616, 1, NULL, NULL, '2026-02-22 02:24:57', '2026-02-22 02:09:57');
 
 --
 -- Indexes for dumped tables
@@ -1235,6 +1274,24 @@ ALTER TABLE `task_form_responses`
   ADD KEY `idx_field_id` (`field_id`);
 
 --
+-- Indexes for table `task_signatures`
+--
+ALTER TABLE `task_signatures`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_task_zone` (`task_id`,`zone_id`),
+  ADD KEY `idx_task_id` (`task_id`),
+  ADD KEY `idx_sign_document_id` (`sign_document_id`),
+  ADD KEY `idx_tenant_id` (`tenant_id`);
+
+--
+-- Indexes for table `task_sign_documents`
+--
+ALTER TABLE `task_sign_documents`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_task_template_id` (`task_template_id`),
+  ADD KEY `idx_tenant_id` (`tenant_id`);
+
+--
 -- Indexes for table `task_templates`
 --
 ALTER TABLE `task_templates`
@@ -1243,7 +1300,8 @@ ALTER TABLE `task_templates`
   ADD KEY `idx_active_order` (`is_active`,`order_index`),
   ADD KEY `idx_task_templates_requires_documents` (`requires_documents`),
   ADD KEY `idx_task_templates_has_custom_form` (`has_custom_form`),
-  ADD KEY `idx_task_templates_tenant` (`tenant_id`);
+  ADD KEY `idx_task_templates_tenant` (`tenant_id`),
+  ADD KEY `idx_task_templates_has_signing` (`has_signing`);
 
 --
 -- Indexes for table `templates`
@@ -1292,13 +1350,13 @@ ALTER TABLE `user_sessions`
 -- AUTO_INCREMENT for table `application_status_history`
 --
 ALTER TABLE `application_status_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `brokers`
@@ -1334,7 +1392,7 @@ ALTER TABLE `campaign_recipients`
 -- AUTO_INCREMENT for table `clients`
 --
 ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
 
 --
 -- AUTO_INCREMENT for table `communications`
@@ -1382,13 +1440,13 @@ ALTER TABLE `lead_activities`
 -- AUTO_INCREMENT for table `loan_applications`
 --
 ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=26;
 
 --
 -- AUTO_INCREMENT for table `pipeline_step_templates`
@@ -1406,13 +1464,13 @@ ALTER TABLE `system_settings`
 -- AUTO_INCREMENT for table `tasks`
 --
 ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
 
 --
 -- AUTO_INCREMENT for table `task_documents`
 --
 ALTER TABLE `task_documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `task_form_fields`
@@ -1424,13 +1482,25 @@ ALTER TABLE `task_form_fields`
 -- AUTO_INCREMENT for table `task_form_responses`
 --
 ALTER TABLE `task_form_responses`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+
+--
+-- AUTO_INCREMENT for table `task_signatures`
+--
+ALTER TABLE `task_signatures`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- AUTO_INCREMENT for table `task_sign_documents`
+--
+ALTER TABLE `task_sign_documents`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `task_templates`
 --
 ALTER TABLE `task_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=33;
 
 --
 -- AUTO_INCREMENT for table `templates`
@@ -1454,7 +1524,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- Constraints for dumped tables

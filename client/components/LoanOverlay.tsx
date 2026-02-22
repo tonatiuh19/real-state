@@ -20,6 +20,7 @@ import {
   Download,
   Trash2,
   Plus,
+  PenTool,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -71,7 +72,9 @@ import {
   updateTaskStatus,
   createTask,
   fetchTasks,
+  fetchTaskSignatures,
 } from "@/store/slices/tasksSlice";
+import PDFSigningViewer from "@/components/PDFSigningViewer";
 import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
 import axios from "axios";
 import { toast } from "@/hooks/use-toast";
@@ -134,6 +137,15 @@ export function LoanOverlay({
     new Set(),
   );
   const [isAddingTasks, setIsAddingTasks] = useState(false);
+  const [taskSignatures, setTaskSignatures] = useState<
+    Record<
+      number,
+      { loading: boolean; signatures: any[]; sign_document: any | null }
+    >
+  >({});
+  const [viewSignatureTaskId, setViewSignatureTaskId] = useState<number | null>(
+    null,
+  );
 
   // Fetch task templates when component mounts
   useEffect(() => {
@@ -480,12 +492,39 @@ export function LoanOverlay({
     }
   };
 
-  const toggleTask = (taskId: number) => {
+  const handleViewTaskSignatures = async (taskId: number) => {
+    if (taskSignatures[taskId]?.loading) return;
+    setTaskSignatures((prev) => ({
+      ...prev,
+      [taskId]: { loading: true, signatures: [], sign_document: null },
+    }));
+    try {
+      const result = await dispatch(fetchTaskSignatures(taskId)).unwrap();
+      setTaskSignatures((prev) => ({
+        ...prev,
+        [taskId]: {
+          loading: false,
+          signatures: result.signatures,
+          sign_document: result.sign_document,
+        },
+      }));
+    } catch {
+      setTaskSignatures((prev) => ({
+        ...prev,
+        [taskId]: { loading: false, signatures: [], sign_document: null },
+      }));
+    }
+  };
+
+  const toggleTask = (taskId: number, taskType?: string) => {
     const willOpen = !expandedTasks[taskId];
     setExpandedTasks((prev) => ({ ...prev, [taskId]: willOpen }));
-    // Auto-load documents + responses the first time a task is expanded
-    if (willOpen && !taskDocuments[taskId]) {
-      handleViewTaskDocuments(taskId);
+    if (willOpen) {
+      if (taskType === "document_signing") {
+        if (!taskSignatures[taskId]) handleViewTaskSignatures(taskId);
+      } else {
+        if (!taskDocuments[taskId]) handleViewTaskDocuments(taskId);
+      }
     }
   };
 
@@ -893,7 +932,7 @@ export function LoanOverlay({
                       <Collapsible
                         key={task.id}
                         open={expandedTasks[task.id]}
-                        onOpenChange={() => toggleTask(task.id)}
+                        onOpenChange={() => toggleTask(task.id, task.task_type)}
                       >
                         <div className="p-4 border border-gray-200 rounded-lg bg-white hover:shadow-sm transition-shadow">
                           <div className="flex items-start gap-3">
@@ -1008,8 +1047,14 @@ export function LoanOverlay({
                                     size="sm"
                                     className="h-8 text-xs gap-1 text-gray-600 hover:text-dark hover:bg-gray-50 hover:border-gray-300 transition-colors duration-200"
                                   >
-                                    <File className="h-3 w-3" />
-                                    Documents
+                                    {task.task_type === "document_signing" ? (
+                                      <PenTool className="h-3 w-3" />
+                                    ) : (
+                                      <File className="h-3 w-3" />
+                                    )}
+                                    {task.task_type === "document_signing"
+                                      ? "Signatures"
+                                      : "Documents"}
                                     {expandedTasks[task.id] ? (
                                       <ChevronUp className="h-3 w-3" />
                                     ) : (
@@ -1067,7 +1112,112 @@ export function LoanOverlay({
 
                           <CollapsibleContent className="mt-4 pl-7">
                             <div className="space-y-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
-                              {taskDocuments[task.id]?.loading ? (
+                              {task.task_type === "document_signing" ? (
+                                // ── Signing task: show signature summary ──
+                                taskSignatures[task.id]?.loading ? (
+                                  <p className="text-xs text-gray-500">
+                                    Loading signatures…
+                                  </p>
+                                ) : taskSignatures[task.id]?.sign_document ? (
+                                  <div className="space-y-3">
+                                    <h6 className="text-xs font-semibold text-gray-700 flex items-center gap-1">
+                                      <PenTool className="h-3 w-3 text-purple-600" />
+                                      Signed Document
+                                    </h6>
+                                    <div className="bg-white p-3 rounded border border-gray-200 space-y-2">
+                                      <p className="text-xs text-gray-600">
+                                        <span className="font-medium">
+                                          File:
+                                        </span>{" "}
+                                        {
+                                          taskSignatures[task.id].sign_document
+                                            .original_filename
+                                        }
+                                      </p>
+                                      <p className="text-xs text-gray-600">
+                                        <span className="font-medium">
+                                          Zones signed:
+                                        </span>{" "}
+                                        {
+                                          taskSignatures[task.id].signatures
+                                            .length
+                                        }{" "}
+                                        /{" "}
+                                        {taskSignatures[task.id].sign_document
+                                          .signature_zones?.length ?? 0}
+                                      </p>
+                                      {taskSignatures[task.id].signatures
+                                        .length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mt-2">
+                                          {taskSignatures[
+                                            task.id
+                                          ].signatures.map((sig: any) => {
+                                            const zone = taskSignatures[
+                                              task.id
+                                            ].sign_document.signature_zones?.find(
+                                              (z: any) => z.id === sig.zone_id,
+                                            );
+                                            return (
+                                              <div
+                                                key={sig.id}
+                                                className="flex flex-col items-center gap-1"
+                                              >
+                                                <img
+                                                  src={sig.signature_data}
+                                                  alt={
+                                                    zone?.label ?? "Signature"
+                                                  }
+                                                  className="h-12 w-24 object-contain border border-green-300 rounded bg-white"
+                                                />
+                                                <span className="text-xs text-gray-500">
+                                                  {zone?.label ?? "Zone"}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 text-xs gap-1 mt-1"
+                                        onClick={() =>
+                                          setViewSignatureTaskId(task.id)
+                                        }
+                                      >
+                                        <ExternalLink className="h-3 w-3" />
+                                        View in PDF
+                                      </Button>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() =>
+                                        handleViewTaskSignatures(task.id)
+                                      }
+                                      className="h-7 text-xs w-full mt-1 hover:bg-gray-100 transition-colors duration-200"
+                                    >
+                                      Refresh
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <p className="text-xs text-muted-foreground">
+                                      No signatures submitted yet.
+                                    </p>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() =>
+                                        handleViewTaskSignatures(task.id)
+                                      }
+                                      className="h-7 text-xs w-full hover:bg-gray-100 transition-colors duration-200"
+                                    >
+                                      Refresh
+                                    </Button>
+                                  </div>
+                                )
+                              ) : taskDocuments[task.id]?.loading ? (
                                 <p className="text-xs text-gray-500">
                                   Loading…
                                 </p>
@@ -1228,14 +1378,18 @@ export function LoanOverlay({
                                     )}
                                 </>
                               )}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleViewTaskDocuments(task.id)}
-                                className="h-7 text-xs w-full mt-2 hover:bg-gray-100 transition-colors duration-200"
-                              >
-                                Refresh
-                              </Button>
+                              {task.task_type !== "document_signing" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    handleViewTaskDocuments(task.id)
+                                  }
+                                  className="h-7 text-xs w-full mt-2 hover:bg-gray-100 transition-colors duration-200"
+                                >
+                                  Refresh
+                                </Button>
+                              )}
                             </div>
                           </CollapsibleContent>
                         </div>
@@ -1290,6 +1444,52 @@ export function LoanOverlay({
           </div>
         )}
       </SheetContent>
+
+      {/* View Signed Document Dialog */}
+      {viewSignatureTaskId !== null &&
+        taskSignatures[viewSignatureTaskId]?.sign_document && (
+          <Dialog
+            open={viewSignatureTaskId !== null}
+            onOpenChange={(open) => {
+              if (!open) setViewSignatureTaskId(null);
+            }}
+          >
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+              <DialogTitle className="flex items-center gap-2">
+                <PenTool className="h-5 w-5 text-purple-600" />
+                Signed Document —{" "}
+                {
+                  taskSignatures[viewSignatureTaskId].sign_document
+                    .original_filename
+                }
+              </DialogTitle>
+              <DialogDescription>
+                Read-only view of the submitted signatures.{" "}
+                {taskSignatures[viewSignatureTaskId].signatures.length} of{" "}
+                {taskSignatures[viewSignatureTaskId].sign_document
+                  .signature_zones?.length ?? 0}{" "}
+                zone(s) signed.
+              </DialogDescription>
+              <PDFSigningViewer
+                pdfUrl={
+                  taskSignatures[viewSignatureTaskId].sign_document.file_path
+                }
+                zones={
+                  taskSignatures[viewSignatureTaskId].sign_document
+                    .signature_zones ?? []
+                }
+                existingSignatures={taskSignatures[
+                  viewSignatureTaskId
+                ].signatures.map((s: any) => ({
+                  zone_id: s.zone_id,
+                  signature_data: s.signature_data,
+                }))}
+                onSubmit={() => {}}
+                readOnly
+              />
+            </DialogContent>
+          </Dialog>
+        )}
 
       {/* Reopen Task Dialog */}
       <Dialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>

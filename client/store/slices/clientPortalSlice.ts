@@ -12,6 +12,8 @@ import type {
   ClientApplication,
   ClientTask,
   ClientProfile,
+  TaskSignDocument,
+  SignatureZone,
 } from "@shared/api";
 
 export interface TaskDetails {
@@ -49,6 +51,13 @@ export interface TaskDetails {
     field_type?: string;
     is_required?: boolean;
     is_uploaded: boolean;
+  }>;
+  task_type?: string;
+  sign_document?: TaskSignDocument | null;
+  existing_signatures?: Array<{
+    zone_id: string;
+    signature_data: string;
+    signed_at: string;
   }>;
 }
 
@@ -445,6 +454,62 @@ export const saveTaskDocumentMetadata = createAsyncThunk(
   },
 );
 
+/**
+ * Fetch sign document for a client task (uses task instance → template)
+ */
+export const fetchClientSignDocument = createAsyncThunk(
+  "clientPortal/fetchSignDocument",
+  async (taskId: number, { getState, rejectWithValue }) => {
+    try {
+      const state = getState() as RootState;
+      const token = state.clientAuth.sessionToken;
+
+      const response = await axios.get(
+        `/api/client/tasks/${taskId}/sign-document`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      return response.data.sign_document as TaskSignDocument | null;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch sign document",
+      );
+    }
+  },
+);
+
+/**
+ * Submit client signatures for a signing task
+ */
+export const submitTaskSignatures = createAsyncThunk(
+  "clientPortal/submitSignatures",
+  async (
+    {
+      taskId,
+      signatures,
+    }: {
+      taskId: number;
+      signatures: Array<{ zone_id: string; signature_data: string }>;
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const state = getState() as RootState;
+      const token = state.clientAuth.sessionToken;
+
+      const response = await axios.post(
+        `/api/client/tasks/${taskId}/signatures`,
+        { signatures },
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      return { taskId, ...response.data };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to submit signatures",
+      );
+    }
+  },
+);
+
 const clientPortalSlice = createSlice({
   name: "clientPortal",
   initialState,
@@ -570,6 +635,17 @@ const clientPortalSlice = createSlice({
       }
       state.taskDetails = null;
       // Clear draft when task is submitted
+      delete state.taskFormDrafts[action.payload.taskId];
+    });
+
+    // Submit signatures
+    builder.addCase(submitTaskSignatures.fulfilled, (state, action) => {
+      const task = state.tasks.find((t) => t.id === action.payload.taskId);
+      if (task) {
+        task.status = "pending_approval";
+        task.completed_at = new Date().toISOString();
+      }
+      state.taskDetails = null;
       delete state.taskFormDrafts[action.payload.taskId];
     });
   },

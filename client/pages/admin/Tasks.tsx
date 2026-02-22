@@ -9,6 +9,7 @@ import {
   Trash2,
   File,
   FileText,
+  PenTool,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -352,7 +353,9 @@ const Tasks = () => {
                           )}
                         </div>
 
-                        {(task.requires_documents || task.has_custom_form) && (
+                        {(task.requires_documents ||
+                          task.has_custom_form ||
+                          task.has_signing) && (
                           <div className="flex items-center gap-1 flex-wrap">
                             {task.requires_documents && (
                               <Badge
@@ -370,6 +373,15 @@ const Tasks = () => {
                               >
                                 <FileText className="h-3 w-3" />
                                 Form
+                              </Badge>
+                            )}
+                            {task.has_signing && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs flex items-center gap-1"
+                              >
+                                <PenTool className="h-3 w-3" />
+                                Signing
                               </Badge>
                             )}
                           </div>
@@ -495,8 +507,18 @@ const Tasks = () => {
                                   Form
                                 </Badge>
                               )}
+                              {!!task.has_signing && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs flex items-center gap-1"
+                                >
+                                  <PenTool className="h-3 w-3" />
+                                  Signing
+                                </Badge>
+                              )}
                               {!task.requires_documents &&
-                                !task.has_custom_form && (
+                                !task.has_custom_form &&
+                                !task.has_signing && (
                                   <span className="text-xs text-muted-foreground">
                                     -
                                   </span>

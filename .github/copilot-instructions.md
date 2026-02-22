@@ -35,6 +35,7 @@
 - `client/global.css` - TailwindCSS theming and global styles
 - Add cool, engage, modern UI components
 - Need to use cool animations and transitions for smooth UX
+- When console logging for debugging, always use logger functions from `client/utils/logger.ts` for consistent formatting and log levels
 
 ### Shared
 

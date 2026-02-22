@@ -3013,6 +3013,7 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
         requires_documents,
         document_instructions,
         has_custom_form,
+        has_signing,
         created_at,
         updated_at
       FROM task_templates
@@ -3099,7 +3100,7 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
         description || null,
         task_type,
         priority,
-        default_due_days || null,
+        default_due_days ?? null,
         orderIndex,
         is_active !== undefined ? is_active : true,
         requires_documents || false,
@@ -3331,7 +3332,7 @@ const handleUpdateTaskTemplateFull: RequestHandler = async (req, res) => {
         description || null,
         task_type,
         priority,
-        default_due_days || null,
+        default_due_days ?? null,
         is_active !== undefined ? is_active : true,
         requires_documents || false,
         document_instructions || null,
@@ -4107,6 +4108,400 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
     });
   }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF PROXY — serves external PDFs through the backend to avoid CORS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/proxy/pdf?url=<encoded>
+ * Fetches a PDF from disruptinglabs.com server-side and streams it to the
+ * browser, bypassing the cross-origin restriction on the external domain.
+ */
+const handleProxyPdf: RequestHandler = async (req, res) => {
+  const { url } = req.query;
+  if (!url || typeof url !== "string") {
+    res.status(400).json({ error: "url query parameter is required" });
+    return;
+  }
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(url);
+  } catch {
+    res.status(400).json({ error: "Invalid URL" });
+    return;
+  }
+  if (targetUrl.hostname !== "disruptinglabs.com") {
+    res
+      .status(403)
+      .json({ error: "Proxy only allowed for disruptinglabs.com" });
+    return;
+  }
+  console.log("📄 PDF proxy: fetching", url);
+  try {
+    const response = await fetch(url);
+    const contentType = response.headers.get("content-type") || "";
+    console.log(
+      "📄 PDF proxy: upstream status",
+      response.status,
+      "content-type",
+      contentType,
+    );
+    if (!response.ok) {
+      console.error("📄 PDF proxy: upstream error", response.status);
+      res
+        .status(response.status)
+        .json({ error: `Upstream returned ${response.status}` });
+      return;
+    }
+    if (!contentType.includes("pdf") && !contentType.includes("octet-stream")) {
+      // Upstream returned HTML or something else — the file likely doesn't exist
+      const text = await response.text();
+      console.error(
+        "📄 PDF proxy: upstream returned non-PDF content",
+        contentType,
+        text.slice(0, 300),
+      );
+      res
+        .status(404)
+        .json({ error: "File not found on remote server", contentType });
+      return;
+    }
+    const buffer = await response.arrayBuffer();
+    console.log("📄 PDF proxy: streaming", buffer.byteLength, "bytes");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    console.error("📄 PDF proxy: fetch threw", err);
+    res.status(500).json({ error: "Failed to proxy PDF" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT SIGNING HANDLERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/tasks/:templateId/sign-document
+ * Broker saves/updates a sign document (PDF + zones) for a task template.
+ * The PDF must already be uploaded to the external server via uploadPDFs.php.
+ */
+const handleSaveSignDocument: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { templateId } = req.params;
+    const { file_path, original_filename, file_size, signature_zones } =
+      req.body;
+
+    if (!file_path || !original_filename) {
+      return res.status(400).json({
+        success: false,
+        error: "file_path and original_filename are required",
+      });
+    }
+
+    if (!Array.isArray(signature_zones) || signature_zones.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "At least one signature zone is required",
+      });
+    }
+
+    // Verify template belongs to this broker's tenant
+    const [templates] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM task_templates WHERE id = ? AND tenant_id = ?",
+      [templateId, MORTGAGE_TENANT_ID],
+    );
+    if ((templates as any[]).length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Task template not found" });
+    }
+
+    const zonesJson = JSON.stringify(signature_zones);
+
+    // Upsert: delete existing then insert fresh
+    await pool.query(
+      "DELETE FROM task_sign_documents WHERE task_template_id = ? AND tenant_id = ?",
+      [templateId, MORTGAGE_TENANT_ID],
+    );
+
+    const [result] = await pool.query<ResultSetHeader>(
+      `INSERT INTO task_sign_documents
+        (tenant_id, task_template_id, file_path, original_filename, file_size, signature_zones, uploaded_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        templateId,
+        file_path,
+        original_filename,
+        file_size || null,
+        zonesJson,
+        brokerId,
+      ],
+    );
+
+    // Ensure has_signing = 1 on the template
+    await pool.query(
+      "UPDATE task_templates SET has_signing = 1 WHERE id = ? AND tenant_id = ?",
+      [templateId, MORTGAGE_TENANT_ID],
+    );
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM task_sign_documents WHERE id = ?",
+      [result.insertId],
+    );
+    const doc = (rows as any[])[0];
+    doc.signature_zones =
+      typeof doc.signature_zones === "string"
+        ? JSON.parse(doc.signature_zones)
+        : doc.signature_zones || [];
+
+    res.json({
+      success: true,
+      sign_document: doc,
+      message: "Sign document saved successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error saving sign document:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to save sign document" });
+  }
+};
+
+/**
+ * GET /api/tasks/:templateId/sign-document
+ * Broker fetches the sign document for a task template.
+ */
+const handleGetSignDocument: RequestHandler = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM task_sign_documents WHERE task_template_id = ? AND tenant_id = ? LIMIT 1",
+      [templateId, MORTGAGE_TENANT_ID],
+    );
+
+    const doc = (rows as any[])[0] || null;
+    if (doc) {
+      doc.signature_zones =
+        typeof doc.signature_zones === "string"
+          ? JSON.parse(doc.signature_zones)
+          : doc.signature_zones || [];
+    }
+
+    res.json({ success: true, sign_document: doc });
+  } catch (error) {
+    console.error("❌ Error fetching sign document:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch sign document" });
+  }
+};
+
+/**
+ * GET /api/client/tasks/:taskId/sign-document
+ * Client fetches the sign document for a task instance.
+ */
+const handleGetClientSignDocument: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+    const { taskId } = req.params;
+
+    // Verify task belongs to client
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      `SELECT t.template_id FROM tasks t
+       INNER JOIN loan_applications la ON t.application_id = la.id
+       WHERE t.id = ? AND la.client_user_id = ?`,
+      [taskId, clientId],
+    );
+
+    if ((taskRows as any[]).length === 0) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    const templateId = (taskRows as any[])[0].template_id;
+    if (!templateId) {
+      return res.json({ success: true, sign_document: null });
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM task_sign_documents WHERE task_template_id = ? AND tenant_id = ? LIMIT 1",
+      [templateId, MORTGAGE_TENANT_ID],
+    );
+
+    const doc = (rows as any[])[0] || null;
+    if (doc) {
+      doc.signature_zones =
+        typeof doc.signature_zones === "string"
+          ? JSON.parse(doc.signature_zones)
+          : doc.signature_zones || [];
+    }
+
+    res.json({ success: true, sign_document: doc });
+  } catch (error) {
+    console.error("❌ Error fetching client sign document:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch sign document" });
+  }
+};
+
+/**
+ * POST /api/client/tasks/:taskId/signatures
+ * Client submits their signatures for a signing task.
+ * Body: { signatures: [{ zone_id, signature_data }] }
+ */
+const handleSubmitTaskSignatures: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+    const { taskId } = req.params;
+    const { signatures } = req.body;
+
+    if (!Array.isArray(signatures) || signatures.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "signatures array is required",
+      });
+    }
+
+    // Verify task belongs to client and get sign_document_id
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      `SELECT t.template_id FROM tasks t
+       INNER JOIN loan_applications la ON t.application_id = la.id
+       WHERE t.id = ? AND la.client_user_id = ?`,
+      [taskId, clientId],
+    );
+
+    if ((taskRows as any[]).length === 0) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    const templateId = (taskRows as any[])[0].template_id;
+    const [signDocRows] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM task_sign_documents WHERE task_template_id = ? AND tenant_id = ? LIMIT 1",
+      [templateId, MORTGAGE_TENANT_ID],
+    );
+
+    if ((signDocRows as any[]).length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Sign document not found for this task",
+      });
+    }
+
+    const signDocumentId = (signDocRows as any[])[0].id;
+
+    // Insert or update each signature (upsert by unique_task_zone)
+    for (const sig of signatures) {
+      const { zone_id, signature_data } = sig;
+      if (!zone_id || !signature_data) continue;
+
+      await pool.query(
+        `INSERT INTO task_signatures
+          (tenant_id, task_id, sign_document_id, zone_id, signature_data, signed_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           signature_data = VALUES(signature_data),
+           signed_by_user_id = VALUES(signed_by_user_id),
+           signed_at = NOW()`,
+        [
+          MORTGAGE_TENANT_ID,
+          taskId,
+          signDocumentId,
+          zone_id,
+          signature_data,
+          clientId,
+        ],
+      );
+    }
+
+    // Mark task as pending_approval
+    await pool.query(
+      `UPDATE tasks SET status = 'pending_approval', completed_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [taskId],
+    );
+
+    // Sync loan status
+    const [taskInfo] = await pool.query<RowDataPacket[]>(
+      "SELECT application_id FROM tasks WHERE id = ?",
+      [taskId],
+    );
+    if ((taskInfo as any[])[0]?.application_id) {
+      await syncLoanStatusFromTasks((taskInfo as any[])[0].application_id);
+    }
+
+    res.json({
+      success: true,
+      message: "Signatures submitted successfully",
+      signatures_count: signatures.length,
+    });
+  } catch (error) {
+    console.error("❌ Error submitting task signatures:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to submit signatures" });
+  }
+};
+
+/**
+ * GET /api/tasks/:taskId/signatures
+ * Broker reviews signatures for a signing task instance.
+ */
+const handleGetTaskSignatures: RequestHandler = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+
+    const [signatures] = await pool.query<RowDataPacket[]>(
+      `SELECT ts.*, c.first_name, c.last_name, c.email
+       FROM task_signatures ts
+       LEFT JOIN clients c ON ts.signed_by_user_id = c.id
+       WHERE ts.task_id = ? AND ts.tenant_id = ?
+       ORDER BY ts.signed_at ASC`,
+      [taskId, MORTGAGE_TENANT_ID],
+    );
+
+    // Get sign document info
+    const [taskRows] = await pool.query<RowDataPacket[]>(
+      "SELECT template_id FROM tasks WHERE id = ? AND tenant_id = ?",
+      [taskId, MORTGAGE_TENANT_ID],
+    );
+
+    let signDoc = null;
+    if ((taskRows as any[])[0]?.template_id) {
+      const [docRows] = await pool.query<RowDataPacket[]>(
+        "SELECT * FROM task_sign_documents WHERE task_template_id = ? AND tenant_id = ? LIMIT 1",
+        [(taskRows as any[])[0].template_id, MORTGAGE_TENANT_ID],
+      );
+      if ((docRows as any[]).length > 0) {
+        signDoc = (docRows as any[])[0];
+        signDoc.signature_zones =
+          typeof signDoc.signature_zones === "string"
+            ? JSON.parse(signDoc.signature_zones)
+            : signDoc.signature_zones || [];
+      }
+    }
+
+    res.json({
+      success: true,
+      signatures: signatures,
+      sign_document: signDoc,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching task signatures:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch signatures" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// END DOCUMENT SIGNING HANDLERS
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Auto-sync loan application status based on the aggregate status of its tasks.
@@ -5282,6 +5677,32 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
       `📄 Found ${documents.length} document fields for template ${task.template_id || 0}`,
     );
 
+    // Fetch sign document if task is document_signing type
+    let signDocument = null;
+    if (task.task_type === "document_signing" && task.template_id) {
+      const [signDocRows] = await pool.query<any[]>(
+        "SELECT * FROM task_sign_documents WHERE task_template_id = ? AND tenant_id = ? LIMIT 1",
+        [task.template_id, MORTGAGE_TENANT_ID],
+      );
+      if (signDocRows.length > 0) {
+        signDocument = signDocRows[0];
+        signDocument.signature_zones =
+          typeof signDocument.signature_zones === "string"
+            ? JSON.parse(signDocument.signature_zones)
+            : signDocument.signature_zones || [];
+      }
+    }
+
+    // Fetch existing signatures for this task instance
+    let existingSignatures: any[] = [];
+    if (task.task_type === "document_signing") {
+      const [sigRows] = await pool.query<any[]>(
+        "SELECT zone_id, signature_data, signed_at FROM task_signatures WHERE task_id = ?",
+        [taskId],
+      );
+      existingSignatures = sigRows;
+    }
+
     res.json({
       success: true,
       id: task.id,
@@ -5289,6 +5710,7 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
       description: task.description,
       priority: task.priority,
       due_date: task.due_date,
+      task_type: task.task_type,
       application_id: task.application_id,
       application_number: task.application_number,
       loan_type: task.loan_type,
@@ -5299,6 +5721,8 @@ const handleGetTaskDetails: RequestHandler = async (req, res) => {
       loan_amount: task.loan_amount,
       formFields,
       requiredDocuments: documents,
+      sign_document: signDocument,
+      existing_signatures: existingSignatures,
     });
   } catch (error) {
     console.error("Error fetching task details:", error);
@@ -7613,6 +8037,26 @@ function createServer() {
     handleSubmitTaskForm,
   );
 
+  // PDF proxy (public — fetches from disruptinglabs.com server-side to avoid CORS)
+  expressApp.get("/api/proxy/pdf", handleProxyPdf);
+
+  // Document signing routes (broker)
+  expressApp.post(
+    "/api/tasks/:templateId/sign-document",
+    verifyBrokerSession,
+    handleSaveSignDocument,
+  );
+  expressApp.get(
+    "/api/tasks/:templateId/sign-document",
+    verifyBrokerSession,
+    handleGetSignDocument,
+  );
+  expressApp.get(
+    "/api/tasks/:taskId/signatures",
+    verifyBrokerSession,
+    handleGetTaskSignatures,
+  );
+
   // Email template routes (require broker session)
   expressApp.get(
     "/api/email-templates",
@@ -7687,6 +8131,18 @@ function createServer() {
     "/api/client/tasks/documents/:documentId",
     verifyClientSession,
     handleDeleteTaskDocument,
+  );
+
+  // Document signing routes (client)
+  expressApp.get(
+    "/api/client/tasks/:taskId/sign-document",
+    verifyClientSession,
+    handleGetClientSignDocument,
+  );
+  expressApp.post(
+    "/api/client/tasks/:taskId/signatures",
+    verifyClientSession,
+    handleSubmitTaskSignatures,
   );
 
   // SMS Templates routes
