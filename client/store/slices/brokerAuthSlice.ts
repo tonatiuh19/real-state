@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
+import { logger } from "@/lib/logger";
 
 interface BrokerUser {
   id: number;
@@ -121,7 +122,7 @@ export const logout = createAsyncThunk(
         );
       }
     } catch (error) {
-      console.error("Logout error:", error);
+      logger.error("Logout error:", error);
     }
   },
 );

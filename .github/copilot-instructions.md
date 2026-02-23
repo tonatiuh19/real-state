@@ -24,6 +24,7 @@
 - **NEVER assume column names - check schema.sql first**
 - **If any database update is made based on schema.sql, generate a migration file** in `database/migrations/` with timestamp prefix (e.g., `YYYYMMDD_HHMMSS_description.sql`) for hostgator mysql database version 8.0
 - **If a type issue is generated, fix it immediately** - ensure all TypeScript types are correct and consistent across client, server, and shared
+- **When using any console logging for debugging in backend, always use logger functions from `server/utils/logger.ts` for consistent formatting and log levels only in UI components, use logger functions from `client/utils/logger.ts` for consistent formatting and log levels**
 
 ## Project Structure
 

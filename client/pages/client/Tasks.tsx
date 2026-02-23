@@ -30,6 +30,7 @@ import {
 } from "@/store/slices/clientPortalSlice";
 import { useToast } from "@/hooks/use-toast";
 import { TaskCompletionModal } from "@/components/TaskCompletionModal";
+import { logger } from "@/lib/logger";
 
 const Tasks = () => {
   const dispatch = useAppDispatch();
@@ -60,12 +61,12 @@ const Tasks = () => {
 
   const handleStartTask = async (taskId: number) => {
     try {
-      console.log(`🚀 Starting task ${taskId}...`);
+      logger.log(`🚀 Starting task ${taskId}...`);
       // Update status to in_progress first and wait for it
       await dispatch(
         updateClientTask({ taskId, status: "in_progress" }),
       ).unwrap();
-      console.log(`✅ Task ${taskId} status updated, opening modal...`);
+      logger.log(`✅ Task ${taskId} status updated, opening modal...`);
       // Then open the modal
       setSelectedTaskId(taskId);
       toast({
@@ -73,7 +74,7 @@ const Tasks = () => {
         description: "Great! Let's get this done!",
       });
     } catch (error) {
-      console.error(`❌ Failed to start task ${taskId}:`, error);
+      logger.error(`❌ Failed to start task ${taskId}:`, error);
       toast({
         title: "Error",
         description: "Failed to start task. Please try again.",

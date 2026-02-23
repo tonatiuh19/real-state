@@ -20,6 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { X } from "lucide-react";
 import type { Broker } from "@shared/api";
+import { logger } from "@/lib/logger";
 
 interface BrokerWizardProps {
   open: boolean;
@@ -96,7 +97,7 @@ export function BrokerWizard({
         formik.resetForm();
         onClose();
       } catch (error) {
-        console.error("Error submitting broker form:", error);
+        logger.error("Error submitting broker form:", error);
       } finally {
         setSubmitting(false);
       }

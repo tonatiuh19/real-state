@@ -31,6 +31,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import type { SignatureZone } from "@shared/api";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -207,7 +208,7 @@ const PDFSigningViewer: React.FC<PDFSigningViewerProps> = ({
                 setPdfError(null);
               }}
               onLoadError={(err) => {
-                console.error("PDF load error:", err);
+                logger.error("PDF load error:", err);
                 setPdfError("Could not load the PDF. Please try refreshing.");
               }}
               loading={

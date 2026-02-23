@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { motion, AnimatePresence } from "framer-motion";
 import type { SignatureZone } from "@shared/api";
+import { logger } from "@/lib/logger";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -62,7 +63,7 @@ const PDFSignatureZoneEditor: React.FC<PDFSignatureZoneEditorProps> = ({
   onChange,
 }) => {
   const displayUrl = toProxiedUrl(pdfUrl);
-  console.log(
+  logger.log(
     "📄 PDFSignatureZoneEditor: pdfUrl",
     pdfUrl,
     "→ displayUrl",
@@ -90,7 +91,7 @@ const PDFSignatureZoneEditor: React.FC<PDFSignatureZoneEditorProps> = ({
   };
 
   const onDocumentLoadError = (err: Error) => {
-    console.error("PDF load error:", err, "url was:", displayUrl);
+    logger.error("PDF load error:", err, "url was:", displayUrl);
     setPdfError("Failed to load PDF. The file might not be accessible.");
   };
 

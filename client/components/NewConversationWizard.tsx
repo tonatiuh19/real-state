@@ -40,6 +40,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface Template {
   id: number;
@@ -346,7 +347,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                         className="bg-primary from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
                         onClick={() => {
                           // TODO: Navigate to template management or creation
-                          console.log("Navigate to template creation");
+                          logger.log("Navigate to template creation");
                         }}
                       >
                         <FileText className="h-4 w-4 mr-2" />
@@ -384,7 +385,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                         className="text-blue-600 border-blue-200 hover:bg-blue-50"
                         onClick={() => {
                           // TODO: Navigate to template creation for this specific type
-                          console.log(`Create ${communicationType} template`);
+                          logger.log(`Create ${communicationType} template`);
                         }}
                       >
                         <FileText className="h-4 w-4 mr-2" />

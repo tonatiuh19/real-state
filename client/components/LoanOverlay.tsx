@@ -83,6 +83,7 @@ import axios from "axios";
 import { toast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface LoanOverlayProps {
   isOpen: boolean;
@@ -227,7 +228,7 @@ export function LoanOverlay({
         [taskId]: { ...docsResult, loading: false },
       }));
     } catch (error) {
-      console.error("Error fetching documents:", error);
+      logger.error("Error fetching documents:", error);
       setTaskDocuments((prev) => ({
         ...prev,
         [taskId]: {
@@ -262,7 +263,7 @@ export function LoanOverlay({
         await dispatch(fetchLoanDetails(selectedLoan.id));
       }
     } catch (error: any) {
-      console.error("Error approving task:", error);
+      logger.error("Error approving task:", error);
       toast({
         title: "Error",
         description: error.response?.data?.error || "Failed to approve task",
@@ -325,7 +326,7 @@ export function LoanOverlay({
       setPendingStatusChange(null);
       setStatusChangeComment("");
     } catch (error: any) {
-      console.error("Error updating task status:", error);
+      logger.error("Error updating task status:", error);
       toast({
         title: "Error",
         description: error || "Failed to update task status",
@@ -383,7 +384,7 @@ export function LoanOverlay({
         await dispatch(fetchLoanDetails(selectedLoan.id));
       }
     } catch (error: any) {
-      console.error("Error reopening task:", error);
+      logger.error("Error reopening task:", error);
       toast({
         title: "Error",
         description: error.response?.data?.error || "Failed to reopen task",
@@ -419,7 +420,7 @@ export function LoanOverlay({
         await dispatch(fetchLoanDetails(selectedLoan.id));
       }
     } catch (error: any) {
-      console.error("Error deleting task:", error);
+      logger.error("Error deleting task:", error);
       toast({
         title: "Error",
         description: error || "Failed to delete task",
@@ -473,7 +474,7 @@ export function LoanOverlay({
         await dispatch(fetchLoanDetails(selectedLoan.id));
       }
     } catch (error: any) {
-      console.error("Error bulk deleting tasks:", error);
+      logger.error("Error bulk deleting tasks:", error);
       toast({
         title: "Error",
         description: error || "Failed to delete tasks",
@@ -515,7 +516,7 @@ export function LoanOverlay({
         description: "The MISMO file has been generated and downloaded.",
       });
     } catch (error: any) {
-      console.error("Error exporting MISMO:", error);
+      logger.error("Error exporting MISMO:", error);
       toast({
         title: "Export Failed",
         description:
@@ -651,7 +652,7 @@ export function LoanOverlay({
       // Refresh loan details to show new tasks
       await dispatch(fetchLoanDetails(selectedLoan.id));
     } catch (error: any) {
-      console.error("Error adding tasks:", error);
+      logger.error("Error adding tasks:", error);
       toast({
         title: "Error",
         description: error.message || "Failed to add tasks.",

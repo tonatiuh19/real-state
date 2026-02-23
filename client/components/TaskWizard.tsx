@@ -70,6 +70,7 @@ import type {
   SignatureZone,
 } from "@shared/api";
 import PDFSignatureZoneEditor from "@/components/PDFSignatureZoneEditor";
+import { logger } from "@/lib/logger";
 
 interface TaskWizardProps {
   open: boolean;
@@ -204,16 +205,16 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
   const performTaskSubmission = async (values: any) => {
     try {
       setIsSubmitting(true);
-      console.log("📝 TaskWizard: Starting task submission...");
-      console.log("📝 TaskWizard: Form values:", values);
-      console.log("📝 TaskWizard: Form fields to create:", formFields);
-      console.log("📝 TaskWizard: Is edit mode?", isEditMode);
+      logger.log("📝 TaskWizard: Starting task submission...");
+      logger.log("📝 TaskWizard: Form values:", values);
+      logger.log("📝 TaskWizard: Form fields to create:", formFields);
+      logger.log("📝 TaskWizard: Is edit mode?", isEditMode);
 
       let taskId: number;
 
       if (isEditMode) {
-        console.log("✏️ TaskWizard: Updating existing task ID:", editTask.id);
-        console.log("✏️ TaskWizard: Update payload:", {
+        logger.log("✏️ TaskWizard: Updating existing task ID:", editTask.id);
+        logger.log("✏️ TaskWizard: Update payload:", {
           id: editTask.id,
           ...values,
         });
@@ -221,13 +222,13 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
           updateTask({ id: editTask.id, ...values }),
         ).unwrap();
         taskId = result.id;
-        console.log("✅ TaskWizard: Task updated successfully, ID:", taskId);
-        console.log("✅ TaskWizard: Updated task data:", result);
+        logger.log("✅ TaskWizard: Task updated successfully, ID:", taskId);
+        logger.log("✅ TaskWizard: Updated task data:", result);
       } else {
-        console.log("➕ TaskWizard: Creating new task...");
+        logger.log("➕ TaskWizard: Creating new task...");
         const result = await dispatch(createTask(values)).unwrap();
         taskId = result.id;
-        console.log("✅ TaskWizard: Task created successfully, ID:", taskId);
+        logger.log("✅ TaskWizard: Task created successfully, ID:", taskId);
       }
 
       // Create/update form fields if custom form is enabled OR requires documents AND fields exist
@@ -237,14 +238,14 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
         formFields.length > 0;
 
       if (shouldHandleFormFields) {
-        console.log(
+        logger.log(
           `📋 TaskWizard: ${isEditMode ? "Updating" : "Creating"} ${formFields.length} form fields for task ${taskId}...`,
         );
-        console.log("📋 TaskWizard: Form fields payload:", {
+        logger.log("📋 TaskWizard: Form fields payload:", {
           taskId,
           form_fields: formFields,
         });
-        console.log("📋 TaskWizard: Should handle form fields because:", {
+        logger.log("📋 TaskWizard: Should handle form fields because:", {
           has_custom_form: values.has_custom_form,
           requires_documents: values.requires_documents,
           formFieldsCount: formFields.length,
@@ -257,12 +258,12 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
           }),
         ).unwrap();
 
-        console.log(
+        logger.log(
           `✅ TaskWizard: Form fields ${isEditMode ? "updated" : "created"} successfully:`,
           fieldsResult,
         );
       } else {
-        console.log("⚠️ TaskWizard: Skipping form fields creation:", {
+        logger.log("⚠️ TaskWizard: Skipping form fields creation:", {
           has_custom_form: values.has_custom_form,
           requires_documents: values.requires_documents,
           formFieldsCount: formFields.length,
@@ -276,7 +277,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
         signingPdfUrl &&
         signingZones.length > 0
       ) {
-        console.log("🖊️ TaskWizard: Saving signing document...");
+        logger.log("🖊️ TaskWizard: Saving signing document...");
         await dispatch(
           saveSignDocument({
             templateId: taskId,
@@ -286,26 +287,26 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
             signature_zones: signingZones,
           }),
         ).unwrap();
-        console.log("✅ TaskWizard: Signing document saved successfully");
+        logger.log("✅ TaskWizard: Signing document saved successfully");
       }
 
       // Clear draft since task was successfully created
-      console.log("🧹 TaskWizard: Clearing draft and closing wizard...");
+      logger.log("🧹 TaskWizard: Clearing draft and closing wizard...");
       dispatch(clearTaskTemplateDraft());
 
       formik.resetForm();
       setFormFields([]);
       onTaskCreated?.();
       onClose();
-      console.log(
+      logger.log(
         `✅ TaskWizard: Task ${isEditMode ? "update" : "creation"} flow completed successfully!`,
       );
     } catch (error) {
-      console.error(
+      logger.error(
         `❌ TaskWizard: Failed to ${isEditMode ? "update" : "create"} task:`,
         error,
       );
-      console.error("❌ TaskWizard: Error details:", {
+      logger.error("❌ TaskWizard: Error details:", {
         message: error instanceof Error ? error.message : "Unknown error",
         stack: error instanceof Error ? error.stack : undefined,
       });
@@ -498,11 +499,11 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
       is_required: true,
       order_index: formFields.length,
     };
-    console.log("➕ TaskWizard: Adding new form field:", newField);
-    console.log("➕ TaskWizard: Current form fields count:", formFields.length);
+    logger.log("➕ TaskWizard: Adding new form field:", newField);
+    logger.log("➕ TaskWizard: Current form fields count:", formFields.length);
     setFormFields([...formFields, newField]);
     setEditingFieldIndex(formFields.length);
-    console.log("➕ TaskWizard: New form fields count:", formFields.length + 1);
+    logger.log("➕ TaskWizard: New form fields count:", formFields.length + 1);
   };
 
   const handleUpdateFormField = (
@@ -511,16 +512,16 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
   ) => {
     const updatedFields = [...formFields];
     updatedFields[index] = { ...updatedFields[index], ...updates };
-    console.log(`✏️ TaskWizard: Updating field ${index}:`, updates);
-    console.log("✏️ TaskWizard: Updated field:", updatedFields[index]);
+    logger.log(`✏️ TaskWizard: Updating field ${index}:`, updates);
+    logger.log("✏️ TaskWizard: Updated field:", updatedFields[index]);
     setFormFields(updatedFields);
   };
 
   const handleRemoveFormField = (index: number) => {
-    console.log(`🗑️ TaskWizard: Removing field ${index}`);
+    logger.log(`🗑️ TaskWizard: Removing field ${index}`);
     setFormFields(formFields.filter((_, i) => i !== index));
     setEditingFieldIndex(null);
-    console.log(
+    logger.log(
       "🗑️ TaskWizard: Remaining form fields count:",
       formFields.length - 1,
     );
@@ -1012,7 +1013,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                               is_required: true,
                               order_index: formFields.length,
                             };
-                            console.log(
+                            logger.log(
                               "➕ TaskWizard: Adding document upload field:",
                               newField,
                             );
@@ -1075,7 +1076,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                                         onValueChange={(
                                           value: TaskFormFieldType,
                                         ) => {
-                                          console.log(
+                                          logger.log(
                                             `🔄 TaskWizard: Changing document type to "${value}"`,
                                           );
                                           handleUpdateFormField(index, {
@@ -1285,7 +1286,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                                       onValueChange={(
                                         value: TaskFormFieldType,
                                       ) => {
-                                        console.log(
+                                        logger.log(
                                           `🔄 TaskWizard: Changing field type from "${field.field_type}" to "${value}"`,
                                         );
                                         handleUpdateFormField(index, {
@@ -1444,7 +1445,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            console.log("📄 PDF upload: starting", {
+                            logger.log("📄 PDF upload: starting", {
                               name: file.name,
                               size: file.size,
                               type: file.type,
@@ -1461,7 +1462,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                               );
                               formData.append("id", String(uploadId));
                               formData.append("pdfs[]", file);
-                              console.log(
+                              logger.log(
                                 "📄 PDF upload: sending to uploadPDFs.php",
                                 {
                                   main_folder: "encore-sign-templates",
@@ -1478,9 +1479,9 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                                   },
                                 },
                               );
-                              console.log("📄 PDF upload: raw response", data);
+                              logger.log("📄 PDF upload: raw response", data);
                               const uploaded = data?.uploaded?.[0];
-                              console.log(
+                              logger.log(
                                 "📄 PDF upload: first uploaded item",
                                 uploaded,
                               );
@@ -1488,7 +1489,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                                 const fullUrl = uploaded.path.startsWith("http")
                                   ? uploaded.path
                                   : `https://disruptinglabs.com/data/api${uploaded.path}`;
-                                console.log("📄 PDF upload: success", fullUrl);
+                                logger.log("📄 PDF upload: success", fullUrl);
                                 setSigningPdfUrl(fullUrl);
                                 setSigningOriginalFilename(
                                   uploaded.original_name ||
@@ -1497,7 +1498,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                                 );
                                 setSigningFileSize(file.size);
                               } else {
-                                console.error(
+                                logger.error(
                                   "📄 PDF upload: unexpected response shape",
                                   data,
                                 );
@@ -1506,7 +1507,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                                 );
                               }
                             } catch (err: any) {
-                              console.error("📄 PDF upload: caught error", {
+                              logger.error("📄 PDF upload: caught error", {
                                 message: err?.message,
                                 status: err?.response?.status,
                                 responseData: err?.response?.data,

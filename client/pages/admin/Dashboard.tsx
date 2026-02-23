@@ -46,6 +46,7 @@ import NewLoanWizard from "@/components/NewLoanWizard";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchLoans } from "@/store/slices/pipelineSlice";
 import { fetchDashboardStats } from "@/store/slices/dashboardSlice";
+import { logger } from "@/lib/logger";
 
 const AdminDashboard = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -66,7 +67,7 @@ const AdminDashboard = () => {
       dispatch(fetchLoans({}));
       dispatch(fetchDashboardStats());
     } catch (error) {
-      console.error("Error loading dashboard data:", error);
+      logger.error("Error loading dashboard data:", error);
     }
   }, [dispatch]);
 
@@ -75,7 +76,7 @@ const AdminDashboard = () => {
       dispatch(fetchLoans({}));
       dispatch(fetchDashboardStats());
     } catch (error) {
-      console.error("Error refreshing dashboard data:", error);
+      logger.error("Error refreshing dashboard data:", error);
     }
   };
 

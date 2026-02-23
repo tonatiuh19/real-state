@@ -15,6 +15,7 @@ import type {
   TaskSignDocument,
   SignatureZone,
 } from "@shared/api";
+import { logger } from "@/lib/logger";
 
 export interface TaskDetails {
   id: number;
@@ -567,7 +568,7 @@ const clientPortalSlice = createSlice({
         const { taskId, status } = action.payload;
         const task = state.tasks.find((t) => t.id === taskId);
         if (task) {
-          console.log(
+          logger.log(
             `✅ Task ${taskId} status updated: ${task.status} → ${status}`,
           );
           task.status = status;
@@ -629,7 +630,7 @@ const clientPortalSlice = createSlice({
     builder.addCase(completeTask.fulfilled, (state, action) => {
       const task = state.tasks.find((t) => t.id === action.payload.taskId);
       if (task) {
-        console.log(`🎉 Task ${action.payload.taskId} submitted for approval!`);
+        logger.log(`🎉 Task ${action.payload.taskId} submitted for approval!`);
         task.status = "pending_approval";
         task.completed_at = new Date().toISOString();
       }
