@@ -6,6 +6,8 @@ import {
   DollarSign,
   MapPin,
   User,
+  UserX,
+  UserPlus,
   CheckCircle2,
   Clock,
   AlertCircle,
@@ -66,6 +68,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchLoanDetails } from "@/store/slices/pipelineSlice";
+import { fetchBrokers } from "@/store/slices/brokersSlice";
 import { fetchTaskDocuments } from "@/store/slices/clientPortalSlice";
 import {
   deleteTaskInstance,
@@ -95,7 +98,8 @@ export function LoanOverlay({
   isLoadingDetails,
 }: LoanOverlayProps) {
   const dispatch = useAppDispatch();
-  const { sessionToken } = useAppSelector((state) => state.brokerAuth);
+  const { sessionToken, user } = useAppSelector((state) => state.brokerAuth);
+  const { brokers } = useAppSelector((state) => state.brokers);
   const { tasks: taskTemplates } = useAppSelector((state) => state.tasks);
   const { emailTemplates } = useAppSelector(
     (state) => state.communicationTemplates,
@@ -147,10 +151,42 @@ export function LoanOverlay({
     null,
   );
 
-  // Fetch task templates when component mounts
+  const [isAssigning, setIsAssigning] = useState(false);
+
+  const handleAssignBroker = async (brokerId: string) => {
+    if (!selectedLoan) return;
+    try {
+      setIsAssigning(true);
+      await axios.patch(
+        `/api/loans/${selectedLoan.id}/assign-broker`,
+        { broker_id: brokerId === "unassigned" ? null : parseInt(brokerId) },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      toast({
+        title: "Broker Updated",
+        description:
+          brokerId === "unassigned"
+            ? "Broker has been unassigned from this loan."
+            : "Broker has been assigned successfully.",
+      });
+      await dispatch(fetchLoanDetails(selectedLoan.id));
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description:
+          error.response?.data?.error || "Failed to update broker assignment",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
+  // Fetch task templates and brokers when component mounts
   useEffect(() => {
     if (isOpen) {
       dispatch(fetchTasks());
+      dispatch(fetchBrokers());
     }
   }, [dispatch, isOpen]);
 
@@ -831,6 +867,70 @@ export function LoanOverlay({
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Broker Assignment */}
+              {(user?.role === "admin" || user?.role === "superadmin") && (
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="pb-3 border-b border-gray-100">
+                    <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
+                      <UserPlus className="h-5 w-5 text-blue-600" />
+                      Assigned Broker
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    {selectedLoan.broker_first_name ? (
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                          <User className="h-4 w-4 text-blue-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            {selectedLoan.broker_first_name}{" "}
+                            {selectedLoan.broker_last_name}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Currently assigned
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-amber-50 border border-amber-200">
+                        <UserX className="h-4 w-4 text-amber-600" />
+                        <span className="text-sm text-amber-700 font-medium">
+                          No broker assigned
+                        </span>
+                      </div>
+                    )}
+                    <Select
+                      value={
+                        selectedLoan.broker_user_id
+                          ? String(selectedLoan.broker_user_id)
+                          : "unassigned"
+                      }
+                      onValueChange={handleAssignBroker}
+                      disabled={isAssigning}
+                    >
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="Select broker..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unassigned">Unassigned</SelectItem>
+                        {brokers
+                          .filter((b) => b.status === "active")
+                          .map((broker) => (
+                            <SelectItem
+                              key={broker.id}
+                              value={String(broker.id)}
+                            >
+                              {broker.first_name} {broker.last_name}
+                              {broker.role === "admin" ? " (Admin)" : ""}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Task Progress */}
               <Card className="border-gray-200 shadow-sm">

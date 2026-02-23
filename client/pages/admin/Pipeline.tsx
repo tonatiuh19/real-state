@@ -7,6 +7,7 @@ import {
   Filter,
   Calendar,
   User,
+  UserX,
   DollarSign,
   ChevronDown,
   Sparkles,
@@ -525,6 +526,24 @@ const Pipeline = () => {
                               {loan.property_address}
                             </div>
                           )}
+
+                          {/* Broker */}
+                          <div className="flex items-center gap-1">
+                            {loan.broker_first_name ? (
+                              <>
+                                <User className="h-3 w-3 text-gray-400" />
+                                <span className="text-xs text-gray-500 truncate">
+                                  {loan.broker_first_name}{" "}
+                                  {loan.broker_last_name}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                                <UserX className="h-3 w-3" />
+                                Unassigned
+                              </span>
+                            )}
+                          </div>
 
                           {/* Footer */}
                           <div className="flex items-center justify-between pt-2 border-t border-gray-100">

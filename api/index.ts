@@ -673,6 +673,211 @@ async function sendClientLoanWelcomeEmail(
 }
 
 /**
+ * Send confirmation email to a user who just submitted via the public wizard.
+ * No broker or tasks yet — just confirms receipt and sets expectations.
+ */
+async function sendPublicApplicationWelcomeEmail(
+  email: string,
+  firstName: string,
+  lastName: string,
+  applicationNumber: string,
+  loanType: string,
+  propertyValue: string,
+  estimatedLoan: string,
+  propertyAddress: string,
+): Promise<void> {
+  try {
+    console.log("📧 Sending public wizard welcome email");
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    const loanTypeLabel: Record<string, string> = {
+      purchase: "Home Purchase",
+      refinance: "Refinance",
+      home_equity: "Home Equity",
+      commercial: "Commercial",
+      construction: "Construction",
+      other: "Other",
+    };
+
+    const portalUrl =
+      process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app";
+
+    const mailOptions = {
+      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: `We received your application! — ${applicationNumber}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Application Received</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+
+                <!-- HERO BAND -->
+                <tr>
+                  <td style="background:linear-gradient(135deg,#e8192c 0%,#c0111f 100%);padding:32px;text-align:center;">
+                    <p style="margin:0 0 6px 0;color:#fecdd3;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:2px;">Application Received</p>
+                    <h1 style="margin:0 0 4px 0;color:#ffffff;font-size:28px;font-weight:800;letter-spacing:0.5px;">You're on your way home! 🏡</h1>
+                    <p style="margin:0;color:#fecdd3;font-size:15px;">Hi <strong style="color:#ffffff;">${firstName} ${lastName}</strong>, we've got everything we need.</p>
+                  </td>
+                </tr>
+
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+
+                    <p style="margin:0 0 28px 0;color:#475569;font-size:15px;line-height:1.7;">
+                      Thank you for submitting your loan application to <strong style="color:#0f172a;">Encore Mortgage</strong>.
+                      One of our licensed loan officers will personally review your information and
+                      reach out within <strong style="color:#0f172a;">1–2 business days</strong> to discuss your options.
+                    </p>
+
+                    <!-- APPLICATION NUMBER BOX -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#fff0f2;border:1px solid #fecdd3;border-radius:12px;padding:20px;text-align:center;">
+                          <p style="margin:0 0 6px 0;color:#e8192c;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;">Your Application Number</p>
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:30px;font-weight:800;letter-spacing:1.5px;">${applicationNumber}</p>
+                          <p style="margin:0;color:#94a3b8;font-size:12px;">Keep this for your records</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- SUMMARY TABLE -->
+                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;">📋 Application Summary</p>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;margin-bottom:28px;">
+                      <tr style="background-color:#f8fafc;">
+                        <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;border-bottom:1px solid #e2e8f0;width:45%;">Loan Type</td>
+                        <td style="padding:12px 16px;color:#0f172a;font-size:13px;font-weight:700;border-bottom:1px solid #e2e8f0;">${loanTypeLabel[loanType] || loanType}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;border-bottom:1px solid #e2e8f0;">Property Value</td>
+                        <td style="padding:12px 16px;color:#0f172a;font-size:13px;font-weight:700;border-bottom:1px solid #e2e8f0;">${propertyValue}</td>
+                      </tr>
+                      <tr style="background-color:#f8fafc;">
+                        <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;border-bottom:1px solid #e2e8f0;">Estimated Loan Amount</td>
+                        <td style="padding:12px 16px;color:#e8192c;font-size:13px;font-weight:800;border-bottom:1px solid #e2e8f0;">${estimatedLoan}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;">Property Address</td>
+                        <td style="padding:12px 16px;color:#0f172a;font-size:13px;font-weight:700;">${propertyAddress || "Not provided"}</td>
+                      </tr>
+                    </table>
+
+                    <!-- WHAT HAPPENS NEXT -->
+                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;">🚀 What Happens Next</p>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      ${[
+                        [
+                          "1",
+                          "Application Review",
+                          "Our team carefully reviews your information and financial profile.",
+                        ],
+                        [
+                          "2",
+                          "Loan Officer Contact",
+                          "A dedicated loan officer will call or email you within 1–2 business days.",
+                        ],
+                        [
+                          "3",
+                          "Document Collection",
+                          "You may be asked to upload supporting documents through your secure portal.",
+                        ],
+                        [
+                          "4",
+                          "Approval &amp; Closing",
+                          "Once everything checks out, we'll guide you through to closing day.",
+                        ],
+                      ]
+                        .map(
+                          ([num, title, desc]) => `
+                        <tr>
+                          <td style="padding:10px 0;vertical-align:top;">
+                            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                              <tr>
+                                <td style="width:36px;vertical-align:top;padding-top:2px;">
+                                  <div style="width:28px;height:28px;background-color:#e8192c;border-radius:50%;text-align:center;line-height:28px;color:#ffffff;font-size:13px;font-weight:800;">${num}</div>
+                                </td>
+                                <td style="padding-left:12px;">
+                                  <p style="margin:0 0 3px 0;color:#0f172a;font-size:14px;font-weight:700;">${title}</p>
+                                  <p style="margin:0;color:#475569;font-size:13px;line-height:1.5;">${desc}</p>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      `,
+                        )
+                        .join("")}
+                    </table>
+
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center" style="background-color:#f8fafc;border-radius:12px;padding:24px;">
+                          <p style="margin:0 0 16px 0;color:#475569;font-size:14px;">Track your application status and upload documents in your secure portal.</p>
+                          <a href="${portalUrl}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 48px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Access My Portal</a>
+                          <p style="margin:12px 0 0 0;color:#94a3b8;font-size:12px;">Use your email address to verify your identity on first login.</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;line-height:1.6;">
+                      Questions? Call us at <a href="tel:(562)337-0000" style="color:#e8192c;text-decoration:none;font-weight:600;">(562) 337-0000</a>
+                    </p>
+                  </td>
+                </tr>
+
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage · NMLS #1946451</p>
+                    <p style="margin:0 0 8px 0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                    <p style="margin:0;color:#475569;font-size:11px;">
+                      This email was sent because you submitted a loan application on our website.
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("✅ Public application welcome email sent!");
+  } catch (error) {
+    console.error("❌ Error sending public application welcome email:", error);
+    throw error;
+  }
+}
+
+/**
  * Send email when task is reopened for rework
  */
 async function sendTaskReopenedEmail(
@@ -881,6 +1086,105 @@ async function sendTaskApprovedEmail(
 // =====================================================
 // MIDDLEWARE
 // =====================================================
+
+async function sendNewTaskAssignedEmail(
+  email: string,
+  firstName: string,
+  taskTitle: string,
+  taskDescription: string | null,
+  applicationNumber: string,
+): Promise<void> {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT!),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    const mailOptions = {
+      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: `New Task Assigned: ${taskTitle}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>New Task Assigned</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <h2 style="margin:0 0 6px 0;color:#0f172a;font-size:22px;font-weight:700;text-align:center;">New Task Assigned</h2>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;text-align:center;">Hi <strong style="color:#0f172a;">${firstName}</strong>, a new task has been added to your loan application.</p>
+                    <!-- APP NUMBER -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+                      <tr>
+                        <td style="background-color:#f1f5f9;border-radius:8px;padding:12px 16px;text-align:center;">
+                          <p style="margin:0;color:#64748b;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Application</p>
+                          <p style="margin:4px 0 0;color:#0f172a;font-size:16px;font-weight:700;letter-spacing:0.5px;">#${applicationNumber}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- TASK BOX -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+                      <tr>
+                        <td style="background-color:#eff6ff;border-left:4px solid #2563eb;border-radius:0 8px 8px 0;padding:16px 18px;">
+                          <p style="margin:0 0 4px 0;color:#2563eb;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Task Required</p>
+                          <p style="margin:0 0 6px;color:#0f172a;font-size:15px;font-weight:600;">${taskTitle}</p>
+                          ${taskDescription ? `<p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">${taskDescription}</p>` : ""}
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Please log in to your portal to review and complete this task. Completing tasks promptly helps keep your application on track.</p>
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center">
+                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/portal" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to My Portal</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">Questions? Contact your loan officer at Encore Mortgage.</p>
+                  </td>
+                </tr>
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage &mdash; NMLS #1946451</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("✅ New task assigned email sent!");
+  } catch (error) {
+    console.error("❌ Error sending new task assigned email:", error);
+    throw error;
+  }
+}
 
 /**
  * Middleware to verify client session
@@ -1910,6 +2214,248 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
 };
 
 /**
+ * PUBLIC: Submit a loan application from the public-facing wizard.
+ * No broker auth required. Creates client + loan (status=submitted, broker_user_id=NULL).
+ */
+const handlePublicApply: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const {
+      // Identity (Step 1)
+      first_name,
+      last_name,
+      email,
+      phone,
+      address_street,
+      address_city,
+      address_state,
+      address_zip,
+      date_of_birth,
+      // Property (Step 2)
+      loan_type,
+      property_value,
+      down_payment,
+      property_type,
+      property_address,
+      property_city,
+      property_state,
+      property_zip,
+      loan_purpose,
+      // Finances (Step 3)
+      annual_income,
+      credit_score_range,
+      income_type,
+      // Employment (Step 4)
+      employment_status,
+      employer_name,
+      years_employed,
+    } = req.body;
+
+    if (!email || !first_name || !last_name) {
+      res
+        .status(400)
+        .json({ success: false, error: "Name and email are required" });
+      return;
+    }
+
+    // Derive numeric loan amount from property_value minus down_payment (best estimate)
+    const propVal = parseFloat(property_value) || 0;
+    const dp = parseFloat(down_payment) || 0;
+    const loan_amount = propVal > dp ? propVal - dp : propVal || 100000;
+
+    // Upsert client (keyed by email + tenant)
+    const [existingClients] = await connection.query<any[]>(
+      "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
+      [email.toLowerCase().trim(), MORTGAGE_TENANT_ID],
+    );
+
+    let clientId: number;
+    const resolvedIncomeType =
+      income_type &&
+      ["W-2", "1099", "Self-Employed", "Investor", "Mixed"].includes(
+        income_type,
+      )
+        ? income_type
+        : "W-2";
+
+    if (existingClients.length > 0) {
+      clientId = existingClients[0].id;
+      await connection.query(
+        `UPDATE clients SET first_name=?, last_name=?, phone=?,
+          address_street=?, address_city=?, address_state=?, address_zip=?,
+          employment_status=?, income_type=?, annual_income=?, credit_score=?,
+          updated_at=NOW()
+         WHERE id=? AND tenant_id=?`,
+        [
+          first_name,
+          last_name,
+          phone || null,
+          address_street || null,
+          address_city || null,
+          address_state || null,
+          address_zip || null,
+          employment_status || null,
+          resolvedIncomeType,
+          annual_income || null,
+          credit_score_range ? parseInt(credit_score_range) : null,
+          clientId,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+    } else {
+      const [clientResult] = await connection.query<any>(
+        `INSERT INTO clients
+          (tenant_id, email, first_name, last_name, phone,
+           address_street, address_city, address_state, address_zip,
+           employment_status, income_type, annual_income, credit_score,
+           status, email_verified, source)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
+        [
+          MORTGAGE_TENANT_ID,
+          email.toLowerCase().trim(),
+          first_name,
+          last_name,
+          phone || null,
+          address_street || null,
+          address_city || null,
+          address_state || null,
+          address_zip || null,
+          employment_status || null,
+          resolvedIncomeType,
+          annual_income || null,
+          credit_score_range ? parseInt(credit_score_range) : null,
+        ],
+      );
+      clientId = clientResult.insertId;
+    }
+
+    const applicationNumber = `LA${Date.now().toString().slice(-8)}`;
+
+    const resolvedLoanType =
+      loan_type &&
+      [
+        "purchase",
+        "refinance",
+        "home_equity",
+        "commercial",
+        "construction",
+        "other",
+      ].includes(loan_type)
+        ? loan_type
+        : "purchase";
+
+    const resolvedPropertyType =
+      property_type &&
+      [
+        "single_family",
+        "condo",
+        "multi_family",
+        "commercial",
+        "land",
+        "other",
+      ].includes(property_type)
+        ? property_type
+        : null;
+
+    const [loanResult] = await connection.query<any>(
+      `INSERT INTO loan_applications
+        (tenant_id, application_number, client_user_id, broker_user_id,
+         loan_type, loan_amount, property_value, property_address,
+         property_city, property_state, property_zip, property_type,
+         down_payment, loan_purpose, status, current_step, total_steps,
+         priority, notes, submitted_at)
+       VALUES (?,?,?,NULL, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        applicationNumber,
+        clientId,
+        resolvedLoanType,
+        loan_amount,
+        propVal || null,
+        property_address || null,
+        property_city || null,
+        property_state || null,
+        property_zip || null,
+        resolvedPropertyType,
+        dp || null,
+        loan_purpose || null,
+        `Public wizard submission. Employment: ${employment_status || "N/A"}, Employer: ${employer_name || "N/A"}, Years employed: ${years_employed || "N/A"}`,
+      ],
+    );
+
+    const applicationId = loanResult.insertId;
+
+    // Notify the client
+    await connection.query(
+      `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
+       VALUES (?,?,?,?,'info','/portal')`,
+      [
+        MORTGAGE_TENANT_ID,
+        clientId,
+        "Application Received",
+        `Your loan application ${applicationNumber} has been received. A loan officer will be in touch shortly.`,
+      ],
+    );
+
+    await connection.commit();
+
+    // Send confirmation email (non-fatal)
+    try {
+      const fmt = (v: number | null) =>
+        v != null
+          ? new Intl.NumberFormat("en-US", {
+              style: "currency",
+              currency: "USD",
+              maximumFractionDigits: 0,
+            }).format(v)
+          : "N/A";
+
+      const estimatedLoanAmt = propVal > dp ? propVal - dp : propVal;
+      const addressStr = [
+        property_address,
+        property_city,
+        property_state,
+        property_zip,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      await sendPublicApplicationWelcomeEmail(
+        email,
+        first_name,
+        last_name,
+        applicationNumber,
+        resolvedLoanType,
+        fmt(propVal),
+        fmt(estimatedLoanAmt),
+        addressStr,
+      );
+    } catch (emailError) {
+      console.error("Welcome email failed (non-fatal):", emailError);
+    }
+
+    res.json({
+      success: true,
+      application_id: applicationId,
+      application_number: applicationNumber,
+      client_id: clientId,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error submitting public application:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to submit application",
+    });
+  } finally {
+    connection.release();
+  }
+};
+
+/**
  * Get all loan applications (pipeline)
  */
 const handleGetLoans: RequestHandler = async (req, res) => {
@@ -2260,6 +2806,49 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
       success: false,
       error:
         error instanceof Error ? error.message : "Failed to fetch loan details",
+    });
+  }
+};
+
+/**
+ * PATCH /api/loans/:loanId/assign-broker
+ * Assign (or unassign) a broker to a loan application.
+ * Admin-only.
+ */
+const handleAssignBroker: RequestHandler = async (req, res) => {
+  try {
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    const loanId = parseInt(req.params.loanId);
+    const { broker_id } = req.body; // null = unassign
+
+    if (broker_id !== null && broker_id !== undefined) {
+      // Verify the broker exists and belongs to this tenant
+      const [rows] = (await pool.query(
+        "SELECT id FROM brokers WHERE id = ? AND tenant_id = ?",
+        [broker_id, MORTGAGE_TENANT_ID],
+      )) as [RowDataPacket[], any];
+      if (rows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broker not found" });
+      }
+    }
+
+    await pool.query(
+      "UPDATE loan_applications SET broker_user_id = ? WHERE id = ? AND tenant_id = ?",
+      [broker_id ?? null, loanId, MORTGAGE_TENANT_ID],
+    );
+
+    res.json({ success: true, message: "Broker assignment updated" });
+  } catch (error) {
+    console.error("Error assigning broker:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to assign broker",
     });
   }
 };
@@ -3054,7 +3643,7 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
       requires_documents,
       document_instructions,
       has_custom_form,
-      application_id, // Ignore this for templates
+      application_id,
     } = req.body;
 
     // Validate required fields
@@ -3066,7 +3655,87 @@ const handleCreateTaskTemplate: RequestHandler = async (req, res) => {
       return;
     }
 
-    // Get max order_index to append new template at end
+    // ── Task INSTANCE path (adding a task to an existing loan) ──
+    if (application_id) {
+      // Fetch loan + client info for notification/email
+      const [loanRows] = (await pool.query<RowDataPacket[]>(
+        `SELECT la.id, la.application_number, la.client_user_id,
+                c.email, c.first_name, c.last_name
+         FROM loan_applications la
+         INNER JOIN clients c ON la.client_user_id = c.id
+         WHERE la.id = ? AND la.tenant_id = ?`,
+        [application_id, MORTGAGE_TENANT_ID],
+      )) as [RowDataPacket[], any];
+
+      if (loanRows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Loan not found" });
+      }
+
+      const loan = loanRows[0];
+      const dueDate = default_due_days
+        ? new Date(Date.now() + default_due_days * 86_400_000)
+        : null;
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO tasks (
+          tenant_id, application_id, title, description, task_type, status, priority,
+          assigned_to_user_id, created_by_broker_id, due_date
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          application_id,
+          title,
+          description || null,
+          task_type,
+          priority,
+          loan.client_user_id,
+          brokerId,
+          dueDate,
+        ],
+      );
+
+      const taskId = result.insertId;
+
+      // In-app notification
+      await pool.query(
+        `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, action_url)
+         VALUES (?, ?, ?, ?, 'info', '/portal')`,
+        [
+          MORTGAGE_TENANT_ID,
+          loan.client_user_id,
+          "New Task Assigned",
+          `A new task "${title}" has been added to your loan application #${loan.application_number}.`,
+        ],
+      );
+
+      // Email notification (non-fatal)
+      try {
+        await sendNewTaskAssignedEmail(
+          loan.email,
+          loan.first_name,
+          title,
+          description || null,
+          loan.application_number,
+        );
+      } catch (emailErr) {
+        console.error("Task assigned email failed (non-fatal):", emailErr);
+      }
+
+      const [taskRows] = await pool.query<RowDataPacket[]>(
+        "SELECT * FROM tasks WHERE id = ?",
+        [taskId],
+      );
+
+      return res.json({
+        success: true,
+        task: taskRows[0],
+        message: "Task added to loan successfully",
+      });
+    }
+
+    // ── Task TEMPLATE path (no application_id) ──
     const [maxOrder] = await pool.query<any[]>(
       "SELECT COALESCE(MAX(order_index), 0) as max_order FROM task_templates WHERE created_by_broker_id = ? AND tenant_id = ?",
       [brokerId, MORTGAGE_TENANT_ID],
@@ -7913,6 +8582,9 @@ function createServer() {
   expressApp.get("/api/client/auth/validate", handleClientValidateSession);
   expressApp.post("/api/client/auth/logout", handleClientLogout);
 
+  // Public apply route (no auth required)
+  expressApp.post("/api/apply", handlePublicApply);
+
   // Protected routes (require broker session)
   expressApp.get(
     "/api/dashboard/stats",
@@ -7925,6 +8597,11 @@ function createServer() {
     "/api/loans/:loanId",
     verifyBrokerSession,
     handleGetLoanDetails,
+  );
+  expressApp.patch(
+    "/api/loans/:loanId/assign-broker",
+    verifyBrokerSession,
+    handleAssignBroker,
   );
   expressApp.patch(
     "/api/loans/:loanId/status",
