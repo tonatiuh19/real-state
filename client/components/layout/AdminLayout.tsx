@@ -19,6 +19,7 @@ import {
   Shield,
   Bell,
   UserCog,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -132,6 +133,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Conversations",
       icon: <MessageCircle className="h-4 w-4" />,
       path: "/admin/conversations",
+      disabled: true,
     },
     {
       id: "reports",
@@ -162,6 +164,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Settings",
       icon: <Settings className="h-4 w-4" />,
       path: "/admin/settings",
+      disabled: true,
     },
   ];
 
@@ -206,24 +209,57 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
 
         {/* Menu Items */}
         <div className="flex-1 space-y-1 p-4 overflow-y-auto scrollbar-thin scrollbar-thumb-muted scrollbar-track-transparent">
-          {menuItems.map((item) => (
-            <Button
-              key={item.id}
-              variant={location.pathname === item.path ? "secondary" : "ghost"}
-              className={cn(
-                "w-full gap-3",
-                sidebarCollapsed ? "justify-center px-2" : "justify-start",
-                location.pathname === item.path
-                  ? "bg-primary/10 text-primary hover:bg-primary/20"
-                  : "",
-              )}
-              onClick={() => navigate(item.path)}
-              title={sidebarCollapsed ? item.label : undefined}
-            >
-              {item.icon}
-              {!sidebarCollapsed && item.label}
-            </Button>
-          ))}
+          {menuItems.map((item) => {
+            const menuButton = (
+              <Button
+                key={item.id}
+                variant={
+                  location.pathname === item.path ? "secondary" : "ghost"
+                }
+                className={cn(
+                  "w-full gap-3",
+                  sidebarCollapsed ? "justify-center px-2" : "justify-start",
+                  location.pathname === item.path
+                    ? "bg-primary/10 text-primary hover:bg-primary/20"
+                    : "",
+                  item.disabled
+                    ? "opacity-60 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground"
+                    : "",
+                )}
+                onClick={() => {
+                  if (!item.disabled) navigate(item.path);
+                }}
+                aria-disabled={item.disabled}
+                title={
+                  sidebarCollapsed && !item.disabled ? item.label : undefined
+                }
+              >
+                {item.icon}
+                {!sidebarCollapsed && (
+                  <>
+                    <span>{item.label}</span>
+                    {item.disabled && <Lock className="h-3.5 w-3.5 ml-auto" />}
+                  </>
+                )}
+                {sidebarCollapsed && item.disabled && (
+                  <Lock className="h-3.5 w-3.5 absolute top-1.5 right-1.5" />
+                )}
+              </Button>
+            );
+
+            if (!item.disabled) {
+              return menuButton;
+            }
+
+            return (
+              <Tooltip key={item.id} delayDuration={250}>
+                <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
+                <TooltipContent side={sidebarCollapsed ? "right" : "top"}>
+                  <p>Coming soon</p>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
         </div>
 
         {/* User Section */}
