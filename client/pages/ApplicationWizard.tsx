@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -21,9 +21,15 @@ import {
   Building2,
   Lock as LockIcon,
   ClipboardList,
+  ListChecks,
   Loader2,
   AlertCircle,
   BadgeCheck,
+  Mail,
+  Award,
+  MapPin,
+  Phone,
+  Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -35,6 +41,11 @@ import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   submitPublicApplication,
   resetWizard,
+  fetchBrokerPublicInfo,
+  clearBrokerInfo,
+  saveDraft,
+  loadDraft,
+  clearDraft,
 } from "@/store/slices/applicationWizardSlice";
 
 // ─── Steps definition ──────────────────────────────────────────────────────
@@ -158,14 +169,73 @@ const formatCurrency = (v: string | number) => {
 // ─── Component ────────────────────────────────────────────────────────────
 
 const ApplicationWizard = () => {
+  const { brokerToken } = useParams<{ brokerToken?: string }>();
   const [currentStep, setCurrentStep] = useState(1);
+  // Step 0: broker welcome   (only relevant when brokerToken is present)
+  const [step0Completed, setStep0Completed] = useState(false);
+  const [guestEmail, setGuestEmail] = useState("");
+  const [guestEmailInput, setGuestEmailInput] = useState("");
+  const [guestEmailError, setGuestEmailError] = useState("");
+
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const { loading, error, submittedApplicationNumber } = useAppSelector(
-    (s) => s.applicationWizard,
-  );
+  const {
+    loading,
+    error,
+    submittedApplicationNumber,
+    brokerInfo,
+    brokerInfoLoading,
+    brokerInfoError,
+    draft,
+  } = useAppSelector((s) => s.applicationWizard);
   const { toast } = useToast();
   const isDev = IS_DEV;
+
+  // Load draft from localStorage on first mount
+  useEffect(() => {
+    dispatch(loadDraft());
+  }, [dispatch]);
+
+  // Restore draft into form + step once draft is in state
+  useEffect(() => {
+    if (draft) {
+      formik.setValues(draft.values as typeof initialValues);
+      setCurrentStep(draft.currentStep);
+      if (draft.currentStep > 1) setStep0Completed(true);
+      if (draft.values.email) setGuestEmail(draft.values.email);
+    }
+    // Only run once when draft first loads
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.savedAt]);
+
+  // Fetch broker info when brokerToken is in the URL
+  useEffect(() => {
+    if (brokerToken) {
+      dispatch(fetchBrokerPublicInfo(brokerToken));
+    }
+    return () => {
+      dispatch(clearBrokerInfo());
+    };
+  }, [brokerToken, dispatch]);
+
+  const handleStep0Continue = () => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!guestEmailInput.trim()) {
+      setGuestEmailError("Please enter your email address");
+      return;
+    }
+    if (!emailRegex.test(guestEmailInput)) {
+      setGuestEmailError("Please enter a valid email address");
+      return;
+    }
+    setGuestEmailError("");
+    setGuestEmail(guestEmailInput);
+    setStep0Completed(true);
+    // Pre-fill email in formik after step 0
+    setTimeout(() => {
+      formik.setFieldValue("email", guestEmailInput);
+    }, 50);
+  };
 
   const fillTestData = () => {
     formik.setValues({
@@ -230,9 +300,12 @@ const ApplicationWizard = () => {
           employment_status: values.employment_status,
           employer_name: values.employer_name,
           years_employed: values.years_employed,
+          // Pass broker_token so this application is tracked to the broker
+          broker_token: brokerToken || undefined,
         }),
       );
       if (submitPublicApplication.fulfilled.match(result)) {
+        dispatch(clearDraft());
         setCurrentStep(6);
       }
     },
@@ -262,6 +335,258 @@ const ApplicationWizard = () => {
   const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 1));
   const isComplete = currentStep === 6;
 
+  // ── Broker Welcome Step 0 (only when arriving via share link) ──
+  if (brokerToken && !step0Completed) {
+    return (
+      <div className="min-h-screen w-full bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
+        <MetaHelmet {...applicationPageMeta} />
+
+        {/* Logo */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="mb-8"
+        >
+          <img
+            src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+            alt="Encore Mortgage"
+            className="h-10 w-auto"
+          />
+        </motion.div>
+
+        <AnimatePresence mode="wait">
+          {brokerInfoLoading ? (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex flex-col items-center gap-3"
+            >
+              <Loader2 className="h-7 w-7 animate-spin text-primary" />
+              <p className="text-sm text-gray-500">Loading broker profile…</p>
+            </motion.div>
+          ) : brokerInfoError ? (
+            <motion.div
+              key="error"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="w-full max-w-sm bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-center"
+            >
+              <AlertCircle className="h-10 w-10 text-red-400 mx-auto mb-3" />
+              <h1 className="text-xl font-bold text-gray-900 mb-2">
+                Link Not Found
+              </h1>
+              <p className="text-sm text-gray-500 mb-5">
+                This application link is no longer valid or has been
+                deactivated.
+              </p>
+              <Button variant="outline" onClick={() => navigate("/")}>
+                Go to Homepage
+              </Button>
+            </motion.div>
+          ) : brokerInfo ? (
+            <motion.div
+              key="content"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4 }}
+              className="w-full max-w-sm"
+            >
+              {/* Card */}
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                {/* Red top accent */}
+                <div className="h-1 bg-primary" />
+
+                <div className="p-7">
+                  {/* Broker identity */}
+                  <div className="flex items-center gap-4 mb-6">
+                    {brokerInfo.avatar_url ? (
+                      <img
+                        src={brokerInfo.avatar_url}
+                        alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
+                        className="h-14 w-14 rounded-xl object-cover border border-gray-200 shrink-0"
+                      />
+                    ) : (
+                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary text-white text-lg font-bold shrink-0">
+                        {brokerInfo.first_name[0]}
+                        {brokerInfo.last_name[0]}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <h1 className="text-lg font-bold text-gray-900 truncate">
+                        {brokerInfo.first_name} {brokerInfo.last_name}
+                      </h1>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Mortgage Professional
+                      </p>
+                      {brokerInfo.license_number && (
+                        <Badge
+                          variant="outline"
+                          className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
+                        >
+                          NMLS #{brokerInfo.license_number}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Stats */}
+                  {(brokerInfo.years_experience ||
+                    brokerInfo.total_loans_closed > 0 ||
+                    (brokerInfo.specializations?.length ?? 0) > 0) && (
+                    <div className="flex gap-2 mb-5">
+                      {brokerInfo.years_experience && (
+                        <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                          <Award className="h-3.5 w-3.5 text-primary shrink-0" />
+                          <div>
+                            <p className="text-sm font-bold text-gray-900 leading-none">
+                              {brokerInfo.years_experience}
+                            </p>
+                            <p className="text-[10px] text-gray-400">
+                              Yrs exp.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {brokerInfo.total_loans_closed > 0 && (
+                        <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                          <div>
+                            <p className="text-sm font-bold text-gray-900 leading-none">
+                              {brokerInfo.total_loans_closed}+
+                            </p>
+                            <p className="text-[10px] text-gray-400">Closed</p>
+                          </div>
+                        </div>
+                      )}
+                      {(brokerInfo.specializations?.length ?? 0) > 0 && (
+                        <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                          <Star className="h-3.5 w-3.5 text-primary shrink-0" />
+                          <p className="text-[10px] text-gray-600 font-medium leading-tight line-clamp-2">
+                            {brokerInfo.specializations![0]}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Bio */}
+                  {brokerInfo.bio && (
+                    <p className="text-xs text-gray-500 italic leading-relaxed mb-5 border-l-2 border-primary/40 pl-3">
+                      "{brokerInfo.bio}"
+                    </p>
+                  )}
+
+                  {/* Contact */}
+                  {(brokerInfo.phone || brokerInfo.office_city) && (
+                    <div className="flex flex-wrap gap-3 mb-5">
+                      {brokerInfo.phone && (
+                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                          <Phone className="h-3 w-3 text-gray-400" />
+                          {brokerInfo.phone}
+                        </div>
+                      )}
+                      {brokerInfo.office_city && (
+                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                          <MapPin className="h-3 w-3 text-gray-400" />
+                          {brokerInfo.office_city}
+                          {brokerInfo.office_state
+                            ? `, ${brokerInfo.office_state}`
+                            : ""}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Divider + CTA */}
+                  <div className="border-t border-gray-100 pt-5">
+                    <h2 className="text-base font-bold text-gray-900 mb-0.5">
+                      Ready to get started?
+                    </h2>
+                    <p className="text-xs text-gray-500 mb-4">
+                      Enter your email to begin your mortgage application.
+                    </p>
+
+                    <div className="space-y-1.5">
+                      <label
+                        htmlFor="guest-email"
+                        className="text-xs font-semibold text-gray-700"
+                      >
+                        Your Email Address
+                      </label>
+                      <div className="relative">
+                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        <Input
+                          id="guest-email"
+                          type="email"
+                          placeholder="you@example.com"
+                          value={guestEmailInput}
+                          onChange={(e) => {
+                            setGuestEmailInput(e.target.value);
+                            if (guestEmailError) setGuestEmailError("");
+                          }}
+                          onKeyDown={(e) =>
+                            e.key === "Enter" && handleStep0Continue()
+                          }
+                          className={cn(
+                            "pl-10 h-11 text-sm",
+                            guestEmailError
+                              ? "border-red-400 focus-visible:ring-red-400"
+                              : "",
+                          )}
+                        />
+                      </div>
+                      {guestEmailError && (
+                        <p className="flex items-center gap-1 text-xs text-red-500">
+                          <AlertCircle className="h-3 w-3" />
+                          {guestEmailError}
+                        </p>
+                      )}
+                    </div>
+
+                    <Button
+                      onClick={handleStep0Continue}
+                      className="w-full h-11 mt-3 text-sm shadow-sm"
+                    >
+                      Start Application <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Trust badges */}
+              <div className="flex justify-center gap-6 mt-5">
+                {[
+                  {
+                    icon: <LockIcon className="h-3.5 w-3.5" />,
+                    label: "Secure & Private",
+                  },
+                  {
+                    icon: <ShieldCheck className="h-3.5 w-3.5" />,
+                    label: "SSL Encrypted",
+                  },
+                  {
+                    icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+                    label: "No Commitment",
+                  },
+                ].map((b) => (
+                  <div
+                    key={b.label}
+                    className="flex flex-col items-center gap-1 text-gray-400"
+                  >
+                    {b.icon}
+                    <span className="text-[10px]">{b.label}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-background overflow-y-auto">
       <MetaHelmet {...applicationPageMeta} />
@@ -281,9 +606,34 @@ const ApplicationWizard = () => {
               />
             </Link>
             <div className="h-4 w-px bg-border hidden sm:block" />
-            <span className="text-sm font-medium text-muted-foreground hidden sm:block">
-              Loan Application Wizard
-            </span>
+            <div className="hidden sm:flex items-center gap-2.5">
+              {brokerInfo && (
+                <div className="h-8 w-8 rounded-full overflow-hidden ring-2 ring-primary/20 flex-shrink-0">
+                  {brokerInfo.avatar_url ? (
+                    <img
+                      src={brokerInfo.avatar_url}
+                      alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-primary flex items-center justify-center text-white text-xs font-bold">
+                      {brokerInfo.first_name[0]}
+                      {brokerInfo.last_name[0]}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium text-muted-foreground leading-none">
+                  Loan Application Wizard
+                </span>
+                {brokerInfo && (
+                  <span className="text-xs text-primary font-medium leading-none">
+                    with {brokerInfo.first_name} {brokerInfo.last_name}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {isDev && !isComplete && (
@@ -344,10 +694,44 @@ const ApplicationWizard = () => {
                   <span className="font-bold text-primary">
                     #{submittedApplicationNumber}
                   </span>{" "}
-                  has been received. A loan officer from Encore Mortgage will
-                  review it and contact you within 1–2 business days.
+                  has been received.{" "}
+                  {brokerInfo
+                    ? `${brokerInfo.first_name} will review it and reach out to you shortly.`
+                    : "A loan officer from Encore Mortgage will review it and contact you within 1–2 business days."}
                 </p>
               </div>
+
+              {/* Broker callout — only shown when arrived via share link */}
+              {brokerInfo && (
+                <div className="flex items-center gap-4 bg-white border border-gray-200 rounded-2xl px-5 py-4 shadow-sm max-w-sm w-full">
+                  <div className="h-12 w-12 rounded-xl overflow-hidden shrink-0">
+                    {brokerInfo.avatar_url ? (
+                      <img
+                        src={brokerInfo.avatar_url}
+                        alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full bg-primary flex items-center justify-center text-white text-sm font-bold">
+                        {brokerInfo.first_name[0]}
+                        {brokerInfo.last_name[0]}
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-400 mb-0.5">
+                      Your loan officer
+                    </p>
+                    <p className="text-sm font-bold text-gray-900 truncate">
+                      {brokerInfo.first_name} {brokerInfo.last_name}
+                    </p>
+                    <p className="text-xs text-primary font-medium">
+                      Will be in touch soon ✓
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="grid sm:grid-cols-3 gap-4 max-w-lg w-full">
                 {[
                   {
@@ -359,8 +743,8 @@ const ApplicationWizard = () => {
                     text: "You'll be contacted within 48 hours",
                   },
                   {
-                    icon: <LockIcon className="h-5 w-5" />,
-                    text: "Access your portal to track progress",
+                    icon: <ListChecks className="h-5 w-5" />,
+                    text: "Complete your pending tasks in the portal to move forward",
                   },
                 ].map((item, i) => (
                   <div
@@ -376,6 +760,23 @@ const ApplicationWizard = () => {
                   </div>
                 ))}
               </div>
+              {/* Portal tasks callout */}
+              <div className="w-full max-w-lg rounded-2xl border-2 border-primary/20 bg-primary/5 px-5 py-4 flex items-start gap-4">
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-white">
+                  <ListChecks className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 mb-0.5">
+                    You have tasks to complete
+                  </p>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    Head to your portal to upload documents, sign forms, and
+                    complete any pending tasks required to process your
+                    application.
+                  </p>
+                </div>
+              </div>
+
               <div className="flex gap-4 pt-2">
                 <Button
                   variant="outline"
@@ -1249,7 +1650,21 @@ const ApplicationWizard = () => {
                             type="button"
                             variant="outline"
                             size="lg"
-                            onClick={() => navigate("/")}
+                            onClick={() => {
+                              dispatch(
+                                saveDraft({
+                                  values: formik.values,
+                                  currentStep,
+                                  brokerToken: brokerToken || undefined,
+                                  savedAt: new Date().toISOString(),
+                                }),
+                              );
+                              toast({
+                                title: "Draft saved",
+                                description:
+                                  "Your progress has been saved. You can return anytime to continue.",
+                              });
+                            }}
                             className="rounded-xl hidden sm:flex"
                           >
                             Save for later
@@ -1312,7 +1727,7 @@ const ApplicationWizard = () => {
 
       {/* Decorative background blobs */}
       <div className="fixed top-0 left-0 -z-10 h-[500px] w-[500px] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
-      <div className="fixed bottom-0 right-0 -z-10 h-[500px] w-[500px] rounded-full bg-blue-500/5 blur-[120px] pointer-events-none" />
+      <div className="fixed bottom-0 right-0 -z-10 h-[500px] w-[500px] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
     </div>
   );
 };

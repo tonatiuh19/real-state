@@ -358,11 +358,11 @@ async function sendBrokerVerificationEmail(
 
     const emailBody = `
       <!DOCTYPE html>
-      <html lang="es">
+      <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Código de Verificación</title>
+        <title>Verification Code</title>
       </head>
       <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
@@ -377,8 +377,8 @@ async function sendBrokerVerificationEmail(
               <!-- BODY -->
               <tr>
                 <td style="background-color:#ffffff;padding:40px 32px 32px;">
-                  <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hola ${firstName},</h2>
-                  <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Tu código de verificación para el panel de administración es:</p>
+                  <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hi ${firstName},</h2>
+                  <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Your verification code for the admin panel is:</p>
                   <!-- CODE BOX -->
                   <table width="100%" cellpadding="0" cellspacing="0" border="0">
                     <tr>
@@ -391,8 +391,8 @@ async function sendBrokerVerificationEmail(
                   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;">
                     <tr>
                       <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;">
-                        <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>⏱️ Validez:</strong> Este código expirará en <strong>15 minutos</strong>.</p>
-                        <p style="margin:0;color:#64748b;font-size:13px;">Si no solicitaste este código, puedes ignorar este correo.</p>
+                        <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>⏱️ Expires in:</strong> This code will expire in <strong>15 minutes</strong>.</p>
+                        <p style="margin:0;color:#64748b;font-size:13px;">If you did not request this code, you can safely ignore this email.</p>
                       </td>
                     </tr>
                   </table>
@@ -402,7 +402,7 @@ async function sendBrokerVerificationEmail(
               <tr>
                 <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
                   <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
-                  <p style="margin:0;color:#94a3b8;font-size:12px;">Panel de Administración</p>
+                  <p style="margin:0;color:#94a3b8;font-size:12px;">Admin Panel</p>
                 </td>
               </tr>
             </table>
@@ -2251,6 +2251,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       employment_status,
       employer_name,
       years_employed,
+      // Optional broker association
+      broker_token,
     } = req.body;
 
     if (!email || !first_name || !last_name) {
@@ -2359,18 +2361,31 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         ? property_type
         : null;
 
+    // Resolve broker from share link token (if provided)
+    let resolvedBrokerUserId: number | null = null;
+    if (broker_token) {
+      const [brokerRows] = await connection.query<any[]>(
+        "SELECT id FROM brokers WHERE public_token = ? AND status = 'active'",
+        [broker_token],
+      );
+      if (brokerRows.length > 0) {
+        resolvedBrokerUserId = brokerRows[0].id;
+      }
+    }
+
     const [loanResult] = await connection.query<any>(
       `INSERT INTO loan_applications
         (tenant_id, application_number, client_user_id, broker_user_id,
          loan_type, loan_amount, property_value, property_address,
          property_city, property_state, property_zip, property_type,
          down_payment, loan_purpose, status, current_step, total_steps,
-         priority, notes, submitted_at)
-       VALUES (?,?,?,NULL, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,NOW())`,
+         priority, notes, broker_token, submitted_at)
+       VALUES (?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,?,NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
         clientId,
+        resolvedBrokerUserId,
         resolvedLoanType,
         loan_amount,
         propVal || null,
@@ -2382,6 +2397,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         dp || null,
         loan_purpose || null,
         `Public wizard submission. Employment: ${employment_status || "N/A"}, Employer: ${employer_name || "N/A"}, Years employed: ${years_employed || "N/A"}`,
+        broker_token || null,
       ],
     );
 
@@ -2452,6 +2468,280 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     });
   } finally {
     connection.release();
+  }
+};
+
+// ─── Broker Public Share Link Handlers ───────────────────────────────────────
+
+/**
+ * GET /api/public/broker/:token
+ * Returns public broker info for the share link landing page (no auth required)
+ */
+const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      res.status(400).json({ success: false, error: "Token is required" });
+      return;
+    }
+
+    const [rows] = await pool.query<any[]>(
+      `SELECT b.id, b.first_name, b.last_name, b.email, b.phone,
+              b.license_number, b.specializations, b.public_token,
+              bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+              bp.office_state, bp.years_experience, bp.total_loans_closed
+       FROM brokers b
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       WHERE b.public_token = ? AND b.status = 'active'`,
+      [token],
+    );
+
+    if (rows.length === 0) {
+      res.status(404).json({ success: false, error: "Broker not found" });
+      return;
+    }
+
+    const row = rows[0];
+    res.json({
+      success: true,
+      broker: {
+        id: row.id,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        email: row.email,
+        phone: row.phone,
+        license_number: row.license_number,
+        specializations: row.specializations
+          ? typeof row.specializations === "string"
+            ? JSON.parse(row.specializations)
+            : row.specializations
+          : null,
+        public_token: row.public_token,
+        bio: row.bio,
+        avatar_url: row.avatar_url,
+        office_address: row.office_address,
+        office_city: row.office_city,
+        office_state: row.office_state,
+        years_experience: row.years_experience,
+        total_loans_closed: row.total_loans_closed || 0,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching broker public info:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch broker info" });
+  }
+};
+
+/**
+ * GET /api/brokers/my-share-link
+ * Returns the authenticated broker's share link token & URL (requires auth)
+ */
+const handleGetMyShareLink: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [rows] = await pool.query<any[]>(
+      "SELECT public_token FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+
+    if (rows.length === 0 || !rows[0].public_token) {
+      res.status(404).json({ success: false, error: "Broker not found" });
+      return;
+    }
+
+    const token = rows[0].public_token;
+    const baseUrl =
+      process.env.BASE_URL || process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:8080";
+
+    res.json({
+      success: true,
+      public_token: token,
+      share_url: `${baseUrl}/apply/${token}`,
+    });
+  } catch (error) {
+    console.error("Error fetching share link:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch share link" });
+  }
+};
+
+/**
+ * POST /api/brokers/my-share-link/regenerate
+ * Regenerates the broker's share link with a new UUID (requires auth)
+ */
+const handleRegenerateShareLink: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [result] = await pool.query<any>(
+      "UPDATE brokers SET public_token = UUID() WHERE id = ?",
+      [brokerId],
+    );
+
+    if (result.affectedRows === 0) {
+      res.status(404).json({ success: false, error: "Broker not found" });
+      return;
+    }
+
+    const [rows] = await pool.query<any[]>(
+      "SELECT public_token FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+
+    const newToken = rows[0].public_token;
+    const baseUrl =
+      process.env.BASE_URL ||
+      (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:8080");
+
+    res.json({
+      success: true,
+      public_token: newToken,
+      share_url: `${baseUrl}/apply/${newToken}`,
+      message: "Share link regenerated successfully",
+    });
+  } catch (error) {
+    console.error("Error regenerating share link:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to regenerate share link" });
+  }
+};
+
+/**
+ * POST /api/brokers/my-share-link/email
+ * Sends the broker's share link to a client email (requires auth)
+ */
+const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { client_email, client_name, message } = req.body;
+
+    if (!client_email) {
+      res
+        .status(400)
+        .json({ success: false, error: "client_email is required" });
+      return;
+    }
+
+    const [rows] = await pool.query<any[]>(
+      "SELECT first_name, last_name, email, public_token FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+
+    if (rows.length === 0 || !rows[0].public_token) {
+      res.status(404).json({ success: false, error: "Broker not found" });
+      return;
+    }
+
+    const broker = rows[0];
+    const baseUrl =
+      process.env.BASE_URL ||
+      (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:8080");
+    const shareUrl = `${baseUrl}/apply/${broker.public_token}`;
+    const clientFirstName = client_name ? client_name.split(" ")[0] : "there";
+    const brokerFullName = `${broker.first_name} ${broker.last_name}`;
+
+    const emailHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mortgage Application Invitation</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+        <!-- LOGO HEADER -->
+        <tr>
+          <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+            <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+          </td>
+        </tr>
+        <!-- BODY -->
+        <tr>
+          <td style="background-color:#ffffff;padding:40px 32px 32px;">
+            <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hello ${clientFirstName},</h2>
+            <p style="margin:0 0 6px 0;color:#475569;font-size:15px;line-height:1.6;">
+              <strong>${brokerFullName}</strong> has invited you to submit your mortgage application.
+            </p>
+            ${
+              message
+                ? `
+            <!-- PERSONAL NOTE -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;margin-bottom:20px;">
+              <tr>
+                <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;">
+                  <p style="margin:0;color:#475569;font-size:14px;line-height:1.6;font-style:italic;">"${message}"</p>
+                </td>
+              </tr>
+            </table>`
+                : `<br/>`
+            }
+            <p style="margin:0 0 28px 0;color:#475569;font-size:15px;line-height:1.6;">
+              Click the button below to get started — the application only takes a few minutes to complete.
+            </p>
+            <!-- CTA BUTTON -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+              <tr>
+                <td align="center">
+                  <a href="${shareUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Start My Application →</a>
+                </td>
+              </tr>
+            </table>
+            <!-- LINK FALLBACK -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+              <tr>
+                <td style="background-color:#f8fafc;border-radius:8px;padding:12px 16px;text-align:center;">
+                  <p style="margin:0 0 4px 0;color:#64748b;font-size:12px;">Or copy this link into your browser:</p>
+                  <p style="margin:0;font-size:12px;word-break:break-all;">
+                    <a href="${shareUrl}" style="color:#e8192c;text-decoration:none;">${shareUrl}</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;">
+              If you have any questions, reach out to ${brokerFullName} directly.<br/>
+              If you did not expect this email, you can safely ignore it.
+            </p>
+          </td>
+        </tr>
+        <!-- FOOTER -->
+        <tr>
+          <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+            <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+            <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+    await sendEmailMessage(
+      client_email,
+      `${brokerFullName} has shared a mortgage application link with you`,
+      emailHtml,
+      true,
+    );
+
+    res.json({
+      success: true,
+      message: `Share link email sent to ${client_email}`,
+    });
+  } catch (error) {
+    console.error("Error sending share link email:", error);
+    res.status(500).json({ success: false, error: "Failed to send email" });
   }
 };
 
@@ -8584,6 +8874,26 @@ function createServer() {
 
   // Public apply route (no auth required)
   expressApp.post("/api/apply", handlePublicApply);
+
+  // Public broker info for share link (no auth required)
+  expressApp.get("/api/public/broker/:token", handleGetBrokerPublicInfo);
+
+  // Broker share link (requires broker auth)
+  expressApp.get(
+    "/api/brokers/my-share-link",
+    verifyBrokerSession,
+    handleGetMyShareLink,
+  );
+  expressApp.post(
+    "/api/brokers/my-share-link/regenerate",
+    verifyBrokerSession,
+    handleRegenerateShareLink,
+  );
+  expressApp.post(
+    "/api/brokers/my-share-link/email",
+    verifyBrokerSession,
+    handleSendShareLinkEmail,
+  );
 
   // Protected routes (require broker session)
   expressApp.get(

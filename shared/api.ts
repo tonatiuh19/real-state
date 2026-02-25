@@ -514,6 +514,7 @@ export interface Broker {
   last_login: string | null;
   license_number: string | null;
   specializations: string[] | null;
+  public_token?: string | null;
   created_at?: string;
 }
 
@@ -1069,4 +1070,54 @@ export interface ConversationStats {
 export interface GetConversationStatsResponse {
   success: boolean;
   stats: ConversationStats;
+}
+
+// ─── Broker Public Share Link ─────────────────────────────────────────────────
+
+export interface BrokerPublicProfile {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string | null;
+  license_number: string | null;
+  specializations: string[] | null;
+  public_token: string;
+  // from broker_profiles
+  bio: string | null;
+  avatar_url: string | null;
+  office_address: string | null;
+  office_city: string | null;
+  office_state: string | null;
+  years_experience: number | null;
+  total_loans_closed: number;
+}
+
+export interface BrokerPublicInfoResponse {
+  success: boolean;
+  broker: BrokerPublicProfile;
+}
+
+export interface MyShareLinkResponse {
+  success: boolean;
+  public_token: string;
+  share_url: string;
+}
+
+export interface RegenerateShareLinkResponse {
+  success: boolean;
+  public_token: string;
+  share_url: string;
+  message: string;
+}
+
+export interface SendShareLinkEmailRequest {
+  client_email: string;
+  client_name?: string;
+  message?: string;
+}
+
+export interface SendShareLinkEmailResponse {
+  success: boolean;
+  message: string;
 }

@@ -93,6 +93,15 @@ const AppRoutes = () => (
         </AppLayout>
       }
     />
+    {/* Broker share link – unique link per broker, pre-loads broker profile */}
+    <Route
+      path="/apply/:brokerToken"
+      element={
+        <AppLayout showHeader={false} showFooter={false}>
+          <ApplicationWizard />
+        </AppLayout>
+      }
+    />
 
     {/* Admin Routes */}
     <Route

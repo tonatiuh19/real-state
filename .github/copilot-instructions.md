@@ -9,6 +9,7 @@
 - **Components ONLY dispatch actions and select state from store**
 - **NO EXCEPTIONS to these rules**
 - **NEVER touch schema.sql, any database changes must be made through migration files in `database/migrations/`**
+- **When using any console logging for debugging use logger functions from `client/utils/logger.ts` for consistent formatting and log levels only in UI components**
 
 ### Package Manager
 
@@ -23,8 +24,7 @@
 - **CRITICAL: Always reference `database/schema.sql` for database structure and table definitions**
 - **NEVER assume column names - check schema.sql first**
 - **If any database update is made based on schema.sql, generate a migration file** in `database/migrations/` with timestamp prefix (e.g., `YYYYMMDD_HHMMSS_description.sql`) for hostgator mysql database version 8.0
-- **If a type issue is generated, fix it immediately** - ensure all TypeScript types are correct and consistent across client, server, and shared
-- **When using any console logging for debugging in backend, always use logger functions from `server/utils/logger.ts` for consistent formatting and log levels only in UI components, use logger functions from `client/utils/logger.ts` for consistent formatting and log levels**
+- **If a type issue is generated, fix it immediately** - ensure all TypeScript types are correct and consistent across client, api/index.ts, and shared
 
 ## Project Structure
 
