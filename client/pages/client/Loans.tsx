@@ -15,6 +15,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
@@ -215,9 +216,21 @@ const Loans = () => {
                       </h4>
                       <div className="space-y-2 text-sm">
                         {app.broker_first_name && (
-                          <p className="font-medium text-base">
-                            {app.broker_first_name} {app.broker_last_name}
-                          </p>
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-10 w-10 ring-2 ring-primary/20">
+                              <AvatarImage
+                                src={app.broker_avatar_url ?? undefined}
+                                alt={`${app.broker_first_name} ${app.broker_last_name}`}
+                              />
+                              <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+                                {app.broker_first_name[0]}
+                                {app.broker_last_name?.[0] ?? ""}
+                              </AvatarFallback>
+                            </Avatar>
+                            <p className="font-medium text-base">
+                              {app.broker_first_name} {app.broker_last_name}
+                            </p>
+                          </div>
                         )}
                         {app.broker_phone && (
                           <a

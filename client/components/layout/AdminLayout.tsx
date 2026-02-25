@@ -266,19 +266,37 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
         <div className="border-t p-4">
           {!sidebarCollapsed ? (
             <div className="flex items-center gap-3 group">
-              <Avatar className="h-9 w-9 ring-2 ring-primary/20">
-                <AvatarFallback className="bg-primary text-primary-foreground">
-                  {user?.first_name?.charAt(0) || "A"}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => navigate("/admin/profile")}
+                className="focus:outline-none"
+              >
+                <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
+                  {(user as any)?.avatar_url ? (
+                    <img
+                      src={(user as any).avatar_url}
+                      alt="Profile"
+                      className="h-full w-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <AvatarFallback className="bg-primary text-primary-foreground">
+                      {user?.first_name?.charAt(0) || "A"}
+                    </AvatarFallback>
+                  )}
+                </Avatar>
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/admin/profile")}
+                className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
+              >
                 <p className="text-sm font-medium truncate">
                   {user ? `${user.first_name} ${user.last_name}` : "Admin User"}
                 </p>
                 <p className="text-xs text-muted-foreground capitalize">
                   {user?.role || "broker"}
                 </p>
-              </div>
+              </button>
               <Tooltip delayDuration={300}>
                 <TooltipTrigger asChild>
                   <Button
@@ -301,18 +319,34 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-9 w-9">
                     <Avatar className="h-9 w-9">
-                      <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                        {user?.first_name?.charAt(0) || "A"}
-                      </AvatarFallback>
+                      {(user as any)?.avatar_url ? (
+                        <img
+                          src={(user as any).avatar_url}
+                          alt="Profile"
+                          className="h-full w-full rounded-full object-cover"
+                        />
+                      ) : (
+                        <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                          {user?.first_name?.charAt(0) || "A"}
+                        </AvatarFallback>
+                      )}
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="end" className="w-56">
                   <div className="flex items-center gap-2 p-2">
                     <Avatar className="h-8 w-8">
-                      <AvatarFallback className="bg-primary text-primary-foreground">
-                        {user?.first_name?.charAt(0) || "A"}
-                      </AvatarFallback>
+                      {(user as any)?.avatar_url ? (
+                        <img
+                          src={(user as any).avatar_url}
+                          alt="Profile"
+                          className="h-full w-full rounded-full object-cover"
+                        />
+                      ) : (
+                        <AvatarFallback className="bg-primary text-primary-foreground">
+                          {user?.first_name?.charAt(0) || "A"}
+                        </AvatarFallback>
+                      )}
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">
@@ -325,6 +359,14 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                       </p>
                     </div>
                   </div>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="gap-2"
+                    onClick={() => navigate("/admin/profile")}
+                  >
+                    <UserCog className="h-4 w-4" />
+                    My Profile
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"

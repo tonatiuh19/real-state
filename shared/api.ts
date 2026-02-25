@@ -192,6 +192,7 @@ export interface ClientApplication {
   broker_last_name: string | null;
   broker_phone: string | null;
   broker_email: string | null;
+  broker_avatar_url: string | null;
   completed_tasks: number;
   total_tasks: number;
 }
@@ -1120,4 +1121,55 @@ export interface SendShareLinkEmailRequest {
 export interface SendShareLinkEmailResponse {
   success: boolean;
   message: string;
+}
+
+// ─── Broker Profile (self-edit) ───────────────────────────────────────────────
+
+export interface BrokerProfileDetails {
+  id: number;
+  email: string;
+  first_name: string;
+  last_name: string;
+  phone: string | null;
+  role: string;
+  license_number: string | null;
+  specializations: string[] | null;
+  // from broker_profiles
+  bio: string | null;
+  avatar_url: string | null;
+  office_address: string | null;
+  office_city: string | null;
+  office_state: string | null;
+  office_zip: string | null;
+  years_experience: number | null;
+  total_loans_closed: number;
+}
+
+export interface GetBrokerProfileResponse {
+  success: boolean;
+  profile: BrokerProfileDetails;
+}
+
+export interface UpdateBrokerProfileRequest {
+  first_name?: string;
+  last_name?: string;
+  phone?: string;
+  license_number?: string;
+  specializations?: string[];
+  bio?: string;
+  office_address?: string;
+  office_city?: string;
+  office_state?: string;
+  office_zip?: string;
+  years_experience?: number | null;
+}
+
+export interface UpdateBrokerProfileResponse {
+  success: boolean;
+  profile: BrokerProfileDetails;
+}
+
+export interface UpdateBrokerAvatarResponse {
+  success: boolean;
+  avatar_url: string;
 }

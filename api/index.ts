@@ -2025,6 +2025,236 @@ const handleAdminLogout: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/admin/profile
+ * Get the authenticated broker's own profile (brokers + broker_profiles join)
+ */
+const handleGetBrokerProfile: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+
+    const [rows] = await pool.query<any[]>(
+      `SELECT
+        b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
+        b.license_number, b.specializations,
+        bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+        bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+      FROM brokers b
+      LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+      WHERE b.id = ? AND b.tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+
+    const profile = rows[0];
+    if (typeof profile.specializations === "string") {
+      try {
+        profile.specializations = JSON.parse(profile.specializations);
+      } catch {
+        profile.specializations = [];
+      }
+    }
+
+    res.json({ success: true, profile });
+  } catch (error) {
+    console.error("Error fetching broker profile:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch profile",
+    });
+  }
+};
+
+/**
+ * PUT /api/admin/profile
+ * Update the authenticated broker's own profile
+ */
+const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      first_name,
+      last_name,
+      phone,
+      license_number,
+      specializations,
+      bio,
+      office_address,
+      office_city,
+      office_state,
+      office_zip,
+      years_experience,
+    } = req.body;
+
+    // Update brokers table
+    const brokerUpdates: string[] = [];
+    const brokerValues: any[] = [];
+
+    if (first_name !== undefined) {
+      brokerUpdates.push("first_name = ?");
+      brokerValues.push(first_name);
+    }
+    if (last_name !== undefined) {
+      brokerUpdates.push("last_name = ?");
+      brokerValues.push(last_name);
+    }
+    if (phone !== undefined) {
+      brokerUpdates.push("phone = ?");
+      brokerValues.push(phone || null);
+    }
+    if (license_number !== undefined) {
+      brokerUpdates.push("license_number = ?");
+      brokerValues.push(license_number || null);
+    }
+    if (specializations !== undefined) {
+      brokerUpdates.push("specializations = ?");
+      brokerValues.push(JSON.stringify(specializations));
+    }
+
+    if (brokerUpdates.length > 0) {
+      brokerValues.push(brokerId, MORTGAGE_TENANT_ID);
+      await pool.query(
+        `UPDATE brokers SET ${brokerUpdates.join(", ")}, updated_at = NOW() WHERE id = ? AND tenant_id = ?`,
+        brokerValues,
+      );
+    }
+
+    // Upsert broker_profiles
+    const profileUpdateCols: string[] = [];
+    const profileValues: any[] = [];
+
+    if (bio !== undefined) {
+      profileUpdateCols.push("bio");
+      profileValues.push(bio || null);
+    }
+    if (office_address !== undefined) {
+      profileUpdateCols.push("office_address");
+      profileValues.push(office_address || null);
+    }
+    if (office_city !== undefined) {
+      profileUpdateCols.push("office_city");
+      profileValues.push(office_city || null);
+    }
+    if (office_state !== undefined) {
+      profileUpdateCols.push("office_state");
+      profileValues.push(office_state || null);
+    }
+    if (office_zip !== undefined) {
+      profileUpdateCols.push("office_zip");
+      profileValues.push(office_zip || null);
+    }
+    if (years_experience !== undefined) {
+      profileUpdateCols.push("years_experience");
+      profileValues.push(
+        years_experience !== null && years_experience !== ""
+          ? Number(years_experience)
+          : null,
+      );
+    }
+
+    if (profileUpdateCols.length > 0) {
+      const [existing] = await pool.query<any[]>(
+        "SELECT id FROM broker_profiles WHERE broker_id = ?",
+        [brokerId],
+      );
+      if (existing.length > 0) {
+        const setClauses = profileUpdateCols
+          .map((col) => `${col} = ?`)
+          .join(", ");
+        await pool.query(
+          `UPDATE broker_profiles SET ${setClauses}, updated_at = NOW() WHERE broker_id = ?`,
+          [...profileValues, brokerId],
+        );
+      } else {
+        const cols = ["broker_id", ...profileUpdateCols].join(", ");
+        const placeholders = profileUpdateCols.map(() => "?").join(", ");
+        await pool.query(
+          `INSERT INTO broker_profiles (${cols}) VALUES (?, ${placeholders})`,
+          [brokerId, ...profileValues],
+        );
+      }
+    }
+
+    // Return updated profile
+    const [rows] = await pool.query<any[]>(
+      `SELECT
+        b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
+        b.license_number, b.specializations,
+        bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+        bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+      FROM brokers b
+      LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+      WHERE b.id = ? AND b.tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    const profile = rows[0];
+    if (typeof profile.specializations === "string") {
+      try {
+        profile.specializations = JSON.parse(profile.specializations);
+      } catch {
+        profile.specializations = [];
+      }
+    }
+
+    res.json({ success: true, profile });
+  } catch (error) {
+    console.error("Error updating broker profile:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to update profile",
+    });
+  }
+};
+
+/**
+ * PUT /api/admin/profile/avatar
+ * Save the avatar URL (after the client uploaded the image to the external CDN)
+ */
+const handleUpdateBrokerAvatar: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { avatar_url } = req.body;
+
+    if (!avatar_url) {
+      return res
+        .status(400)
+        .json({ success: false, error: "avatar_url is required" });
+    }
+
+    const [existing] = await pool.query<any[]>(
+      "SELECT id FROM broker_profiles WHERE broker_id = ?",
+      [brokerId],
+    );
+
+    if (existing.length > 0) {
+      await pool.query(
+        "UPDATE broker_profiles SET avatar_url = ?, updated_at = NOW() WHERE broker_id = ?",
+        [avatar_url, brokerId],
+      );
+    } else {
+      await pool.query(
+        "INSERT INTO broker_profiles (broker_id, avatar_url) VALUES (?, ?)",
+        [brokerId, avatar_url],
+      );
+    }
+
+    res.json({ success: true, avatar_url });
+  } catch (error) {
+    console.error("Error updating broker avatar:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to update avatar",
+    });
+  }
+};
+
+/**
  * Create a new loan application with tasks
  */
 const handleCreateLoan: RequestHandler = async (req, res) => {
@@ -6424,10 +6654,12 @@ const handleGetClientApplications: RequestHandler = async (req, res) => {
         b.last_name as broker_last_name,
         b.phone as broker_phone,
         b.email as broker_email,
+        bp.avatar_url as broker_avatar_url,
         (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND status = 'completed' AND tenant_id = ?) as completed_tasks,
         (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND tenant_id = ?) as total_tasks
       FROM loan_applications la
       LEFT JOIN brokers b ON la.broker_user_id = b.id
+      LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
       WHERE la.client_user_id = ? AND la.tenant_id = ?
       ORDER BY la.created_at DESC`,
       [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, clientId, MORTGAGE_TENANT_ID],
@@ -8893,6 +9125,23 @@ function createServer() {
     "/api/brokers/my-share-link/email",
     verifyBrokerSession,
     handleSendShareLinkEmail,
+  );
+
+  // Broker self-profile routes (require broker session)
+  expressApp.get(
+    "/api/admin/profile",
+    verifyBrokerSession,
+    handleGetBrokerProfile,
+  );
+  expressApp.put(
+    "/api/admin/profile",
+    verifyBrokerSession,
+    handleUpdateBrokerProfile,
+  );
+  expressApp.put(
+    "/api/admin/profile/avatar",
+    verifyBrokerSession,
+    handleUpdateBrokerAvatar,
   );
 
   // Protected routes (require broker session)

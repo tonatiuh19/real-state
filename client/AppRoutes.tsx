@@ -20,6 +20,7 @@ import Reports from "./pages/admin/Reports";
 // import Compliance from "./pages/admin/Compliance";
 // import Notifications from "./pages/admin/Notifications";
 import Brokers from "./pages/admin/Brokers";
+import BrokerProfile from "./pages/admin/BrokerProfile";
 import ClientDashboard from "./pages/client/Dashboard";
 import ClientLoans from "./pages/client/Loans";
 import ClientTasks from "./pages/client/Tasks";
@@ -205,6 +206,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <Settings />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/profile"
+      element={
+        <AdminLayout>
+          <BrokerProfile />
         </AdminLayout>
       }
     />
