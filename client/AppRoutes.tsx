@@ -25,6 +25,8 @@ import ClientDashboard from "./pages/client/Dashboard";
 import ClientLoans from "./pages/client/Loans";
 import ClientTasks from "./pages/client/Tasks";
 import ClientProfile from "./pages/client/Profile";
+import ClientDocuments from "./pages/client/Documents";
+import ClientCalculator from "./pages/client/Calculator";
 
 const AppRoutes = () => (
   <Routes>
@@ -67,6 +69,32 @@ const AppRoutes = () => (
         <ClientLayout>
           <ClientProfile />
         </ClientLayout>
+      }
+    />
+    <Route
+      path="/portal/documents"
+      element={
+        <ClientLayout>
+          <ClientDocuments />
+        </ClientLayout>
+      }
+    />
+    <Route
+      path="/portal/calculator"
+      element={
+        <ClientLayout>
+          <ClientCalculator />
+        </ClientLayout>
+      }
+    />
+    <Route
+      path="/calculator"
+      element={
+        <AppLayout showHeader={true} showFooter={true}>
+          <div className="container max-w-7xl mx-auto px-4 py-10">
+            <ClientCalculator />
+          </div>
+        </AppLayout>
       }
     />
     <Route

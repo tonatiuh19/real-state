@@ -9,6 +9,8 @@ import {
   LogOut,
   Menu,
   X,
+  FolderOpen,
+  Calculator,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -66,6 +68,16 @@ const ClientLayout = ({ children }: ClientLayoutProps) => {
       name: "Tasks",
       href: "/portal/tasks",
       icon: CheckSquare,
+    },
+    {
+      name: "Documents",
+      href: "/portal/documents",
+      icon: FolderOpen,
+    },
+    {
+      name: "Calculator",
+      href: "/portal/calculator",
+      icon: Calculator,
     },
     {
       name: "Profile",

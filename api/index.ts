@@ -739,7 +739,7 @@ async function sendPublicApplicationWelcomeEmail(
                 <tr>
                   <td style="background:linear-gradient(135deg,#e8192c 0%,#c0111f 100%);padding:32px;text-align:center;">
                     <p style="margin:0 0 6px 0;color:#fecdd3;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:2px;">Application Received</p>
-                    <h1 style="margin:0 0 4px 0;color:#ffffff;font-size:28px;font-weight:800;letter-spacing:0.5px;">You're on your way home! 🏡</h1>
+                    <h1 style="margin:0 0 4px 0;color:#ffffff;font-size:28px;font-weight:800;letter-spacing:0.5px;">You're on your way home!</h1>
                     <p style="margin:0;color:#fecdd3;font-size:15px;">Hi <strong style="color:#ffffff;">${firstName} ${lastName}</strong>, we've got everything we need.</p>
                   </td>
                 </tr>
@@ -766,7 +766,7 @@ async function sendPublicApplicationWelcomeEmail(
                     </table>
 
                     <!-- SUMMARY TABLE -->
-                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;">📋 Application Summary</p>
+                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;">Application Summary</p>
                     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;margin-bottom:28px;">
                       <tr style="background-color:#f8fafc;">
                         <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;border-bottom:1px solid #e2e8f0;width:45%;">Loan Type</td>
@@ -787,7 +787,7 @@ async function sendPublicApplicationWelcomeEmail(
                     </table>
 
                     <!-- WHAT HAPPENS NEXT -->
-                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;">🚀 What Happens Next</p>
+                    <p style="margin:0 0 12px 0;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;">What Happens Next</p>
                     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
                       ${[
                         [
@@ -2481,6 +2481,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       employment_status,
       employer_name,
       years_employed,
+      // Citizenship / immigration (Step 1)
+      citizenship_status,
       // Optional broker association
       broker_token,
     } = req.body;
@@ -2512,13 +2514,21 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         ? income_type
         : "W-2";
 
+    const resolvedCitizenshipStatus =
+      citizenship_status &&
+      ["us_citizen", "permanent_resident", "non_resident", "other"].includes(
+        citizenship_status,
+      )
+        ? citizenship_status
+        : null;
+
     if (existingClients.length > 0) {
       clientId = existingClients[0].id;
       await connection.query(
         `UPDATE clients SET first_name=?, last_name=?, phone=?,
           address_street=?, address_city=?, address_state=?, address_zip=?,
           employment_status=?, income_type=?, annual_income=?, credit_score=?,
-          updated_at=NOW()
+          citizenship_status=?, updated_at=NOW()
          WHERE id=? AND tenant_id=?`,
         [
           first_name,
@@ -2532,6 +2542,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           resolvedIncomeType,
           annual_income || null,
           credit_score_range ? parseInt(credit_score_range) : null,
+          resolvedCitizenshipStatus,
           clientId,
           MORTGAGE_TENANT_ID,
         ],
@@ -2542,8 +2553,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           (tenant_id, email, first_name, last_name, phone,
            address_street, address_city, address_state, address_zip,
            employment_status, income_type, annual_income, credit_score,
-           status, email_verified, source)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
+           citizenship_status, status, email_verified, source)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
         [
           MORTGAGE_TENANT_ID,
           email.toLowerCase().trim(),
@@ -2558,6 +2569,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           resolvedIncomeType,
           annual_income || null,
           credit_score_range ? parseInt(credit_score_range) : null,
+          resolvedCitizenshipStatus,
         ],
       );
       clientId = clientResult.insertId;
@@ -2609,8 +2621,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
          loan_type, loan_amount, property_value, property_address,
          property_city, property_state, property_zip, property_type,
          down_payment, loan_purpose, status, current_step, total_steps,
-         priority, notes, broker_token, submitted_at)
-       VALUES (?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,?,NOW())`,
+         priority, notes, broker_token, citizenship_status, submitted_at)
+       VALUES (?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,?,?,NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
@@ -2628,10 +2640,146 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         loan_purpose || null,
         `Public wizard submission. Employment: ${employment_status || "N/A"}, Employer: ${employer_name || "N/A"}, Years employed: ${years_employed || "N/A"}`,
         broker_token || null,
+        resolvedCitizenshipStatus,
       ],
     );
 
     const applicationId = loanResult.insertId;
+
+    // ── Auto-assign tasks from templates based on client profile ──────────────
+    //
+    // Always:
+    //   Government-Issued ID, Social Security Card (SSN),
+    //   Housing Payment Statement (2 Months), Homeowner's Insurance Policy
+    //
+    // Citizenship:
+    //   permanent_resident → Green Card (Permanent Resident Card)
+    //   non_resident       → Visa / Work Authorization Document, ITIN Assignment Letter
+    //
+    // Income type:
+    //   W-2            → W-2 Form
+    //   1099           → 1099 Forms (Last 2 Years)
+    //   Self-Employed  → Federal Tax Returns (Last 2 Years), Business License,
+    //                    Profit & Loss Statement (Current Year), Business Bank Statements (3 Months)
+    //   Investor       → Investment / Brokerage Account Statements (2 Months)
+    //   Mixed          → W-2 Form, 1099 Forms (Last 2 Years)
+    //
+    // Employment status:
+    //   retired        → Pension / Retirement Award Letter, Social Security Award Letter
+    //
+    // Loan type:
+    //   refinance / home_equity → Current Mortgage Statement, Most Recent Property Tax Bill
+    //   purchase                → Purchase Agreement / Offer Letter
+    //   construction            → Construction Plans & Builder Contract
+    //
+    // Property type:
+    //   condo        → HOA Statement & Master Insurance Policy
+    //   multi_family → Existing Lease Agreements
+    //   commercial   → Business Financial Statements
+
+    const templateTitlesToAssign: string[] = [
+      "Government-Issued ID",
+      "Social Security Card (SSN)",
+      "Housing Payment Statement (2 Months)",
+      "Homeowner's Insurance Policy",
+    ];
+
+    // Citizenship
+    if (resolvedCitizenshipStatus === "permanent_resident") {
+      templateTitlesToAssign.push("Green Card (Permanent Resident Card)");
+    }
+    if (resolvedCitizenshipStatus === "non_resident") {
+      templateTitlesToAssign.push(
+        "Visa / Work Authorization Document",
+        "ITIN Assignment Letter",
+      );
+    }
+
+    // Income type
+    if (resolvedIncomeType === "W-2") {
+      templateTitlesToAssign.push("W-2 Form");
+    } else if (resolvedIncomeType === "1099") {
+      templateTitlesToAssign.push("1099 Forms (Last 2 Years)");
+    } else if (resolvedIncomeType === "Self-Employed") {
+      templateTitlesToAssign.push(
+        "Federal Tax Returns (Last 2 Years)",
+        "Business License",
+        "Profit & Loss Statement (Current Year)",
+        "Business Bank Statements (3 Months)",
+      );
+    } else if (resolvedIncomeType === "Investor") {
+      templateTitlesToAssign.push(
+        "Investment / Brokerage Account Statements (2 Months)",
+      );
+    } else if (resolvedIncomeType === "Mixed") {
+      templateTitlesToAssign.push("W-2 Form", "1099 Forms (Last 2 Years)");
+    }
+
+    // Employment status
+    if (employment_status === "retired") {
+      templateTitlesToAssign.push(
+        "Pension / Retirement Award Letter",
+        "Social Security Award Letter",
+      );
+    }
+
+    // Loan type
+    if (
+      resolvedLoanType === "refinance" ||
+      resolvedLoanType === "home_equity"
+    ) {
+      templateTitlesToAssign.push(
+        "Current Mortgage Statement",
+        "Most Recent Property Tax Bill",
+      );
+    } else if (resolvedLoanType === "purchase") {
+      templateTitlesToAssign.push("Purchase Agreement / Offer Letter");
+    } else if (resolvedLoanType === "construction") {
+      templateTitlesToAssign.push("Construction Plans & Builder Contract");
+    }
+
+    // Property type
+    if (resolvedPropertyType === "condo") {
+      templateTitlesToAssign.push("HOA Statement & Master Insurance Policy");
+    } else if (resolvedPropertyType === "multi_family") {
+      templateTitlesToAssign.push("Existing Lease Agreements");
+    } else if (resolvedPropertyType === "commercial") {
+      templateTitlesToAssign.push("Business Financial Statements");
+    }
+
+    const [templateRows] = await connection.query<any[]>(
+      `SELECT id, title, description, task_type, priority, default_due_days,
+              requires_documents, document_instructions, has_custom_form, has_signing
+       FROM task_templates
+       WHERE title IN (${templateTitlesToAssign.map(() => "?").join(",")})
+         AND tenant_id = ?
+         AND is_active = 1`,
+      [...templateTitlesToAssign, MORTGAGE_TENANT_ID],
+    );
+
+    for (const tmpl of templateRows) {
+      const dueDate = tmpl.default_due_days
+        ? new Date(Date.now() + tmpl.default_due_days * 86_400_000)
+        : new Date(Date.now() + 7 * 86_400_000); // default 7 days
+
+      await connection.query(
+        `INSERT INTO tasks
+           (tenant_id, application_id, template_id, title, description, task_type,
+            status, priority, assigned_to_user_id, due_date)
+         VALUES (?,?,?,?,?,?,'pending',?,?,?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          applicationId,
+          tmpl.id,
+          tmpl.title,
+          tmpl.description || null,
+          tmpl.task_type,
+          tmpl.priority,
+          clientId,
+          dueDate,
+        ],
+      );
+    }
 
     // Notify the client
     await connection.query(
@@ -7074,6 +7222,51 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/client/documents
+ * Get all uploaded documents for the authenticated client, grouped by task.
+ */
+const handleGetClientDocuments: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId;
+
+    const [documents] = await pool.query<any[]>(
+      `SELECT
+        td.id,
+        td.task_id,
+        td.field_id,
+        td.document_type,
+        td.filename,
+        td.original_filename,
+        td.file_path,
+        td.file_size,
+        td.uploaded_at,
+        td.notes,
+        t.title        AS task_title,
+        t.task_type,
+        t.status       AS task_status,
+        la.application_number,
+        la.loan_type,
+        la.property_address,
+        la.property_city,
+        la.property_state
+      FROM task_documents td
+      INNER JOIN tasks t     ON td.task_id = t.id
+      INNER JOIN loan_applications la ON t.application_id = la.id
+      WHERE la.client_user_id = ? AND la.tenant_id = ?
+      ORDER BY td.uploaded_at DESC`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+
+    res.json({ success: true, documents });
+  } catch (error) {
+    console.error("❌ Error getting client documents:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to get client documents" });
+  }
+};
+
+/**
  * Get all SMS templates
  */
 const handleGetSmsTemplates: RequestHandler = async (req, res) => {
@@ -9367,6 +9560,13 @@ function createServer() {
     "/api/client/tasks/documents/:documentId",
     verifyClientSession,
     handleDeleteTaskDocument,
+  );
+
+  // All documents for authenticated client
+  expressApp.get(
+    "/api/client/documents",
+    verifyClientSession,
+    handleGetClientDocuments,
   );
 
   // Document signing routes (client)

@@ -54,8 +54,8 @@ const Navbar = () => {
   };
 
   const navLinks = [
-    { name: "Purchase", href: "/purchase" },
-    { name: "Refinance", href: "/refinance" },
+    { name: "Purchase", href: "/calculator?type=purchase" },
+    { name: "Refinance", href: "/calculator?type=refinance" },
     { name: "Loan Options", href: "/loan-options" },
     { name: "About", href: "/about" },
     { name: "Contact", href: "/contact" },
@@ -87,20 +87,24 @@ const Navbar = () => {
               />
             </Link>
             <div className="hidden md:flex md:ml-10 md:gap-8">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  to={link.href}
-                  className={cn(
-                    "relative text-sm font-semibold transition-all hover:text-primary py-2",
-                    location.pathname === link.href
-                      ? "text-primary after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:bg-primary after:rounded-full"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {link.name}
-                </Link>
-              ))}
+              {navLinks.map((link) => {
+                const linkPath = link.href.split("?")[0];
+                const isActive = location.pathname === linkPath;
+                return (
+                  <Link
+                    key={link.href}
+                    to={link.href}
+                    className={cn(
+                      "relative text-sm font-semibold transition-all hover:text-primary py-2",
+                      isActive
+                        ? "text-primary after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:bg-primary after:rounded-full"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {link.name}
+                  </Link>
+                );
+              })}
             </div>
           </div>
 
@@ -204,21 +208,24 @@ const Navbar = () => {
           )}
         >
           <div className="container space-y-1 pb-3 pt-2">
-            {navLinks.map((link) => (
-              <Link
-                key={link.href}
-                to={link.href}
-                className={cn(
-                  "block rounded-xl px-3 py-3 text-base font-semibold transition-all",
-                  location.pathname === link.href
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-white/5",
-                )}
-                onClick={() => setIsOpen(false)}
-              >
-                {link.name}
-              </Link>
-            ))}
+            {navLinks.map((link) => {
+              const linkPath = link.href.split("?")[0];
+              return (
+                <Link
+                  key={link.href}
+                  to={link.href}
+                  className={cn(
+                    "block rounded-xl px-3 py-3 text-base font-semibold transition-all",
+                    location.pathname === linkPath
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-white/5",
+                  )}
+                  onClick={() => setIsOpen(false)}
+                >
+                  {link.name}
+                </Link>
+              );
+            })}
             <div className="mt-4 flex flex-col gap-2 px-1 pb-2">
               <a href="tel:(562)337-0000" className="w-full">
                 <Button

@@ -51,6 +51,8 @@ export interface PublicApplicationPayload {
   employment_status: string;
   employer_name: string;
   years_employed: string;
+  // Step 1 – Citizenship / immigration
+  citizenship_status: string; // 'us_citizen' | 'permanent_resident' | 'non_resident' | 'other'
   // Optional broker association (from share link)
   broker_token?: string;
 }

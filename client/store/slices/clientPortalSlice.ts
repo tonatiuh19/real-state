@@ -17,6 +17,27 @@ import type {
 } from "@shared/api";
 import { logger } from "@/lib/logger";
 
+export interface ClientDocument {
+  id: number;
+  task_id: number;
+  field_id: number | null;
+  document_type: "pdf" | "image";
+  filename: string;
+  original_filename: string;
+  file_path: string;
+  file_size: number | null;
+  uploaded_at: string;
+  notes: string | null;
+  task_title: string;
+  task_type: string;
+  task_status: string;
+  application_number: string;
+  loan_type: string;
+  property_address: string;
+  property_city?: string;
+  property_state?: string;
+}
+
 export interface TaskDetails {
   id: number;
   title: string;
@@ -75,10 +96,12 @@ interface ClientPortalState {
   profile: ClientProfile | null;
   taskDetails: TaskDetails | null;
   taskFormDrafts: Record<number, TaskFormDraft>; // Keyed by taskId
+  clientDocuments: ClientDocument[];
   loading: boolean;
   tasksLoading: boolean;
   profileLoading: boolean;
   taskDetailsLoading: boolean;
+  documentsLoading: boolean;
   error: string | null;
 }
 
@@ -88,12 +111,40 @@ const initialState: ClientPortalState = {
   profile: null,
   taskDetails: null,
   taskFormDrafts: {},
+  clientDocuments: [],
   loading: false,
   tasksLoading: false,
   profileLoading: false,
   taskDetailsLoading: false,
+  documentsLoading: false,
   error: null,
 };
+
+/**
+ * Fetch all documents uploaded by the client across all tasks
+ */
+export const fetchClientDocuments = createAsyncThunk(
+  "clientPortal/fetchDocuments",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const state = getState() as RootState;
+      const token = state.clientAuth.sessionToken;
+
+      const response = await axios.get<{
+        success: boolean;
+        documents: ClientDocument[];
+      }>("/api/client/documents", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      return response.data.documents;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch documents",
+      );
+    }
+  },
+);
 
 /**
  * Fetch client's loan applications
@@ -639,6 +690,21 @@ const clientPortalSlice = createSlice({
       delete state.taskFormDrafts[action.payload.taskId];
     });
 
+    // Fetch client documents
+    builder
+      .addCase(fetchClientDocuments.pending, (state) => {
+        state.documentsLoading = true;
+        state.error = null;
+      })
+      .addCase(fetchClientDocuments.fulfilled, (state, action) => {
+        state.documentsLoading = false;
+        state.clientDocuments = action.payload;
+      })
+      .addCase(fetchClientDocuments.rejected, (state, action) => {
+        state.documentsLoading = false;
+        state.error = action.payload as string;
+      });
+
     // Submit signatures
     builder.addCase(submitTaskSignatures.fulfilled, (state, action) => {
       const task = state.tasks.find((t) => t.id === action.payload.taskId);
@@ -674,5 +740,9 @@ export const selectTasksLoading = (state: RootState) =>
 export const selectProfileLoading = (state: RootState) =>
   state.clientPortal.profileLoading;
 export const selectPortalError = (state: RootState) => state.clientPortal.error;
+export const selectClientDocuments = (state: RootState) =>
+  state.clientPortal.clientDocuments;
+export const selectDocumentsLoading = (state: RootState) =>
+  state.clientPortal.documentsLoading;
 
 export default clientPortalSlice.reducer;

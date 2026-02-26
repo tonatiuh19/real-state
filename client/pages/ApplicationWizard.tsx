@@ -71,6 +71,7 @@ const stepSchemas: Record<number, Yup.AnyObjectSchema> = {
     address_city: Yup.string().required("City is required"),
     address_state: Yup.string().required("State is required"),
     address_zip: Yup.string().required("ZIP code is required"),
+    citizenship_status: Yup.string().required("Citizenship status is required"),
   }),
   2: Yup.object({
     loan_type: Yup.string().required("Loan type is required"),
@@ -110,6 +111,13 @@ const stepSchemas: Record<number, Yup.AnyObjectSchema> = {
 
 // ─── Initial form values ───────────────────────────────────────────────────
 
+const CITIZENSHIP_OPTIONS = [
+  { v: "us_citizen", label: "U.S. Citizen" },
+  { v: "permanent_resident", label: "Permanent Resident (Green Card)" },
+  { v: "non_resident", label: "Non-Resident Alien" },
+  { v: "other", label: "Other" },
+];
+
 const initialValues = {
   first_name: "",
   last_name: "",
@@ -119,6 +127,7 @@ const initialValues = {
   address_city: "",
   address_state: "",
   address_zip: "",
+  citizenship_status: "",
   loan_type: "purchase",
   property_value: "",
   down_payment: "",
@@ -247,6 +256,7 @@ const ApplicationWizard = () => {
       address_city: "Los Angeles",
       address_state: "CA",
       address_zip: "90001",
+      citizenship_status: "us_citizen",
       loan_type: "purchase",
       property_value: "550000",
       down_payment: "110000",
@@ -285,6 +295,7 @@ const ApplicationWizard = () => {
           address_city: values.address_city,
           address_state: values.address_state,
           address_zip: values.address_zip,
+          citizenship_status: values.citizenship_status,
           loan_type: values.loan_type,
           property_value: values.property_value,
           down_payment: values.down_payment,
@@ -789,7 +800,7 @@ const ApplicationWizard = () => {
                   Back to Home
                 </Button>
                 <Button
-                  onClick={() => navigate("/portal")}
+                  onClick={() => navigate("/client-login")}
                   className="rounded-xl px-8 font-bold shadow-lg shadow-primary/20"
                 >
                   Go to My Portal
@@ -1027,6 +1038,40 @@ const ApplicationWizard = () => {
                                 }
                               />
                             </div>
+                          </div>
+
+                          {/* Citizenship / Immigration Status */}
+                          <div className="space-y-3 md:col-span-2">
+                            <Label>Citizenship / Immigration Status *</Label>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              {CITIZENSHIP_OPTIONS.map(({ v, label }) => (
+                                <button
+                                  key={v}
+                                  type="button"
+                                  onClick={() =>
+                                    formik.setFieldValue(
+                                      "citizenship_status",
+                                      v,
+                                    )
+                                  }
+                                  className={cn(
+                                    "h-14 rounded-xl border-2 text-xs font-semibold transition-all px-2 text-center leading-tight",
+                                    formik.values.citizenship_status === v
+                                      ? "border-primary bg-primary/5 text-primary"
+                                      : "border-muted hover:border-primary/40",
+                                  )}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            <FieldError
+                              msg={
+                                formik.touched.citizenship_status
+                                  ? formik.errors.citizenship_status
+                                  : undefined
+                              }
+                            />
                           </div>
                         </div>
                       )}
@@ -1489,6 +1534,15 @@ const ApplicationWizard = () => {
                                   [
                                     "Address",
                                     `${formik.values.address_street}, ${formik.values.address_city}, ${formik.values.address_state} ${formik.values.address_zip}`,
+                                  ],
+                                  [
+                                    "Citizenship Status",
+                                    CITIZENSHIP_OPTIONS.find(
+                                      (o) =>
+                                        o.v ===
+                                        formik.values.citizenship_status,
+                                    )?.label ??
+                                      formik.values.citizenship_status,
                                   ],
                                 ],
                               },

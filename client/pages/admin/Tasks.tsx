@@ -332,9 +332,9 @@ const Tasks = () => {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
-                          <Badge variant="outline" className="text-xs">
+                          {/* <Badge variant="outline" className="text-xs">
                             Order: {task.order_index}
-                          </Badge>
+                          </Badge> */}
                           <Badge
                             className={cn(
                               "text-xs",
@@ -417,9 +417,9 @@ const Tasks = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="min-w-[50px] whitespace-nowrap">
+                        {/* <TableHead className="min-w-[50px] whitespace-nowrap">
                           Order
-                        </TableHead>
+                        </TableHead> */}
                         <TableHead className="min-w-[200px]">
                           Task Template
                         </TableHead>
@@ -446,11 +446,11 @@ const Tasks = () => {
                     <TableBody>
                       {filteredTasks.map((task) => (
                         <TableRow key={task.id}>
-                          <TableCell className="min-w-[50px] whitespace-nowrap">
+                          {/* <TableCell className="min-w-[50px] whitespace-nowrap">
                             <Badge variant="outline" className="text-xs">
                               {task.order_index}
                             </Badge>
-                          </TableCell>
+                          </TableCell> */}
                           <TableCell className="min-w-[200px] max-w-[300px]">
                             <div className="flex items-center gap-2">
                               <div className="min-w-0">
