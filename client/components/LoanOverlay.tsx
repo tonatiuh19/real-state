@@ -153,6 +153,7 @@ export function LoanOverlay({
   );
 
   const [isAssigning, setIsAssigning] = useState(false);
+  const [approvingTaskId, setApprovingTaskId] = useState<number | null>(null);
 
   const handleAssignBroker = async (brokerId: string) => {
     if (!selectedLoan) return;
@@ -242,7 +243,7 @@ export function LoanOverlay({
 
   const handleApproveTask = async (taskId: number) => {
     try {
-      setIsSubmitting(true);
+      setApprovingTaskId(taskId);
       await axios.post(
         `/api/tasks/${taskId}/approve`,
         {},
@@ -270,7 +271,7 @@ export function LoanOverlay({
         variant: "destructive",
       });
     } finally {
-      setIsSubmitting(false);
+      setApprovingTaskId(null);
     }
   };
 
@@ -1172,10 +1173,10 @@ export function LoanOverlay({
                                       size="sm"
                                       className="h-8 text-xs gap-1 border-green-200 text-green-700 hover:bg-green-50 hover:border-green-300 hover:text-green-800 transition-colors duration-200"
                                       onClick={() => handleApproveTask(task.id)}
-                                      disabled={isSubmitting}
+                                      disabled={approvingTaskId === task.id}
                                     >
                                       <Check className="h-3 w-3" />
-                                      {isSubmitting
+                                      {approvingTaskId === task.id
                                         ? "Approving..."
                                         : "Approve"}
                                     </Button>

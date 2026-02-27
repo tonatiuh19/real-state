@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 25, 2026 at 08:30 PM
+-- Generation Time: Feb 26, 2026 at 05:43 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -37,6 +37,13 @@ CREATE TABLE `application_status_history` (
   `notes` text COLLATE utf8mb4_unicode_ci,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `application_status_history`
+--
+
+INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `from_status`, `to_status`, `changed_by_broker_id`, `notes`, `created_at`) VALUES
+(22, 1, 24, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-02-26 17:38:04');
 
 -- --------------------------------------------------------
 
@@ -178,7 +185,7 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-24 18:31:45', NULL, '[]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-02-24 20:59:43'),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-25 22:22:37', NULL, '[]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-02-25 22:22:37'),
 (2, 1, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'admin', 'active', 0, '2026-01-21 00:14:12', '123457890', '[\"First-Time Home Buyers\"]', '9b99b55c-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 23:10:11', '2026-02-24 18:33:30'),
 (3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-02-24 16:50:22', '380277', NULL, '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-02-24 18:33:30'),
 (4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-24 17:32:57', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-02-24 18:33:30'),
@@ -239,7 +246,7 @@ INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `
 (63, 6, 303837, 1, NULL, NULL, '2026-02-13 00:29:10', '2026-02-13 00:14:10'),
 (76, 3, 368922, 1, NULL, NULL, '2026-02-24 23:04:54', '2026-02-24 22:49:54'),
 (78, 4, 410414, 1, NULL, NULL, '2026-02-24 23:47:32', '2026-02-24 23:32:32'),
-(79, 1, 698742, 1, NULL, NULL, '2026-02-25 00:46:29', '2026-02-25 00:31:29');
+(80, 1, 304358, 1, NULL, NULL, '2026-02-26 04:37:22', '2026-02-26 04:22:22');
 
 -- --------------------------------------------------------
 
@@ -308,6 +315,7 @@ CREATE TABLE `clients` (
   `income_type` enum('W-2','1099','Self-Employed','Investor','Mixed') COLLATE utf8mb4_unicode_ci NOT NULL,
   `annual_income` decimal(15,2) DEFAULT NULL,
   `credit_score` int(11) DEFAULT NULL,
+  `citizenship_status` enum('us_citizen','permanent_resident','non_resident','other') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Client citizenship/immigration status',
   `status` enum('active','inactive','suspended') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
   `email_verified` tinyint(1) DEFAULT '0',
   `phone_verified` tinyint(1) DEFAULT '0',
@@ -323,9 +331,10 @@ CREATE TABLE `clients` (
 -- Dumping data for table `clients`
 --
 
-INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
-(14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
-(22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, 'active', 0, 0, '2026-02-24 17:48:05', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-02-24 17:48:05');
+INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `citizenship_status`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
+(14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
+(22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-02-24 17:48:05', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-02-24 17:48:05'),
+(23, 1, 'tonatiuh.gom@gmail.com', '', 'Felix', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', 'employed', 'W-2', 120000.00, 740, 'permanent_resident', 'active', 0, 0, '2026-02-26 15:14:06', NULL, 'public_wizard', NULL, '2026-02-26 15:04:18', '2026-02-26 15:14:06');
 
 -- --------------------------------------------------------
 
@@ -530,8 +539,8 @@ CREATE TABLE `environment_keys` (
 --
 
 INSERT INTO `environment_keys` (`id`, `title`, `type`, `key_string`, `is_test`, `created_at`, `updated_at`) VALUES
-(1, 'stripe', 'publishable', 'pk_test_REPLACE_WITH_YOUR_STRIPE_PUBLISHABLE_KEY', 1, '2026-02-23 23:50:30', '2026-02-23 23:50:30'),
-(2, 'stripe', 'secret', 'sk_test_REPLACE_WITH_YOUR_STRIPE_SECRET_KEY', 1, '2026-02-23 23:50:30', '2026-02-23 23:50:30'),
+(1, 'stripe', 'publishable', '', 1, '2026-02-23 23:50:30', '2026-02-26 23:43:35'),
+(2, 'stripe', 'secret', '', 1, '2026-02-23 23:50:30', '2026-02-26 23:43:31'),
 (3, 'stripe', 'publishable', '', 0, '2026-02-23 23:50:30', '2026-02-23 23:50:30'),
 (4, 'stripe', 'secret', '', 0, '2026-02-23 23:50:30', '2026-02-23 23:50:30');
 
@@ -613,16 +622,18 @@ CREATE TABLE `loan_applications` (
   `broker_token` varchar(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Broker public_token used when client submitted via share link',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `submitted_at` datetime DEFAULT NULL
+  `submitted_at` datetime DEFAULT NULL,
+  `citizenship_status` enum('us_citizen','permanent_resident','non_resident','other') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Applicant citizenship/immigration status at time of application'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data for table `loan_applications`
 --
 
-INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`) VALUES
-(15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
-(23, 1, 'LA73590546', 22, 3, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, 'submitted', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-02-24 16:53:10', '2026-02-24 16:53:10');
+INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`, `citizenship_status`) VALUES
+(15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41', NULL),
+(23, 1, 'LA73590546', 22, 3, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, 'submitted', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-02-24 16:53:10', '2026-02-24 16:53:10', NULL),
+(24, 1, 'LA39857852', 23, 1, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'documents_pending', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-02-26 15:04:18', '2026-02-26 17:38:04', '2026-02-26 15:04:18', 'permanent_resident');
 
 -- --------------------------------------------------------
 
@@ -649,7 +660,8 @@ CREATE TABLE `notifications` (
 
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
 (18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL),
-(36, 1, 22, 'New Loan Application Created', 'Your loan application LA73590546 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-24 16:53:10', NULL);
+(36, 1, 22, 'New Loan Application Created', 'Your loan application LA73590546 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-24 16:53:10', NULL),
+(37, 1, 23, 'Application Received', 'Your loan application LA39857852 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-02-26 15:04:18', NULL);
 
 -- --------------------------------------------------------
 
@@ -740,7 +752,14 @@ CREATE TABLE `tasks` (
 --
 
 INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`, `approval_status`, `approved_by_broker_id`, `approved_at`, `reopened_by_broker_id`, `reopened_at`, `reopen_reason`, `status_change_reason`, `status_changed_by_broker_id`, `status_changed_at`) VALUES
-(23, 2, NULL, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+(23, 2, NULL, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(36, 1, 34, 0, 24, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-05 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(37, 1, 36, 0, 24, 'Green Card (Permanent Resident Card)', 'Provide your valid Permanent Resident Card (Form I-551).', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-05 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(38, 1, 37, 0, 24, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-05 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(39, 1, 38, 0, 24, 'Housing Payment Statement (2 Months)', 'Provide the last two months of bank or mortgage statements showing your housing payment.', 'document_verification', 'pending', 'medium', 23, NULL, NULL, '2026-03-12 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(40, 1, 39, 0, 24, 'Homeowner\'s Insurance Policy', 'Provide the current homeowner\'s insurance policy for the property.', 'document_verification', 'pending', 'medium', 23, NULL, NULL, '2026-03-12 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(41, 1, 40, 0, 24, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-12 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(42, 1, 53, 0, 24, 'Purchase Agreement / Offer Letter', 'Provide a fully executed purchase agreement or offer letter for the property.', 'document_verification', 'in_progress', 'high', 23, NULL, NULL, '2026-03-03 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 17:38:04', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -890,7 +909,24 @@ INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_t
 (37, 1, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'high', 7, 13, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach a clear photo or scan of your Social Security card. Make sure the number is clearly visible.', 0, 0),
 (38, 1, 'Housing Payment Statement (2 Months)', 'Provide the last two months of bank or mortgage statements showing your housing payment.', 'document_verification', 'medium', 14, 14, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach the last two months of bank or mortgage statements. They must clearly show the account holder name, partial account number, and housing payment transactions.', 0, 0),
 (39, 1, 'Homeowner\'s Insurance Policy', 'Provide the current homeowner\'s insurance policy for the property.', 'document_verification', 'medium', 14, 15, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach the active homeowner\'s insurance policy. It must include the policy number, coverage details, insured name, and effective dates.', 0, 0),
-(40, 1, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'high', 14, 16, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach all W-2 forms from the most recent tax year. If you have multiple employers, include the W-2 from each one.', 0, 0);
+(40, 1, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'high', 14, 16, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach all W-2 forms from the most recent tax year. If you have multiple employers, include the W-2 from each one.', 0, 0),
+(41, 1, '1099 Forms (Last 2 Years)', 'Provide all 1099 forms received in the last two tax years.', 'document_verification', 'high', 14, 20, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach all 1099 forms (1099-MISC, 1099-NEC, 1099-INT, etc.) for the last two tax years. Include all issuers.', 0, 0),
+(42, 1, 'Federal Tax Returns (Last 2 Years)', 'Provide signed federal tax returns (Form 1040) for the last two years, including all schedules.', 'document_verification', 'high', 14, 21, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach complete and signed IRS Form 1040 with all schedules (Schedule C, E, etc.) for the last two tax years.', 0, 0),
+(43, 1, 'Business License', 'Provide a copy of your current business license or registration.', 'document_verification', 'medium', 10, 22, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach a copy of your valid business license, DBA registration, or LLC/corporation certificate.', 0, 0),
+(44, 1, 'Profit & Loss Statement (Current Year)', 'Provide a year-to-date profit & loss statement for your business.', 'document_verification', 'high', 10, 23, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach a YTD profit & loss statement prepared by a CPA or bookkeeper. Must include revenue, expenses, and net income.', 0, 0),
+(45, 1, 'Business Bank Statements (3 Months)', 'Provide the last 3 months of business bank statements.', 'document_verification', 'high', 14, 24, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the last 3 months of all business bank statements. Must show account holder name, account number (partial), and all transactions.', 0, 0),
+(46, 1, 'Investment / Brokerage Account Statements (2 Months)', 'Provide the last 2 months of investment or brokerage account statements.', 'document_verification', 'medium', 14, 25, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the last 2 months of all investment, brokerage, or retirement account statements (401k, IRA, etc.).', 0, 0),
+(47, 1, 'Pension / Retirement Award Letter', 'Provide a pension or retirement benefit award letter showing monthly income.', 'document_verification', 'medium', 14, 26, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the most recent pension or retirement award/benefit letter. It must show the monthly payment amount and the issuing organization.', 0, 0),
+(48, 1, 'Social Security Award Letter', 'Provide the most recent Social Security benefits award letter.', 'document_verification', 'medium', 14, 27, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach your most recent Social Security award letter showing your monthly benefit amount. You can obtain it from ssa.gov.', 0, 0),
+(49, 1, 'Visa / Work Authorization Document', 'Provide a copy of your current visa or work authorization document (I-94, EAD, H-1B, etc.).', 'document_verification', 'high', 7, 28, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach a clear copy of your valid visa, I-94 Arrival/Departure Record, Employment Authorization Document (EAD), or other immigration status document.', 0, 0),
+(50, 1, 'ITIN Assignment Letter', 'Provide the IRS ITIN assignment letter (CP565 notice).', 'document_verification', 'medium', 7, 29, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach your IRS ITIN assignment letter (Notice CP565) showing your Individual Taxpayer Identification Number.', 0, 0),
+(51, 1, 'Current Mortgage Statement', 'Provide the most recent monthly mortgage statement for the property being refinanced.', 'document_verification', 'high', 7, 30, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach your most recent mortgage statement showing the current balance, monthly payment, and lender information.', 0, 0),
+(52, 1, 'Most Recent Property Tax Bill', 'Provide the most recent property tax bill for the subject property.', 'document_verification', 'medium', 14, 31, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the most recent property tax assessment or bill from your county/city assessor.', 0, 0),
+(53, 1, 'Purchase Agreement / Offer Letter', 'Provide a fully executed purchase agreement or offer letter for the property.', 'document_verification', 'high', 5, 32, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the signed purchase agreement (sales contract) including all addenda and counteroffers.', 0, 0),
+(54, 1, 'Construction Plans & Builder Contract', 'Provide the construction plans and a signed contract with your builder.', 'document_verification', 'high', 10, 33, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the architectural/engineering plans for the construction project and the signed builder contract including total cost breakdown.', 0, 0),
+(55, 1, 'HOA Statement & Master Insurance Policy', 'Provide the current HOA statement and the master insurance policy for the condo community.', 'document_verification', 'medium', 14, 34, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the current HOA dues statement and the master/blanket insurance policy (hazard + liability) for the condo association.', 0, 0),
+(56, 1, 'Existing Lease Agreements', 'Provide copies of all current lease agreements for the rental units.', 'document_verification', 'medium', 14, 35, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach all signed lease agreements currently in effect for each rental unit in the property. Include lease start/end dates and monthly rent amounts.', 0, 0),
+(57, 1, 'Business Financial Statements', 'Provide the last 2 years of business financial statements (income statement & balance sheet).', 'document_verification', 'high', 14, 36, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the last 2 years of income statements and balance sheets for the business operating at or owning the commercial property. CPA-prepared preferred.', 0, 0);
 
 -- --------------------------------------------------------
 
@@ -1023,7 +1059,8 @@ CREATE TABLE `user_sessions` (
 --
 
 INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(11, 22, 603385, 1, NULL, NULL, '2026-02-25 00:02:48', '2026-02-24 23:47:48');
+(11, 22, 603385, 1, NULL, NULL, '2026-02-25 00:02:48', '2026-02-24 23:47:48'),
+(12, 23, 271337, 1, NULL, NULL, '2026-02-26 21:28:51', '2026-02-26 21:13:51');
 
 --
 -- Indexes for dumped tables
@@ -1115,7 +1152,8 @@ ALTER TABLE `clients`
   ADD KEY `idx_status` (`status`),
   ADD KEY `idx_assigned_broker` (`assigned_broker_id`),
   ADD KEY `idx_income_type` (`income_type`),
-  ADD KEY `tenant_id` (`tenant_id`);
+  ADD KEY `tenant_id` (`tenant_id`),
+  ADD KEY `idx_clients_citizenship` (`citizenship_status`);
 
 --
 -- Indexes for table `communications`
@@ -1231,7 +1269,8 @@ ALTER TABLE `loan_applications`
   ADD KEY `idx_status` (`status`),
   ADD KEY `idx_created_at` (`created_at`),
   ADD KEY `tenant_id` (`tenant_id`),
-  ADD KEY `idx_loan_applications_broker_token` (`broker_token`);
+  ADD KEY `idx_loan_applications_broker_token` (`broker_token`),
+  ADD KEY `idx_loan_apps_citizenship` (`citizenship_status`);
 
 --
 -- Indexes for table `notifications`
@@ -1386,7 +1425,7 @@ ALTER TABLE `user_sessions`
 -- AUTO_INCREMENT for table `application_status_history`
 --
 ALTER TABLE `application_status_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
@@ -1410,7 +1449,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=80;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=81;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -1428,7 +1467,7 @@ ALTER TABLE `campaign_recipients`
 -- AUTO_INCREMENT for table `clients`
 --
 ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
 
 --
 -- AUTO_INCREMENT for table `communications`
@@ -1482,13 +1521,13 @@ ALTER TABLE `lead_activities`
 -- AUTO_INCREMENT for table `loan_applications`
 --
 ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=37;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=38;
 
 --
 -- AUTO_INCREMENT for table `pipeline_step_templates`
@@ -1506,7 +1545,7 @@ ALTER TABLE `system_settings`
 -- AUTO_INCREMENT for table `tasks`
 --
 ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=43;
 
 --
 -- AUTO_INCREMENT for table `task_documents`
@@ -1542,7 +1581,7 @@ ALTER TABLE `task_sign_documents`
 -- AUTO_INCREMENT for table `task_templates`
 --
 ALTER TABLE `task_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=41;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=58;
 
 --
 -- AUTO_INCREMENT for table `templates`
@@ -1566,7 +1605,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- Constraints for dumped tables

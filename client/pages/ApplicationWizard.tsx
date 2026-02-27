@@ -714,31 +714,33 @@ const ApplicationWizard = () => {
 
               {/* Broker callout — only shown when arrived via share link */}
               {brokerInfo && (
-                <div className="flex items-center gap-4 bg-white border border-gray-200 rounded-2xl px-5 py-4 shadow-sm max-w-sm w-full">
-                  <div className="h-12 w-12 rounded-xl overflow-hidden shrink-0">
-                    {brokerInfo.avatar_url ? (
-                      <img
-                        src={brokerInfo.avatar_url}
-                        alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="h-full w-full bg-primary flex items-center justify-center text-white text-sm font-bold">
-                        {brokerInfo.first_name[0]}
-                        {brokerInfo.last_name[0]}
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-400 mb-0.5">
-                      Your loan officer
-                    </p>
-                    <p className="text-sm font-bold text-gray-900 truncate">
-                      {brokerInfo.first_name} {brokerInfo.last_name}
-                    </p>
-                    <p className="text-xs text-primary font-medium">
-                      Will be in touch soon ✓
-                    </p>
+                <div className="flex justify-center w-full">
+                  <div className="flex items-center gap-4 bg-white border border-gray-200 rounded-2xl px-5 py-4 shadow-sm max-w-sm w-full">
+                    <div className="h-12 w-12 rounded-xl overflow-hidden shrink-0">
+                      {brokerInfo.avatar_url ? (
+                        <img
+                          src={brokerInfo.avatar_url}
+                          alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="h-full w-full bg-primary flex items-center justify-center text-white text-sm font-bold">
+                          {brokerInfo.first_name[0]}
+                          {brokerInfo.last_name[0]}
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-400 mb-0.5">
+                        Your loan officer
+                      </p>
+                      <p className="text-sm font-bold text-gray-900 truncate">
+                        {brokerInfo.first_name} {brokerInfo.last_name}
+                      </p>
+                      <p className="text-xs text-primary font-medium">
+                        Will be in touch soon ✓
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}

@@ -4,7 +4,6 @@ import {
   Image,
   Search,
   Filter,
-  Download,
   ExternalLink,
   Trash2,
   RefreshCw,
@@ -177,67 +176,6 @@ const Documents = () => {
               Refresh
             </Button>
           </div>
-        </div>
-
-        {/* Stats Cards */}
-        <div className="grid gap-4 md:grid-cols-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
-                Total Documents
-              </CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {filteredDocuments.length}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">PDFs</CardTitle>
-              <FileText className="h-4 w-4 text-destructive" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {
-                  filteredDocuments.filter((d) => d.document_type === "pdf")
-                    .length
-                }
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Images</CardTitle>
-              <Image className="h-4 w-4 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {
-                  filteredDocuments.filter((d) => d.document_type === "image")
-                    .length
-                }
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Size</CardTitle>
-              <Download className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {formatFileSize(
-                  filteredDocuments.reduce(
-                    (sum, doc) => sum + (doc.file_size || 0),
-                    0,
-                  ),
-                )}
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
         {/* Filters */}
