@@ -23,6 +23,8 @@ import {
   Trash2,
   Plus,
   PenTool,
+  Award,
+  Shield,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +80,9 @@ import {
   fetchTaskSignatures,
 } from "@/store/slices/tasksSlice";
 import PDFSigningViewer from "@/components/PDFSigningViewer";
+import { PreApprovalLetterModal } from "@/components/PreApprovalLetterModal";
 import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
+import { fetchPreApprovalLetter } from "@/store/slices/preApprovalSlice";
 import axios from "axios";
 import { toast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -152,6 +156,15 @@ export function LoanOverlay({
     null,
   );
 
+  const [preApprovalLetterOpen, setPreApprovalLetterOpen] = useState(false);
+
+  const { letters: preApprovalLetters } = useAppSelector(
+    (state) => state.preApproval,
+  );
+  const preApprovalLetter = selectedLoan
+    ? preApprovalLetters[selectedLoan.id]
+    : null;
+
   const [isAssigning, setIsAssigning] = useState(false);
   const [approvingTaskId, setApprovingTaskId] = useState<number | null>(null);
 
@@ -184,13 +197,20 @@ export function LoanOverlay({
     }
   };
 
-  // Fetch task templates and brokers when component mounts
+  // Fetch task templates, brokers, and pre-approval letter when component mounts
   useEffect(() => {
     if (isOpen) {
       dispatch(fetchTasks());
       dispatch(fetchBrokers());
     }
   }, [dispatch, isOpen]);
+
+  // Fetch pre-approval letter when a specific loan is selected
+  useEffect(() => {
+    if (isOpen && selectedLoan?.id) {
+      dispatch(fetchPreApprovalLetter(selectedLoan.id));
+    }
+  }, [dispatch, isOpen, selectedLoan?.id]);
 
   const handleViewTaskDocuments = async (taskId: number) => {
     if (taskDocuments[taskId]?.loading) return;
@@ -731,6 +751,7 @@ export function LoanOverlay({
   // Check if all tasks are fully completed (approved) for MISMO export
   const areAllTasksCompleted = totalTasks > 0 && approvedTasks === totalTasks;
   const canExportMISMO = sessionToken && areAllTasksCompleted; // Only brokers/admins with completed tasks
+  const canShowPreApproval = sessionToken; // Always visible for brokers
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -801,10 +822,87 @@ export function LoanOverlay({
                     Export MISMO
                   </Button>
                 ) : null}
+
+                {/* Pre-Approval Letter Button */}
+                {canShowPreApproval && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPreApprovalLetterOpen(true)}
+                    className={cn(
+                      "gap-2 h-8 px-3 text-xs transition-colors duration-200",
+                      preApprovalLetter?.is_active
+                        ? "border-red-200 text-red-700 hover:bg-red-50 hover:border-red-300"
+                        : "border-gray-200 text-gray-600 hover:bg-gray-50",
+                    )}
+                  >
+                    <Award className="h-3 w-3" />
+                    {preApprovalLetter
+                      ? "View Pre-Approval"
+                      : "Pre-Approval Letter"}
+                  </Button>
+                )}
               </div>
             </SheetHeader>
 
             <div className="space-y-6">
+              {/* Pre-Approval Letter Banner — shown when all tasks done and letter exists */}
+              {areAllTasksCompleted && preApprovalLetter?.is_active && (
+                <div
+                  className="flex items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-red-50 to-rose-50 border border-red-200 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all duration-200"
+                  onClick={() => setPreApprovalLetterOpen(true)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) =>
+                    e.key === "Enter" && setPreApprovalLetterOpen(true)
+                  }
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-red-100 rounded-lg">
+                      <Award className="h-5 w-5 text-red-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-red-900">
+                        Pre-Approved:{" "}
+                        {new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                          minimumFractionDigits: 0,
+                        }).format(preApprovalLetter.approved_amount)}
+                      </p>
+                      <p className="text-xs text-red-600 flex items-center gap-1">
+                        <Shield className="h-3 w-3" />
+                        Max:{" "}
+                        {new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                          minimumFractionDigits: 0,
+                        }).format(preApprovalLetter.max_approved_amount)}
+                        {preApprovalLetter.expires_at && (
+                          <span className="ml-2">
+                            · Expires{" "}
+                            {new Date(
+                              preApprovalLetter.expires_at + "T00:00:00",
+                            ).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">
+                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                      Letter Active
+                    </Badge>
+                    <ExternalLink className="h-4 w-4 text-red-400" />
+                  </div>
+                </div>
+              )}
+
               {/* Loan Overview */}
               <Card className="border-gray-200 shadow-sm">
                 <CardHeader className="pb-3 border-b border-gray-100">
@@ -1786,6 +1884,16 @@ export function LoanOverlay({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Pre-Approval Letter Modal */}
+      {selectedLoan && (
+        <PreApprovalLetterModal
+          isOpen={preApprovalLetterOpen}
+          onClose={() => setPreApprovalLetterOpen(false)}
+          loanId={selectedLoan.id}
+          loanAmount={selectedLoan.loan_amount ?? 0}
+        />
+      )}
 
       {/* Add Tasks Dialog */}
       <Dialog open={addTasksDialogOpen} onOpenChange={setAddTasksDialogOpen}>

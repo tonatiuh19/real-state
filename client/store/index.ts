@@ -16,6 +16,8 @@ import clientPortalReducer from "./slices/clientPortalSlice";
 import auditLogsReducer from "./slices/auditLogsSlice";
 import reportsReducer from "./slices/reportsSlice";
 import applicationWizardReducer from "./slices/applicationWizardSlice";
+import preApprovalReducer from "./slices/preApprovalSlice";
+import settingsReducer from "./slices/settingsSlice";
 
 export const store = configureStore({
   reducer: {
@@ -36,6 +38,8 @@ export const store = configureStore({
     auditLogs: auditLogsReducer,
     reports: reportsReducer,
     applicationWizard: applicationWizardReducer,
+    preApproval: preApprovalReducer,
+    settings: settingsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

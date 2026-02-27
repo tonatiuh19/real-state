@@ -3742,6 +3742,8 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
 const handleGetClients: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
 
     const [clients] = await pool.query<any[]>(
       `SELECT 
@@ -3756,10 +3758,11 @@ const handleGetClients: RequestHandler = async (req, res) => {
         SUM(CASE WHEN la.status IN ('submitted', 'under_review', 'documents_pending', 'underwriting', 'conditional_approval') THEN 1 ELSE 0 END) as active_applications
       FROM clients c
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
-      WHERE c.assigned_broker_id = ? AND c.tenant_id = ?
+      WHERE c.tenant_id = ?
+        ${isAdmin ? "" : "AND c.assigned_broker_id = ?"}
       GROUP BY c.id
       ORDER BY c.created_at DESC`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      isAdmin ? [MORTGAGE_TENANT_ID] : [MORTGAGE_TENANT_ID, brokerId],
     );
 
     res.json({
@@ -9257,6 +9260,1035 @@ const handleExportReport: RequestHandler = async (req, res) => {
 };
 
 // =====================================================
+// =====================================================
+// SYSTEM SETTINGS HANDLERS
+// =====================================================
+
+/**
+ * GET /api/settings
+ * Returns all system settings for the authenticated broker's tenant.
+ */
+const handleGetSettings: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res.status(404).json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM system_settings
+       WHERE tenant_id = ? OR tenant_id IS NULL
+       ORDER BY tenant_id DESC, setting_key ASC`,
+      [tenantId],
+    );
+
+    // Deduplicate: prefer tenant-scoped over global
+    const seen = new Set<string>();
+    const settings = rows.filter((r) => {
+      if (seen.has(r.setting_key)) return false;
+      seen.add(r.setting_key);
+      return true;
+    });
+
+    return res.json({ success: true, settings });
+  } catch (error) {
+    console.error("Error fetching settings:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch settings" });
+  }
+};
+
+/**
+ * PUT /api/settings
+ * Batch-upsert system settings for the authenticated broker's tenant.
+ * Admin only.
+ */
+const handleUpdateSettings: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
+      return res
+        .status(403)
+        .json({ success: false, error: "Admin access required" });
+    }
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res.status(404).json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+
+    const { updates } = req.body as {
+      updates: { setting_key: string; setting_value: string }[];
+    };
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "updates array is required" });
+    }
+
+    for (const { setting_key, setting_value } of updates) {
+      await pool.query(
+        `INSERT INTO system_settings (tenant_id, setting_key, setting_value, updated_at)
+         VALUES (?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()`,
+        [tenantId, setting_key, setting_value],
+      );
+    }
+
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "update_system_settings",
+      entityType: "system_settings",
+      entityId: tenantId,
+      changes: { keys: updates.map((u) => u.setting_key) },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    return res.json({ success: true, message: "Settings updated successfully" });
+  } catch (error) {
+    console.error("Error updating settings:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to update settings" });
+  }
+};
+
+// =====================================================
+// PRE-APPROVAL LETTER HANDLERS
+// =====================================================
+
+/**
+ * Build default pre-approval HTML content.
+ * Placeholders wrapped in {{...}} will be replaced by data at render time.
+ */
+function buildDefaultPreApprovalHtml(): string {
+  return `<div style="font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;">
+
+  <!-- HEADER: Logo left, company info right -->
+  <table style="width: 100%; margin-bottom: 20px; border-collapse: collapse;">
+    <tr>
+      <td style="vertical-align: top; width: 55%;">
+        {{COMPANY_LOGO}}
+      </td>
+      <td style="vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;">
+        <strong>{{COMPANY_NAME}}</strong><br>
+        P. {{COMPANY_PHONE}}<br>
+        NMLS# {{COMPANY_NMLS}}
+      </td>
+    </tr>
+  </table>
+
+  <hr style="border: none; border-top: 1px solid #ccc; margin-bottom: 20px;">
+
+  <!-- DATE + EXPIRES row -->
+  <table style="width: 100%; margin-bottom: 20px; border-collapse: collapse;">
+    <tr>
+      <td style="font-size: 13px;">Date: {{LETTER_DATE}}</td>
+      <td style="font-size: 13px; text-align: right;">Expires: {{EXPIRES_SHORT}}</td>
+    </tr>
+  </table>
+
+  <!-- RE LINE -->
+  <p style="margin: 0 0 20px; font-size: 13px;">Re: {{CLIENT_FULL_NAME}}</p>
+
+  <hr style="border: none; border-top: 1px solid #ccc; margin-bottom: 20px;">
+
+  <!-- BODY -->
+  <p style="margin: 0 0 16px; font-size: 13px; line-height: 1.7;">
+    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:
+  </p>
+
+  <!-- LOAN DETAILS -->
+  <p style="margin: 0 0 5px; font-size: 13px;">Purchase Price: {{APPROVED_AMOUNT}}</p>
+  <p style="margin: 0 0 5px; font-size: 13px;">Loan Type: </p>
+  <p style="margin: 0 0 5px; font-size: 13px;">Term: 30 years</p>
+  <p style="margin: 0 0 5px; font-size: 13px;">FICO Score: </p>
+  <p style="margin: 0 0 20px; font-size: 13px;">Property Address: {{PROPERTY_ADDRESS}}</p>
+
+  <!-- REVIEWED SECTION -->
+  <p style="margin: 0 0 8px; font-size: 13px;"><strong>We have reviewed the following:</strong></p>
+  <ul style="margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;">
+    <li>Reviewed applicant&#39;s credit report and credit score</li>
+    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>
+    <li>Verified applicant&#39;s assets documentation</li>
+  </ul>
+
+  <!-- DISCLAIMER -->
+  <p style="margin: 0 0 20px; font-size: 13px; line-height: 1.7;">
+    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.
+  </p>
+
+  <!-- REALTOR PARTNER -->
+  <p style="margin: 0 0 32px; font-size: 13px;">Realtor Partner: </p>
+
+  <!-- BROKER SIGNATURE -->
+  <table style="width: 100%; border-collapse: collapse;">
+    <tr>
+      <td style="vertical-align: top; width: 100px;">
+        {{BROKER_PHOTO}}
+      </td>
+      <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
+        <p style="margin: 0 0 3px;"><strong>{{BROKER_FULL_NAME}}</strong></p>
+        <p style="margin: 0 0 3px; color: #444;">Mortgage Banker</p>
+        {{BROKER_LICENSE}}
+        <p style="margin: 0 0 3px; color: #444;">{{COMPANY_NAME}}</p>
+        <p style="margin: 0 0 3px; color: #444;">{{BROKER_PHONE}}</p>
+        <p style="margin: 0; color: #444;">{{BROKER_EMAIL}}</p>
+      </td>
+    </tr>
+  </table>
+
+</div>`;
+}
+
+/**
+ * Build the default branded email HTML for sending a pre-approval letter.
+ */
+function buildDefaultPreApprovalEmailHtml(params: {
+  logoUrl: string;
+  companyName: string;
+  companyAddress: string;
+  clientFirstName: string;
+  brokerName: string;
+  brokerPhone: string;
+  brokerEmail: string;
+  brokerNmls: string;
+  approvedAmount: number;
+  letterDateFormatted: string;
+  expiresShort: string;
+  propertyAddr: string;
+  pdfFilename: string;
+  hasPdf: boolean;
+  customMessage?: string;
+}): string {
+  const {
+    logoUrl, companyName, companyAddress, clientFirstName, brokerName,
+    brokerPhone, brokerEmail, brokerNmls, approvedAmount, letterDateFormatted,
+    expiresShort, propertyAddr, pdfFilename, hasPdf, customMessage,
+  } = params;
+
+  const amountFormatted = new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD", minimumFractionDigits: 0,
+  }).format(approvedAmount);
+
+  const customBlock = customMessage?.trim()
+    ? `<tr><td style="padding:0 0 20px 0;">
+        <div style="background:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;font-size:14px;color:#333;line-height:1.6;">${customMessage.trim()}</div>
+       </td></tr>`
+    : "";
+
+  const expiresRow = expiresShort
+    ? `<tr>
+         <td style="padding:6px 0;color:#64748b;font-size:13px;width:160px;">Valid Until</td>
+         <td style="padding:6px 0;color:#0f172a;font-size:14px;">${expiresShort}</td>
+       </tr>`
+    : "";
+
+  const brokerPhoneLine = brokerPhone
+    ? `<p style="margin:2px 0 0;color:#475569;font-size:13px;">📞 ${brokerPhone}</p>` : "";
+  const brokerEmailLine = brokerEmail
+    ? `<p style="margin:2px 0 0;color:#475569;font-size:13px;">✉ ${brokerEmail}</p>` : "";
+  const brokerNmlsLine = brokerNmls
+    ? `<p style="margin:2px 0 0;color:#94a3b8;font-size:12px;">NMLS# ${brokerNmls}</p>` : "";
+
+  const attachNote = hasPdf
+    ? `<tr><td style="padding:16px 0 0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 16px;">
+              <p style="margin:0;color:#166534;font-size:13px;">📎 <strong>${pdfFilename}</strong> is attached to this email.</p>
+            </td>
+          </tr>
+        </table>
+       </td></tr>`
+    : "";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pre-Approval Letter</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+        <tr>
+          <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+            <img src="${logoUrl}" alt="${companyName}" style="height:52px;width:auto;display:inline-block;" />
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color:#ffffff;padding:40px 32px 32px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              ${customBlock}
+              <tr>
+                <td style="padding:0 0 8px 0;">
+                  <h2 style="margin:0;color:#0f172a;font-size:22px;font-weight:700;">Congratulations, ${clientFirstName || "Applicant"}!</h2>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">
+                  Your pre-approval letter is ready. Please find it attached to this email as a PDF.
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 0 20px 0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+                    <tr>
+                      <td style="padding:20px 24px;">
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                          <tr>
+                            <td style="padding:6px 0;color:#64748b;font-size:13px;width:160px;">Pre-Approved Amount</td>
+                            <td style="padding:6px 0;color:#e8192c;font-size:18px;font-weight:700;">${amountFormatted}</td>
+                          </tr>
+                          <tr>
+                            <td style="padding:6px 0;color:#64748b;font-size:13px;">Letter Date</td>
+                            <td style="padding:6px 0;color:#0f172a;font-size:14px;">${letterDateFormatted}</td>
+                          </tr>
+                          ${expiresRow}
+                          <tr>
+                            <td style="padding:6px 0;color:#64748b;font-size:13px;">Property</td>
+                            <td style="padding:6px 0;color:#0f172a;font-size:14px;">${propertyAddr || "TBD"}</td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+              ${attachNote}
+              <tr>
+                <td style="padding:20px 0 0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+                    <tr>
+                      <td style="padding:16px 20px;">
+                        <p style="margin:0 0 2px;color:#0f172a;font-size:14px;font-weight:600;">${brokerName}</p>
+                        ${brokerPhoneLine}
+                        ${brokerEmailLine}
+                        ${brokerNmlsLine}
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+            <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">${companyName}</p>
+            <p style="margin:0;color:#94a3b8;font-size:12px;">${companyAddress}</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+/**
+ * GET /api/loans/:loanId/pre-approval-letter
+ * Fetch the pre-approval letter for a loan (with all joined data).
+ */
+const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const brokerId = (req as any).brokerId;
+
+    // Verify the loan exists (tenant-scoped)
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT la.id, la.tenant_id FROM loan_applications la WHERE la.id = ? AND la.tenant_id = (
+          SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1
+       )`,
+      [loanId, brokerId],
+    );
+    if (!loanRows.length) {
+      return res.status(404).json({ success: false, error: "Loan not found" });
+    }
+    const tenantId = loanRows[0].tenant_id;
+
+    // Fetch letter with joined fields
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+          pal.*,
+          b.first_name  AS broker_first_name,
+          b.last_name   AS broker_last_name,
+          b.email       AS broker_email,
+          b.phone       AS broker_phone,
+          b.license_number AS broker_license_number,
+          bp.avatar_url AS broker_photo_url,
+          c.first_name  AS client_first_name,
+          c.last_name   AS client_last_name,
+          c.email       AS client_email,
+          la.property_address,
+          la.property_city,
+          la.property_state,
+          la.property_zip,
+          la.application_number,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url'  AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'      AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_name,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_address'   AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_address,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'      AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
+       FROM pre_approval_letters pal
+       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       INNER JOIN loan_applications la ON pal.application_id = la.id
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE pal.application_id = ? AND pal.tenant_id = ?
+       ORDER BY pal.created_at DESC
+       LIMIT 1`,
+      [tenantId, tenantId, tenantId, tenantId, tenantId, loanId, tenantId],
+    );
+
+    if (!rows.length) {
+      return res.json({ success: true, letter: null });
+    }
+
+    const letter = {
+      ...rows[0],
+      approved_amount: parseFloat(rows[0].approved_amount),
+      max_approved_amount: parseFloat(rows[0].max_approved_amount),
+      is_active: !!rows[0].is_active,
+    };
+
+    return res.json({ success: true, letter });
+  } catch (error) {
+    console.error("Error fetching pre-approval letter:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch pre-approval letter",
+    });
+  }
+};
+
+/**
+ * POST /api/loans/:loanId/pre-approval-letter
+ * Create a pre-approval letter for a loan. Admin only (sets max_approved_amount).
+ */
+const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const brokerId = (req as any).brokerId;
+    const brokerRole: string = (req as any).brokerRole;
+
+    if (brokerRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        error: "Only admin brokers can create pre-approval letters",
+      });
+    }
+
+    const { max_approved_amount, approved_amount, html_content, letter_date, expires_at } = req.body;
+
+    if (!max_approved_amount || isNaN(Number(max_approved_amount))) {
+      return res.status(400).json({ success: false, error: "max_approved_amount is required" });
+    }
+    if (!approved_amount || isNaN(Number(approved_amount))) {
+      return res.status(400).json({ success: false, error: "approved_amount is required" });
+    }
+    if (Number(approved_amount) > Number(max_approved_amount)) {
+      return res.status(400).json({
+        success: false,
+        error: "approved_amount cannot exceed max_approved_amount",
+      });
+    }
+
+    // Get loan (tenant-scoped)
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT la.* FROM loan_applications la WHERE la.id = ? AND la.tenant_id = (
+          SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1
+       )`,
+      [loanId, brokerId],
+    );
+    if (!loanRows.length) {
+      return res.status(404).json({ success: false, error: "Loan not found" });
+    }
+    const loan = loanRows[0];
+
+    // Check for existing letter (one per loan)
+    const [existing] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM pre_approval_letters WHERE application_id = ? AND tenant_id = ?",
+      [loanId, loan.tenant_id],
+    );
+    if (existing.length) {
+      return res.status(409).json({
+        success: false,
+        error: "A pre-approval letter already exists for this loan. Use PUT to update it.",
+      });
+    }
+
+    const finalHtml = html_content?.trim() || buildDefaultPreApprovalHtml();
+    const finalDate = letter_date || new Date().toISOString().split("T")[0];
+
+    const [result] = await pool.query<any>(
+      `INSERT INTO pre_approval_letters
+         (tenant_id, application_id, approved_amount, max_approved_amount, html_content, letter_date, expires_at, is_active, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [loan.tenant_id, loanId, approved_amount, max_approved_amount, finalHtml, finalDate, expires_at || null, brokerId],
+    );
+    const newId = result.insertId;
+
+    // Add to documents table so it shows in the documents section
+    await pool.query(
+      `INSERT INTO documents
+         (tenant_id, application_id, uploaded_by_broker_id, document_type, document_name, file_path, mime_type, status, is_required)
+       VALUES (?, ?, ?, 'other', ?, ?, 'text/html', 'approved', 0)`,
+      [
+        loan.tenant_id,
+        loanId,
+        brokerId,
+        `Pre-Approval Letter - ${new Date(finalDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`,
+        `/pre-approval-letters/${newId}`,
+      ],
+    );
+
+    // Audit log
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "create_pre_approval_letter",
+      entityType: "pre_approval_letter",
+      entityId: newId,
+      changes: { application_id: loanId, approved_amount, max_approved_amount },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    // Return the full letter
+    const [letterRows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+          pal.*,
+          b.first_name AS broker_first_name, b.last_name AS broker_last_name,
+          b.email AS broker_email, b.phone AS broker_phone,
+          b.license_number AS broker_license_number, bp.avatar_url AS broker_photo_url,
+          c.first_name AS client_first_name, c.last_name AS client_last_name, c.email AS client_email,
+          la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url' AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_name,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_address'  AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_address,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'    AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
+       FROM pre_approval_letters pal
+       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       INNER JOIN loan_applications la ON pal.application_id = la.id
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE pal.id = ?`,
+      [loan.tenant_id, loan.tenant_id, loan.tenant_id, loan.tenant_id, loan.tenant_id, newId],
+    );
+
+    const letter = {
+      ...letterRows[0],
+      approved_amount: parseFloat(letterRows[0].approved_amount),
+      max_approved_amount: parseFloat(letterRows[0].max_approved_amount),
+      is_active: !!letterRows[0].is_active,
+    };
+
+    return res.status(201).json({
+      success: true,
+      letter,
+      message: "Pre-approval letter created successfully",
+    });
+  } catch (error) {
+    console.error("Error creating pre-approval letter:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to create pre-approval letter",
+    });
+  }
+};
+
+/**
+ * PUT /api/loans/:loanId/pre-approval-letter
+ * Update the pre-approval letter. Any broker can update html_content, approved_amount (≤ max).
+ * Only admin can update max_approved_amount or is_active.
+ */
+const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const brokerId = (req as any).brokerId;
+    const brokerRole: string = (req as any).brokerRole;
+
+    // Get broker's tenant
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res.status(401).json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+
+    // Fetch existing letter
+    const [letterRows] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM pre_approval_letters WHERE application_id = ? AND tenant_id = ?",
+      [loanId, tenantId],
+    );
+    if (!letterRows.length) {
+      return res.status(404).json({ success: false, error: "Pre-approval letter not found" });
+    }
+    const existing = letterRows[0];
+
+    const {
+      approved_amount,
+      html_content,
+      letter_date,
+      expires_at,
+      is_active,
+      max_approved_amount,
+    } = req.body;
+
+    // Non-admins cannot change max_approved_amount
+    if (max_approved_amount !== undefined && brokerRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        error: "Only admin brokers can change the maximum pre-approved amount",
+      });
+    }
+
+    // Enforce amount cap
+    const newMax = max_approved_amount !== undefined
+      ? Number(max_approved_amount)
+      : parseFloat(existing.max_approved_amount);
+    const newAmount = approved_amount !== undefined
+      ? Number(approved_amount)
+      : parseFloat(existing.approved_amount);
+
+    if (newAmount > newMax) {
+      return res.status(400).json({
+        success: false,
+        error: `approved_amount (${newAmount}) cannot exceed max_approved_amount (${newMax})`,
+      });
+    }
+
+    // Build update
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (approved_amount !== undefined) { updates.push("approved_amount = ?"); values.push(newAmount); }
+    if (max_approved_amount !== undefined && brokerRole === "admin") { updates.push("max_approved_amount = ?"); values.push(newMax); }
+    if (html_content !== undefined) { updates.push("html_content = ?"); values.push(html_content); }
+    if (letter_date !== undefined) { updates.push("letter_date = ?"); values.push(letter_date); }
+    if (expires_at !== undefined) { updates.push("expires_at = ?"); values.push(expires_at || null); }
+    if (is_active !== undefined && brokerRole === "admin") { updates.push("is_active = ?"); values.push(is_active ? 1 : 0); }
+
+    updates.push("updated_by_broker_id = ?");
+    values.push(brokerId);
+
+    if (updates.length === 1) {
+      return res.status(400).json({ success: false, error: "No valid fields to update" });
+    }
+
+    values.push(existing.id);
+    await pool.query(
+      `UPDATE pre_approval_letters SET ${updates.join(", ")} WHERE id = ?`,
+      values,
+    );
+
+    // Also update the document record name if date changed
+    if (letter_date !== undefined) {
+      await pool.query(
+        `UPDATE documents SET document_name = ? WHERE application_id = ? AND file_path = ? AND tenant_id = ?`,
+        [
+          `Pre-Approval Letter - ${new Date(letter_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`,
+          loanId,
+          `/pre-approval-letters/${existing.id}`,
+          tenantId,
+        ],
+      );
+    }
+
+    // Audit log
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "update_pre_approval_letter",
+      entityType: "pre_approval_letter",
+      entityId: existing.id,
+      changes: { approved_amount, max_approved_amount, html_content: html_content ? "(updated)" : undefined, letter_date, expires_at, is_active },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    // Return updated letter
+    const [updated] = await pool.query<RowDataPacket[]>(
+      `SELECT
+          pal.*,
+          b.first_name AS broker_first_name, b.last_name AS broker_last_name,
+          b.email AS broker_email, b.phone AS broker_phone,
+          b.license_number AS broker_license_number, bp.avatar_url AS broker_photo_url,
+          c.first_name AS client_first_name, c.last_name AS client_last_name, c.email AS client_email,
+          la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url' AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_name,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_address'  AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_address,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'    AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
+       FROM pre_approval_letters pal
+       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       INNER JOIN loan_applications la ON pal.application_id = la.id
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE pal.id = ?`,
+      [tenantId, tenantId, tenantId, tenantId, tenantId, existing.id],
+    );
+
+    const letter = {
+      ...updated[0],
+      approved_amount: parseFloat(updated[0].approved_amount),
+      max_approved_amount: parseFloat(updated[0].max_approved_amount),
+      is_active: !!updated[0].is_active,
+    };
+
+    return res.json({
+      success: true,
+      letter,
+      message: "Pre-approval letter updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating pre-approval letter:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to update pre-approval letter",
+    });
+  }
+};
+
+/**
+ * POST /api/loans/:loanId/pre-approval-letter/send-email
+ * Send the rendered pre-approval letter as an HTML email to the client.
+ * Optionally wraps inside an existing email template body.
+ */
+const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const brokerId = (req as any).brokerId;
+    const { subject, custom_message, template_id, pdf_base64 } = req.body;
+
+    // Get broker's tenant
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res.status(401).json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+
+    // Fetch letter with all joined data
+    const [letterRows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+          pal.*,
+          b.first_name AS broker_first_name, b.last_name AS broker_last_name,
+          b.email AS broker_email, b.phone AS broker_phone,
+          b.license_number AS broker_license_number, bp.avatar_url AS broker_photo_url,
+          c.first_name AS client_first_name, c.last_name AS client_last_name,
+          c.email AS client_email, c.id AS client_id,
+          la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url' AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_name,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_address'  AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_address,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'    AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
+          (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
+       FROM pre_approval_letters pal
+       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       INNER JOIN loan_applications la ON pal.application_id = la.id
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE pal.application_id = ? AND pal.tenant_id = ? AND pal.is_active = 1
+       ORDER BY pal.created_at DESC LIMIT 1`,
+      [tenantId, tenantId, tenantId, tenantId, tenantId, loanId, tenantId],
+    );
+
+    if (!letterRows.length) {
+      return res.status(404).json({
+        success: false,
+        error: "No active pre-approval letter found for this loan",
+      });
+    }
+
+    const letter = letterRows[0];
+
+    if (!letter.client_email) {
+      return res.status(400).json({
+        success: false,
+        error: "Client has no email address on file",
+      });
+    }
+
+    // --- Build placeholder map (same logic as frontend renderer) ---
+    const approvedAmount = parseFloat(letter.approved_amount);
+    const clientName = `${letter.client_first_name ?? ""} ${letter.client_last_name ?? ""}`.trim();
+    const propertyAddr = [
+      letter.property_address,
+      letter.property_city,
+      letter.property_state,
+      letter.property_zip,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    const letterDateFormatted = letter.letter_date
+      ? new Date(letter.letter_date).toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })
+      : new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+    const expiryNote = letter.expires_at
+      ? `This pre-approval is valid through <strong>${new Date(letter.expires_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}</strong>. After this date a new pre-qualification review will be required.`
+      : `This pre-approval letter does not have a set expiration date; however, your financial circumstances, creditworthiness, and market conditions are subject to change.`;
+
+    const expiresShort = letter.expires_at
+      ? new Date(letter.expires_at).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+      : "";
+
+    const logoHtml = letter.company_logo_url
+      ? `<img src="${letter.company_logo_url}" alt="${letter.company_name ?? "Company"} Logo" style="max-height:64px; max-width:200px; object-fit:contain;" />`
+      : `<div style="font-size:20px; font-weight:bold; color:#1a3a5c;">${letter.company_name ?? "Encore Mortgage"}</div>`;
+
+    const brokerPhotoHtml = letter.broker_photo_url
+      ? `<img src="${letter.broker_photo_url}" alt="${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}" style="width:72px; height:72px; border-radius:50%; object-fit:cover; border:3px solid #1a3a5c;" />`
+      : `<div style="width:72px; height:72px; border-radius:50%; background:#e8edf5; border:3px solid #1a3a5c; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:bold; color:#1a3a5c;">${(letter.broker_first_name?.[0] ?? "") + (letter.broker_last_name?.[0] ?? "")}</div>`;
+
+    const brokerLicenseHtml = letter.broker_license_number
+      ? `<p style="margin:4px 0 0; font-size:13px; color:#555;">NMLS# ${letter.broker_license_number}</p>`
+      : "";
+
+    const placeholders: Record<string, string> = {
+      "{{COMPANY_LOGO}}": logoHtml,
+      "{{COMPANY_ADDRESS}}": letter.company_address ?? "",
+      "{{COMPANY_PHONE}}": letter.company_phone ?? "",
+      "{{COMPANY_NMLS}}": letter.company_nmls ?? "",
+      "{{LETTER_DATE}}": letterDateFormatted,
+      "{{CLIENT_FULL_NAME}}": clientName || "Applicant",
+      "{{PROPERTY_ADDRESS}}": propertyAddr || "Property Address TBD",
+      "{{APPROVED_AMOUNT}}": new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(approvedAmount),
+      "{{EXPIRY_NOTE}}": expiryNote,
+      "{{EXPIRES_SHORT}}": expiresShort,
+      "{{BROKER_PHOTO}}": brokerPhotoHtml,
+      "{{BROKER_FULL_NAME}}": `${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}`.trim(),
+      "{{COMPANY_NAME}}": letter.company_name ?? "Encore Mortgage",
+      "{{BROKER_LICENSE}}": brokerLicenseHtml,
+      "{{BROKER_PHONE}}": letter.broker_phone ?? "",
+      "{{BROKER_EMAIL}}": letter.broker_email ?? "",
+    };
+
+    let renderedLetterHtml = letter.html_content as string;
+    for (const [placeholder, value] of Object.entries(placeholders)) {
+      renderedLetterHtml = renderedLetterHtml.replace(
+        new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"),
+        value,
+      );
+    }
+
+    // --- Optionally wrap in an email template ---
+    let finalSubject = subject?.trim() || `Your Pre-Approval Letter — ${letter.application_number}`;
+    let finalBody = "";
+
+    const effectiveLogoUrl = (letter.company_logo_url as string | null) ||
+      "https://disruptinglabs.com/data/encore/assets/images/logo.png";
+    const companyName  = (letter.company_name  as string) || "Encore Mortgage";
+    const brokerName   = `${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}`.trim() || "Your Loan Officer";
+    const pdfFilename  = `Pre-Approval-${letter.application_number ?? loanId}.pdf`;
+
+    if (template_id) {
+      const [templateRows] = await pool.query<RowDataPacket[]>(
+        "SELECT * FROM templates WHERE id = ? AND tenant_id = ? AND template_type = 'email' AND is_active = 1",
+        [template_id, tenantId],
+      );
+      if (templateRows.length) {
+        const tpl = templateRows[0];
+        const tplVariables: Record<string, string> = {
+          client_name: clientName || "Applicant",
+          first_name: letter.client_first_name ?? "",
+          last_name: letter.client_last_name ?? "",
+          application_number: letter.application_number ?? "",
+          approved_amount: new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(approvedAmount),
+          broker_name: brokerName,
+          pre_approval_letter: renderedLetterHtml,
+          current_date: letterDateFormatted,
+        };
+        finalBody = processTemplateVariables(tpl.body, tplVariables);
+        if (tpl.subject && !subject?.trim()) {
+          finalSubject = processTemplateVariables(tpl.subject, tplVariables);
+        }
+      }
+    }
+
+    // --- Build branded email when no custom template ---
+    if (!finalBody) {
+      finalBody = buildDefaultPreApprovalEmailHtml({
+        logoUrl: effectiveLogoUrl,
+        companyName,
+        companyAddress: letter.company_address ?? "",
+        clientFirstName: letter.client_first_name ?? "",
+        brokerName,
+        brokerPhone: letter.broker_phone ?? "",
+        brokerEmail: letter.broker_email ?? "",
+        brokerNmls: letter.broker_license_number ?? "",
+        approvedAmount,
+        letterDateFormatted,
+        expiresShort,
+        propertyAddr,
+        pdfFilename,
+        hasPdf: !!pdf_base64,
+        customMessage: custom_message,
+      });
+    }
+
+    // --- Send the email (inline transporter to support PDF attachment) ---
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+    });
+
+    const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
+    if (pdf_base64) {
+      attachments.push({
+        filename: pdfFilename,
+        content: Buffer.from(pdf_base64, "base64"),
+        contentType: "application/pdf",
+      });
+    }
+
+    let sendSuccess = false;
+    let externalId: string | undefined;
+    try {
+      const info = await transporter.sendMail({
+        from: process.env.SMTP_FROM,
+        to: letter.client_email,
+        subject: finalSubject,
+        html: finalBody,
+        attachments,
+      });
+      sendSuccess = true;
+      externalId = info.messageId;
+    } catch (mailErr: any) {
+      console.error("❌ Pre-approval email send failed:", mailErr);
+    }
+
+    // Audit log
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "send_pre_approval_letter_email",
+      entityType: "pre_approval_letter",
+      entityId: letter.id,
+      changes: {
+        application_id: loanId,
+        client_email: letter.client_email,
+        subject: finalSubject,
+        template_id: template_id || null,
+        send_success: sendSuccess,
+        pdf_attached: !!pdf_base64,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    if (!sendSuccess) {
+      return res.status(502).json({
+        success: false,
+        error: "Email delivery failed",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Pre-approval letter sent to ${letter.client_email}`,
+      external_id: externalId,
+    });
+  } catch (error) {
+    console.error("Error sending pre-approval letter email:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to send email",
+    });
+  }
+};
+
+/**
+ * DELETE /api/loans/:loanId/pre-approval-letter
+ * Delete the pre-approval letter for a loan. Admin only.
+ */
+const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const brokerId = (req as any).brokerId;
+    const brokerRole: string = (req as any).brokerRole;
+
+    if (brokerRole !== "admin") {
+      return res.status(403).json({ success: false, error: "Only admin brokers can delete pre-approval letters" });
+    }
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [existing] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM pre_approval_letters WHERE application_id = ? AND tenant_id = ?",
+      [loanId, tenantId],
+    );
+    if (!existing.length) {
+      return res.status(404).json({ success: false, error: "Pre-approval letter not found" });
+    }
+
+    const letterId = existing[0].id;
+
+    // Remove document record
+    await pool.query(
+      "DELETE FROM documents WHERE application_id = ? AND file_path = ? AND tenant_id = ?",
+      [loanId, `/pre-approval-letters/${letterId}`, tenantId],
+    );
+
+    // Delete letter
+    await pool.query("DELETE FROM pre_approval_letters WHERE id = ?", [letterId]);
+
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "delete_pre_approval_letter",
+      entityType: "pre_approval_letter",
+      entityId: letterId,
+      changes: { application_id: loanId },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    return res.json({ success: true, message: "Pre-approval letter deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting pre-approval letter:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to delete pre-approval letter",
+    });
+  }
+};
+
+// =====================================================
 // SERVER INITIALIZATION
 // =====================================================
 
@@ -9702,6 +10734,56 @@ function createServer() {
     "/api/reports/export",
     verifyBrokerSession,
     handleExportReport,
+  );
+
+  // Image proxy (for client-side PDF generation – bypasses CORS on external images)
+  expressApp.get("/api/image-proxy", async (req, res) => {
+    const url = req.query.url as string;
+    if (!url || !/^https?:\/\//.test(url)) {
+      return res.status(400).send("Invalid url");
+    }
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return res.status(502).send("Upstream error");
+      const contentType = response.headers.get("content-type") || "image/png";
+      const buffer = Buffer.from(await response.arrayBuffer());
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send(buffer);
+    } catch {
+      return res.status(502).send("Failed to fetch image");
+    }
+  });
+
+  // System Settings routes
+  expressApp.get("/api/settings", verifyBrokerSession, handleGetSettings);
+  expressApp.put("/api/settings", verifyBrokerSession, handleUpdateSettings);
+
+  // Pre-Approval Letter routes
+  expressApp.get(
+    "/api/loans/:loanId/pre-approval-letter",
+    verifyBrokerSession,
+    handleGetPreApprovalLetter,
+  );
+  expressApp.post(
+    "/api/loans/:loanId/pre-approval-letter",
+    verifyBrokerSession,
+    handleCreatePreApprovalLetter,
+  );
+  expressApp.put(
+    "/api/loans/:loanId/pre-approval-letter",
+    verifyBrokerSession,
+    handleUpdatePreApprovalLetter,
+  );
+  expressApp.delete(
+    "/api/loans/:loanId/pre-approval-letter",
+    verifyBrokerSession,
+    handleDeletePreApprovalLetter,
+  );
+  expressApp.post(
+    "/api/loans/:loanId/pre-approval-letter/send-email",
+    verifyBrokerSession,
+    handleSendPreApprovalLetterEmail,
   );
 
   // 404 handler - only for API routes

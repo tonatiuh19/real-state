@@ -1173,3 +1173,116 @@ export interface UpdateBrokerAvatarResponse {
   success: boolean;
   avatar_url: string;
 }
+
+// =====================================================
+// PRE-APPROVAL LETTER TYPES
+// =====================================================
+
+export interface PreApprovalLetter {
+  id: number;
+  tenant_id: number;
+  application_id: number;
+  approved_amount: number;
+  max_approved_amount: number;
+  html_content: string;
+  letter_date: string;
+  expires_at: string | null;
+  is_active: boolean;
+  created_by_broker_id: number;
+  updated_by_broker_id: number | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  broker_first_name: string | null;
+  broker_last_name: string | null;
+  broker_email: string | null;
+  broker_phone: string | null;
+  broker_license_number: string | null;
+  broker_photo_url: string | null;
+  client_first_name: string | null;
+  client_last_name: string | null;
+  client_email: string | null;
+  property_address: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_zip: string | null;
+  application_number: string | null;
+  company_logo_url: string | null;
+  company_name: string | null;
+  company_address: string | null;
+  company_phone: string | null;
+  company_nmls: string | null;
+}
+
+export interface GetPreApprovalLetterResponse {
+  success: boolean;
+  letter: PreApprovalLetter | null;
+}
+
+export interface CreatePreApprovalLetterRequest {
+  max_approved_amount: number;
+  approved_amount: number;
+  html_content: string;
+  letter_date: string;
+  expires_at?: string | null;
+}
+
+export interface CreatePreApprovalLetterResponse {
+  success: boolean;
+  letter: PreApprovalLetter;
+  message: string;
+}
+
+export interface UpdatePreApprovalLetterRequest {
+  approved_amount?: number;
+  html_content?: string;
+  letter_date?: string;
+  expires_at?: string | null;
+  is_active?: boolean;
+  // Only admins can update max_approved_amount
+  max_approved_amount?: number;
+}
+
+export interface UpdatePreApprovalLetterResponse {
+  success: boolean;
+  letter: PreApprovalLetter;
+  message: string;
+}
+
+export interface SendPreApprovalLetterEmailRequest {
+  subject?: string;
+  custom_message?: string;
+  template_id?: number | null;
+}
+
+export interface SendPreApprovalLetterEmailResponse {
+  success: boolean;
+  message: string;
+  external_id?: string;
+}
+
+// ─── System Settings ───────────────────────────────────────────────────────────
+
+export interface SystemSetting {
+  id: number;
+  tenant_id: number | null;
+  setting_key: string;
+  setting_value: string | null;
+  setting_type: "string" | "number" | "boolean" | "json";
+  description: string | null;
+  updated_at: string;
+}
+
+export interface GetSettingsResponse {
+  success: boolean;
+  settings: SystemSetting[];
+}
+
+export interface UpdateSettingsRequest {
+  updates: { setting_key: string; setting_value: string }[];
+}
+
+export interface UpdateSettingsResponse {
+  success: boolean;
+  message: string;
+}
