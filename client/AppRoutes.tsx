@@ -21,6 +21,7 @@ import Reports from "./pages/admin/Reports";
 // import Notifications from "./pages/admin/Notifications";
 import Brokers from "./pages/admin/Brokers";
 import BrokerProfile from "./pages/admin/BrokerProfile";
+import ReminderFlows from "./pages/admin/ReminderFlows";
 import ClientDashboard from "./pages/client/Dashboard";
 import ClientLoans from "./pages/client/Loans";
 import ClientTasks from "./pages/client/Tasks";
@@ -221,6 +222,14 @@ const AppRoutes = () => (
         </AdminLayout>
       }
     /> */}
+    <Route
+      path="/admin/reminder-flows"
+      element={
+        <AdminLayout>
+          <ReminderFlows />
+        </AdminLayout>
+      }
+    />
     <Route
       path="/admin/brokers"
       element={

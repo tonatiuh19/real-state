@@ -21,6 +21,7 @@
   "dependencies": {
     "@reduxjs/toolkit": "^2.11.2",
     "@vercel/node": "^3.0.21",
+    "@xyflow/react": "^12.10.1",
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",
     "dotenv": "^17.2.1",

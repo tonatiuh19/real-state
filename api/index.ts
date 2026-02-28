@@ -9276,7 +9276,9 @@ const handleGetSettings: RequestHandler = async (req, res) => {
       [brokerId],
     );
     if (!tenantRows.length) {
-      return res.status(404).json({ success: false, error: "Broker not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
     }
     const tenantId = tenantRows[0].tenant_id;
 
@@ -9324,7 +9326,9 @@ const handleUpdateSettings: RequestHandler = async (req, res) => {
       [brokerId],
     );
     if (!tenantRows.length) {
-      return res.status(404).json({ success: false, error: "Broker not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
     }
     const tenantId = tenantRows[0].tenant_id;
 
@@ -9357,7 +9361,10 @@ const handleUpdateSettings: RequestHandler = async (req, res) => {
       userAgent: req.headers["user-agent"],
     });
 
-    return res.json({ success: true, message: "Settings updated successfully" });
+    return res.json({
+      success: true,
+      message: "Settings updated successfully",
+    });
   } catch (error) {
     console.error("Error updating settings:", error);
     return res
@@ -9475,13 +9482,27 @@ function buildDefaultPreApprovalEmailHtml(params: {
   customMessage?: string;
 }): string {
   const {
-    logoUrl, companyName, companyAddress, clientFirstName, brokerName,
-    brokerPhone, brokerEmail, brokerNmls, approvedAmount, letterDateFormatted,
-    expiresShort, propertyAddr, pdfFilename, hasPdf, customMessage,
+    logoUrl,
+    companyName,
+    companyAddress,
+    clientFirstName,
+    brokerName,
+    brokerPhone,
+    brokerEmail,
+    brokerNmls,
+    approvedAmount,
+    letterDateFormatted,
+    expiresShort,
+    propertyAddr,
+    pdfFilename,
+    hasPdf,
+    customMessage,
   } = params;
 
   const amountFormatted = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD", minimumFractionDigits: 0,
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
   }).format(approvedAmount);
 
   const customBlock = customMessage?.trim()
@@ -9498,11 +9519,14 @@ function buildDefaultPreApprovalEmailHtml(params: {
     : "";
 
   const brokerPhoneLine = brokerPhone
-    ? `<p style="margin:2px 0 0;color:#475569;font-size:13px;">📞 ${brokerPhone}</p>` : "";
+    ? `<p style="margin:2px 0 0;color:#475569;font-size:13px;">📞 ${brokerPhone}</p>`
+    : "";
   const brokerEmailLine = brokerEmail
-    ? `<p style="margin:2px 0 0;color:#475569;font-size:13px;">✉ ${brokerEmail}</p>` : "";
+    ? `<p style="margin:2px 0 0;color:#475569;font-size:13px;">✉ ${brokerEmail}</p>`
+    : "";
   const brokerNmlsLine = brokerNmls
-    ? `<p style="margin:2px 0 0;color:#94a3b8;font-size:12px;">NMLS# ${brokerNmls}</p>` : "";
+    ? `<p style="margin:2px 0 0;color:#94a3b8;font-size:12px;">NMLS# ${brokerNmls}</p>`
+    : "";
 
   const attachNote = hasPdf
     ? `<tr><td style="padding:16px 0 0;">
@@ -9673,7 +9697,10 @@ const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
     console.error("Error fetching pre-approval letter:", error);
     return res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : "Failed to fetch pre-approval letter",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch pre-approval letter",
     });
   }
 };
@@ -9695,13 +9722,23 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       });
     }
 
-    const { max_approved_amount, approved_amount, html_content, letter_date, expires_at } = req.body;
+    const {
+      max_approved_amount,
+      approved_amount,
+      html_content,
+      letter_date,
+      expires_at,
+    } = req.body;
 
     if (!max_approved_amount || isNaN(Number(max_approved_amount))) {
-      return res.status(400).json({ success: false, error: "max_approved_amount is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "max_approved_amount is required" });
     }
     if (!approved_amount || isNaN(Number(approved_amount))) {
-      return res.status(400).json({ success: false, error: "approved_amount is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "approved_amount is required" });
     }
     if (Number(approved_amount) > Number(max_approved_amount)) {
       return res.status(400).json({
@@ -9730,7 +9767,8 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
     if (existing.length) {
       return res.status(409).json({
         success: false,
-        error: "A pre-approval letter already exists for this loan. Use PUT to update it.",
+        error:
+          "A pre-approval letter already exists for this loan. Use PUT to update it.",
       });
     }
 
@@ -9741,7 +9779,16 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       `INSERT INTO pre_approval_letters
          (tenant_id, application_id, approved_amount, max_approved_amount, html_content, letter_date, expires_at, is_active, created_by_broker_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-      [loan.tenant_id, loanId, approved_amount, max_approved_amount, finalHtml, finalDate, expires_at || null, brokerId],
+      [
+        loan.tenant_id,
+        loanId,
+        approved_amount,
+        max_approved_amount,
+        finalHtml,
+        finalDate,
+        expires_at || null,
+        brokerId,
+      ],
     );
     const newId = result.insertId;
 
@@ -9791,7 +9838,14 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
        INNER JOIN loan_applications la ON pal.application_id = la.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.id = ?`,
-      [loan.tenant_id, loan.tenant_id, loan.tenant_id, loan.tenant_id, loan.tenant_id, newId],
+      [
+        loan.tenant_id,
+        loan.tenant_id,
+        loan.tenant_id,
+        loan.tenant_id,
+        loan.tenant_id,
+        newId,
+      ],
     );
 
     const letter = {
@@ -9810,7 +9864,10 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
     console.error("Error creating pre-approval letter:", error);
     return res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : "Failed to create pre-approval letter",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to create pre-approval letter",
     });
   }
 };
@@ -9832,7 +9889,9 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       [brokerId],
     );
     if (!tenantRows.length) {
-      return res.status(401).json({ success: false, error: "Broker not found" });
+      return res
+        .status(401)
+        .json({ success: false, error: "Broker not found" });
     }
     const tenantId = tenantRows[0].tenant_id;
 
@@ -9842,7 +9901,9 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       [loanId, tenantId],
     );
     if (!letterRows.length) {
-      return res.status(404).json({ success: false, error: "Pre-approval letter not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Pre-approval letter not found" });
     }
     const existing = letterRows[0];
 
@@ -9864,12 +9925,14 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
     }
 
     // Enforce amount cap
-    const newMax = max_approved_amount !== undefined
-      ? Number(max_approved_amount)
-      : parseFloat(existing.max_approved_amount);
-    const newAmount = approved_amount !== undefined
-      ? Number(approved_amount)
-      : parseFloat(existing.approved_amount);
+    const newMax =
+      max_approved_amount !== undefined
+        ? Number(max_approved_amount)
+        : parseFloat(existing.max_approved_amount);
+    const newAmount =
+      approved_amount !== undefined
+        ? Number(approved_amount)
+        : parseFloat(existing.approved_amount);
 
     if (newAmount > newMax) {
       return res.status(400).json({
@@ -9882,18 +9945,38 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
     const updates: string[] = [];
     const values: any[] = [];
 
-    if (approved_amount !== undefined) { updates.push("approved_amount = ?"); values.push(newAmount); }
-    if (max_approved_amount !== undefined && brokerRole === "admin") { updates.push("max_approved_amount = ?"); values.push(newMax); }
-    if (html_content !== undefined) { updates.push("html_content = ?"); values.push(html_content); }
-    if (letter_date !== undefined) { updates.push("letter_date = ?"); values.push(letter_date); }
-    if (expires_at !== undefined) { updates.push("expires_at = ?"); values.push(expires_at || null); }
-    if (is_active !== undefined && brokerRole === "admin") { updates.push("is_active = ?"); values.push(is_active ? 1 : 0); }
+    if (approved_amount !== undefined) {
+      updates.push("approved_amount = ?");
+      values.push(newAmount);
+    }
+    if (max_approved_amount !== undefined && brokerRole === "admin") {
+      updates.push("max_approved_amount = ?");
+      values.push(newMax);
+    }
+    if (html_content !== undefined) {
+      updates.push("html_content = ?");
+      values.push(html_content);
+    }
+    if (letter_date !== undefined) {
+      updates.push("letter_date = ?");
+      values.push(letter_date);
+    }
+    if (expires_at !== undefined) {
+      updates.push("expires_at = ?");
+      values.push(expires_at || null);
+    }
+    if (is_active !== undefined && brokerRole === "admin") {
+      updates.push("is_active = ?");
+      values.push(is_active ? 1 : 0);
+    }
 
     updates.push("updated_by_broker_id = ?");
     values.push(brokerId);
 
     if (updates.length === 1) {
-      return res.status(400).json({ success: false, error: "No valid fields to update" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No valid fields to update" });
     }
 
     values.push(existing.id);
@@ -9922,7 +10005,14 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       action: "update_pre_approval_letter",
       entityType: "pre_approval_letter",
       entityId: existing.id,
-      changes: { approved_amount, max_approved_amount, html_content: html_content ? "(updated)" : undefined, letter_date, expires_at, is_active },
+      changes: {
+        approved_amount,
+        max_approved_amount,
+        html_content: html_content ? "(updated)" : undefined,
+        letter_date,
+        expires_at,
+        is_active,
+      },
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
     });
@@ -9966,7 +10056,10 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
     console.error("Error updating pre-approval letter:", error);
     return res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : "Failed to update pre-approval letter",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to update pre-approval letter",
     });
   }
 };
@@ -9988,7 +10081,9 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
       [brokerId],
     );
     if (!tenantRows.length) {
-      return res.status(401).json({ success: false, error: "Broker not found" });
+      return res
+        .status(401)
+        .json({ success: false, error: "Broker not found" });
     }
     const tenantId = tenantRows[0].tenant_id;
 
@@ -10035,7 +10130,8 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
 
     // --- Build placeholder map (same logic as frontend renderer) ---
     const approvedAmount = parseFloat(letter.approved_amount);
-    const clientName = `${letter.client_first_name ?? ""} ${letter.client_last_name ?? ""}`.trim();
+    const clientName =
+      `${letter.client_first_name ?? ""} ${letter.client_last_name ?? ""}`.trim();
     const propertyAddr = [
       letter.property_address,
       letter.property_city,
@@ -10051,14 +10147,22 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
           month: "long",
           day: "numeric",
         })
-      : new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+      : new Date().toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
 
     const expiryNote = letter.expires_at
       ? `This pre-approval is valid through <strong>${new Date(letter.expires_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}</strong>. After this date a new pre-qualification review will be required.`
       : `This pre-approval letter does not have a set expiration date; however, your financial circumstances, creditworthiness, and market conditions are subject to change.`;
 
     const expiresShort = letter.expires_at
-      ? new Date(letter.expires_at).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+      ? new Date(letter.expires_at).toLocaleDateString("en-US", {
+          month: "2-digit",
+          day: "2-digit",
+          year: "numeric",
+        })
       : "";
 
     const logoHtml = letter.company_logo_url
@@ -10081,11 +10185,16 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
       "{{LETTER_DATE}}": letterDateFormatted,
       "{{CLIENT_FULL_NAME}}": clientName || "Applicant",
       "{{PROPERTY_ADDRESS}}": propertyAddr || "Property Address TBD",
-      "{{APPROVED_AMOUNT}}": new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(approvedAmount),
+      "{{APPROVED_AMOUNT}}": new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 0,
+      }).format(approvedAmount),
       "{{EXPIRY_NOTE}}": expiryNote,
       "{{EXPIRES_SHORT}}": expiresShort,
       "{{BROKER_PHOTO}}": brokerPhotoHtml,
-      "{{BROKER_FULL_NAME}}": `${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}`.trim(),
+      "{{BROKER_FULL_NAME}}":
+        `${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}`.trim(),
       "{{COMPANY_NAME}}": letter.company_name ?? "Encore Mortgage",
       "{{BROKER_LICENSE}}": brokerLicenseHtml,
       "{{BROKER_PHONE}}": letter.broker_phone ?? "",
@@ -10101,14 +10210,19 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
     }
 
     // --- Optionally wrap in an email template ---
-    let finalSubject = subject?.trim() || `Your Pre-Approval Letter — ${letter.application_number}`;
+    let finalSubject =
+      subject?.trim() ||
+      `Your Pre-Approval Letter — ${letter.application_number}`;
     let finalBody = "";
 
-    const effectiveLogoUrl = (letter.company_logo_url as string | null) ||
+    const effectiveLogoUrl =
+      (letter.company_logo_url as string | null) ||
       "https://disruptinglabs.com/data/encore/assets/images/logo.png";
-    const companyName  = (letter.company_name  as string) || "Encore Mortgage";
-    const brokerName   = `${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}`.trim() || "Your Loan Officer";
-    const pdfFilename  = `Pre-Approval-${letter.application_number ?? loanId}.pdf`;
+    const companyName = (letter.company_name as string) || "Encore Mortgage";
+    const brokerName =
+      `${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}`.trim() ||
+      "Your Loan Officer";
+    const pdfFilename = `Pre-Approval-${letter.application_number ?? loanId}.pdf`;
 
     if (template_id) {
       const [templateRows] = await pool.query<RowDataPacket[]>(
@@ -10122,7 +10236,11 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
           first_name: letter.client_first_name ?? "",
           last_name: letter.client_last_name ?? "",
           application_number: letter.application_number ?? "",
-          approved_amount: new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(approvedAmount),
+          approved_amount: new Intl.NumberFormat("en-US", {
+            style: "currency",
+            currency: "USD",
+            minimumFractionDigits: 0,
+          }).format(approvedAmount),
           broker_name: brokerName,
           pre_approval_letter: renderedLetterHtml,
           current_date: letterDateFormatted,
@@ -10163,7 +10281,11 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
     });
 
-    const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
+    const attachments: Array<{
+      filename: string;
+      content: Buffer;
+      contentType: string;
+    }> = [];
     if (pdf_base64) {
       attachments.push({
         filename: pdfFilename,
@@ -10239,7 +10361,12 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
     const brokerRole: string = (req as any).brokerRole;
 
     if (brokerRole !== "admin") {
-      return res.status(403).json({ success: false, error: "Only admin brokers can delete pre-approval letters" });
+      return res
+        .status(403)
+        .json({
+          success: false,
+          error: "Only admin brokers can delete pre-approval letters",
+        });
     }
 
     const [tenantRows] = await pool.query<RowDataPacket[]>(
@@ -10253,7 +10380,9 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
       [loanId, tenantId],
     );
     if (!existing.length) {
-      return res.status(404).json({ success: false, error: "Pre-approval letter not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Pre-approval letter not found" });
     }
 
     const letterId = existing[0].id;
@@ -10265,7 +10394,9 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
     );
 
     // Delete letter
-    await pool.query("DELETE FROM pre_approval_letters WHERE id = ?", [letterId]);
+    await pool.query("DELETE FROM pre_approval_letters WHERE id = ?", [
+      letterId,
+    ]);
 
     await createAuditLog({
       actorType: "broker",
@@ -10278,13 +10409,454 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
       userAgent: req.headers["user-agent"],
     });
 
-    return res.json({ success: true, message: "Pre-approval letter deleted successfully" });
+    return res.json({
+      success: true,
+      message: "Pre-approval letter deleted successfully",
+    });
   } catch (error) {
     console.error("Error deleting pre-approval letter:", error);
     return res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : "Failed to delete pre-approval letter",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to delete pre-approval letter",
     });
+  }
+};
+
+// =====================================================
+// REMINDER FLOWS HANDLERS
+// =====================================================
+
+/**
+ * GET /api/reminder-flows
+ * List all reminder flows for the tenant
+ */
+const handleGetReminderFlows: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [flows] = await pool.query<RowDataPacket[]>(
+      `SELECT rf.*,
+        (SELECT COUNT(*) FROM reminder_flow_executions rfe WHERE rfe.flow_id = rf.id AND rfe.status = 'active') AS active_executions_count
+       FROM reminder_flows rf
+       WHERE rf.tenant_id = ?
+       ORDER BY rf.created_at DESC`,
+      [tenantId],
+    );
+
+    return res.json({ success: true, flows });
+  } catch (error) {
+    console.error("Error fetching reminder flows:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch reminder flows" });
+  }
+};
+
+/**
+ * POST /api/reminder-flows
+ * Create a new reminder flow (metadata only, no steps yet)
+ */
+const handleCreateReminderFlow: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      name,
+      description,
+      trigger_event,
+      trigger_delay_days = 0,
+      is_active = true,
+      apply_to_all_loans = true,
+    } = req.body;
+
+    if (!name || !trigger_event) {
+      return res
+        .status(400)
+        .json({ success: false, error: "name and trigger_event are required" });
+    }
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [result] = await pool.query<ResultSetHeader>(
+      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        tenantId,
+        name,
+        description || null,
+        trigger_event,
+        trigger_delay_days,
+        is_active ? 1 : 0,
+        apply_to_all_loans ? 1 : 0,
+        brokerId,
+      ],
+    );
+
+    return res
+      .status(201)
+      .json({
+        success: true,
+        message: "Reminder flow created",
+        flow_id: result.insertId,
+      });
+  } catch (error) {
+    console.error("Error creating reminder flow:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to create reminder flow" });
+  }
+};
+
+/**
+ * GET /api/reminder-flows/:flowId
+ * Get a single flow with its steps and connections
+ */
+const handleGetReminderFlow: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { flowId } = req.params;
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [flowRows] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM reminder_flows WHERE id = ? AND tenant_id = ?",
+      [flowId, tenantId],
+    );
+
+    if (!flowRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Reminder flow not found" });
+    }
+
+    const flow = flowRows[0];
+
+    const [steps] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM reminder_flow_steps WHERE flow_id = ? ORDER BY id ASC",
+      [flowId],
+    );
+
+    const [connections] = await pool.query<RowDataPacket[]>(
+      "SELECT * FROM reminder_flow_connections WHERE flow_id = ? ORDER BY id ASC",
+      [flowId],
+    );
+
+    // Parse JSON config for steps
+    const parsedSteps = steps.map((s) => ({
+      ...s,
+      config: s.config
+        ? typeof s.config === "string"
+          ? JSON.parse(s.config)
+          : s.config
+        : null,
+    }));
+
+    return res.json({
+      success: true,
+      flow: { ...flow, steps: parsedSteps, connections },
+    });
+  } catch (error) {
+    console.error("Error fetching reminder flow:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch reminder flow" });
+  }
+};
+
+/**
+ * PUT /api/reminder-flows/:flowId
+ * Save/update a flow including all steps and connections (full replace)
+ */
+const handleSaveReminderFlow: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { flowId } = req.params;
+    const {
+      name,
+      description,
+      trigger_event,
+      trigger_delay_days = 0,
+      is_active,
+      apply_to_all_loans,
+      steps = [],
+      connections = [],
+    } = req.body;
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [flowRows] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM reminder_flows WHERE id = ? AND tenant_id = ?",
+      [flowId, tenantId],
+    );
+
+    if (!flowRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Reminder flow not found" });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Update flow metadata
+      const updateFields: string[] = [];
+      const updateValues: any[] = [];
+
+      if (name !== undefined) {
+        updateFields.push("name = ?");
+        updateValues.push(name);
+      }
+      if (description !== undefined) {
+        updateFields.push("description = ?");
+        updateValues.push(description || null);
+      }
+      if (trigger_event !== undefined) {
+        updateFields.push("trigger_event = ?");
+        updateValues.push(trigger_event);
+      }
+      if (trigger_delay_days !== undefined) {
+        updateFields.push("trigger_delay_days = ?");
+        updateValues.push(trigger_delay_days);
+      }
+      if (is_active !== undefined) {
+        updateFields.push("is_active = ?");
+        updateValues.push(is_active ? 1 : 0);
+      }
+      if (apply_to_all_loans !== undefined) {
+        updateFields.push("apply_to_all_loans = ?");
+        updateValues.push(apply_to_all_loans ? 1 : 0);
+      }
+
+      if (updateFields.length) {
+        await conn.query(
+          `UPDATE reminder_flows SET ${updateFields.join(", ")} WHERE id = ?`,
+          [...updateValues, flowId],
+        );
+      }
+
+      // Replace all steps
+      await conn.query("DELETE FROM reminder_flow_steps WHERE flow_id = ?", [
+        flowId,
+      ]);
+      if (steps.length > 0) {
+        const stepValues = steps.map((s: any) => [
+          flowId,
+          s.step_key,
+          s.step_type,
+          s.label,
+          s.description || null,
+          s.config ? JSON.stringify(s.config) : null,
+          s.position_x ?? 0,
+          s.position_y ?? 0,
+        ]);
+        await conn.query(
+          `INSERT INTO reminder_flow_steps (flow_id, step_key, step_type, label, description, config, position_x, position_y)
+           VALUES ?`,
+          [stepValues],
+        );
+      }
+
+      // Replace all connections
+      await conn.query(
+        "DELETE FROM reminder_flow_connections WHERE flow_id = ?",
+        [flowId],
+      );
+      if (connections.length > 0) {
+        const edgeValues = connections.map((e: any) => [
+          flowId,
+          e.edge_key,
+          e.source_step_key,
+          e.target_step_key,
+          e.label || null,
+          e.edge_type || "default",
+        ]);
+        await conn.query(
+          `INSERT INTO reminder_flow_connections (flow_id, edge_key, source_step_key, target_step_key, label, edge_type)
+           VALUES ?`,
+          [edgeValues],
+        );
+      }
+
+      await conn.commit();
+      return res.json({
+        success: true,
+        message: "Reminder flow saved",
+        flow_id: Number(flowId),
+      });
+    } catch (innerErr) {
+      await conn.rollback();
+      throw innerErr;
+    } finally {
+      conn.release();
+    }
+  } catch (error) {
+    console.error("Error saving reminder flow:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to save reminder flow" });
+  }
+};
+
+/**
+ * DELETE /api/reminder-flows/:flowId
+ * Delete a flow and all its steps/connections (cascade)
+ */
+const handleDeleteReminderFlow: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { flowId } = req.params;
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [result] = await pool.query<ResultSetHeader>(
+      "DELETE FROM reminder_flows WHERE id = ? AND tenant_id = ?",
+      [flowId, tenantId],
+    );
+
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Reminder flow not found" });
+    }
+
+    return res.json({ success: true, message: "Reminder flow deleted" });
+  } catch (error) {
+    console.error("Error deleting reminder flow:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to delete reminder flow" });
+  }
+};
+
+/**
+ * PATCH /api/reminder-flows/:flowId/toggle
+ * Toggle is_active on a flow
+ */
+const handleToggleReminderFlow: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { flowId } = req.params;
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [flowRows] = await pool.query<RowDataPacket[]>(
+      "SELECT id, is_active FROM reminder_flows WHERE id = ? AND tenant_id = ?",
+      [flowId, tenantId],
+    );
+
+    if (!flowRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Reminder flow not found" });
+    }
+
+    const newActive = !flowRows[0].is_active;
+    await pool.query("UPDATE reminder_flows SET is_active = ? WHERE id = ?", [
+      newActive ? 1 : 0,
+      flowId,
+    ]);
+
+    return res.json({
+      success: true,
+      message: newActive ? "Flow activated" : "Flow deactivated",
+      is_active: newActive,
+    });
+  } catch (error) {
+    console.error("Error toggling reminder flow:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to toggle reminder flow" });
+  }
+};
+
+/**
+ * GET /api/reminder-flow-executions
+ * Get all executions (across all flows) for the tenant
+ */
+const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { status, flow_id } = req.query;
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    let query = `
+      SELECT rfe.*,
+        rf.name AS flow_name,
+        CONCAT(c.first_name, ' ', c.last_name) AS client_name,
+        la.application_number
+      FROM reminder_flow_executions rfe
+      JOIN reminder_flows rf ON rf.id = rfe.flow_id
+      LEFT JOIN clients c ON c.id = rfe.client_id
+      LEFT JOIN loan_applications la ON la.id = rfe.loan_application_id
+      WHERE rfe.tenant_id = ?`;
+    const params: any[] = [tenantId];
+
+    if (status) {
+      query += " AND rfe.status = ?";
+      params.push(status);
+    }
+    if (flow_id) {
+      query += " AND rfe.flow_id = ?";
+      params.push(flow_id);
+    }
+
+    query += " ORDER BY rfe.created_at DESC LIMIT 200";
+
+    const [executions] = await pool.query<RowDataPacket[]>(query, params);
+
+    // Parse JSON
+    const parsed = executions.map((e) => ({
+      ...e,
+      completed_steps: e.completed_steps
+        ? typeof e.completed_steps === "string"
+          ? JSON.parse(e.completed_steps)
+          : e.completed_steps
+        : null,
+    }));
+
+    return res.json({
+      success: true,
+      executions: parsed,
+      total: parsed.length,
+    });
+  } catch (error) {
+    console.error("Error fetching flow executions:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch flow executions" });
   }
 };
 
@@ -10784,6 +11356,45 @@ function createServer() {
     "/api/loans/:loanId/pre-approval-letter/send-email",
     verifyBrokerSession,
     handleSendPreApprovalLetterEmail,
+  );
+
+  // ============================================================
+  // REMINDER FLOWS ROUTES
+  // ============================================================
+  expressApp.get(
+    "/api/reminder-flows",
+    verifyBrokerSession,
+    handleGetReminderFlows,
+  );
+  expressApp.post(
+    "/api/reminder-flows",
+    verifyBrokerSession,
+    handleCreateReminderFlow,
+  );
+  expressApp.get(
+    "/api/reminder-flows/:flowId",
+    verifyBrokerSession,
+    handleGetReminderFlow,
+  );
+  expressApp.put(
+    "/api/reminder-flows/:flowId",
+    verifyBrokerSession,
+    handleSaveReminderFlow,
+  );
+  expressApp.delete(
+    "/api/reminder-flows/:flowId",
+    verifyBrokerSession,
+    handleDeleteReminderFlow,
+  );
+  expressApp.patch(
+    "/api/reminder-flows/:flowId/toggle",
+    verifyBrokerSession,
+    handleToggleReminderFlow,
+  );
+  expressApp.get(
+    "/api/reminder-flow-executions",
+    verifyBrokerSession,
+    handleGetReminderFlowExecutions,
   );
 
   // 404 handler - only for API routes

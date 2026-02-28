@@ -1286,3 +1286,186 @@ export interface UpdateSettingsResponse {
   success: boolean;
   message: string;
 }
+
+// =============================================================
+// REMINDER FLOWS
+// =============================================================
+
+export type ReminderTriggerEvent =
+  | "application_created"
+  | "task_pending"
+  | "task_in_progress"
+  | "task_overdue"
+  | "no_activity"
+  | "loan_approved"
+  | "loan_documents_pending"
+  | "manual";
+
+export type ReminderStepType =
+  | "trigger"
+  | "wait"
+  | "send_notification"
+  | "send_email"
+  | "send_sms"
+  | "condition"
+  | "end";
+
+export type FlowEdgeType = "default" | "condition_yes" | "condition_no";
+
+export interface ReminderFlowStepConfig {
+  // For 'wait' steps
+  delay_days?: number;
+  delay_hours?: number;
+  // For 'send_notification' / 'send_email' / 'send_sms'
+  message?: string;
+  subject?: string;
+  template_id?: number;
+  // For 'condition' steps
+  condition_type?:
+    | "task_completed"
+    | "task_pending"
+    | "inactivity_days"
+    | "loan_status";
+  condition_value?: string;
+}
+
+export interface ReminderFlowStep {
+  id: number;
+  flow_id: number;
+  step_key: string;
+  step_type: ReminderStepType;
+  label: string;
+  description: string | null;
+  config: ReminderFlowStepConfig | null;
+  position_x: number;
+  position_y: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReminderFlowConnection {
+  id: number;
+  flow_id: number;
+  edge_key: string;
+  source_step_key: string;
+  target_step_key: string;
+  label: string | null;
+  edge_type: FlowEdgeType;
+  created_at: string;
+}
+
+export interface ReminderFlow {
+  id: number;
+  tenant_id: number;
+  name: string;
+  description: string | null;
+  trigger_event: ReminderTriggerEvent;
+  trigger_delay_days: number;
+  is_active: boolean;
+  apply_to_all_loans: boolean;
+  created_by_broker_id: number | null;
+  created_at: string;
+  updated_at: string;
+  steps?: ReminderFlowStep[];
+  connections?: ReminderFlowConnection[];
+  active_executions_count?: number;
+}
+
+export interface ReminderFlowExecution {
+  id: number;
+  flow_id: number;
+  flow_name: string;
+  loan_application_id: number | null;
+  client_id: number | null;
+  client_name: string | null;
+  application_number: string | null;
+  current_step_key: string | null;
+  status: "active" | "paused" | "completed" | "cancelled" | "failed";
+  next_execution_at: string | null;
+  completed_steps: string[] | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+// API Requests / Responses
+export interface GetReminderFlowsResponse {
+  success: boolean;
+  flows: ReminderFlow[];
+}
+
+export interface GetReminderFlowResponse {
+  success: boolean;
+  flow: ReminderFlow;
+}
+
+export interface CreateReminderFlowRequest {
+  name: string;
+  description?: string;
+  trigger_event: ReminderTriggerEvent;
+  trigger_delay_days?: number;
+  is_active?: boolean;
+  apply_to_all_loans?: boolean;
+}
+
+export interface UpdateReminderFlowRequest {
+  name?: string;
+  description?: string;
+  trigger_event?: ReminderTriggerEvent;
+  trigger_delay_days?: number;
+  is_active?: boolean;
+  apply_to_all_loans?: boolean;
+  steps?: SaveReminderFlowStep[];
+  connections?: SaveReminderFlowConnection[];
+}
+
+export interface SaveReminderFlowStep {
+  step_key: string;
+  step_type: ReminderStepType;
+  label: string;
+  description?: string;
+  config?: ReminderFlowStepConfig;
+  position_x: number;
+  position_y: number;
+}
+
+export interface SaveReminderFlowConnection {
+  edge_key: string;
+  source_step_key: string;
+  target_step_key: string;
+  label?: string;
+  edge_type?: FlowEdgeType;
+}
+
+export interface SaveReminderFlowRequest {
+  name: string;
+  description?: string;
+  trigger_event: ReminderTriggerEvent;
+  trigger_delay_days?: number;
+  is_active?: boolean;
+  apply_to_all_loans?: boolean;
+  steps: SaveReminderFlowStep[];
+  connections: SaveReminderFlowConnection[];
+}
+
+export interface SaveReminderFlowResponse {
+  success: boolean;
+  message: string;
+  flow_id: number;
+}
+
+export interface DeleteReminderFlowResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface GetReminderFlowExecutionsResponse {
+  success: boolean;
+  executions: ReminderFlowExecution[];
+  total: number;
+}
+
+export interface ToggleReminderFlowResponse {
+  success: boolean;
+  message: string;
+  is_active: boolean;
+}

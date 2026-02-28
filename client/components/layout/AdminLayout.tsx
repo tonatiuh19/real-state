@@ -20,6 +20,7 @@ import {
   Bell,
   UserCog,
   Lock,
+  AlarmClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -127,6 +128,12 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Communications",
       icon: <Mail className="h-4 w-4" />,
       path: "/admin/communication-templates",
+    },
+    {
+      id: "reminder-flows",
+      label: "Reminder Flows",
+      icon: <AlarmClock className="h-4 w-4" />,
+      path: "/admin/reminder-flows",
     },
     {
       id: "conversations",
