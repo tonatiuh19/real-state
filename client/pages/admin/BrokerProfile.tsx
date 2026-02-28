@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import {
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
+import { ImageCropUploader } from "@/components/ImageCropUploader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,7 +74,6 @@ const profileSchema = Yup.object({
 const BrokerProfile = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const { user, profileLoading, profileSaving, avatarUploading, profileError } =
     useAppSelector((state) => state.brokerAuth);
 
@@ -138,10 +138,7 @@ const BrokerProfile = () => {
     },
   });
 
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleAvatarUpload = async (file: File) => {
     const result = await dispatch(uploadBrokerAvatar(file));
     if (uploadBrokerAvatar.fulfilled.match(result)) {
       toast({
@@ -155,9 +152,6 @@ const BrokerProfile = () => {
         variant: "destructive",
       });
     }
-
-    // Reset input so same file can be re-selected
-    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const toggleSpecialization = (spec: string) => {
@@ -249,40 +243,35 @@ const BrokerProfile = () => {
               <CardContent className="pt-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5">
                   {/* Avatar with upload overlay */}
-                  <div className="relative group shrink-0">
-                    <Avatar className="h-20 w-20 ring-4 ring-primary/15">
-                      {user?.avatar_url ? (
-                        <img
-                          src={user.avatar_url}
-                          alt="Profile photo"
-                          className="h-full w-full rounded-full object-cover"
-                        />
-                      ) : (
-                        <AvatarFallback className="bg-primary text-primary-foreground text-2xl font-bold">
-                          {initials}
-                        </AvatarFallback>
-                      )}
-                    </Avatar>
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={avatarUploading}
-                      className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                    >
-                      {avatarUploading ? (
-                        <Loader2 className="h-5 w-5 text-white animate-spin" />
-                      ) : (
-                        <Camera className="h-5 w-5 text-white" />
-                      )}
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png"
-                      className="hidden"
-                      onChange={handleAvatarChange}
-                    />
-                  </div>
+                  <ImageCropUploader
+                    onUpload={handleAvatarUpload}
+                    uploading={avatarUploading}
+                    circularCrop
+                    className="shrink-0"
+                  >
+                    <div className="relative group cursor-pointer">
+                      <Avatar className="h-20 w-20 ring-4 ring-primary/15">
+                        {user?.avatar_url ? (
+                          <img
+                            src={user.avatar_url}
+                            alt="Profile photo"
+                            className="h-full w-full rounded-full object-cover"
+                          />
+                        ) : (
+                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl font-bold">
+                            {initials}
+                          </AvatarFallback>
+                        )}
+                      </Avatar>
+                      <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        {avatarUploading ? (
+                          <Loader2 className="h-5 w-5 text-white animate-spin" />
+                        ) : (
+                          <Camera className="h-5 w-5 text-white" />
+                        )}
+                      </div>
+                    </div>
+                  </ImageCropUploader>
 
                   {/* Identity summary */}
                   <div className="flex-1 min-w-0">
@@ -303,21 +292,26 @@ const BrokerProfile = () => {
                         {user.email}
                       </p>
                     )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="gap-2 text-xs h-8"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={avatarUploading}
+                    <ImageCropUploader
+                      onUpload={handleAvatarUpload}
+                      uploading={avatarUploading}
+                      circularCrop
                     >
-                      {avatarUploading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Camera className="h-3.5 w-3.5" />
-                      )}
-                      {avatarUploading ? "Uploading…" : "Change photo"}
-                    </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-2 text-xs h-8"
+                        disabled={avatarUploading}
+                      >
+                        {avatarUploading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Camera className="h-3.5 w-3.5" />
+                        )}
+                        {avatarUploading ? "Uploading…" : "Change photo"}
+                      </Button>
+                    </ImageCropUploader>
                   </div>
 
                   {/* Quick stats */}
