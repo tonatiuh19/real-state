@@ -1481,3 +1481,35 @@ export interface ToggleReminderFlowResponse {
   message: string;
   is_active: boolean;
 }
+
+// ─── Admin Section Controls ───────────────────────────────────────────────────
+
+export interface AdminSectionControl {
+  id: number;
+  tenant_id: number;
+  section_id: string;
+  is_disabled: boolean;
+  tooltip_message: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetAdminSectionControlsResponse {
+  success: boolean;
+  controls: AdminSectionControl[];
+}
+
+export interface UpdateAdminSectionControlRequest {
+  section_id: string;
+  is_disabled: boolean;
+  tooltip_message?: string;
+}
+
+export interface UpdateAdminSectionControlsRequest {
+  controls: UpdateAdminSectionControlRequest[];
+}
+
+export interface UpdateAdminSectionControlsResponse {
+  success: boolean;
+  message: string;
+}

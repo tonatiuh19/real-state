@@ -40,6 +40,10 @@ import {
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, validateSession } from "@/store/slices/brokerAuthSlice";
+import {
+  fetchAdminSectionControls,
+  selectSectionControlsMap,
+} from "@/store/slices/adminSectionControlsSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   AlertDialog,
@@ -65,6 +69,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   const { user, sessionToken, isAuthenticated } = useAppSelector(
     (state) => state.brokerAuth,
   );
+  const sectionControlsMap = useAppSelector(selectSectionControlsMap);
 
   // Redirect to login if not authenticated
   React.useEffect(() => {
@@ -79,6 +84,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       dispatch(validateSession());
     }
   }, [dispatch, user, sessionToken]);
+
+  // Fetch section controls once authenticated
+  React.useEffect(() => {
+    if (sessionToken) {
+      dispatch(fetchAdminSectionControls());
+    }
+  }, [dispatch, sessionToken]);
 
   const handleLogout = async () => {
     setShowLogoutConfirm(false);
@@ -140,7 +152,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Conversations",
       icon: <MessageCircle className="h-4 w-4" />,
       path: "/admin/conversations",
-      disabled: true,
     },
     {
       id: "reports",
@@ -173,6 +184,16 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       path: "/admin/settings",
     },
   ];
+
+  // Build effective menu items with disabled state resolved from DB
+  const effectiveMenuItems = menuItems.map((item) => {
+    const ctrl = sectionControlsMap[item.id];
+    return {
+      ...item,
+      disabled: ctrl ? ctrl.is_disabled : false,
+      tooltipMessage: ctrl?.tooltip_message ?? "Coming Soon",
+    };
+  });
 
   return (
     <div className="flex h-screen bg-muted/20 overflow-hidden">
@@ -215,7 +236,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
 
         {/* Menu Items */}
         <div className="flex-1 space-y-1 p-4 overflow-y-auto scrollbar-thin scrollbar-thumb-muted scrollbar-track-transparent">
-          {menuItems.map((item) => {
+          {effectiveMenuItems.map((item) => {
             const menuButton = (
               <Button
                 key={item.id}
@@ -261,7 +282,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               <Tooltip key={item.id} delayDuration={250}>
                 <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
                 <TooltipContent side={sidebarCollapsed ? "right" : "top"}>
-                  <p>Coming soon</p>
+                  <p>{item.tooltipMessage}</p>
                 </TooltipContent>
               </Tooltip>
             );

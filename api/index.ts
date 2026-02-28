@@ -9654,6 +9654,137 @@ const handleUpdateSettings: RequestHandler = async (req, res) => {
 };
 
 // =====================================================
+// ADMIN SECTION CONTROLS HANDLERS
+// =====================================================
+
+/**
+ * GET /api/admin/section-controls
+ * Returns the enabled/disabled state and tooltip messages for all admin sidebar sections.
+ */
+const handleGetAdminSectionControls: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM admin_section_controls WHERE tenant_id = ? ORDER BY id ASC`,
+      [tenantId],
+    );
+
+    const controls = rows.map((r) => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      section_id: r.section_id,
+      is_disabled: r.is_disabled === 1 || r.is_disabled === true,
+      tooltip_message: r.tooltip_message || "Coming Soon",
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }));
+
+    return res.json({ success: true, controls });
+  } catch (error) {
+    console.error("Error fetching admin section controls:", error);
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error: "Failed to fetch admin section controls",
+      });
+  }
+};
+
+/**
+ * PUT /api/admin/section-controls
+ * Batch-upsert admin section controls. Admin only.
+ */
+const handleUpdateAdminSectionControls: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
+      return res
+        .status(403)
+        .json({ success: false, error: "Admin access required" });
+    }
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+
+    const { controls } = req.body as {
+      controls: {
+        section_id: string;
+        is_disabled: boolean;
+        tooltip_message?: string;
+      }[];
+    };
+
+    if (!Array.isArray(controls) || controls.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "controls array is required" });
+    }
+
+    for (const { section_id, is_disabled, tooltip_message } of controls) {
+      await pool.query(
+        `INSERT INTO admin_section_controls (tenant_id, section_id, is_disabled, tooltip_message, updated_at)
+         VALUES (?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE
+           is_disabled = VALUES(is_disabled),
+           tooltip_message = VALUES(tooltip_message),
+           updated_at = NOW()`,
+        [
+          tenantId,
+          section_id,
+          is_disabled ? 1 : 0,
+          tooltip_message ?? "Coming Soon",
+        ],
+      );
+    }
+
+    await createAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action: "update_admin_section_controls",
+      entityType: "admin_section_controls",
+      entityId: tenantId,
+      changes: { sections: controls.map((c) => c.section_id) },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
+    return res.json({
+      success: true,
+      message: "Section controls updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating admin section controls:", error);
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error: "Failed to update admin section controls",
+      });
+  }
+};
+
+// =====================================================
 // PRE-APPROVAL LETTER HANDLERS
 // =====================================================
 
@@ -11627,6 +11758,18 @@ function createServer() {
   // System Settings routes
   expressApp.get("/api/settings", verifyBrokerSession, handleGetSettings);
   expressApp.put("/api/settings", verifyBrokerSession, handleUpdateSettings);
+
+  // Admin Section Controls routes
+  expressApp.get(
+    "/api/admin/section-controls",
+    verifyBrokerSession,
+    handleGetAdminSectionControls,
+  );
+  expressApp.put(
+    "/api/admin/section-controls",
+    verifyBrokerSession,
+    handleUpdateAdminSectionControls,
+  );
 
   // Pre-Approval Letter routes
   expressApp.get(

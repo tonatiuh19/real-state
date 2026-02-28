@@ -19,6 +19,7 @@ import applicationWizardReducer from "./slices/applicationWizardSlice";
 import preApprovalReducer from "./slices/preApprovalSlice";
 import settingsReducer from "./slices/settingsSlice";
 import reminderFlowsReducer from "./slices/reminderFlowsSlice";
+import adminSectionControlsReducer from "./slices/adminSectionControlsSlice";
 
 export const store = configureStore({
   reducer: {
@@ -42,6 +43,7 @@ export const store = configureStore({
     preApproval: preApprovalReducer,
     settings: settingsReducer,
     reminderFlows: reminderFlowsReducer,
+    adminSectionControls: adminSectionControlsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

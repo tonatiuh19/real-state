@@ -3,7 +3,6 @@ import {
   Plus,
   Search,
   MoreVertical,
-  Mail,
   FileText,
   AlertCircle,
   TrendingUp,
@@ -11,7 +10,10 @@ import {
   User,
   Clock,
   CheckCircle2,
+  Eye,
+  ArrowRight,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import {
@@ -39,22 +41,28 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import NewLoanWizard from "@/components/NewLoanWizard";
+import { LoanOverlay } from "@/components/LoanOverlay";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { fetchLoans } from "@/store/slices/pipelineSlice";
+import { fetchLoans, fetchLoanDetails } from "@/store/slices/pipelineSlice";
 import { fetchDashboardStats } from "@/store/slices/dashboardSlice";
 import { logger } from "@/lib/logger";
 
 const AdminDashboard = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [loanOverlayOpen, setLoanOverlayOpen] = useState(false);
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const {
     loans,
     isLoading: loading,
     error: loansError,
+    selectedLoan,
+    isLoadingDetails,
   } = useAppSelector((state) => state.pipeline);
   const {
     stats,
@@ -78,6 +86,15 @@ const AdminDashboard = () => {
     } catch (error) {
       logger.error("Error refreshing dashboard data:", error);
     }
+  };
+
+  const handleOpenLoan = async (loanId: number) => {
+    await dispatch(fetchLoanDetails(loanId));
+    setLoanOverlayOpen(true);
+  };
+
+  const handleCloseLoan = () => {
+    setLoanOverlayOpen(false);
   };
 
   const getStatusColor = (status: string) => {
@@ -177,6 +194,13 @@ const AdminDashboard = () => {
           open={wizardOpen}
           onOpenChange={setWizardOpen}
           onSuccess={handleLoanCreated}
+        />
+
+        <LoanOverlay
+          isOpen={loanOverlayOpen}
+          onClose={handleCloseLoan}
+          selectedLoan={selectedLoan}
+          isLoadingDetails={isLoadingDetails}
         />
 
         <div className="space-y-8 animate-in fade-in duration-500">
@@ -388,9 +412,25 @@ const AdminDashboard = () => {
                   Recent loan applications and their current status.
                 </CardDescription>
               </div>
-              <Button variant="outline" size="sm">
-                View All
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => navigate("/admin/pipeline")}
+                >
+                  View All
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setWizardOpen(true)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New Loan
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="relative w-full overflow-x-auto">
@@ -499,14 +539,25 @@ const AdminDashboard = () => {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem className="gap-2">
-                                  <Mail className="h-4 w-4" /> Message
+                                <DropdownMenuItem
+                                  className="gap-2"
+                                  onClick={() => handleOpenLoan(loan.id)}
+                                >
+                                  <Eye className="h-4 w-4" /> Open Loan
                                 </DropdownMenuItem>
-                                <DropdownMenuItem className="gap-2">
+                                <DropdownMenuItem
+                                  className="gap-2"
+                                  onClick={() => navigate(`/admin/pipeline`)}
+                                >
+                                  <ArrowRight className="h-4 w-4" /> Go to
+                                  Pipeline
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="gap-2"
+                                  onClick={() => navigate("/admin/documents")}
+                                >
                                   <FileText className="h-4 w-4" /> View Docs
-                                </DropdownMenuItem>
-                                <DropdownMenuItem className="gap-2 text-destructive">
-                                  <AlertCircle className="h-4 w-4" /> Flag Issue
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
