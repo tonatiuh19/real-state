@@ -4254,6 +4254,286 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/brokers/:brokerId/share-link
+ * Admin gets any broker's share link
+ */
+const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
+  try {
+    const adminId = (req as any).brokerId;
+    const { brokerId: targetId } = req.params;
+
+    const [adminCheck] = await pool.query<RowDataPacket[]>(
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [adminId, MORTGAGE_TENANT_ID],
+    );
+    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT public_token FROM brokers WHERE id = ? AND tenant_id = ?",
+      [targetId, MORTGAGE_TENANT_ID],
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+
+    const token = rows[0].public_token;
+    if (!token) {
+      // Auto-create token
+      await pool.query(
+        "UPDATE brokers SET public_token = UUID() WHERE id = ?",
+        [targetId],
+      );
+      const [refreshed] = await pool.query<RowDataPacket[]>(
+        "SELECT public_token FROM brokers WHERE id = ?",
+        [targetId],
+      );
+      const newToken = refreshed[0].public_token;
+      const baseUrl =
+        process.env.BASE_URL ||
+        (process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : "http://localhost:8080");
+      return res.json({
+        success: true,
+        public_token: newToken,
+        share_url: `${baseUrl}/apply/${newToken}`,
+      });
+    }
+
+    const baseUrl =
+      process.env.BASE_URL ||
+      (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:8080");
+    res.json({
+      success: true,
+      public_token: token,
+      share_url: `${baseUrl}/apply/${token}`,
+    });
+  } catch (error) {
+    console.error("Error fetching broker share link:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch share link" });
+  }
+};
+
+/**
+ * GET /api/brokers/:brokerId/profile
+ * Admin gets full profile (brokers + broker_profiles) for any broker
+ */
+const handleGetBrokerProfileByAdmin: RequestHandler = async (req, res) => {
+  try {
+    const adminId = (req as any).brokerId;
+    const { brokerId: targetId } = req.params;
+
+    const [adminCheck] = await pool.query<RowDataPacket[]>(
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [adminId, MORTGAGE_TENANT_ID],
+    );
+    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    const [rows] = await pool.query<any[]>(
+      `SELECT b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
+              b.license_number, b.specializations,
+              bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+              bp.office_state, bp.office_zip, bp.years_experience,
+              COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+       FROM brokers b
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       WHERE b.id = ? AND b.tenant_id = ?`,
+      [targetId, MORTGAGE_TENANT_ID],
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+
+    const profile = rows[0];
+    if (typeof profile.specializations === "string") {
+      try {
+        profile.specializations = JSON.parse(profile.specializations);
+      } catch {
+        profile.specializations = [];
+      }
+    }
+
+    res.json({ success: true, profile });
+  } catch (error) {
+    console.error("Error fetching broker profile (admin):", error);
+    res.status(500).json({ success: false, error: "Failed to fetch profile" });
+  }
+};
+
+/**
+ * PUT /api/brokers/:brokerId/profile
+ * Admin updates profile fields (bio, office, years_experience) for any broker
+ */
+const handleUpdateBrokerProfileByAdmin: RequestHandler = async (req, res) => {
+  try {
+    const adminId = (req as any).brokerId;
+    const { brokerId: targetId } = req.params;
+    const {
+      bio,
+      office_address,
+      office_city,
+      office_state,
+      office_zip,
+      years_experience,
+    } = req.body;
+
+    const [adminCheck] = await pool.query<RowDataPacket[]>(
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [adminId, MORTGAGE_TENANT_ID],
+    );
+    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    const profileCols: string[] = [];
+    const profileVals: any[] = [];
+
+    if (bio !== undefined) {
+      profileCols.push("bio");
+      profileVals.push(bio || null);
+    }
+    if (office_address !== undefined) {
+      profileCols.push("office_address");
+      profileVals.push(office_address || null);
+    }
+    if (office_city !== undefined) {
+      profileCols.push("office_city");
+      profileVals.push(office_city || null);
+    }
+    if (office_state !== undefined) {
+      profileCols.push("office_state");
+      profileVals.push(office_state || null);
+    }
+    if (office_zip !== undefined) {
+      profileCols.push("office_zip");
+      profileVals.push(office_zip || null);
+    }
+    if (years_experience !== undefined) {
+      profileCols.push("years_experience");
+      profileVals.push(
+        years_experience !== null && years_experience !== ""
+          ? Number(years_experience)
+          : null,
+      );
+    }
+
+    if (profileCols.length > 0) {
+      const [existing] = await pool.query<RowDataPacket[]>(
+        "SELECT id FROM broker_profiles WHERE broker_id = ?",
+        [targetId],
+      );
+      if (existing.length > 0) {
+        const setClauses = profileCols.map((c) => `${c} = ?`).join(", ");
+        await pool.query(
+          `UPDATE broker_profiles SET ${setClauses}, updated_at = NOW() WHERE broker_id = ?`,
+          [...profileVals, targetId],
+        );
+      } else {
+        const cols = ["broker_id", ...profileCols].join(", ");
+        const placeholders = profileCols.map(() => "?").join(", ");
+        await pool.query(
+          `INSERT INTO broker_profiles (${cols}) VALUES (?, ${placeholders})`,
+          [targetId, ...profileVals],
+        );
+      }
+    }
+
+    const [rows] = await pool.query<any[]>(
+      `SELECT b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
+              b.license_number, b.specializations,
+              bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+              bp.office_state, bp.office_zip, bp.years_experience,
+              COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+       FROM brokers b
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       WHERE b.id = ? AND b.tenant_id = ?`,
+      [targetId, MORTGAGE_TENANT_ID],
+    );
+
+    const profile = rows[0];
+    if (typeof profile.specializations === "string") {
+      try {
+        profile.specializations = JSON.parse(profile.specializations);
+      } catch {
+        profile.specializations = [];
+      }
+    }
+
+    res.json({ success: true, profile });
+  } catch (error) {
+    console.error("Error updating broker profile (admin):", error);
+    res.status(500).json({ success: false, error: "Failed to update profile" });
+  }
+};
+
+/**
+ * PUT /api/brokers/:brokerId/avatar
+ * Admin uploads base64 avatar for any broker
+ */
+const handleUpdateBrokerAvatarByAdmin: RequestHandler = async (req, res) => {
+  try {
+    const adminId = (req as any).brokerId;
+    const { brokerId: targetId } = req.params;
+    const { avatar_data } = req.body;
+
+    const [adminCheck] = await pool.query<RowDataPacket[]>(
+      "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
+      [adminId, MORTGAGE_TENANT_ID],
+    );
+    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    if (!avatar_data) {
+      return res
+        .status(400)
+        .json({ success: false, error: "avatar_data is required" });
+    }
+
+    // Validate it looks like a data URI
+    if (!avatar_data.startsWith("data:image/")) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid image data" });
+    }
+
+    const [existing] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM broker_profiles WHERE broker_id = ?",
+      [targetId],
+    );
+    if (existing.length > 0) {
+      await pool.query(
+        "UPDATE broker_profiles SET avatar_url = ?, updated_at = NOW() WHERE broker_id = ?",
+        [avatar_data, targetId],
+      );
+    } else {
+      await pool.query(
+        "INSERT INTO broker_profiles (broker_id, avatar_url) VALUES (?, ?)",
+        [targetId, avatar_data],
+      );
+    }
+
+    res.json({ success: true, avatar_url: avatar_data });
+  } catch (error) {
+    console.error("Error updating broker avatar (admin):", error);
+    res.status(500).json({ success: false, error: "Failed to update avatar" });
+  }
+};
+
+/**
  * Get task templates (for Tasks management page)
  */
 const handleGetTaskTemplates: RequestHandler = async (req, res) => {
@@ -10361,12 +10641,10 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
     const brokerRole: string = (req as any).brokerRole;
 
     if (brokerRole !== "admin") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          error: "Only admin brokers can delete pre-approval letters",
-        });
+      return res.status(403).json({
+        success: false,
+        error: "Only admin brokers can delete pre-approval letters",
+      });
     }
 
     const [tenantRows] = await pool.query<RowDataPacket[]>(
@@ -10503,13 +10781,11 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
       ],
     );
 
-    return res
-      .status(201)
-      .json({
-        success: true,
-        message: "Reminder flow created",
-        flow_id: result.insertId,
-      });
+    return res.status(201).json({
+      success: true,
+      message: "Reminder flow created",
+      flow_id: result.insertId,
+    });
   } catch (error) {
     console.error("Error creating reminder flow:", error);
     return res
@@ -10986,6 +11262,27 @@ function createServer() {
     "/api/brokers/:brokerId",
     verifyBrokerSession,
     handleDeleteBroker,
+  );
+  // Admin broker profile/avatar/share-link management
+  expressApp.get(
+    "/api/brokers/:brokerId/share-link",
+    verifyBrokerSession,
+    handleGetBrokerShareLinkByAdmin,
+  );
+  expressApp.get(
+    "/api/brokers/:brokerId/profile",
+    verifyBrokerSession,
+    handleGetBrokerProfileByAdmin,
+  );
+  expressApp.put(
+    "/api/brokers/:brokerId/profile",
+    verifyBrokerSession,
+    handleUpdateBrokerProfileByAdmin,
+  );
+  expressApp.put(
+    "/api/brokers/:brokerId/avatar",
+    verifyBrokerSession,
+    handleUpdateBrokerAvatarByAdmin,
   );
   expressApp.get("/api/tasks", verifyBrokerSession, handleGetTaskTemplates);
   expressApp.post("/api/tasks", verifyBrokerSession, handleCreateTaskTemplate);

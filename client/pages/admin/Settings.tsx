@@ -2,14 +2,12 @@ import React, { useEffect, useState, useCallback } from "react";
 import {
   Settings as SettingsIcon,
   Bell,
-  HardDrive,
   FileCheck2,
   Save,
   RefreshCw,
   CheckCircle2,
   Mail,
   MessageSquare,
-  Upload,
   AlertCircle,
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -236,9 +234,6 @@ const Settings = () => {
   const [enableEmail, setEnableEmail] = useState(true);
   const [enableSms, setEnableSms] = useState(false);
 
-  // System
-  const [maxUploadMb, setMaxUploadMb] = useState("10");
-
   // Saved flash state
   const [savedSections, setSavedSections] = useState<Set<string>>(new Set());
 
@@ -251,8 +246,6 @@ const Settings = () => {
       );
       setEnableEmail(selectSettingValue(settings, "enable_email") !== "false");
       setEnableSms(selectSettingValue(settings, "enable_sms") === "true");
-      const mb = selectSettingValue(settings, "max_file_upload_mb");
-      if (mb) setMaxUploadMb(mb);
     }
   }, [settings]);
 
@@ -421,42 +414,6 @@ const Settings = () => {
                         {
                           setting_key: "enable_sms",
                           setting_value: enableSms ? "true" : "false",
-                        },
-                      ])
-                    }
-                  />
-                </div>
-              </SettingsSection>
-
-              {/* System */}
-              <SettingsSection
-                index={2}
-                icon={HardDrive}
-                title="System"
-                description="Technical limits and infrastructure configuration"
-                accent="bg-slate-50/80"
-              >
-                <SettingRow
-                  icon={Upload}
-                  label="Max file upload size (MB)"
-                  value={maxUploadMb}
-                  onChange={setMaxUploadMb}
-                  placeholder="10"
-                  type="number"
-                  hint="Maximum size for document uploads. Applies to all file types."
-                  disabled={!isAdmin}
-                />
-
-                <div className="flex justify-end pt-5 mt-5 border-t border-border/40">
-                  <SaveButton
-                    isSaving={isSaving}
-                    saved={savedSections.has("system")}
-                    disabled={!isAdmin}
-                    onClick={() =>
-                      handleSave("system", [
-                        {
-                          setting_key: "max_file_upload_mb",
-                          setting_value: maxUploadMb,
                         },
                       ])
                     }

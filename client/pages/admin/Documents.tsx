@@ -318,7 +318,10 @@ const Documents = () => {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="secondary">
+                          <Badge
+                            variant="secondary"
+                            className="whitespace-nowrap"
+                          >
                             {doc.application_number}
                           </Badge>
                         </TableCell>

@@ -1174,6 +1174,18 @@ export interface UpdateBrokerAvatarResponse {
   avatar_url: string;
 }
 
+// Admin manages any broker's profile/avatar/share-link
+export interface AdminBrokerShareLinkResponse {
+  success: boolean;
+  public_token: string;
+  share_url: string;
+}
+
+export interface AdminUpdateBrokerAvatarRequest {
+  /** Data URI (e.g. data:image/jpeg;base64,...) from the crop uploader */
+  avatar_data: string;
+}
+
 // =====================================================
 // PRE-APPROVAL LETTER TYPES
 // =====================================================
