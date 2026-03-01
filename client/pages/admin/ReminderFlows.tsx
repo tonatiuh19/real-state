@@ -1561,6 +1561,7 @@ function FlowCanvasInner({ flow, onBack, onSaved }: FlowCanvasProps) {
             nodeTypes={nodeTypes}
             fitView
             fitViewOptions={{ padding: 0.3 }}
+            proOptions={{ hideAttribution: true }}
             defaultEdgeOptions={{
               markerEnd: { type: MarkerType.ArrowClosed },
               style: { stroke: "#94a3b8", strokeWidth: 2 },
@@ -1570,10 +1571,10 @@ function FlowCanvasInner({ flow, onBack, onSaved }: FlowCanvasProps) {
             snapGrid={[15, 15]}
           >
             <Background
-              variant={BackgroundVariant.Dots}
-              gap={20}
-              size={1}
-              color="#e2e8f0"
+              variant={BackgroundVariant.Lines}
+              gap={24}
+              lineWidth={0.5}
+              color="#e8edf3"
             />
             <Controls className="!border !border-border !rounded-xl !overflow-hidden !shadow-sm" />
             <MiniMap
