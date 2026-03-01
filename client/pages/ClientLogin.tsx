@@ -117,9 +117,9 @@ const ClientLogin = () => {
         {/* Background Image with Overlay */}
         <div className="absolute inset-0">
           <img
-            src="https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=1200&auto=format&fit=crop"
+            src="https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=1200&auto=format&fit=crop"
             alt="Modern home"
-            className="w-full h-full object-cover opacity-20"
+            className="w-full h-full object-cover opacity-40"
           />
           <div className="absolute inset-0 bg-gradient-to-br from-primary/90 via-primary/80 to-primary/70" />
         </div>
@@ -309,11 +309,16 @@ const ClientLogin = () => {
           {/* Header */}
           <div className="text-center mb-8">
             <div className="flex justify-center mb-6 lg:hidden">
-              <img
-                src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
-                alt="Encore Mortgage"
-                className="h-10 w-auto"
-              />
+              <button
+                onClick={() => navigate("/")}
+                className="transition-transform hover:scale-105"
+              >
+                <img
+                  src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+                  alt="Encore Mortgage"
+                  className="h-10 w-auto"
+                />
+              </button>
             </div>
             <h2 className="text-3xl font-bold mb-2">
               {step === "email" ? "Client Portal Access" : "Verify Your Email"}

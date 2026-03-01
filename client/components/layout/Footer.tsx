@@ -153,7 +153,7 @@ const Footer = () => {
         <div className="mt-12 border-t pt-8 text-center text-sm text-muted-foreground">
           <p>
             © {new Date().getFullYear()} Encore Mortgage. All rights reserved.
-            NMLS #123456
+            NMLS #1105497
           </p>
         </div>
       </div>
