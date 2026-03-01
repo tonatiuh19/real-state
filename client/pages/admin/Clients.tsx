@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { Users, Search, Mail, Phone, Trash2 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -45,6 +45,19 @@ const Clients = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredClients = useMemo(() => {
+    if (!searchQuery.trim()) return clients;
+    const q = searchQuery.toLowerCase();
+    return clients.filter(
+      (c) =>
+        c.first_name.toLowerCase().includes(q) ||
+        c.last_name.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        (c.phone || "").toLowerCase().includes(q),
+    );
+  }, [clients, searchQuery]);
 
   useEffect(() => {
     dispatch(fetchClients());
@@ -119,7 +132,12 @@ const Clients = () => {
           <div className="flex items-center gap-3">
             <div className="relative w-full sm:max-w-xs">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search clients..." className="pl-9" />
+              <Input
+                placeholder="Search clients..."
+                className="pl-9"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
             </div>
           </div>
         </header>
@@ -183,7 +201,8 @@ const Clients = () => {
               <CardHeader>
                 <CardTitle>All Clients</CardTitle>
                 <CardDescription>
-                  Showing {clients.length} clients
+                  Showing {filteredClients.length} of {clients.length} clients
+                  {searchQuery && ` matching "${searchQuery}"`}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -200,72 +219,83 @@ const Clients = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {clients.map((client) => (
-                      <TableRow key={client.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <Avatar>
-                              <AvatarFallback className="bg-primary/10 text-primary font-semibold">
-                                {getInitials(
-                                  client.first_name,
-                                  client.last_name,
-                                )}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <div className="font-medium">
-                                {client.first_name} {client.last_name}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                Client ID: {client.id}
-                              </div>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2 text-sm">
-                              <Mail className="h-3 w-3 text-muted-foreground" />
-                              <span className="truncate max-w-[200px]">
-                                {client.email}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 text-sm">
-                              <Phone className="h-3 w-3 text-muted-foreground" />
-                              <span>{client.phone || "No phone"}</span>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-xs">
-                            {client.total_applications} total
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
-                            {client.active_applications} active
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm">N/A</span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm font-mono">N/A</span>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDeleteClick(client)}
-                            disabled={isDeleting}
-                            className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Delete
-                          </Button>
+                    {filteredClients.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={7}
+                          className="text-center py-8 text-muted-foreground"
+                        >
+                          No clients match your search.
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      filteredClients.map((client) => (
+                        <TableRow key={client.id}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <Avatar>
+                                <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+                                  {getInitials(
+                                    client.first_name,
+                                    client.last_name,
+                                  )}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <div className="font-medium">
+                                  {client.first_name} {client.last_name}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  Client ID: {client.id}
+                                </div>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 text-sm">
+                                <Mail className="h-3 w-3 text-muted-foreground" />
+                                <span className="truncate max-w-[200px]">
+                                  {client.email}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-sm">
+                                <Phone className="h-3 w-3 text-muted-foreground" />
+                                <span>{client.phone || "No phone"}</span>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">
+                              {client.total_applications} total
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
+                              {client.active_applications} active
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">N/A</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm font-mono">N/A</span>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteClick(client)}
+                              disabled={isDeleting}
+                              className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Delete
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </CardContent>

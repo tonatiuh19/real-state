@@ -1513,3 +1513,11 @@ export interface UpdateAdminSectionControlsResponse {
   success: boolean;
   message: string;
 }
+
+// ─── Admin Init (merged session bootstrap) ──────────────────────────────────
+
+export interface AdminInitResponse {
+  success: boolean;
+  profile: BrokerProfileDetails;
+  controls: AdminSectionControl[];
+}

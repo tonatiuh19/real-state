@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -251,17 +251,14 @@ const BrokerProfile = () => {
                   >
                     <div className="relative group cursor-pointer">
                       <Avatar className="h-20 w-20 ring-4 ring-primary/15">
-                        {user?.avatar_url ? (
-                          <img
-                            src={user.avatar_url}
-                            alt="Profile photo"
-                            className="h-full w-full rounded-full object-cover"
-                          />
-                        ) : (
-                          <AvatarFallback className="bg-primary text-primary-foreground text-2xl font-bold">
-                            {initials}
-                          </AvatarFallback>
-                        )}
+                        <AvatarImage
+                          src={user?.avatar_url ?? undefined}
+                          alt="Profile photo"
+                          className="object-cover"
+                        />
+                        <AvatarFallback className="bg-primary text-primary-foreground text-2xl font-bold">
+                          {initials}
+                        </AvatarFallback>
                       </Avatar>
                       <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                         {avatarUploading ? (

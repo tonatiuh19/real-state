@@ -70,6 +70,7 @@ const Tasks = () => {
   const dispatch = useAppDispatch();
   const { tasks, isLoading: loading } = useAppSelector((state) => state.tasks);
   const [filter, setFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskTemplate | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -166,9 +167,17 @@ const Tasks = () => {
   };
 
   const filteredTasks = tasks.filter((task) => {
-    if (filter === "all") return true;
-    if (filter === "active") return task.is_active;
-    if (filter === "inactive") return !task.is_active;
+    if (filter === "active" && !task.is_active) return false;
+    if (filter === "inactive" && task.is_active) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      if (
+        !task.title.toLowerCase().includes(q) &&
+        !(task.description || "").toLowerCase().includes(q) &&
+        !(task.task_type || "").toLowerCase().includes(q)
+      )
+        return false;
+    }
     return true;
   });
 
@@ -203,7 +212,12 @@ const Tasks = () => {
           <div className="flex items-center gap-3">
             <div className="relative w-full sm:max-w-xs">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search tasks..." className="pl-9" />
+              <Input
+                placeholder="Search tasks..."
+                className="pl-9"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
             </div>
             <Button
               onClick={() => setWizardOpen(true)}

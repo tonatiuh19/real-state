@@ -23,7 +23,7 @@ import {
   AlarmClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -39,11 +39,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { logout, validateSession } from "@/store/slices/brokerAuthSlice";
-import {
-  fetchAdminSectionControls,
-  selectSectionControlsMap,
-} from "@/store/slices/adminSectionControlsSlice";
+import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
+import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   AlertDialog,
@@ -78,17 +75,10 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     }
   }, [sessionToken, navigate]);
 
-  // Validate session and load user data on mount
-  React.useEffect(() => {
-    if (!user && sessionToken) {
-      dispatch(validateSession());
-    }
-  }, [dispatch, user, sessionToken]);
-
-  // Fetch section controls once authenticated
+  // Single bootstrap call — validates session, loads profile + section controls
   React.useEffect(() => {
     if (sessionToken) {
-      dispatch(fetchAdminSectionControls());
+      dispatch(initAdminSession());
     }
   }, [dispatch, sessionToken]);
 
@@ -299,17 +289,14 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                 className="focus:outline-none"
               >
                 <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
-                  {(user as any)?.avatar_url ? (
-                    <img
-                      src={(user as any).avatar_url}
-                      alt="Profile"
-                      className="h-full w-full rounded-full object-cover"
-                    />
-                  ) : (
-                    <AvatarFallback className="bg-primary text-primary-foreground">
-                      {user?.first_name?.charAt(0) || "A"}
-                    </AvatarFallback>
-                  )}
+                  <AvatarImage
+                    src={user?.avatar_url ?? undefined}
+                    alt="Profile"
+                    className="object-cover"
+                  />
+                  <AvatarFallback className="bg-primary text-primary-foreground">
+                    {user?.first_name?.charAt(0) || "A"}
+                  </AvatarFallback>
                 </Avatar>
               </button>
               <button
@@ -346,34 +333,28 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-9 w-9">
                     <Avatar className="h-9 w-9">
-                      {(user as any)?.avatar_url ? (
-                        <img
-                          src={(user as any).avatar_url}
-                          alt="Profile"
-                          className="h-full w-full rounded-full object-cover"
-                        />
-                      ) : (
-                        <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                          {user?.first_name?.charAt(0) || "A"}
-                        </AvatarFallback>
-                      )}
+                      <AvatarImage
+                        src={user?.avatar_url ?? undefined}
+                        alt="Profile"
+                        className="object-cover"
+                      />
+                      <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                        {user?.first_name?.charAt(0) || "A"}
+                      </AvatarFallback>
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="end" className="w-56">
                   <div className="flex items-center gap-2 p-2">
                     <Avatar className="h-8 w-8">
-                      {(user as any)?.avatar_url ? (
-                        <img
-                          src={(user as any).avatar_url}
-                          alt="Profile"
-                          className="h-full w-full rounded-full object-cover"
-                        />
-                      ) : (
-                        <AvatarFallback className="bg-primary text-primary-foreground">
-                          {user?.first_name?.charAt(0) || "A"}
-                        </AvatarFallback>
-                      )}
+                      <AvatarImage
+                        src={user?.avatar_url ?? undefined}
+                        alt="Profile"
+                        className="object-cover"
+                      />
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        {user?.first_name?.charAt(0) || "A"}
+                      </AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">

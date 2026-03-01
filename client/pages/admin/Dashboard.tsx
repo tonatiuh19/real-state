@@ -55,6 +55,7 @@ import { logger } from "@/lib/logger";
 const AdminDashboard = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [loanOverlayOpen, setLoanOverlayOpen] = useState(false);
+  const [dashboardSearch, setDashboardSearch] = useState("");
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const {
@@ -159,6 +160,24 @@ const AdminDashboard = () => {
     : "-2 Days";
   const rateChange = "+2.1%";
 
+  const filteredLoans = React.useMemo(() => {
+    const all = loans || [];
+    if (!dashboardSearch.trim()) return all;
+    const q = dashboardSearch.toLowerCase();
+    return all.filter(
+      (loan) =>
+        `${loan.client_first_name ?? ""} ${loan.client_last_name ?? ""}`
+          .toLowerCase()
+          .includes(q) ||
+        `${loan.broker_first_name ?? ""} ${loan.broker_last_name ?? ""}`
+          .toLowerCase()
+          .includes(q) ||
+        (loan.loan_type ?? "").toLowerCase().includes(q) ||
+        (loan.status ?? "").toLowerCase().includes(q) ||
+        (loan.application_number ?? "").toLowerCase().includes(q),
+    );
+  }, [loans, dashboardSearch]);
+
   return (
     <>
       <MetaHelmet
@@ -177,7 +196,12 @@ const AdminDashboard = () => {
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <div className="relative w-full sm:max-w-xs md:w-64">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search everything..." className="pl-9" />
+              <Input
+                placeholder="Search loans..."
+                className="pl-9"
+                value={dashboardSearch}
+                onChange={(e) => setDashboardSearch(e.target.value)}
+              />
             </div>
             <Button
               className="gap-2 whitespace-nowrap"
@@ -438,9 +462,11 @@ const AdminDashboard = () => {
                   <div className="text-center py-8 text-muted-foreground">
                     Loading...
                   </div>
-                ) : (loans || []).length === 0 ? (
+                ) : filteredLoans.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
-                    No active loans yet. Create your first loan application!
+                    {dashboardSearch
+                      ? `No loans match "${dashboardSearch}".`
+                      : "No active loans yet. Create your first loan application!"}
                   </div>
                 ) : (
                   <table className="w-full caption-bottom text-sm min-w-[640px]">
@@ -470,7 +496,7 @@ const AdminDashboard = () => {
                       </tr>
                     </thead>
                     <tbody className="[&_tr:last-child]:border-0">
-                      {(loans || []).map((loan) => (
+                      {filteredLoans.map((loan) => (
                         <tr
                           key={loan.id}
                           className="border-b transition-colors hover:bg-muted/50"

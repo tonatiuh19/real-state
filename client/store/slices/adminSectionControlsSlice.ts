@@ -7,6 +7,7 @@ import type {
   UpdateAdminSectionControlsRequest,
   UpdateAdminSectionControlsResponse,
 } from "@shared/api";
+import { initAdminSession } from "./brokerAuthSlice";
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -107,6 +108,10 @@ const adminSectionControlsSlice = createSlice({
       .addCase(updateAdminSectionControls.rejected, (state, action) => {
         state.isSaving = false;
         state.error = action.payload as string;
+      })
+      // initAdminSession — cross-slice: populate controls from merged bootstrap
+      .addCase(initAdminSession.fulfilled, (state, action) => {
+        state.controls = action.payload.controls;
       });
   },
 });

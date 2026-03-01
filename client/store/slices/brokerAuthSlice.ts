@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
 import { logger } from "@/lib/logger";
 import type {
+  AdminInitResponse,
   GetBrokerProfileResponse,
   UpdateBrokerProfileRequest,
   UpdateBrokerProfileResponse,
@@ -145,6 +146,25 @@ export const logout = createAsyncThunk(
       }
     } catch (error) {
       logger.error("Logout error:", error);
+    }
+  },
+);
+
+/** Single bootstrap call — replaces validateSession + fetchBrokerProfile + fetchAdminSectionControls */
+export const initAdminSession = createAsyncThunk(
+  "brokerAuth/init",
+  async (_, { rejectWithValue, getState }) => {
+    try {
+      const state = getState() as { brokerAuth: BrokerAuthState };
+      const token = state.brokerAuth.sessionToken;
+      const { data } = await axios.get<AdminInitResponse>("/api/admin/init", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to initialise admin session",
+      );
     }
   },
 );
@@ -301,9 +321,36 @@ const brokerAuthSlice = createSlice({
         state.user = action.payload.admin;
         state.isAuthenticated = true;
         state.error = null;
+        // Persist refreshed user (including avatar_url) so next load has it
+        localStorage.setItem(
+          "broker_user",
+          JSON.stringify(action.payload.admin),
+        );
       })
       .addCase(validateSession.rejected, (state) => {
         state.loading = false;
+        state.user = null;
+        state.sessionToken = null;
+        state.isAuthenticated = false;
+        localStorage.removeItem("broker_session");
+        localStorage.removeItem("broker_user");
+      });
+
+    // Init admin session (merged bootstrap)
+    builder
+      .addCase(initAdminSession.pending, (state) => {
+        state.profileLoading = true;
+      })
+      .addCase(initAdminSession.fulfilled, (state, action) => {
+        state.profileLoading = false;
+        state.user = { ...state.user, ...action.payload.profile } as BrokerUser;
+        state.isAuthenticated = true;
+        state.error = null;
+        localStorage.setItem("broker_user", JSON.stringify(state.user));
+      })
+      .addCase(initAdminSession.rejected, (state, action) => {
+        state.profileLoading = false;
+        // session invalid — clear everything
         state.user = null;
         state.sessionToken = null;
         state.isAuthenticated = false;
@@ -330,6 +377,7 @@ const brokerAuthSlice = createSlice({
       .addCase(fetchBrokerProfile.fulfilled, (state, action) => {
         state.profileLoading = false;
         state.user = { ...state.user, ...action.payload } as BrokerUser;
+        localStorage.setItem("broker_user", JSON.stringify(state.user));
       })
       .addCase(fetchBrokerProfile.rejected, (state, action) => {
         state.profileLoading = false;

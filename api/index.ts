@@ -1523,7 +1523,10 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
 
     // Check if broker exists
     const [brokers] = await pool.query<any[]>(
-      "SELECT * FROM brokers WHERE email = ? AND status = 'active' AND tenant_id = ?",
+      `SELECT b.*, bp.avatar_url
+       FROM brokers b
+       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+       WHERE b.email = ? AND b.status = 'active' AND b.tenant_id = ?`,
       [normalizedEmail, MORTGAGE_TENANT_ID],
     );
 
@@ -1606,6 +1609,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
         phone: broker.phone,
         role: broker.role,
         is_active: broker.status === "active",
+        avatar_url: broker.avatar_url ?? null,
       },
     });
   } catch (error) {
@@ -1670,6 +1674,7 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
           phone: broker.phone,
           role: broker.role,
           is_active: broker.status === "active",
+          avatar_url: broker.avatar_url ?? null,
         },
       });
     } catch (jwtError) {
@@ -9693,12 +9698,10 @@ const handleGetAdminSectionControls: RequestHandler = async (req, res) => {
     return res.json({ success: true, controls });
   } catch (error) {
     console.error("Error fetching admin section controls:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        error: "Failed to fetch admin section controls",
-      });
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch admin section controls",
+    });
   }
 };
 
@@ -9775,12 +9778,73 @@ const handleUpdateAdminSectionControls: RequestHandler = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating admin section controls:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to update admin section controls",
+    });
+  }
+};
+
+/**
+ * GET /api/admin/init
+ * Single bootstrap endpoint — returns broker profile + section controls in one
+ * round-trip. Replaces separate calls to /validate, /profile, /section-controls.
+ */
+const handleAdminInit: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+
+    // Fetch full broker profile with broker_profiles join
+    const [profileRows] = await pool.query<any[]>(
+      `SELECT
+        b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
+        b.license_number, b.specializations, b.tenant_id,
+        bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+        bp.office_state, bp.office_zip, bp.years_experience,
+        COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+      FROM brokers b
+      LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+      WHERE b.id = ? AND b.tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    if (profileRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+
+    const profile = profileRows[0];
+    if (typeof profile.specializations === "string") {
+      try {
+        profile.specializations = JSON.parse(profile.specializations);
+      } catch {
+        profile.specializations = [];
+      }
+    }
+
+    // Fetch section controls for this tenant
+    const [controlRows] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM admin_section_controls WHERE tenant_id = ? ORDER BY id ASC`,
+      [profile.tenant_id],
+    );
+
+    const controls = controlRows.map((r) => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      section_id: r.section_id,
+      is_disabled: r.is_disabled === 1 || r.is_disabled === true,
+      tooltip_message: r.tooltip_message || "Coming Soon",
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }));
+
+    return res.json({ success: true, profile, controls });
+  } catch (error) {
+    console.error("Error in admin init:", error);
     return res
       .status(500)
-      .json({
-        success: false,
-        error: "Failed to update admin section controls",
-      });
+      .json({ success: false, error: "Failed to initialise admin session" });
   }
 };
 
@@ -11758,6 +11822,9 @@ function createServer() {
   // System Settings routes
   expressApp.get("/api/settings", verifyBrokerSession, handleGetSettings);
   expressApp.put("/api/settings", verifyBrokerSession, handleUpdateSettings);
+
+  // Admin init (merged bootstrap)
+  expressApp.get("/api/admin/init", verifyBrokerSession, handleAdminInit);
 
   // Admin Section Controls routes
   expressApp.get(
