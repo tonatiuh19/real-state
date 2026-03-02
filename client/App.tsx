@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, useLocation } from "react-router-dom";
 import { Provider } from "react-redux";
 import { HelmetProvider } from "react-helmet-async";
 import { store } from "./store";
@@ -14,6 +14,24 @@ import { validateClientSession } from "./store/slices/clientAuthSlice";
 import { validateSession as validateBrokerSession } from "./store/slices/brokerAuthSlice";
 
 const queryClient = new QueryClient();
+
+// Scrolls to hash element after navigation (e.g. /#contact)
+const ScrollToHash = () => {
+  const { hash, pathname } = useLocation();
+  useEffect(() => {
+    if (hash) {
+      // Small delay to allow page to render first
+      const timer = setTimeout(() => {
+        const el = document.querySelector(hash);
+        if (el) el.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+      return () => clearTimeout(timer);
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [hash, pathname]);
+  return null;
+};
 
 const AppContent = () => {
   useEffect(() => {
@@ -30,7 +48,12 @@ const AppContent = () => {
     }
   }, []);
 
-  return <AppRoutes />;
+  return (
+    <>
+      <ScrollToHash />
+      <AppRoutes />
+    </>
+  );
 };
 
 const App = () => (

@@ -28,6 +28,7 @@ import ClientTasks from "./pages/client/Tasks";
 import ClientProfile from "./pages/client/Profile";
 import ClientDocuments from "./pages/client/Documents";
 import ClientCalculator from "./pages/client/Calculator";
+import FAQ from "./pages/FAQ";
 
 const AppRoutes = () => (
   <Routes>
@@ -107,6 +108,14 @@ const AppRoutes = () => (
       }
     />
     <Route path="/client-login" element={<ClientLogin />} />
+    <Route
+      path="/faq"
+      element={
+        <AppLayout showHeader={true} showFooter={true}>
+          <FAQ />
+        </AppLayout>
+      }
+    />
     <Route
       path="/wizard"
       element={

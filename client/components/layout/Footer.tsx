@@ -56,7 +56,7 @@ const Footer = () => {
             <ul className="space-y-2 text-sm">
               <li>
                 <Link
-                  to="/apply"
+                  to="/wizard"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
                   Apply Now
@@ -73,7 +73,7 @@ const Footer = () => {
               </li>
               <li>
                 <Link
-                  to="#"
+                  to="/client-login"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
                   Track Application
@@ -81,10 +81,10 @@ const Footer = () => {
               </li>
               <li>
                 <Link
-                  to="#"
+                  to="/#loans"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
-                  Resources
+                  Loan Options
                 </Link>
               </li>
             </ul>
@@ -97,15 +97,15 @@ const Footer = () => {
             <ul className="space-y-2 text-sm">
               <li>
                 <Link
-                  to="#"
+                  to="/#loans"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
-                  Loan Calculator
+                  Loan Options
                 </Link>
               </li>
               <li>
                 <Link
-                  to="#"
+                  to="/faq"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
                   FAQ
@@ -113,15 +113,15 @@ const Footer = () => {
               </li>
               <li>
                 <Link
-                  to="#"
+                  to="/#about"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
-                  Learning Center
+                  Our Story
                 </Link>
               </li>
               <li>
                 <Link
-                  to="#"
+                  to="/#contact"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
                   Contact Us

@@ -127,7 +127,10 @@ const Index = () => {
       />
 
       {/* Hero Section */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-background via-background to-primary/5 py-20 md:py-32 lg:py-40">
+      <section
+        id="hero"
+        className="relative overflow-hidden bg-gradient-to-br from-background via-background to-primary/5 py-20 md:py-32 lg:py-40"
+      >
         <HeroBackground />
 
         {/* Animated gradient orbs */}
@@ -421,7 +424,7 @@ const Index = () => {
       </section>
 
       {/* Our Story Section */}
-      <section className="py-24 bg-muted/30">
+      <section id="about" className="py-24 bg-muted/30">
         <div className="container">
           <div className="mx-auto max-w-3xl text-center">
             <h2 className="mb-6 text-3xl font-bold tracking-tight md:text-4xl">
@@ -438,7 +441,7 @@ const Index = () => {
       </section>
 
       {/* Purchase & Refinance Section */}
-      <section className="py-24">
+      <section id="services" className="py-24">
         <div className="container">
           <div className="grid gap-12 lg:grid-cols-2">
             <Card className="group transition-all hover:shadow-xl">
@@ -454,7 +457,7 @@ const Index = () => {
                   will help you get you in your new home on-time, at the lowest
                   available rate, and with the best mortgage.
                 </p>
-                <Link to="/purchase">
+                <Link to="/wizard">
                   <Button className="mt-4">
                     Get Pre-Approved <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
@@ -475,7 +478,7 @@ const Index = () => {
                   cash to consolidate your debt, we can help you determine how
                   refinancing fits with your financial goals.
                 </p>
-                <Link to="/refinance">
+                <Link to="/calculator">
                   <Button className="mt-4">
                     Get a Custom Quote <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
@@ -487,7 +490,7 @@ const Index = () => {
       </section>
 
       {/* Loan Options Section */}
-      <section className="bg-muted/50 py-24">
+      <section id="loans" className="bg-muted/50 py-24">
         <div className="container">
           <div className="mb-16 text-center">
             <h2 className="mb-4 text-3xl font-bold tracking-tight md:text-4xl">
@@ -522,7 +525,7 @@ const Index = () => {
       </section>
 
       {/* Contact Section */}
-      <section className="py-24">
+      <section id="contact" className="py-24">
         <div className="container">
           <div className="rounded-3xl bg-primary px-8 py-16 text-primary-foreground md:px-16">
             <div className="grid gap-12 lg:grid-cols-2">
