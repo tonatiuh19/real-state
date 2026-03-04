@@ -457,7 +457,7 @@ const Index = () => {
                   will help you get you in your new home on-time, at the lowest
                   available rate, and with the best mortgage.
                 </p>
-                <Link to="/wizard">
+                <Link to="/purchase">
                   <Button className="mt-4">
                     Get Pre-Approved <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
@@ -478,7 +478,7 @@ const Index = () => {
                   cash to consolidate your debt, we can help you determine how
                   refinancing fits with your financial goals.
                 </p>
-                <Link to="/calculator">
+                <Link to="/refinance">
                   <Button className="mt-4">
                     Get a Custom Quote <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>

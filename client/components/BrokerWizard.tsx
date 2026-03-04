@@ -203,14 +203,8 @@ export function BrokerWizard({
     if (!broker?.id) return;
     setAvatarUploading(true);
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target?.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
       await dispatch(
-        uploadBrokerAvatarByAdmin({ id: broker.id, avatar_data: dataUrl }),
+        uploadBrokerAvatarByAdmin({ id: broker.id, file }),
       ).unwrap();
       toast({ title: "Avatar updated", description: "Profile photo saved." });
     } catch (err: any) {

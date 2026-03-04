@@ -1,6 +1,7 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
 import { logger } from "@/lib/logger";
+import { uploadAvatarToCDN } from "@/lib/cdn-upload";
 import type {
   AdminInitResponse,
   GetBrokerProfileResponse,
@@ -216,29 +217,13 @@ export const uploadBrokerAvatar = createAsyncThunk(
   async (file: File, { rejectWithValue, getState }) => {
     try {
       const state = getState() as { brokerAuth: BrokerAuthState };
-      const brokerId = state.brokerAuth.user?.id;
+      const brokerId = state.brokerAuth.user?.id!;
       const token = state.brokerAuth.sessionToken;
 
-      // Step 1 — Upload image to external CDN
-      const formData = new FormData();
-      formData.append("main_folder", "encore-profiles");
-      formData.append("id", `profile-${brokerId}`);
-      formData.append("main_image", file);
+      // Step 1 — Upload image to CDN
+      const avatarUrl = await uploadAvatarToCDN(file, brokerId);
 
-      const cdnRes = await axios.post(
-        "https://disruptinglabs.com/data/api/uploadImages.php",
-        formData,
-        { headers: { "Content-Type": "multipart/form-data" } },
-      );
-
-      if (!cdnRes.data.success || !cdnRes.data.main_image) {
-        throw new Error("Image upload failed");
-      }
-
-      const avatarUrl =
-        "https://disruptinglabs.com/data/api" + cdnRes.data.main_image.path;
-
-      // Step 2 — Save URL to our DB
+      // Step 2 — Save CDN URL to our DB
       await axios.put(
         "/api/admin/profile/avatar",
         { avatar_url: avatarUrl },

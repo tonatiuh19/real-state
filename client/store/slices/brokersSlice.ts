@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
+import { uploadAvatarToCDN } from "@/lib/cdn-upload";
 import type {
   GetBrokersResponse,
   Broker,
@@ -153,27 +154,34 @@ export const updateBrokerProfileByAdmin = createAsyncThunk(
   },
 );
 
-/** Admin: upload base64 avatar (data URI) for any broker */
+/** Admin: upload avatar for any broker (uploads to CDN, then stores CDN URL) */
 export const uploadBrokerAvatarByAdmin = createAsyncThunk(
   "brokers/uploadBrokerAvatarByAdmin",
   async (
-    { id, avatar_data }: { id: number; avatar_data: string },
+    { id, file }: { id: number; file: File },
     { getState, rejectWithValue },
   ) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
+
+      // Step 1 — Upload image to CDN (same helper used by own-profile upload)
+      const avatarUrl = await uploadAvatarToCDN(file, id);
+
+      // Step 2 — Save CDN URL to our DB
       const { data } = await axios.put<{
         success: boolean;
         avatar_url: string;
       }>(
         `/api/brokers/${id}/avatar`,
-        { avatar_data },
+        { avatar_url: avatarUrl },
         { headers: { Authorization: `Bearer ${sessionToken}` } },
       );
       return { id, avatar_url: data.avatar_url };
     } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.error || "Failed to upload avatar",
+        error.response?.data?.error ||
+          error.message ||
+          "Failed to upload avatar",
       );
     }
   },

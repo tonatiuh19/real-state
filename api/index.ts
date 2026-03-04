@@ -4492,7 +4492,7 @@ const handleUpdateBrokerAvatarByAdmin: RequestHandler = async (req, res) => {
   try {
     const adminId = (req as any).brokerId;
     const { brokerId: targetId } = req.params;
-    const { avatar_data } = req.body;
+    const { avatar_url } = req.body;
 
     const [adminCheck] = await pool.query<RowDataPacket[]>(
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
@@ -4502,17 +4502,10 @@ const handleUpdateBrokerAvatarByAdmin: RequestHandler = async (req, res) => {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
-    if (!avatar_data) {
+    if (!avatar_url) {
       return res
         .status(400)
-        .json({ success: false, error: "avatar_data is required" });
-    }
-
-    // Validate it looks like a data URI
-    if (!avatar_data.startsWith("data:image/")) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Invalid image data" });
+        .json({ success: false, error: "avatar_url is required" });
     }
 
     const [existing] = await pool.query<RowDataPacket[]>(
@@ -4522,16 +4515,16 @@ const handleUpdateBrokerAvatarByAdmin: RequestHandler = async (req, res) => {
     if (existing.length > 0) {
       await pool.query(
         "UPDATE broker_profiles SET avatar_url = ?, updated_at = NOW() WHERE broker_id = ?",
-        [avatar_data, targetId],
+        [avatar_url, targetId],
       );
     } else {
       await pool.query(
         "INSERT INTO broker_profiles (broker_id, avatar_url) VALUES (?, ?)",
-        [targetId, avatar_data],
+        [targetId, avatar_url],
       );
     }
 
-    res.json({ success: true, avatar_url: avatar_data });
+    res.json({ success: true, avatar_url });
   } catch (error) {
     console.error("Error updating broker avatar (admin):", error);
     res.status(500).json({ success: false, error: "Failed to update avatar" });
