@@ -350,7 +350,7 @@ export default function Brokers() {
                     </TableCell>
                     <TableCell>
                       <Badge className={getRoleBadgeColor(broker.role)}>
-                        {broker.role}
+                        {broker.role === "admin" ? "Mortgage Banker" : "Broker"}
                       </Badge>
                     </TableCell>
                     <TableCell>

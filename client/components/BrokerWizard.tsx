@@ -404,7 +404,9 @@ export function BrokerWizard({
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="broker">Broker</SelectItem>
-                            <SelectItem value="admin">Admin</SelectItem>
+                            <SelectItem value="admin">
+                              Mortgage Banker
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                         {formik.touched.role && formik.errors.role && (

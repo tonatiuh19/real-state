@@ -163,7 +163,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     // },
     {
       id: "brokers",
-      label: "Broker Management",
+      label: "People Management",
       icon: <UserCog className="h-4 w-4" />,
       path: "/admin/brokers",
     },
@@ -363,7 +363,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                           : "Admin User"}
                       </p>
                       <p className="text-xs text-muted-foreground capitalize">
-                        {user?.role || "broker"}
+                        {user?.role === "admin" ? "Mortgage Banker" : "Broker"}
                       </p>
                     </div>
                   </div>

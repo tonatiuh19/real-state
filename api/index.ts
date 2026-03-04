@@ -6287,16 +6287,16 @@ const handleApproveTask: RequestHandler = async (req, res) => {
     );
 
     // Send approval email to client
-    try {
-      await sendTaskApprovedEmail(
-        task.client_email,
-        task.first_name,
-        task.title,
-      );
-    } catch (emailError) {
-      console.error("Failed to send approval email:", emailError);
-      // Don't fail the request if email fails
-    }
+    // try {
+    //   await sendTaskApprovedEmail(
+    //     task.client_email,
+    //     task.first_name,
+    //     task.title,
+    //   );
+    // } catch (emailError) {
+    //   console.error("Failed to send approval email:", emailError);
+    //   // Don't fail the request if email fails
+    // }
 
     // Sync loan status based on all task states
     await syncLoanStatusFromTasks(task.application_id, brokerId);

@@ -278,9 +278,9 @@ const BrokerProfile = () => {
                       </h2>
                       <Badge
                         variant="secondary"
-                        className="capitalize text-xs bg-primary/10 text-primary border-0"
+                        className="text-xs bg-primary/10 text-primary border-0"
                       >
-                        {user?.role || "broker"}
+                        {user?.role === "admin" ? "Mortgage Banker" : "Broker"}
                       </Badge>
                     </div>
                     {user?.email && (

@@ -102,7 +102,9 @@ export default function BrokerShareLinkModal({
               <User className="h-4 w-4 text-red-600" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-gray-900">{brokerName}</p>
+              <p className="text-sm font-semibold text-gray-900">
+                {brokerName}
+              </p>
               <p className="text-xs text-gray-500">{broker?.email}</p>
             </div>
             <div className="ml-auto">
@@ -114,7 +116,7 @@ export default function BrokerShareLinkModal({
                     : "bg-blue-100 text-blue-700",
                 )}
               >
-                {broker?.role}
+                {broker?.role === "admin" ? "Mortgage Banker" : "Broker"}
               </span>
             </div>
           </div>
