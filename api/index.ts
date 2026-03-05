@@ -55,6 +55,14 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   );
 }
 
+// Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
+// VERCEL_URL (no https:// prefix), then localhost for local dev
+const getBaseUrl = (): string => {
+  if (process.env.BASE_URL) return process.env.BASE_URL;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return `http://localhost:${process.env.PORT || 8080}`;
+};
+
 // Database connection pool
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -3011,7 +3019,7 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
     }
 
     const token = rows[0].public_token;
-    const baseUrl = process.env.BASE_URL!;
+    const baseUrl = getBaseUrl();
 
     res.json({
       success: true,
@@ -3049,7 +3057,7 @@ const handleRegenerateShareLink: RequestHandler = async (req, res) => {
     );
 
     const newToken = rows[0].public_token;
-    const baseUrl = process.env.BASE_URL!;
+    const baseUrl = getBaseUrl();
 
     res.json({
       success: true,
@@ -3092,7 +3100,7 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
     }
 
     const broker = rows[0];
-    const baseUrl = process.env.BASE_URL!;
+    const baseUrl = getBaseUrl();
     const shareUrl = `${baseUrl}/apply/${broker.public_token}`;
     const clientFirstName = client_name ? client_name.split(" ")[0] : "there";
     const brokerFullName = `${broker.first_name} ${broker.last_name}`;
@@ -4411,7 +4419,7 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
         [targetId],
       );
       const newToken = refreshed[0].public_token;
-      const baseUrl = process.env.BASE_URL!;
+      const baseUrl = getBaseUrl();
       return res.json({
         success: true,
         public_token: newToken,
@@ -4419,7 +4427,7 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
       });
     }
 
-    const baseUrl = process.env.BASE_URL!;
+    const baseUrl = getBaseUrl();
     res.json({
       success: true,
       public_token: token,
