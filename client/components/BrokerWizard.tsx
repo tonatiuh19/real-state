@@ -403,7 +403,7 @@ export function BrokerWizard({
                             <SelectValue placeholder="Select role" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="broker">Broker</SelectItem>
+                            <SelectItem value="broker">Partner</SelectItem>
                             <SelectItem value="admin">
                               Mortgage Banker
                             </SelectItem>

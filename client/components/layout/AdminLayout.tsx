@@ -88,6 +88,8 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     navigate("/broker-login");
   };
 
+  const isPartner = user?.role === "broker";
+
   const menuItems = [
     {
       id: "dashboard",
@@ -136,6 +138,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Reminder Flows",
       icon: <AlarmClock className="h-4 w-4" />,
       path: "/admin/reminder-flows",
+      hidden: isPartner,
     },
     {
       id: "conversations",
@@ -148,6 +151,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Reports & Analytics",
       icon: <TrendingUp className="h-4 w-4" />,
       path: "/admin/reports",
+      hidden: isPartner,
     },
     // {
     //   id: "compliance",
@@ -166,24 +170,28 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "People Management",
       icon: <UserCog className="h-4 w-4" />,
       path: "/admin/brokers",
+      hidden: isPartner,
     },
     {
       id: "settings",
       label: "Settings",
       icon: <Settings className="h-4 w-4" />,
       path: "/admin/settings",
+      hidden: isPartner,
     },
   ];
 
   // Build effective menu items with disabled state resolved from DB
-  const effectiveMenuItems = menuItems.map((item) => {
-    const ctrl = sectionControlsMap[item.id];
-    return {
-      ...item,
-      disabled: ctrl ? ctrl.is_disabled : false,
-      tooltipMessage: ctrl?.tooltip_message ?? "Coming Soon",
-    };
-  });
+  const effectiveMenuItems = menuItems
+    .filter((item) => !(item as any).hidden)
+    .map((item) => {
+      const ctrl = sectionControlsMap[item.id];
+      return {
+        ...item,
+        disabled: ctrl ? ctrl.is_disabled : false,
+        tooltipMessage: ctrl?.tooltip_message ?? "Coming Soon",
+      };
+    });
 
   return (
     <div className="flex h-screen bg-muted/20 overflow-hidden">
@@ -308,7 +316,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   {user ? `${user.first_name} ${user.last_name}` : "Admin User"}
                 </p>
                 <p className="text-xs text-muted-foreground capitalize">
-                  {user?.role || "broker"}
+                  {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
                 </p>
               </button>
               <Tooltip delayDuration={300}>
@@ -363,7 +371,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                           : "Admin User"}
                       </p>
                       <p className="text-xs text-muted-foreground capitalize">
-                        {user?.role === "admin" ? "Mortgage Banker" : "Broker"}
+                        {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
                       </p>
                     </div>
                   </div>

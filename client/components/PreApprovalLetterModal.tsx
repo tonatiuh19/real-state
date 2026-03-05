@@ -139,12 +139,60 @@ function renderLetterHtml(
   const logoHtml = `<img src="${effectiveLogoUrl}" alt="${letter.company_name ?? "Company"} Logo" style="max-height:64px; max-width:200px; object-fit:contain;" />`;
 
   const brokerPhotoHtml = letter.broker_photo_url
-    ? `<img src="${letter.broker_photo_url}" alt="${letter.broker_first_name} ${letter.broker_last_name}" style="width:72px; height:72px; border-radius:50%; object-fit:cover; border:3px solid #1a3a5c;" />`
-    : `<div style="width:72px; height:72px; border-radius:50%; background:#e8edf5; border:3px solid #1a3a5c; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:bold; color:#1a3a5c;">${(letter.broker_first_name?.[0] ?? "") + (letter.broker_last_name?.[0] ?? "")}</div>`;
+    ? `<div style="width:72px; height:72px; border-radius:50%; overflow:hidden; border:3px solid #1a3a5c; box-sizing:border-box;"><img src="${letter.broker_photo_url}" style="width:100%; height:100%; object-fit:cover; display:block;" /></div>`
+    : `<div style="width:72px; height:72px; border-radius:50%; background:#e8edf5; border:3px solid #1a3a5c; text-align:center; line-height:72px; font-size:24px; font-weight:bold; color:#1a3a5c; box-sizing:border-box;">${(letter.broker_first_name?.[0] ?? "") + (letter.broker_last_name?.[0] ?? "")}</div>`;
 
   const brokerLicenseHtml = letter.broker_license_number
     ? `<p style="margin:4px 0 0; font-size:13px; color:#555;">NMLS# ${letter.broker_license_number}</p>`
     : "";
+
+  // Build broker signature section — smart: MB + partner side-by-side if partner loan
+  const isPartnerLoan =
+    letter.loan_broker_role === "broker" && !!letter.partner_first_name;
+
+  const brokerSignatureSection = isPartnerLoan
+    ? (() => {
+        const partnerLicenseHtml = letter.partner_license_number
+          ? `<p style="margin:3px 0; font-size:13px; color:#555;">NMLS# ${letter.partner_license_number}</p>`
+          : "";
+        const partnerPhotoHtml = letter.partner_photo_url
+          ? `<div style="width:72px; height:72px; border-radius:50%; overflow:hidden; border:3px solid #1a3a5c; box-sizing:border-box;"><img src="${letter.partner_photo_url}" style="width:100%; height:100%; object-fit:cover; display:block;" /></div>`
+          : `<div style="width:72px; height:72px; border-radius:50%; background:#e8edf5; border:3px solid #1a3a5c; text-align:center; line-height:72px; font-size:24px; font-weight:bold; color:#1a3a5c; box-sizing:border-box;">${(letter.partner_first_name?.[0] ?? "") + (letter.partner_last_name?.[0] ?? "")}</div>`;
+        return `<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="vertical-align: top; width: 88px;">${brokerPhotoHtml}</td>
+    <td style="vertical-align: top; padding-left: 16px; padding-right: 28px; font-size: 13px; border-right: 1px solid #e5e7eb;">
+      <p style="margin: 0 0 3px;"><strong>${(letter.broker_first_name ?? "") + " " + (letter.broker_last_name ?? "")}</strong></p>
+      <p style="margin: 0 0 3px; color: #444;">Mortgage Banker</p>
+      ${brokerLicenseHtml}
+      <p style="margin: 3px 0; color: #444;">${letter.company_name ?? "Encore Mortgage"}</p>
+      <p style="margin: 3px 0; color: #444;">${letter.broker_phone ?? ""}</p>
+      <p style="margin: 0; color: #444;">${letter.broker_email ?? ""}</p>
+    </td>
+    <td style="vertical-align: top; padding-left: 24px; padding-right: 0; width: 88px;">${partnerPhotoHtml}</td>
+    <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
+      <p style="margin: 0 0 3px;"><strong>${(letter.partner_first_name ?? "") + " " + (letter.partner_last_name ?? "")}</strong></p>
+      <p style="margin: 0 0 3px; color: #444;">Partner</p>
+      ${partnerLicenseHtml}
+      <p style="margin: 3px 0; color: #444;">${letter.partner_phone ?? ""}</p>
+      <p style="margin: 0; color: #444;">${letter.partner_email ?? ""}</p>
+    </td>
+  </tr>
+</table>`;
+      })()
+    : `<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="vertical-align: top; width: 88px;">${brokerPhotoHtml}</td>
+    <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
+      <p style="margin: 0 0 3px;"><strong>${(letter.broker_first_name ?? "") + " " + (letter.broker_last_name ?? "")}</strong></p>
+      <p style="margin: 0 0 3px; color: #444;">Mortgage Banker</p>
+      ${brokerLicenseHtml}
+      <p style="margin: 3px 0; color: #444;">${letter.company_name ?? "Encore Mortgage"}</p>
+      <p style="margin: 3px 0; color: #444;">${letter.broker_phone ?? ""}</p>
+      <p style="margin: 0; color: #444;">${letter.broker_email ?? ""}</p>
+    </td>
+  </tr>
+</table>`;
 
   const replacements: Record<string, string> = {
     "{{COMPANY_LOGO}}": logoHtml,
@@ -164,6 +212,7 @@ function renderLetterHtml(
     "{{BROKER_LICENSE}}": brokerLicenseHtml,
     "{{BROKER_PHONE}}": letter.broker_phone ?? "",
     "{{BROKER_EMAIL}}": letter.broker_email ?? "",
+    "{{BROKER_SIGNATURE_SECTION}}": brokerSignatureSection,
   };
 
   let rendered = html;
@@ -620,11 +669,11 @@ export function PreApprovalLetterModal({
                   </div>
 
                   {!isAdmin && (
-                    <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                      <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                      <p className="text-sm text-amber-700">
-                        Only admin brokers can create pre-approval letters and
-                        set approval limits.
+                    <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <AlertCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-blue-700">
+                        You can create and send pre-approval letters. Only
+                        Mortgage Bankers can set the maximum allowed amount.
                       </p>
                     </div>
                   )}
@@ -634,48 +683,49 @@ export function PreApprovalLetterModal({
                     className="space-y-4"
                   >
                     <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <Label className="text-sm font-medium text-foreground/80 flex items-center gap-1.5">
-                          <Shield className="h-3.5 w-3.5 text-primary" />
-                          Maximum Allowed Amount
-                          <span className="text-destructive">*</span>
-                        </Label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
-                            $
-                          </span>
-                          <Input
-                            type="number"
-                            id="max_approved_amount"
-                            {...createFormik.getFieldProps(
-                              "max_approved_amount",
+                      {isAdmin && (
+                        <div className="space-y-1.5">
+                          <Label className="text-sm font-medium text-foreground/80 flex items-center gap-1.5">
+                            <Shield className="h-3.5 w-3.5 text-primary" />
+                            Maximum Allowed Amount
+                            <span className="text-destructive">*</span>
+                          </Label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                              $
+                            </span>
+                            <Input
+                              type="number"
+                              id="max_approved_amount"
+                              {...createFormik.getFieldProps(
+                                "max_approved_amount",
+                              )}
+                              className={cn(
+                                "pl-7",
+                                createFormik.touched.max_approved_amount &&
+                                  createFormik.errors.max_approved_amount &&
+                                  "border-destructive focus:ring-destructive/20",
+                              )}
+                              placeholder="650000"
+                            />
+                          </div>
+                          {createFormik.touched.max_approved_amount &&
+                            createFormik.errors.max_approved_amount && (
+                              <p className="text-xs text-destructive flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {createFormik.errors.max_approved_amount}
+                              </p>
                             )}
-                            className={cn(
-                              "pl-7",
-                              createFormik.touched.max_approved_amount &&
-                                createFormik.errors.max_approved_amount &&
-                                "border-destructive focus:ring-destructive/20",
-                            )}
-                            disabled={!isAdmin}
-                            placeholder="650000"
-                          />
-                        </div>
-                        {createFormik.touched.max_approved_amount &&
-                          createFormik.errors.max_approved_amount && (
-                            <p className="text-xs text-destructive flex items-center gap-1">
-                              <AlertCircle className="h-3 w-3" />
-                              {createFormik.errors.max_approved_amount}
+                          {!(
+                            createFormik.touched.max_approved_amount &&
+                            createFormik.errors.max_approved_amount
+                          ) && (
+                            <p className="text-xs text-muted-foreground">
+                              Ceiling — brokers cannot exceed this when editing
                             </p>
                           )}
-                        {!(
-                          createFormik.touched.max_approved_amount &&
-                          createFormik.errors.max_approved_amount
-                        ) && (
-                          <p className="text-xs text-muted-foreground">
-                            Ceiling — brokers cannot exceed this when editing
-                          </p>
-                        )}
-                      </div>
+                        </div>
+                      )}
 
                       <div className="space-y-1.5">
                         <Label className="text-sm font-medium text-foreground/80 flex items-center gap-1.5">
@@ -767,7 +817,7 @@ export function PreApprovalLetterModal({
                   <Button
                     type="button"
                     onClick={() => createFormik.handleSubmit()}
-                    disabled={isSaving || !isAdmin || !createFormik.isValid}
+                    disabled={isSaving || !createFormik.isValid}
                     className="w-full gap-2 bg-primary hover:bg-primary/90 text-primary-foreground h-11 shadow-sm"
                   >
                     {isSaving ? (
@@ -800,16 +850,18 @@ export function PreApprovalLetterModal({
                       <Eye className="h-3.5 w-3.5" />
                       Preview
                     </TabsTrigger>
-                    <TabsTrigger
-                      value="edit"
-                      className="gap-1.5 text-xs h-7 px-3"
-                    >
-                      <Edit3 className="h-3.5 w-3.5" />
-                      Edit
-                      {hasUnsavedChanges && (
-                        <span className="ml-1 h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
-                      )}
-                    </TabsTrigger>
+                    {isAdmin && (
+                      <TabsTrigger
+                        value="edit"
+                        className="gap-1.5 text-xs h-7 px-3"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                        Edit
+                        {hasUnsavedChanges && (
+                          <span className="ml-1 h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
+                        )}
+                      </TabsTrigger>
+                    )}
                   </TabsList>
 
                   <div className="flex items-center gap-2">
@@ -844,17 +896,16 @@ export function PreApprovalLetterModal({
                       <Mail className="h-3.5 w-3.5" />
                       Send to Client
                     </Button>
-                    {isAdmin && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setDeleteConfirmOpen(true)}
-                        className="gap-1.5 h-8 px-3 text-xs border-destructive/30 text-destructive hover:bg-destructive/5"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
-                      </Button>
-                    )}
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setDeleteConfirmOpen(true)}
+                      className="gap-1.5 h-8 px-3 text-xs border-destructive/30 text-destructive hover:bg-destructive/5"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </Button>
                   </div>
                 </div>
 

@@ -116,7 +116,7 @@ export default function BrokerShareLinkModal({
                     : "bg-blue-100 text-blue-700",
                 )}
               >
-                {broker?.role === "admin" ? "Mortgage Banker" : "Broker"}
+                {broker?.role === "admin" ? "Mortgage Banker" : "Partner"}
               </span>
             </div>
           </div>

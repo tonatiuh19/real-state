@@ -36,6 +36,13 @@ import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -175,6 +182,54 @@ const formatCurrency = (v: string | number) => {
   }).format(n);
 };
 
+// ─── Module-level sub-components (must NOT be defined inside render) ────────
+
+const AvatarCircle = ({
+  person,
+  size = "lg",
+  onClick,
+}: {
+  person: {
+    first_name: string;
+    last_name: string;
+    avatar_url: string | null;
+  };
+  size?: "sm" | "lg";
+  onClick?: () => void;
+}) => {
+  const dim = size === "lg" ? "h-[88px] w-[88px]" : "h-8 w-8";
+  const text = size === "lg" ? "text-2xl" : "text-xs";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        dim,
+        "rounded-full overflow-hidden ring-4 ring-white border-[3px] border-primary shadow-lg transition-transform hover:scale-105 focus:outline-none shrink-0",
+        onClick ? "cursor-pointer" : "cursor-default",
+      )}
+    >
+      {person.avatar_url ? (
+        <img
+          src={person.avatar_url}
+          alt={`${person.first_name} ${person.last_name}`}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <div
+          className={cn(
+            "h-full w-full bg-primary flex items-center justify-center text-white font-bold",
+            text,
+          )}
+        >
+          {person.first_name[0]}
+          {person.last_name[0]}
+        </div>
+      )}
+    </button>
+  );
+};
+
 // ─── Component ────────────────────────────────────────────────────────────
 
 const ApplicationWizard = () => {
@@ -185,6 +240,21 @@ const ApplicationWizard = () => {
   const [guestEmail, setGuestEmail] = useState("");
   const [guestEmailInput, setGuestEmailInput] = useState("");
   const [guestEmailError, setGuestEmailError] = useState("");
+  const [contactModalPerson, setContactModalPerson] = useState<{
+    id: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string | null;
+    license_number: string | null;
+    bio: string | null;
+    avatar_url: string | null;
+    office_city: string | null;
+    office_state: string | null;
+    role?: string;
+    years_experience?: number | null;
+    total_loans_closed?: number;
+  } | null>(null);
 
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -404,196 +474,409 @@ const ApplicationWizard = () => {
               transition={{ duration: 0.4 }}
               className="w-full max-w-sm"
             >
-              {/* Card */}
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                {/* Red top accent */}
-                <div className="h-1 bg-primary" />
+              {(() => {
+                const isHomeTeam =
+                  brokerInfo.role === "broker" && !!brokerInfo.mortgage_banker;
 
-                <div className="p-7">
-                  {/* Broker identity */}
-                  <div className="flex items-center gap-4 mb-6">
-                    {brokerInfo.avatar_url ? (
-                      <img
-                        src={brokerInfo.avatar_url}
-                        alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
-                        className="h-14 w-14 rounded-xl object-cover border border-gray-200 shrink-0"
-                      />
-                    ) : (
-                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary text-white text-lg font-bold shrink-0">
-                        {brokerInfo.first_name[0]}
-                        {brokerInfo.last_name[0]}
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <h1 className="text-lg font-bold text-gray-900 truncate">
-                        {brokerInfo.first_name} {brokerInfo.last_name}
-                      </h1>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        Mortgage Professional
-                      </p>
-                      {brokerInfo.license_number && (
-                        <Badge
-                          variant="outline"
-                          className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
-                        >
-                          NMLS #{brokerInfo.license_number}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
+                return (
+                  <>
+                    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                      <div className="h-1 bg-primary" />
+                      <div className="p-7">
+                        {isHomeTeam ? (
+                          /* ── My Home Team Layout ── */
+                          <>
+                            {/* Overlapping avatars */}
+                            <div className="flex justify-center mb-5">
+                              <div className="flex items-center">
+                                <div className="relative z-10">
+                                  <AvatarCircle
+                                    person={brokerInfo}
+                                    onClick={() =>
+                                      setContactModalPerson(brokerInfo)
+                                    }
+                                  />
+                                </div>
+                                <div className="-ml-7 relative z-0">
+                                  <AvatarCircle
+                                    person={brokerInfo.mortgage_banker!}
+                                    onClick={() =>
+                                      setContactModalPerson(
+                                        brokerInfo.mortgage_banker,
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            </div>
 
-                  {/* Stats */}
-                  {(brokerInfo.years_experience ||
-                    brokerInfo.total_loans_closed > 0 ||
-                    (brokerInfo.specializations?.length ?? 0) > 0) && (
-                    <div className="flex gap-2 mb-5">
-                      {brokerInfo.years_experience && (
-                        <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
-                          <Award className="h-3.5 w-3.5 text-primary shrink-0" />
-                          <div>
-                            <p className="text-sm font-bold text-gray-900 leading-none">
-                              {brokerInfo.years_experience}
-                            </p>
-                            <p className="text-[10px] text-gray-400">
-                              Yrs exp.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {brokerInfo.total_loans_closed > 0 && (
-                        <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                          <div>
-                            <p className="text-sm font-bold text-gray-900 leading-none">
-                              {brokerInfo.total_loans_closed}+
-                            </p>
-                            <p className="text-[10px] text-gray-400">Closed</p>
-                          </div>
-                        </div>
-                      )}
-                      {(brokerInfo.specializations?.length ?? 0) > 0 && (
-                        <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
-                          <Star className="h-3.5 w-3.5 text-primary shrink-0" />
-                          <p className="text-[10px] text-gray-600 font-medium leading-tight line-clamp-2">
-                            {brokerInfo.specializations![0]}
+                            {/* Title */}
+                            <div className="text-center mb-5">
+                              <h1 className="text-xl font-extrabold text-gray-900 tracking-tight">
+                                My Home Team
+                              </h1>
+                              <p className="text-xs text-gray-400 mt-1">
+                                Your dedicated home loan professionals
+                              </p>
+                            </div>
+
+                            {/* Clickable names */}
+                            <div className="flex justify-center items-center gap-2 mb-6">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setContactModalPerson(brokerInfo)
+                                }
+                                className="text-sm font-semibold text-primary hover:underline underline-offset-2 transition-colors"
+                              >
+                                {brokerInfo.first_name} {brokerInfo.last_name}
+                              </button>
+                              <span className="text-gray-300 font-light">
+                                |
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setContactModalPerson(
+                                    brokerInfo.mortgage_banker,
+                                  )
+                                }
+                                className="text-sm font-semibold text-primary hover:underline underline-offset-2 transition-colors"
+                              >
+                                {brokerInfo.mortgage_banker!.first_name}{" "}
+                                {brokerInfo.mortgage_banker!.last_name}
+                              </button>
+                            </div>
+
+                            <Separator className="mb-5" />
+                          </>
+                        ) : (
+                          /* ── Single Mortgage Banker Layout ── */
+                          <>
+                            <div className="flex items-center gap-4 mb-6">
+                              <AvatarCircle
+                                person={brokerInfo}
+                                onClick={() =>
+                                  setContactModalPerson(brokerInfo)
+                                }
+                              />
+                              <div className="min-w-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setContactModalPerson(brokerInfo)
+                                  }
+                                  className="text-left"
+                                >
+                                  <h1 className="text-lg font-bold text-gray-900 truncate hover:underline underline-offset-2">
+                                    {brokerInfo.first_name}{" "}
+                                    {brokerInfo.last_name}
+                                  </h1>
+                                </button>
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                  Mortgage Banker
+                                </p>
+                                {brokerInfo.license_number && (
+                                  <Badge
+                                    variant="outline"
+                                    className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
+                                  >
+                                    NMLS #{brokerInfo.license_number}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Stats */}
+                            {(brokerInfo.years_experience ||
+                              brokerInfo.total_loans_closed > 0 ||
+                              (brokerInfo.specializations?.length ?? 0) >
+                                0) && (
+                              <div className="flex gap-2 mb-5">
+                                {brokerInfo.years_experience && (
+                                  <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                                    <Award className="h-3.5 w-3.5 text-primary shrink-0" />
+                                    <div>
+                                      <p className="text-sm font-bold text-gray-900 leading-none">
+                                        {brokerInfo.years_experience}
+                                      </p>
+                                      <p className="text-[10px] text-gray-400">
+                                        Yrs exp.
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                                {brokerInfo.total_loans_closed > 0 && (
+                                  <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                                    <div>
+                                      <p className="text-sm font-bold text-gray-900 leading-none">
+                                        {brokerInfo.total_loans_closed}+
+                                      </p>
+                                      <p className="text-[10px] text-gray-400">
+                                        Closed
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                                {(brokerInfo.specializations?.length ?? 0) >
+                                  0 && (
+                                  <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                                    <Star className="h-3.5 w-3.5 text-primary shrink-0" />
+                                    <p className="text-[10px] text-gray-600 font-medium leading-tight line-clamp-2">
+                                      {brokerInfo.specializations![0]}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {brokerInfo.bio && (
+                              <p className="text-xs text-gray-500 italic leading-relaxed mb-5 border-l-2 border-primary/40 pl-3">
+                                "{brokerInfo.bio}"
+                              </p>
+                            )}
+
+                            {(brokerInfo.phone || brokerInfo.office_city) && (
+                              <div className="flex flex-wrap gap-3 mb-5">
+                                {brokerInfo.phone && (
+                                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                                    <Phone className="h-3 w-3 text-gray-400" />{" "}
+                                    {brokerInfo.phone}
+                                  </div>
+                                )}
+                                {brokerInfo.office_city && (
+                                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                                    <MapPin className="h-3 w-3 text-gray-400" />
+                                    {brokerInfo.office_city}
+                                    {brokerInfo.office_state
+                                      ? `, ${brokerInfo.office_state}`
+                                      : ""}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <Separator className="mb-5" />
+                          </>
+                        )}
+
+                        {/* Email form — shared by both layouts */}
+                        <div className="space-y-1">
+                          <h2 className="text-base font-bold text-gray-900 mb-0.5">
+                            Ready to get started?
+                          </h2>
+                          <p className="text-xs text-gray-500 mb-3">
+                            Enter your email to begin your mortgage application.
                           </p>
+                          <div className="space-y-1.5">
+                            <label
+                              htmlFor="guest-email"
+                              className="text-xs font-semibold text-gray-700"
+                            >
+                              Your Email Address
+                            </label>
+                            <div className="relative">
+                              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                              <Input
+                                id="guest-email"
+                                type="email"
+                                placeholder="you@example.com"
+                                value={guestEmailInput}
+                                onChange={(e) => {
+                                  setGuestEmailInput(e.target.value);
+                                  if (guestEmailError) setGuestEmailError("");
+                                }}
+                                onKeyDown={(e) =>
+                                  e.key === "Enter" && handleStep0Continue()
+                                }
+                                className={cn(
+                                  "pl-10 h-11 text-sm",
+                                  guestEmailError
+                                    ? "border-red-400 focus-visible:ring-red-400"
+                                    : "",
+                                )}
+                              />
+                            </div>
+                            {guestEmailError && (
+                              <p className="flex items-center gap-1 text-xs text-red-500">
+                                <AlertCircle className="h-3 w-3" />{" "}
+                                {guestEmailError}
+                              </p>
+                            )}
+                            <Button
+                              onClick={handleStep0Continue}
+                              className="w-full h-11 mt-2 text-sm shadow-sm"
+                            >
+                              Start Application{" "}
+                              <ArrowRight className="ml-2 h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Bio */}
-                  {brokerInfo.bio && (
-                    <p className="text-xs text-gray-500 italic leading-relaxed mb-5 border-l-2 border-primary/40 pl-3">
-                      "{brokerInfo.bio}"
-                    </p>
-                  )}
-
-                  {/* Contact */}
-                  {(brokerInfo.phone || brokerInfo.office_city) && (
-                    <div className="flex flex-wrap gap-3 mb-5">
-                      {brokerInfo.phone && (
-                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                          <Phone className="h-3 w-3 text-gray-400" />
-                          {brokerInfo.phone}
-                        </div>
-                      )}
-                      {brokerInfo.office_city && (
-                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                          <MapPin className="h-3 w-3 text-gray-400" />
-                          {brokerInfo.office_city}
-                          {brokerInfo.office_state
-                            ? `, ${brokerInfo.office_state}`
-                            : ""}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Divider + CTA */}
-                  <div className="border-t border-gray-100 pt-5">
-                    <h2 className="text-base font-bold text-gray-900 mb-0.5">
-                      Ready to get started?
-                    </h2>
-                    <p className="text-xs text-gray-500 mb-4">
-                      Enter your email to begin your mortgage application.
-                    </p>
-
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor="guest-email"
-                        className="text-xs font-semibold text-gray-700"
-                      >
-                        Your Email Address
-                      </label>
-                      <div className="relative">
-                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                        <Input
-                          id="guest-email"
-                          type="email"
-                          placeholder="you@example.com"
-                          value={guestEmailInput}
-                          onChange={(e) => {
-                            setGuestEmailInput(e.target.value);
-                            if (guestEmailError) setGuestEmailError("");
-                          }}
-                          onKeyDown={(e) =>
-                            e.key === "Enter" && handleStep0Continue()
-                          }
-                          className={cn(
-                            "pl-10 h-11 text-sm",
-                            guestEmailError
-                              ? "border-red-400 focus-visible:ring-red-400"
-                              : "",
-                          )}
-                        />
                       </div>
-                      {guestEmailError && (
-                        <p className="flex items-center gap-1 text-xs text-red-500">
-                          <AlertCircle className="h-3 w-3" />
-                          {guestEmailError}
-                        </p>
-                      )}
                     </div>
 
-                    <Button
-                      onClick={handleStep0Continue}
-                      className="w-full h-11 mt-3 text-sm shadow-sm"
-                    >
-                      Start Application <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Trust badges */}
-              <div className="flex justify-center gap-6 mt-5">
-                {[
-                  {
-                    icon: <LockIcon className="h-3.5 w-3.5" />,
-                    label: "Secure & Private",
-                  },
-                  {
-                    icon: <ShieldCheck className="h-3.5 w-3.5" />,
-                    label: "SSL Encrypted",
-                  },
-                  {
-                    icon: <CheckCircle2 className="h-3.5 w-3.5" />,
-                    label: "No Commitment",
-                  },
-                ].map((b) => (
-                  <div
-                    key={b.label}
-                    className="flex flex-col items-center gap-1 text-gray-400"
-                  >
-                    {b.icon}
-                    <span className="text-[10px]">{b.label}</span>
-                  </div>
-                ))}
-              </div>
+                    {/* Trust badges */}
+                    <div className="flex justify-center gap-6 mt-5">
+                      {[
+                        {
+                          icon: <LockIcon className="h-3.5 w-3.5" />,
+                          label: "Secure & Private",
+                        },
+                        {
+                          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+                          label: "SSL Encrypted",
+                        },
+                        {
+                          icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+                          label: "No Commitment",
+                        },
+                      ].map((b) => (
+                        <div
+                          key={b.label}
+                          className="flex flex-col items-center gap-1 text-gray-400"
+                        >
+                          {b.icon}
+                          <span className="text-[10px]">{b.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
             </motion.div>
           ) : null}
         </AnimatePresence>
+
+        {/* ── Contact Info Modal ── */}
+        <Dialog
+          open={!!contactModalPerson}
+          onOpenChange={() => setContactModalPerson(null)}
+        >
+          <DialogContent className="max-w-sm p-0 gap-0 overflow-hidden">
+            <div className="h-1 bg-primary" />
+            <div className="p-6">
+              {contactModalPerson && (
+                <>
+                  <DialogHeader className="mb-4">
+                    <div className="flex items-center gap-4">
+                      <div className="h-16 w-16 rounded-full overflow-hidden ring-2 ring-primary/30 border-2 border-primary shrink-0">
+                        {contactModalPerson.avatar_url ? (
+                          <img
+                            src={contactModalPerson.avatar_url}
+                            alt={`${contactModalPerson.first_name} ${contactModalPerson.last_name}`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-full w-full bg-primary flex items-center justify-center text-white font-bold text-xl">
+                            {contactModalPerson.first_name[0]}
+                            {contactModalPerson.last_name[0]}
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <DialogTitle className="text-base font-bold text-gray-900 leading-tight">
+                          {contactModalPerson.first_name}{" "}
+                          {contactModalPerson.last_name}
+                        </DialogTitle>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {contactModalPerson.role === "admin"
+                            ? "Mortgage Banker"
+                            : "Partner"}
+                        </p>
+                        {contactModalPerson.license_number && (
+                          <Badge
+                            variant="outline"
+                            className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
+                          >
+                            NMLS #{contactModalPerson.license_number}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </DialogHeader>
+
+                  {contactModalPerson.bio && (
+                    <p className="text-xs text-gray-500 italic leading-relaxed mb-4 border-l-2 border-primary/40 pl-3">
+                      "{contactModalPerson.bio}"
+                    </p>
+                  )}
+
+                  <div className="space-y-2">
+                    {contactModalPerson.phone && (
+                      <a
+                        href={`tel:${contactModalPerson.phone}`}
+                        className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
+                      >
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                          <Phone className="h-3.5 w-3.5 text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                            Phone
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {contactModalPerson.phone}
+                          </p>
+                        </div>
+                      </a>
+                    )}
+                    <a
+                      href={`mailto:${contactModalPerson.email}`}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
+                    >
+                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                        <Mail className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                          Email
+                        </p>
+                        <p className="text-sm font-semibold text-gray-900 truncate">
+                          {contactModalPerson.email}
+                        </p>
+                      </div>
+                    </a>
+                    {(contactModalPerson.office_city ||
+                      contactModalPerson.office_state) && (
+                      <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <MapPin className="h-3.5 w-3.5 text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                            Location
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {contactModalPerson.office_city}
+                            {contactModalPerson.office_state
+                              ? `, ${contactModalPerson.office_state}`
+                              : ""}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {contactModalPerson.years_experience && (
+                      <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <Award className="h-3.5 w-3.5 text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                            Experience
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {contactModalPerson.years_experience} years
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
@@ -618,29 +901,55 @@ const ApplicationWizard = () => {
             </Link>
             <div className="h-4 w-px bg-border hidden sm:block" />
             <div className="hidden sm:flex items-center gap-2.5">
-              {brokerInfo && (
-                <div className="h-8 w-8 rounded-full overflow-hidden ring-2 ring-primary/20 flex-shrink-0">
-                  {brokerInfo.avatar_url ? (
-                    <img
-                      src={brokerInfo.avatar_url}
-                      alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="h-full w-full bg-primary flex items-center justify-center text-white text-xs font-bold">
-                      {brokerInfo.first_name[0]}
-                      {brokerInfo.last_name[0]}
+              {brokerInfo &&
+                (() => {
+                  const isHomeTeam =
+                    brokerInfo.role === "broker" &&
+                    !!brokerInfo.mortgage_banker;
+                  const SmallAvatar = ({
+                    person,
+                  }: {
+                    person: {
+                      first_name: string;
+                      last_name: string;
+                      avatar_url: string | null;
+                    };
+                  }) => (
+                    <div className="h-8 w-8 rounded-full overflow-hidden ring-2 ring-primary/20 border border-primary/30 shrink-0">
+                      {person.avatar_url ? (
+                        <img
+                          src={person.avatar_url}
+                          alt={`${person.first_name} ${person.last_name}`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="h-full w-full bg-primary flex items-center justify-center text-white text-xs font-bold">
+                          {person.first_name[0]}
+                          {person.last_name[0]}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                  );
+                  return isHomeTeam ? (
+                    <div className="flex items-center">
+                      <SmallAvatar person={brokerInfo} />
+                      <div className="-ml-2 z-10">
+                        <SmallAvatar person={brokerInfo.mortgage_banker!} />
+                      </div>
+                    </div>
+                  ) : (
+                    <SmallAvatar person={brokerInfo} />
+                  );
+                })()}
               <div className="flex flex-col gap-0.5">
                 <span className="text-sm font-medium text-muted-foreground leading-none">
                   Loan Application Wizard
                 </span>
                 {brokerInfo && (
                   <span className="text-xs text-primary font-medium leading-none">
-                    with {brokerInfo.first_name} {brokerInfo.last_name}
+                    {brokerInfo.role === "broker" && brokerInfo.mortgage_banker
+                      ? `${brokerInfo.first_name} & ${brokerInfo.mortgage_banker.first_name}`
+                      : `with ${brokerInfo.first_name} ${brokerInfo.last_name}`}
                   </span>
                 )}
               </div>
@@ -712,38 +1021,104 @@ const ApplicationWizard = () => {
                 </p>
               </div>
 
-              {/* Broker callout — only shown when arrived via share link */}
-              {brokerInfo && (
-                <div className="flex justify-center w-full">
-                  <div className="flex items-center gap-4 bg-white border border-gray-200 rounded-2xl px-5 py-4 shadow-sm max-w-sm w-full">
-                    <div className="h-12 w-12 rounded-xl overflow-hidden shrink-0">
-                      {brokerInfo.avatar_url ? (
-                        <img
-                          src={brokerInfo.avatar_url}
-                          alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="h-full w-full bg-primary flex items-center justify-center text-white text-sm font-bold">
-                          {brokerInfo.first_name[0]}
-                          {brokerInfo.last_name[0]}
-                        </div>
-                      )}
+              {/* Team callout — shown on success when arrived via share link */}
+              {brokerInfo &&
+                (() => {
+                  const isHomeTeam =
+                    brokerInfo.role === "broker" &&
+                    !!brokerInfo.mortgage_banker;
+                  const TeamMember = ({
+                    person,
+                    label,
+                  }: {
+                    person: {
+                      first_name: string;
+                      last_name: string;
+                      avatar_url: string | null;
+                    };
+                    label: string;
+                  }) => (
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full overflow-hidden ring-2 ring-primary/30 border border-primary shrink-0">
+                        {person.avatar_url ? (
+                          <img
+                            src={person.avatar_url}
+                            alt={`${person.first_name} ${person.last_name}`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-full w-full bg-primary flex items-center justify-center text-white text-sm font-bold">
+                            {person.first_name[0]}
+                            {person.last_name[0]}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-400 leading-none mb-0.5">
+                          {label}
+                        </p>
+                        <p className="text-sm font-bold text-gray-900">
+                          {person.first_name} {person.last_name}
+                        </p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-400 mb-0.5">
-                        Your loan officer
-                      </p>
-                      <p className="text-sm font-bold text-gray-900 truncate">
-                        {brokerInfo.first_name} {brokerInfo.last_name}
-                      </p>
-                      <p className="text-xs text-primary font-medium">
-                        Will be in touch soon ✓
-                      </p>
+                  );
+                  return (
+                    <div className="flex justify-center w-full">
+                      <div
+                        className={cn(
+                          "bg-white border border-gray-200 rounded-2xl px-5 py-4 shadow-sm max-w-sm w-full",
+                          isHomeTeam ? "space-y-3" : "flex items-center gap-4",
+                        )}
+                      >
+                        {isHomeTeam ? (
+                          <>
+                            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                              Your Home Team
+                            </p>
+                            <TeamMember
+                              person={brokerInfo}
+                              label="Your Partner"
+                            />
+                            <div className="h-px bg-gray-100" />
+                            <TeamMember
+                              person={brokerInfo.mortgage_banker!}
+                              label="Mortgage Banker"
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <div className="h-12 w-12 rounded-full overflow-hidden ring-2 ring-primary/30 border border-primary shrink-0">
+                              {brokerInfo.avatar_url ? (
+                                <img
+                                  src={brokerInfo.avatar_url}
+                                  alt={`${brokerInfo.first_name} ${brokerInfo.last_name}`}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="h-full w-full bg-primary flex items-center justify-center text-white text-sm font-bold">
+                                  {brokerInfo.first_name[0]}
+                                  {brokerInfo.last_name[0]}
+                                </div>
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs text-gray-400 mb-0.5">
+                                Your Mortgage Banker
+                              </p>
+                              <p className="text-sm font-bold text-gray-900 truncate">
+                                {brokerInfo.first_name} {brokerInfo.last_name}
+                              </p>
+                              <p className="text-xs text-primary font-medium">
+                                Will be in touch soon ✓
+                              </p>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </div>
-              )}
+                  );
+                })()}
 
               <div className="grid sm:grid-cols-3 gap-4 max-w-lg w-full">
                 {[
@@ -1784,6 +2159,136 @@ const ApplicationWizard = () => {
       {/* Decorative background blobs */}
       <div className="fixed top-0 left-0 -z-10 h-[500px] w-[500px] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
       <div className="fixed bottom-0 right-0 -z-10 h-[500px] w-[500px] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
+
+      {/* ── Contact Info Modal (reachable from header / success section) ── */}
+      <Dialog
+        open={!!contactModalPerson}
+        onOpenChange={() => setContactModalPerson(null)}
+      >
+        <DialogContent className="max-w-sm p-0 gap-0 overflow-hidden">
+          <div className="h-1 bg-primary" />
+          <div className="p-6">
+            {contactModalPerson && (
+              <>
+                <DialogHeader className="mb-4">
+                  <div className="flex items-center gap-4">
+                    <div className="h-16 w-16 rounded-full overflow-hidden ring-2 ring-primary/30 border-2 border-primary shrink-0">
+                      {contactModalPerson.avatar_url ? (
+                        <img
+                          src={contactModalPerson.avatar_url}
+                          alt={`${contactModalPerson.first_name} ${contactModalPerson.last_name}`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="h-full w-full bg-primary flex items-center justify-center text-white font-bold text-xl">
+                          {contactModalPerson.first_name[0]}
+                          {contactModalPerson.last_name[0]}
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <DialogTitle className="text-base font-bold text-gray-900 leading-tight">
+                        {contactModalPerson.first_name}{" "}
+                        {contactModalPerson.last_name}
+                      </DialogTitle>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {contactModalPerson.role === "admin"
+                          ? "Mortgage Banker"
+                          : "Partner"}
+                      </p>
+                      {contactModalPerson.license_number && (
+                        <Badge
+                          variant="outline"
+                          className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
+                        >
+                          NMLS #{contactModalPerson.license_number}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </DialogHeader>
+
+                {contactModalPerson.bio && (
+                  <p className="text-xs text-gray-500 italic leading-relaxed mb-4 border-l-2 border-primary/40 pl-3">
+                    "{contactModalPerson.bio}"
+                  </p>
+                )}
+
+                <div className="space-y-2">
+                  {contactModalPerson.phone && (
+                    <a
+                      href={`tel:${contactModalPerson.phone}`}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
+                    >
+                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                        <Phone className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                          Phone
+                        </p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {contactModalPerson.phone}
+                        </p>
+                      </div>
+                    </a>
+                  )}
+                  <a
+                    href={`mailto:${contactModalPerson.email}`}
+                    className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
+                  >
+                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                      <Mail className="h-3.5 w-3.5 text-primary" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                        Email
+                      </p>
+                      <p className="text-sm font-semibold text-gray-900 truncate">
+                        {contactModalPerson.email}
+                      </p>
+                    </div>
+                  </a>
+                  {(contactModalPerson.office_city ||
+                    contactModalPerson.office_state) && (
+                    <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <MapPin className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                          Location
+                        </p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {contactModalPerson.office_city}
+                          {contactModalPerson.office_state
+                            ? `, ${contactModalPerson.office_state}`
+                            : ""}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  {contactModalPerson.years_experience && (
+                    <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <Award className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                          Experience
+                        </p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {contactModalPerson.years_experience} years
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -280,7 +280,7 @@ const BrokerProfile = () => {
                         variant="secondary"
                         className="text-xs bg-primary/10 text-primary border-0"
                       >
-                        {user?.role === "admin" ? "Mortgage Banker" : "Broker"}
+                        {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
                       </Badge>
                     </div>
                     {user?.email && (

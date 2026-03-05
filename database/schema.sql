@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 26, 2026 at 05:43 PM
+-- Generation Time: Mar 04, 2026 at 07:38 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -20,6 +20,39 @@ SET time_zone = "+00:00";
 --
 -- Database: `alanchat_encore_m`
 --
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `admin_section_controls`
+--
+
+CREATE TABLE `admin_section_controls` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `section_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Matches the id field in the sidebar menu items',
+  `is_disabled` tinyint(1) NOT NULL DEFAULT '0',
+  `tooltip_message` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Coming Soon',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Controls which admin sidebar sections are disabled and their tooltip messages';
+
+--
+-- Dumping data for table `admin_section_controls`
+--
+
+INSERT INTO `admin_section_controls` (`id`, `tenant_id`, `section_id`, `is_disabled`, `tooltip_message`, `created_at`, `updated_at`) VALUES
+(1, 1, 'dashboard', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(2, 1, 'pipeline', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(3, 1, 'clients', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(4, 1, 'tasks', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(5, 1, 'documents', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(6, 1, 'communication-templates', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(7, 1, 'reminder-flows', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(8, 1, 'conversations', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:38:02'),
+(9, 1, 'reports', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(10, 1, 'brokers', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(11, 1, 'settings', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37');
 
 -- --------------------------------------------------------
 
@@ -43,7 +76,19 @@ CREATE TABLE `application_status_history` (
 --
 
 INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `from_status`, `to_status`, `changed_by_broker_id`, `notes`, `created_at`) VALUES
-(22, 1, 24, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-02-26 17:38:04');
+(48, 1, 28, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:37:49'),
+(49, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:37:58'),
+(50, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:02'),
+(51, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:08'),
+(52, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:11'),
+(53, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:25'),
+(54, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:30'),
+(55, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:36'),
+(56, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:40:54'),
+(57, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:41:00'),
+(58, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:41:05'),
+(59, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:41:10'),
+(60, 1, 28, 'under_review', 'underwriting', 1, 'Auto-updated based on task statuses', '2026-03-04 18:41:43');
 
 -- --------------------------------------------------------
 
@@ -154,7 +199,59 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (77, 1, NULL, 1, 'broker', 'approve_task', 'task', 35, '{\"status\": \"approved\", \"approved_at\": \"2026-02-24T00:21:54.095Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-23 18:21:54'),
 (78, 1, NULL, 1, 'broker', 'approve_task', 'task', 34, '{\"status\": \"approved\", \"approved_at\": \"2026-02-24T00:23:49.484Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-23 18:23:49'),
 (79, 1, NULL, 1, 'broker', 'generate_mismo', 'loan_application', 22, '{\"filename\": \"MISMO_LA92351886_2026-02-24.xml\", \"generated_at\": \"2026-02-24T00:24:02.418Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-23 18:24:02'),
-(80, 1, NULL, 3, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-24 16:50:45');
+(80, 1, NULL, 3, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-24 16:50:45'),
+(81, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', '2026-02-26 20:27:00'),
+(82, 1, NULL, 1, 'broker', 'reopen_task', 'task', 55, '{\"reason\": \"please re-submit again\", \"status\": \"reopened\", \"reopened_at\": \"2026-02-27T03:13:27.314Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:13:27'),
+(83, 1, NULL, 1, 'broker', 'approve_task', 'task', 50, '{\"status\": \"approved\", \"approved_at\": \"2026-02-27T03:13:52.787Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:13:52'),
+(84, 1, NULL, 1, 'broker', 'approve_task', 'task', 51, '{\"status\": \"approved\", \"approved_at\": \"2026-02-27T03:15:20.179Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:15:20'),
+(85, 1, NULL, 1, 'broker', 'approve_task', 'task', 54, '{\"status\": \"approved\", \"approved_at\": \"2026-02-27T03:15:41.001Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:15:41'),
+(86, 1, NULL, 1, 'broker', 'approve_task', 'task', 52, '{\"status\": \"approved\", \"approved_at\": \"2026-02-27T03:15:59.250Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:15:59'),
+(87, 1, NULL, 1, 'broker', 'approve_task', 'task', 53, '{\"status\": \"approved\", \"approved_at\": \"2026-02-27T03:16:16.972Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:16:17'),
+(88, 1, NULL, 1, 'broker', 'approve_task', 'task', 55, '{\"status\": \"approved\", \"approved_at\": \"2026-02-27T03:18:19.672Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-26 21:18:19'),
+(89, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 1, '{\"application_id\": \"26\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:26:57'),
+(90, 1, NULL, 1, 'broker', 'update_pre_approval_letter', 'pre_approval_letter', 1, '{\"expires_at\": \"2026-02-28\", \"letter_date\": \"2026-02-27\", \"html_content\": \"(updated)\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:28:38'),
+(91, 1, NULL, 1, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 1, '{\"application_id\": \"26\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:29:16'),
+(92, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 2, '{\"application_id\": \"26\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:36:15'),
+(93, 1, NULL, 1, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 2, '{\"application_id\": \"26\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:36:49'),
+(94, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 3, '{\"application_id\": \"26\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:39:24'),
+(95, 1, NULL, 1, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 3, '{\"application_id\": \"26\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:39:52'),
+(96, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 4, '{\"application_id\": \"26\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:40:36'),
+(97, 1, NULL, 1, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 4, '{\"application_id\": \"26\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:54:07'),
+(98, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 5, '{\"application_id\": \"26\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 22:54:21'),
+(99, 1, NULL, 1, 'broker', 'send_pre_approval_letter_email', 'pre_approval_letter', 5, '{\"subject\": \"Your Pre-Approval Letter — LA50710937\", \"template_id\": null, \"client_email\": \"tonatiuh.gom@gmail.com\", \"pdf_attached\": true, \"send_success\": true, \"application_id\": \"26\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-26 23:22:45'),
+(100, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows_system', NULL, '{\"migration\": \"20260228_add_reminder_flows\", \"tables_created\": [\"reminder_flows\", \"reminder_flow_steps\", \"reminder_flow_connections\", \"reminder_flow_executions\"]}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-02-28 16:03:38'),
+(101, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 17:26:13'),
+(102, 1, NULL, 1, 'broker', 'export_report', 'report', NULL, '{\"format\": \"csv\", \"to_date\": \"2026-02-28\", \"from_date\": \"2026-01-29\", \"report_type\": \"overview\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 17:26:23'),
+(103, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 17:47:46'),
+(104, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 18:57:40'),
+(105, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 19:14:14'),
+(106, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 19:14:45'),
+(107, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 19:44:58'),
+(108, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 20:20:55'),
+(109, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-28 20:30:24'),
+(110, 1, NULL, 1, 'broker', 'approve_task', 'task', 62, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:01.261Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:01'),
+(111, 1, NULL, 1, 'broker', 'approve_task', 'task', 56, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:04.966Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:05'),
+(112, 1, NULL, 1, 'broker', 'approve_task', 'task', 57, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:08.121Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:08'),
+(113, 1, NULL, 1, 'broker', 'approve_task', 'task', 58, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:23.863Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:23'),
+(114, 1, NULL, 1, 'broker', 'approve_task', 'task', 59, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:40.607Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:40'),
+(115, 1, NULL, 1, 'broker', 'approve_task', 'task', 60, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:44.098Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:44'),
+(116, 1, NULL, 1, 'broker', 'approve_task', 'task', 61, '{\"status\": \"approved\", \"approved_at\": \"2026-03-03T01:08:47.320Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-02 19:08:47'),
+(117, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 6, '{\"application_id\": \"27\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-02 19:09:17'),
+(118, 1, NULL, 3, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-02 19:25:40'),
+(119, 1, NULL, 3, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-02 20:41:13'),
+(120, 1, NULL, 1, 'broker', 'approve_task', 'task', 68, '{\"status\": \"approved\", \"approved_at\": \"2026-03-05T00:41:28.511Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-04 18:41:28'),
+(121, 1, NULL, 1, 'broker', 'approve_task', 'task', 63, '{\"status\": \"approved\", \"approved_at\": \"2026-03-05T00:41:31.373Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-04 18:41:31'),
+(122, 1, NULL, 1, 'broker', 'approve_task', 'task', 64, '{\"status\": \"approved\", \"approved_at\": \"2026-03-05T00:41:34.234Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-04 18:41:34'),
+(123, 1, NULL, 1, 'broker', 'approve_task', 'task', 65, '{\"status\": \"approved\", \"approved_at\": \"2026-03-05T00:41:36.789Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-04 18:41:36'),
+(124, 1, NULL, 1, 'broker', 'approve_task', 'task', 66, '{\"status\": \"approved\", \"approved_at\": \"2026-03-05T00:41:40.202Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-04 18:41:40'),
+(125, 1, NULL, 1, 'broker', 'approve_task', 'task', 67, '{\"status\": \"approved\", \"approved_at\": \"2026-03-05T00:41:43.355Z\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-04 18:41:43'),
+(126, 1, NULL, 1, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 7, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 18:44:28'),
+(127, 1, NULL, 1, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 7, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 18:44:59'),
+(128, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 8, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:28:44'),
+(129, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 8, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:36:10'),
+(130, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 9, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:36:20'),
+(131, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 9, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:36:35'),
+(132, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 10, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:38:06');
 
 -- --------------------------------------------------------
 
@@ -177,20 +274,21 @@ CREATE TABLE `brokers` (
   `specializations` json DEFAULT NULL,
   `public_token` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'UUID token for public broker share link',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by_broker_id` int(11) DEFAULT NULL COMMENT 'The admin/Mortgage Banker who created this partner broker'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data for table `brokers`
 --
 
-INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-25 22:22:37', NULL, '[]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-02-25 22:22:37'),
-(2, 1, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'admin', 'active', 0, '2026-01-21 00:14:12', '123457890', '[\"First-Time Home Buyers\"]', '9b99b55c-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 23:10:11', '2026-02-24 18:33:30'),
-(3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-02-24 16:50:22', '380277', NULL, '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-02-24 18:33:30'),
-(4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-24 17:32:57', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-02-24 18:33:30'),
-(6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-12 18:14:25', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-02-24 18:33:30'),
-(7, 2, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-13 00:04:37', NULL, NULL, '9b99c5ad-11e1-11f1-83cc-525400bd6b5d', '2026-02-03 14:59:53', '2026-02-24 18:33:30');
+INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`, `created_by_broker_id`) VALUES
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-02 16:26:23', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-02 16:26:23', NULL),
+(3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-02-24 16:50:22', '380277', NULL, '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-02-24 18:33:30', NULL),
+(4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-24 17:32:57', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-02-24 18:33:30', NULL),
+(6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-12 18:14:25', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-02-24 18:33:30', NULL),
+(7, 2, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-13 00:04:37', NULL, NULL, '9b99c5ad-11e1-11f1-83cc-525400bd6b5d', '2026-02-03 14:59:53', '2026-02-24 18:33:30', NULL),
+(8, 1, 'tonatiuh.gom@gmail.com', 'Tonatiuh', 'Gomez', '4741400363', 'broker', 'active', 0, '2026-03-04 19:11:06', '1234567890', '[\"FHA Loans\", \"VA Loans\"]', 'dc63d1fa-1829-11f1-83cc-525400bd6b5d', '2026-03-04 18:25:44', '2026-03-04 19:11:06', 1);
 
 -- --------------------------------------------------------
 
@@ -206,7 +304,7 @@ CREATE TABLE `broker_profiles` (
   `office_city` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `office_state` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `office_zip` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `avatar_url` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `avatar_url` mediumtext COLLATE utf8mb4_unicode_ci,
   `years_experience` int(11) DEFAULT NULL,
   `total_loans_closed` int(11) DEFAULT '0',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
@@ -218,7 +316,9 @@ CREATE TABLE `broker_profiles` (
 --
 
 INSERT INTO `broker_profiles` (`id`, `broker_id`, `bio`, `office_address`, `office_city`, `office_state`, `office_zip`, `avatar_url`, `years_experience`, `total_loans_closed`, `created_at`, `updated_at`) VALUES
-(1, 1, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-1/main_image/699e6506c5de0_1771988230.png', NULL, 0, '2026-02-24 20:53:50', '2026-02-24 20:59:43');
+(1, 1, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-1/main_image/69a6138f45544_1772491663.png', NULL, 0, '2026-02-24 20:53:50', '2026-03-02 16:47:43'),
+(3, 4, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-4/main_image/69a635b968a3d_1772500409.png', NULL, 0, '2026-03-02 19:13:29', '2026-03-02 19:13:29'),
+(4, 8, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-8/main_image/69a8de34b884b_1772674612.png', NULL, 0, '2026-03-04 19:36:52', '2026-03-04 19:36:52');
 
 -- --------------------------------------------------------
 
@@ -242,11 +342,10 @@ CREATE TABLE `broker_sessions` (
 --
 
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(44, 2, 510149, 1, NULL, NULL, '2026-02-03 06:39:20', '2026-02-03 08:24:20'),
 (63, 6, 303837, 1, NULL, NULL, '2026-02-13 00:29:10', '2026-02-13 00:14:10'),
 (76, 3, 368922, 1, NULL, NULL, '2026-02-24 23:04:54', '2026-02-24 22:49:54'),
 (78, 4, 410414, 1, NULL, NULL, '2026-02-24 23:47:32', '2026-02-24 23:32:32'),
-(80, 1, 304358, 1, NULL, NULL, '2026-02-26 04:37:22', '2026-02-26 04:22:22');
+(84, 8, 424007, 1, NULL, NULL, '2026-03-05 01:25:49', '2026-03-05 01:10:49');
 
 -- --------------------------------------------------------
 
@@ -334,7 +433,7 @@ CREATE TABLE `clients` (
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `citizenship_status`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
 (14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
 (22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-02-24 17:48:05', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-02-24 17:48:05'),
-(23, 1, 'tonatiuh.gom@gmail.com', '', 'Felix', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', 'employed', 'W-2', 120000.00, 740, 'permanent_resident', 'active', 0, 0, '2026-02-26 15:14:06', NULL, 'public_wizard', NULL, '2026-02-26 15:04:18', '2026-02-26 15:14:06');
+(27, 1, 'tonatiuh.gom@gmail.com', '', 'Jane', 'Doe', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', 'employed', 'W-2', 120000.00, 740, 'us_citizen', 'active', 0, 0, '2026-03-04 18:37:44', 8, 'public_wizard', NULL, '2026-03-04 18:34:10', '2026-03-04 19:23:31');
 
 -- --------------------------------------------------------
 
@@ -518,6 +617,13 @@ CREATE TABLE `documents` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `documents`
+--
+
+INSERT INTO `documents` (`id`, `tenant_id`, `application_id`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `document_type`, `document_name`, `file_path`, `file_size_bytes`, `mime_type`, `status`, `is_required`, `reviewed_by_broker_id`, `reviewed_at`, `review_notes`, `expiration_date`, `created_at`, `updated_at`) VALUES
+(10, 1, 28, NULL, 8, 'other', 'Pre-Approval Letter - March 12, 2026', '/pre-approval-letters/10', NULL, 'text/html', 'approved', 0, NULL, NULL, NULL, NULL, '2026-03-04 19:38:06', '2026-03-04 19:38:06');
+
 -- --------------------------------------------------------
 
 --
@@ -633,7 +739,7 @@ CREATE TABLE `loan_applications` (
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`, `citizenship_status`) VALUES
 (15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41', NULL),
 (23, 1, 'LA73590546', 22, 3, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, 'submitted', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-02-24 16:53:10', '2026-02-24 16:53:10', NULL),
-(24, 1, 'LA39857852', 23, 1, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'documents_pending', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-02-26 15:04:18', '2026-02-26 17:38:04', '2026-02-26 15:04:18', 'permanent_resident');
+(28, 1, 'LA70850493', 27, 8, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'underwriting', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'dc63d1fa-1829-11f1-83cc-525400bd6b5d', '2026-03-04 18:34:10', '2026-03-04 18:41:43', '2026-03-04 18:34:10', 'us_citizen');
 
 -- --------------------------------------------------------
 
@@ -661,7 +767,13 @@ CREATE TABLE `notifications` (
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
 (18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL),
 (36, 1, 22, 'New Loan Application Created', 'Your loan application LA73590546 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-24 16:53:10', NULL),
-(37, 1, 23, 'Application Received', 'Your loan application LA39857852 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-02-26 15:04:18', NULL);
+(55, 1, 27, 'Application Received', 'Your loan application LA70850493 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-03-04 18:34:11', NULL),
+(56, 1, 27, 'Task Approved', 'Your task \"Purchase Agreement / Offer Letter\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:28', NULL),
+(57, 1, 27, 'Task Approved', 'Your task \"Government-Issued ID\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:31', NULL),
+(58, 1, 27, 'Task Approved', 'Your task \"Social Security Card (SSN)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:34', NULL),
+(59, 1, 27, 'Task Approved', 'Your task \"Housing Payment Statement (2 Months)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:36', NULL),
+(60, 1, 27, 'Task Approved', 'Your task \"Homeowner\'s Insurance Policy\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:40', NULL),
+(61, 1, 27, 'Task Approved', 'Your task \"W-2 Form\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:43', NULL);
 
 -- --------------------------------------------------------
 
@@ -677,6 +789,123 @@ CREATE TABLE `pipeline_step_templates` (
   `template_id` int(11) NOT NULL,
   `is_active` tinyint(1) DEFAULT '1',
   `created_by_broker_id` int(11) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `pre_approval_letters`
+--
+
+CREATE TABLE `pre_approval_letters` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `application_id` int(11) NOT NULL COMMENT 'FK to loan_applications.id',
+  `approved_amount` decimal(12,2) NOT NULL COMMENT 'Current pre-approved amount shown on letter (can be edited up to max_approved_amount)',
+  `max_approved_amount` decimal(12,2) NOT NULL COMMENT 'Maximum pre-approval ceiling — set only by admin brokers, cannot be exceeded',
+  `html_content` longtext COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Fully customizable HTML body of the letter',
+  `letter_date` date NOT NULL COMMENT 'Date shown on the letter',
+  `expires_at` date DEFAULT NULL COMMENT 'Optional expiration date for the pre-approval',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1' COMMENT '1 = active/enabled, 0 = disabled',
+  `created_by_broker_id` int(11) NOT NULL COMMENT 'Broker who issued the letter',
+  `updated_by_broker_id` int(11) DEFAULT NULL COMMENT 'Broker who last edited the letter',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Pre-approval letters attached to loan applications. One letter per loan, customizable HTML content.';
+
+--
+-- Dumping data for table `pre_approval_letters`
+--
+
+INSERT INTO `pre_approval_letters` (`id`, `tenant_id`, `application_id`, `approved_amount`, `max_approved_amount`, `html_content`, `letter_date`, `expires_at`, `is_active`, `created_by_broker_id`, `updated_by_broker_id`, `created_at`, `updated_at`) VALUES
+(5, 1, 26, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; max-width: 750px; margin: 0 auto; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- REALTOR PARTNER -->\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\n\n  <!-- BROKER SIGNATURE -->\n  <table style=\"width: 100%; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 100px;\">\n        {{BROKER_PHOTO}}\n      </td>\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px;\">\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\n        {{BROKER_LICENSE}}\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\n      </td>\n    </tr>\n  </table>\n\n</div>', '2026-02-27', '2026-02-28', 1, 1, NULL, '2026-02-26 22:54:21', '2026-02-26 22:54:21'),
+(6, 1, 27, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- REALTOR PARTNER -->\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\n\n  <!-- BROKER SIGNATURE -->\n  <table style=\"width: 100%; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 100px;\">\n        {{BROKER_PHOTO}}\n      </td>\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px;\">\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\n        {{BROKER_LICENSE}}\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\n      </td>\n    </tr>\n  </table>\n\n</div>', '2026-03-05', '2026-04-09', 1, 1, NULL, '2026-03-02 19:09:17', '2026-03-02 19:09:17'),
+(10, 1, 28, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- BROKER + PARTNER SIGNATURE -->\n  {{BROKER_SIGNATURE_SECTION}}\n\n</div>', '2026-03-13', '2026-03-25', 1, 8, NULL, '2026-03-04 19:38:06', '2026-03-04 19:38:06');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `reminder_flows`
+--
+
+CREATE TABLE `reminder_flows` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `trigger_event` enum('application_created','task_pending','task_in_progress','task_overdue','no_activity','loan_approved','loan_documents_pending','manual') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'application_created',
+  `trigger_delay_days` int(11) NOT NULL DEFAULT '0' COMMENT 'Days after trigger event to start flow',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `apply_to_all_loans` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'When true, applies to all current and future loans',
+  `created_by_broker_id` int(11) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `reminder_flows`
+--
+
+INSERT INTO `reminder_flows` (`id`, `tenant_id`, `name`, `description`, `trigger_event`, `trigger_delay_days`, `is_active`, `apply_to_all_loans`, `created_by_broker_id`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Test', 'Testing', 'application_created', 3, 1, 1, 1, '2026-02-28 16:03:43', '2026-02-28 16:03:43');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `reminder_flow_connections`
+--
+
+CREATE TABLE `reminder_flow_connections` (
+  `id` int(11) NOT NULL,
+  `flow_id` int(11) NOT NULL,
+  `edge_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Unique key within flow for React Flow edge id',
+  `source_step_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `target_step_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `label` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Edge label e.g. Yes / No for conditions',
+  `edge_type` enum('default','condition_yes','condition_no') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'default',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `reminder_flow_executions`
+--
+
+CREATE TABLE `reminder_flow_executions` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `flow_id` int(11) NOT NULL,
+  `loan_application_id` int(11) DEFAULT NULL,
+  `client_id` int(11) DEFAULT NULL,
+  `current_step_key` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `status` enum('active','paused','completed','cancelled','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `next_execution_at` datetime DEFAULT NULL COMMENT 'When the next step should execute',
+  `completed_steps` json DEFAULT NULL COMMENT 'Array of completed step keys',
+  `started_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `completed_at` datetime DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `reminder_flow_steps`
+--
+
+CREATE TABLE `reminder_flow_steps` (
+  `id` int(11) NOT NULL,
+  `flow_id` int(11) NOT NULL,
+  `step_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Unique key within flow for React Flow node id',
+  `step_type` enum('trigger','wait','send_notification','send_email','send_sms','condition','end') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `label` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `config` json DEFAULT NULL COMMENT 'Step-specific configuration (message, delay hours/days, condition type, etc.)',
+  `position_x` float NOT NULL DEFAULT '0' COMMENT 'X position on the flow canvas',
+  `position_y` float NOT NULL DEFAULT '0' COMMENT 'Y position on the flow canvas',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -702,11 +931,16 @@ CREATE TABLE `system_settings` (
 --
 
 INSERT INTO `system_settings` (`id`, `tenant_id`, `setting_key`, `setting_value`, `setting_type`, `description`, `updated_at`) VALUES
-(1, 1, 'company_name', 'Loan Broker Pro', 'string', 'Company name', '2026-02-02 14:24:22'),
+(1, 1, 'company_name', 'Encore Mortgage', 'string', 'Company name', '2026-02-26 22:37:43'),
 (2, 1, 'support_email', 'support@example.com', 'string', 'Support email address', '2026-02-02 14:24:22'),
 (3, 1, 'max_file_upload_mb', '10', 'number', 'Maximum file upload size in MB', '2026-02-02 14:24:22'),
 (4, 1, 'enable_sms', 'true', 'boolean', 'Enable SMS notifications', '2026-02-02 14:24:22'),
-(5, 1, 'enable_email', 'true', 'boolean', 'Enable email notifications', '2026-02-02 14:24:22');
+(5, 1, 'enable_email', 'true', 'boolean', 'Enable email notifications', '2026-02-02 14:24:22'),
+(6, 1, 'company_logo_url', '', 'string', 'URL to company logo displayed in pre-approval letters', '2026-02-26 22:13:34'),
+(7, 1, 'company_address', '', 'string', 'Company address displayed in pre-approval letters', '2026-02-26 22:13:34'),
+(8, 1, 'company_phone', '5623370000', 'string', 'Company phone displayed in pre-approval letters', '2026-02-28 23:15:03'),
+(9, 1, 'company_nmls', '1105497', 'string', 'Company NMLS license number for pre-approval letters', '2026-02-28 23:14:10'),
+(11, 1, 'pre_approval_default_template', '<div style=\"font-family: Arial, Helvetica, sans-serif; max-width: 750px; margin: 0 auto; padding: 48px; background: #fff; color: #222;\">\r\n\r\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\r\n    <tr>\r\n      <td style=\"vertical-align: top; width: 55%;\">{{COMPANY_LOGO}}</td>\r\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\r\n        <strong>{{COMPANY_NAME}}</strong><br>P. {{COMPANY_PHONE}}<br>NMLS# {{COMPANY_NMLS}}\r\n      </td>\r\n    </tr>\r\n  </table>\r\n\r\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\r\n\r\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\r\n    <tr>\r\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\r\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\r\n    </tr>\r\n  </table>\r\n\r\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\r\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\r\n\r\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:</p>\r\n\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\r\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\r\n\r\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\r\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\r\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\r\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\r\n    <li>Verified applicant&#39;s assets documentation</li>\r\n  </ul>\r\n\r\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.</p>\r\n\r\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\r\n\r\n  <table style=\"width: 100%; border-collapse: collapse;\">\r\n    <tr>\r\n      <td style=\"vertical-align: top; width: 100px;\">{{BROKER_PHOTO}}</td>\r\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px; line-height: 1.7;\">\r\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_LICENSE}}</p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\r\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\r\n      </td>\r\n    </tr>\r\n  </table>\r\n\r\n</div>', 'string', 'Default HTML template for pre-approval letters — matches Encore Mortgage letter format', '2026-02-26 22:13:35');
 
 -- --------------------------------------------------------
 
@@ -753,13 +987,12 @@ CREATE TABLE `tasks` (
 
 INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`, `approval_status`, `approved_by_broker_id`, `approved_at`, `reopened_by_broker_id`, `reopened_at`, `reopen_reason`, `status_change_reason`, `status_changed_by_broker_id`, `status_changed_at`) VALUES
 (23, 2, NULL, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(36, 1, 34, 0, 24, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-05 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(37, 1, 36, 0, 24, 'Green Card (Permanent Resident Card)', 'Provide your valid Permanent Resident Card (Form I-551).', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-05 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(38, 1, 37, 0, 24, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-05 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(39, 1, 38, 0, 24, 'Housing Payment Statement (2 Months)', 'Provide the last two months of bank or mortgage statements showing your housing payment.', 'document_verification', 'pending', 'medium', 23, NULL, NULL, '2026-03-12 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(40, 1, 39, 0, 24, 'Homeowner\'s Insurance Policy', 'Provide the current homeowner\'s insurance policy for the property.', 'document_verification', 'pending', 'medium', 23, NULL, NULL, '2026-03-12 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(41, 1, 40, 0, 24, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'pending', 'high', 23, NULL, NULL, '2026-03-12 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 15:04:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(42, 1, 53, 0, 24, 'Purchase Agreement / Offer Letter', 'Provide a fully executed purchase agreement or offer letter for the property.', 'document_verification', 'in_progress', 'high', 23, NULL, NULL, '2026-03-03 15:04:18', NULL, '2026-02-26 15:04:18', '2026-02-26 17:38:04', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+(63, 1, 34, 0, 28, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-11 18:34:11', '2026-03-04 18:38:08', '2026-03-04 18:34:10', '2026-03-04 18:41:31', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:31', NULL, NULL, NULL, NULL, NULL, NULL),
+(64, 1, 37, 0, 28, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-11 18:34:11', '2026-03-04 18:38:25', '2026-03-04 18:34:10', '2026-03-04 18:41:34', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:34', NULL, NULL, NULL, NULL, NULL, NULL),
+(65, 1, 38, 0, 28, 'Housing Payment Statement (2 Months)', 'Provide the last two months of bank or mortgage statements showing your housing payment.', 'document_verification', 'approved', 'medium', 27, NULL, NULL, '2026-03-18 18:34:11', '2026-03-04 18:38:36', '2026-03-04 18:34:10', '2026-03-04 18:41:36', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:36', NULL, NULL, NULL, NULL, NULL, NULL),
+(66, 1, 39, 0, 28, 'Homeowner\'s Insurance Policy', 'Provide the current homeowner\'s insurance policy for the property.', 'document_verification', 'approved', 'medium', 27, NULL, NULL, '2026-03-18 18:34:11', '2026-03-04 18:41:00', '2026-03-04 18:34:11', '2026-03-04 18:41:40', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:40', NULL, NULL, NULL, NULL, NULL, NULL),
+(67, 1, 40, 0, 28, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-18 18:34:11', '2026-03-04 18:41:10', '2026-03-04 18:34:11', '2026-03-04 18:41:43', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:43', NULL, NULL, NULL, NULL, NULL, NULL),
+(68, 1, 53, 0, 28, 'Purchase Agreement / Offer Letter', 'Provide a fully executed purchase agreement or offer letter for the property.', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-09 18:34:11', '2026-03-04 18:37:59', '2026-03-04 18:34:11', '2026-03-04 18:41:28', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:28', NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -782,6 +1015,18 @@ CREATE TABLE `task_documents` (
   `notes` text COLLATE utf8mb4_unicode_ci
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Document attachments for tasks';
 
+--
+-- Dumping data for table `task_documents`
+--
+
+INSERT INTO `task_documents` (`id`, `task_id`, `field_id`, `document_type`, `filename`, `original_filename`, `file_path`, `file_size`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `uploaded_at`, `notes`) VALUES
+(29, 68, 54, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d0664e754.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/68/pdfs/2026_02_15_14_33_51_229_receipt_69a8d0664e754.pdf', 16707, 27, NULL, '2026-03-04 18:37:58', NULL),
+(30, 63, 35, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d06f7e7fc.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/63/pdfs/2026_02_15_14_33_51_229_receipt_69a8d06f7e7fc.pdf', 16707, 27, NULL, '2026-03-04 18:38:07', NULL),
+(31, 64, 38, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d081268f5.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/64/pdfs/2026_02_15_14_33_51_229_receipt_69a8d081268f5.pdf', 16707, 27, NULL, '2026-03-04 18:38:25', NULL),
+(32, 65, 39, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d08b897ca.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/65/pdfs/2026_02_15_14_33_51_229_receipt_69a8d08b897ca.pdf', 16707, 27, NULL, '2026-03-04 18:38:35', NULL),
+(33, 66, 40, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d11c0a6b0.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/66/pdfs/2026_02_15_14_33_51_229_receipt_69a8d11c0a6b0.pdf', 16707, 27, NULL, '2026-03-04 18:41:00', NULL),
+(34, 67, 41, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d125a575e.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/67/pdfs/2026_02_15_14_33_51_229_receipt_69a8d125a575e.pdf', 16707, 27, NULL, '2026-03-04 18:41:09', NULL);
+
 -- --------------------------------------------------------
 
 --
@@ -802,6 +1047,36 @@ CREATE TABLE `task_form_fields` (
   `help_text` text COLLATE utf8mb4_unicode_ci COMMENT 'Helper text shown below field',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Custom form fields for task templates';
+
+--
+-- Dumping data for table `task_form_fields`
+--
+
+INSERT INTO `task_form_fields` (`id`, `task_template_id`, `field_name`, `field_label`, `field_type`, `field_options`, `is_required`, `placeholder`, `validation_rules`, `order_index`, `help_text`, `created_at`) VALUES
+(35, 34, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a clear photo or scan of your valid government-issued ID (passport, driver license, state ID, etc.).', '2026-02-26 18:03:40'),
+(36, 35, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a clear photo or scan of your valid driver\'s license (front and back).', '2026-02-26 18:03:40'),
+(37, 36, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a clear photo or scan of your valid Green Card (front and back).', '2026-02-26 18:03:40'),
+(38, 37, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a clear photo or scan of your Social Security card. Make sure the number is clearly visible.', '2026-02-26 18:03:40'),
+(39, 38, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last two months of bank or mortgage statements. They must clearly show the account holder name, partial account number, and housing payment transactions.', '2026-02-26 18:03:40'),
+(40, 39, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the active homeowner\'s insurance policy. It must include the policy number, coverage details, insured name, and effective dates.', '2026-02-26 18:03:40'),
+(41, 40, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach all W-2 forms from the most recent tax year. If you have multiple employers, include the W-2 from each one.', '2026-02-26 18:03:40'),
+(42, 41, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach all 1099 forms (1099-MISC, 1099-NEC, 1099-INT, etc.) for the last two tax years. Include all issuers.', '2026-02-26 18:03:40'),
+(43, 42, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach complete and signed IRS Form 1040 with all schedules (Schedule C, E, etc.) for the last two tax years.', '2026-02-26 18:03:40'),
+(44, 43, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a copy of your valid business license, DBA registration, or LLC/corporation certificate.', '2026-02-26 18:03:40'),
+(45, 44, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a YTD profit & loss statement prepared by a CPA or bookkeeper. Must include revenue, expenses, and net income.', '2026-02-26 18:03:40'),
+(46, 45, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last 3 months of all business bank statements. Must show account holder name, account number (partial), and all transactions.', '2026-02-26 18:03:40'),
+(47, 46, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last 2 months of all investment, brokerage, or retirement account statements (401k, IRA, etc.).', '2026-02-26 18:03:40'),
+(48, 47, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the most recent pension or retirement award/benefit letter. It must show the monthly payment amount and the issuing organization.', '2026-02-26 18:03:40'),
+(49, 48, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your most recent Social Security award letter showing your monthly benefit amount. You can obtain it from ssa.gov.', '2026-02-26 18:03:40'),
+(50, 49, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach a clear copy of your valid visa, I-94 Arrival/Departure Record, Employment Authorization Document (EAD), or other immigration status document.', '2026-02-26 18:03:40'),
+(51, 50, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your IRS ITIN assignment letter (Notice CP565) showing your Individual Taxpayer Identification Number.', '2026-02-26 18:03:40'),
+(52, 51, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your most recent mortgage statement showing the current balance, monthly payment, and lender information.', '2026-02-26 18:03:40'),
+(53, 52, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the most recent property tax assessment or bill from your county/city assessor.', '2026-02-26 18:03:40'),
+(54, 53, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the signed purchase agreement (sales contract) including all addenda and counteroffers.', '2026-02-26 18:03:40'),
+(55, 54, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the architectural/engineering plans for the construction project and the signed builder contract including total cost breakdown.', '2026-02-26 18:03:40'),
+(56, 55, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the current HOA dues statement and the master/blanket insurance policy (hazard + liability) for the condo association.', '2026-02-26 18:03:40'),
+(57, 56, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach all signed lease agreements currently in effect for each rental unit in the property. Include lease start/end dates and monthly rent amounts.', '2026-02-26 18:03:40'),
+(58, 57, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last 2 years of income statements and balance sheets for the business operating at or owning the commercial property. CPA-prepared preferred.', '2026-02-26 18:03:40');
 
 -- --------------------------------------------------------
 
@@ -1060,11 +1335,18 @@ CREATE TABLE `user_sessions` (
 
 INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
 (11, 22, 603385, 1, NULL, NULL, '2026-02-25 00:02:48', '2026-02-24 23:47:48'),
-(12, 23, 271337, 1, NULL, NULL, '2026-02-26 21:28:51', '2026-02-26 21:13:51');
+(16, 27, 498447, 1, NULL, NULL, '2026-03-05 00:52:33', '2026-03-05 00:37:33');
 
 --
 -- Indexes for dumped tables
 --
+
+--
+-- Indexes for table `admin_section_controls`
+--
+ALTER TABLE `admin_section_controls`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_tenant_section` (`tenant_id`,`section_id`);
 
 --
 -- Indexes for table `application_status_history`
@@ -1102,7 +1384,8 @@ ALTER TABLE `brokers`
   ADD KEY `idx_email` (`email`),
   ADD KEY `idx_role` (`role`),
   ADD KEY `idx_status` (`status`),
-  ADD KEY `tenant_id` (`tenant_id`);
+  ADD KEY `tenant_id` (`tenant_id`),
+  ADD KEY `idx_brokers_created_by` (`created_by_broker_id`);
 
 --
 -- Indexes for table `broker_profiles`
@@ -1293,6 +1576,50 @@ ALTER TABLE `pipeline_step_templates`
   ADD KEY `fk_pst_template` (`template_id`);
 
 --
+-- Indexes for table `pre_approval_letters`
+--
+ALTER TABLE `pre_approval_letters`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_pre_approval_per_loan` (`application_id`,`tenant_id`) COMMENT 'One active letter per loan per tenant',
+  ADD KEY `idx_pre_approval_tenant` (`tenant_id`),
+  ADD KEY `idx_pre_approval_application` (`application_id`),
+  ADD KEY `idx_pre_approval_created_by` (`created_by_broker_id`);
+
+--
+-- Indexes for table `reminder_flows`
+--
+ALTER TABLE `reminder_flows`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_reminder_flows_tenant` (`tenant_id`),
+  ADD KEY `idx_reminder_flows_active` (`is_active`),
+  ADD KEY `fk_reminder_flows_broker` (`created_by_broker_id`);
+
+--
+-- Indexes for table `reminder_flow_connections`
+--
+ALTER TABLE `reminder_flow_connections`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_flow_connections_flow` (`flow_id`);
+
+--
+-- Indexes for table `reminder_flow_executions`
+--
+ALTER TABLE `reminder_flow_executions`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_executions_flow` (`flow_id`),
+  ADD KEY `idx_executions_loan` (`loan_application_id`),
+  ADD KEY `idx_executions_client` (`client_id`),
+  ADD KEY `idx_executions_status` (`status`),
+  ADD KEY `idx_executions_next_exec` (`next_execution_at`);
+
+--
+-- Indexes for table `reminder_flow_steps`
+--
+ALTER TABLE `reminder_flow_steps`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_flow_steps_flow` (`flow_id`);
+
+--
 -- Indexes for table `system_settings`
 --
 ALTER TABLE `system_settings`
@@ -1422,34 +1749,40 @@ ALTER TABLE `user_sessions`
 --
 
 --
+-- AUTO_INCREMENT for table `admin_section_controls`
+--
+ALTER TABLE `admin_section_controls`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+
+--
 -- AUTO_INCREMENT for table `application_status_history`
 --
 ALTER TABLE `application_status_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=61;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=81;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=133;
 
 --
 -- AUTO_INCREMENT for table `brokers`
 --
 ALTER TABLE `brokers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `broker_profiles`
 --
 ALTER TABLE `broker_profiles`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=81;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=85;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -1467,13 +1800,13 @@ ALTER TABLE `campaign_recipients`
 -- AUTO_INCREMENT for table `clients`
 --
 ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
 
 --
 -- AUTO_INCREMENT for table `communications`
 --
 ALTER TABLE `communications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `compliance_checklists`
@@ -1497,7 +1830,7 @@ ALTER TABLE `conversation_threads`
 -- AUTO_INCREMENT for table `documents`
 --
 ALTER TABLE `documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `environment_keys`
@@ -1521,13 +1854,13 @@ ALTER TABLE `lead_activities`
 -- AUTO_INCREMENT for table `loan_applications`
 --
 ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=38;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
 
 --
 -- AUTO_INCREMENT for table `pipeline_step_templates`
@@ -1536,28 +1869,58 @@ ALTER TABLE `pipeline_step_templates`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `pre_approval_letters`
+--
+ALTER TABLE `pre_approval_letters`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+
+--
+-- AUTO_INCREMENT for table `reminder_flows`
+--
+ALTER TABLE `reminder_flows`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- AUTO_INCREMENT for table `reminder_flow_connections`
+--
+ALTER TABLE `reminder_flow_connections`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `reminder_flow_executions`
+--
+ALTER TABLE `reminder_flow_executions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `reminder_flow_steps`
+--
+ALTER TABLE `reminder_flow_steps`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `system_settings`
 --
 ALTER TABLE `system_settings`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
 
 --
 -- AUTO_INCREMENT for table `tasks`
 --
 ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=43;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
 
 --
 -- AUTO_INCREMENT for table `task_documents`
 --
 ALTER TABLE `task_documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
 
 --
 -- AUTO_INCREMENT for table `task_form_fields`
 --
 ALTER TABLE `task_form_fields`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=66;
 
 --
 -- AUTO_INCREMENT for table `task_form_responses`
@@ -1605,7 +1968,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
 
 --
 -- Constraints for dumped tables
@@ -1631,6 +1994,7 @@ ALTER TABLE `audit_logs`
 -- Constraints for table `brokers`
 --
 ALTER TABLE `brokers`
+  ADD CONSTRAINT `fk_brokers_created_by` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_brokers_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
 --
@@ -1749,6 +2113,24 @@ ALTER TABLE `notifications`
 --
 ALTER TABLE `pipeline_step_templates`
   ADD CONSTRAINT `fk_pst_template` FOREIGN KEY (`template_id`) REFERENCES `templates` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `reminder_flow_connections`
+--
+ALTER TABLE `reminder_flow_connections`
+  ADD CONSTRAINT `fk_flow_connections_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `reminder_flow_executions`
+--
+ALTER TABLE `reminder_flow_executions`
+  ADD CONSTRAINT `fk_executions_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `reminder_flow_steps`
+--
+ALTER TABLE `reminder_flow_steps`
+  ADD CONSTRAINT `fk_flow_steps_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `system_settings`

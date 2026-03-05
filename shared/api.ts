@@ -1075,12 +1075,29 @@ export interface GetConversationStatsResponse {
 
 // ─── Broker Public Share Link ─────────────────────────────────────────────────
 
+/** Slim profile returned for the associated Mortgage Banker (admin) when viewed via a partner link */
+export interface MortgageBankerPublicInfo {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string | null;
+  license_number: string | null;
+  bio: string | null;
+  avatar_url: string | null;
+  office_city: string | null;
+  office_state: string | null;
+  years_experience: number | null;
+  total_loans_closed: number;
+}
+
 export interface BrokerPublicProfile {
   id: number;
   first_name: string;
   last_name: string;
   email: string;
   phone: string | null;
+  role: "broker" | "admin";
   license_number: string | null;
   specializations: string[] | null;
   public_token: string;
@@ -1092,6 +1109,8 @@ export interface BrokerPublicProfile {
   office_state: string | null;
   years_experience: number | null;
   total_loans_closed: number;
+  // Populated when the broker is a partner (role="broker") and has an associated Mortgage Banker
+  mortgage_banker: MortgageBankerPublicInfo | null;
 }
 
 export interface BrokerPublicInfoResponse {
@@ -1211,6 +1230,14 @@ export interface PreApprovalLetter {
   broker_phone: string | null;
   broker_license_number: string | null;
   broker_photo_url: string | null;
+  // Partner fields (when loan was assigned to a partner broker)
+  loan_broker_role: string | null;
+  partner_first_name: string | null;
+  partner_last_name: string | null;
+  partner_email: string | null;
+  partner_phone: string | null;
+  partner_license_number: string | null;
+  partner_photo_url: string | null;
   client_first_name: string | null;
   client_last_name: string | null;
   client_email: string | null;

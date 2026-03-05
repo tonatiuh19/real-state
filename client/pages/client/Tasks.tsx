@@ -57,7 +57,7 @@ const Tasks = () => {
 
   const approvedTasks = tasks.filter((t) => t.status === "approved");
   const completionRate =
-    tasks.length > 0 ? (approvedTasks.length / tasks.length) * 100 : 0;
+    tasks.length > 0 ? (completedTasks.length / tasks.length) * 100 : 0;
 
   const handleStartTask = async (taskId: number) => {
     try {
@@ -305,9 +305,12 @@ const Tasks = () => {
             <h1 className="text-4xl font-bold mb-2">
               {completionRate.toFixed(0)}%
             </h1>
-            <Progress value={completionRate} className="h-2 bg-white/20" />
+            <Progress
+              value={completionRate}
+              className="h-2 bg-white/20 [&>div]:bg-white"
+            />
             <p className="text-sm opacity-90 mt-2">
-              {approvedTasks.length} of {tasks.length} tasks approved
+              {completedTasks.length} of {tasks.length} tasks completed
             </p>
           </div>
 

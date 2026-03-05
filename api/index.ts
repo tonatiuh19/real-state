@@ -2533,7 +2533,9 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         `UPDATE clients SET first_name=?, last_name=?, phone=?,
           address_street=?, address_city=?, address_state=?, address_zip=?,
           employment_status=?, income_type=?, annual_income=?, credit_score=?,
-          citizenship_status=?, updated_at=NOW()
+          citizenship_status=?,
+          assigned_broker_id = COALESCE(assigned_broker_id, ?),
+          updated_at=NOW()
          WHERE id=? AND tenant_id=?`,
         [
           first_name,
@@ -2548,6 +2550,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           annual_income || null,
           credit_score_range ? parseInt(credit_score_range) : null,
           resolvedCitizenshipStatus,
+          null, // placeholder; will be replaced after broker resolves
           clientId,
           MORTGAGE_TENANT_ID,
         ],
@@ -2558,8 +2561,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           (tenant_id, email, first_name, last_name, phone,
            address_street, address_city, address_state, address_zip,
            employment_status, income_type, annual_income, credit_score,
-           citizenship_status, status, email_verified, source)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
+           citizenship_status, assigned_broker_id, status, email_verified, source)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
         [
           MORTGAGE_TENANT_ID,
           email.toLowerCase().trim(),
@@ -2575,6 +2578,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           annual_income || null,
           credit_score_range ? parseInt(credit_score_range) : null,
           resolvedCitizenshipStatus,
+          null, // placeholder; will be filled after broker resolves
         ],
       );
       clientId = clientResult.insertId;
@@ -2618,6 +2622,14 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       if (brokerRows.length > 0) {
         resolvedBrokerUserId = brokerRows[0].id;
       }
+    }
+
+    // Assign broker to this client now that we know the resolved broker id
+    if (resolvedBrokerUserId) {
+      await connection.query(
+        `UPDATE clients SET assigned_broker_id = COALESCE(assigned_broker_id, ?) WHERE id = ? AND tenant_id = ?`,
+        [resolvedBrokerUserId, clientId, MORTGAGE_TENANT_ID],
+      );
     }
 
     const [loanResult] = await connection.query<any>(
@@ -2869,10 +2881,11 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
     }
 
     const [rows] = await pool.query<any[]>(
-      `SELECT b.id, b.first_name, b.last_name, b.email, b.phone,
-              b.license_number, b.specializations, b.public_token,
-              bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
-              bp.office_state, bp.years_experience, bp.total_loans_closed
+      `SELECT
+        b.id, b.first_name, b.last_name, b.email, b.phone, b.role,
+        b.license_number, b.specializations, b.public_token, b.created_by_broker_id,
+        bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
+        bp.office_state, bp.years_experience, bp.total_loans_closed
        FROM brokers b
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        WHERE b.public_token = ? AND b.status = 'active'`,
@@ -2885,6 +2898,39 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
     }
 
     const row = rows[0];
+
+    // If this is a partner (role=broker) with a created_by_broker_id, fetch the Mortgage Banker's info
+    let mortgageBanker: any = null;
+    if (row.role === "broker" && row.created_by_broker_id) {
+      const [mbRows] = await pool.query<any[]>(
+        `SELECT
+          b.id, b.first_name, b.last_name, b.email, b.phone, b.license_number,
+          bp.bio, bp.avatar_url, bp.office_city, bp.office_state,
+          bp.years_experience, bp.total_loans_closed
+         FROM brokers b
+         LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+         WHERE b.id = ? AND b.status = 'active'`,
+        [row.created_by_broker_id],
+      );
+      if (mbRows.length > 0) {
+        const mb = mbRows[0];
+        mortgageBanker = {
+          id: mb.id,
+          first_name: mb.first_name,
+          last_name: mb.last_name,
+          email: mb.email,
+          phone: mb.phone,
+          license_number: mb.license_number,
+          bio: mb.bio,
+          avatar_url: mb.avatar_url,
+          office_city: mb.office_city,
+          office_state: mb.office_state,
+          years_experience: mb.years_experience,
+          total_loans_closed: mb.total_loans_closed || 0,
+        };
+      }
+    }
+
     res.json({
       success: true,
       broker: {
@@ -2893,6 +2939,7 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
         last_name: row.last_name,
         email: row.email,
         phone: row.phone,
+        role: row.role,
         license_number: row.license_number,
         specializations: row.specializations
           ? typeof row.specializations === "string"
@@ -2907,6 +2954,7 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
         office_state: row.office_state,
         years_experience: row.years_experience,
         total_loans_closed: row.total_loans_closed || 0,
+        mortgage_banker: mortgageBanker,
       },
     });
   } catch (error) {
@@ -3363,7 +3411,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
       ${whereClause}
       ${orderClause}
       LIMIT ? OFFSET ?`,
-      [...queryParams, ...subqueryParams, limitNum, offset],
+      [...subqueryParams, ...queryParams, limitNum, offset],
     );
 
     res.json({
@@ -3764,10 +3812,10 @@ const handleGetClients: RequestHandler = async (req, res) => {
       FROM clients c
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
       WHERE c.tenant_id = ?
-        ${isAdmin ? "" : "AND c.assigned_broker_id = ?"}
+        ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ?)"}
       GROUP BY c.id
       ORDER BY c.created_at DESC`,
-      isAdmin ? [MORTGAGE_TENANT_ID] : [MORTGAGE_TENANT_ID, brokerId],
+      isAdmin ? [MORTGAGE_TENANT_ID] : [MORTGAGE_TENANT_ID, brokerId, brokerId],
     );
 
     res.json({
@@ -3997,11 +4045,12 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
       });
     }
 
-    // Insert new broker
+    // Insert new broker — track which admin created this partner
+    const createdByBrokerId = role === "broker" ? brokerId : null;
     const [result] = (await pool.query(
       `INSERT INTO brokers 
-        (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)`,
+        (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified, created_by_broker_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?)`,
       [
         MORTGAGE_TENANT_ID,
         email,
@@ -4011,6 +4060,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
         role || "broker",
         license_number || null,
         specializations ? JSON.stringify(specializations) : null,
+        createdByBrokerId,
       ],
     )) as [ResultSetHeader, any];
 
@@ -4200,7 +4250,7 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
         },
         {
           table: "loan_applications",
-          foreignKey: "assigned_broker_id",
+          foreignKey: "broker_user_id",
           tenantFilter: true,
           friendlyName: "loan applications",
         },
@@ -9849,6 +9899,63 @@ const handleAdminInit: RequestHandler = async (req, res) => {
  * Build default pre-approval HTML content.
  * Placeholders wrapped in {{...}} will be replaced by data at render time.
  */
+function buildSignatureSectionHtml(letter: Record<string, any>): string {
+  const brokerPhotoHtml = letter.broker_photo_url
+    ? `<div style="width:72px; height:72px; border-radius:50%; overflow:hidden; border:3px solid #1a3a5c; box-sizing:border-box;"><img src="${letter.broker_photo_url}" style="width:100%; height:100%; object-fit:cover; display:block;" /></div>`
+    : `<div style="width:72px; height:72px; border-radius:50%; background:#e8edf5; border:3px solid #1a3a5c; text-align:center; line-height:72px; font-size:24px; font-weight:bold; color:#1a3a5c; box-sizing:border-box;">${(letter.broker_first_name?.[0] ?? "") + (letter.broker_last_name?.[0] ?? "")}</div>`;
+
+  const mbLicenseHtml = letter.broker_license_number
+    ? `<p style="margin:3px 0; font-size:13px; color:#555;">NMLS# ${letter.broker_license_number}</p>`
+    : "";
+
+  const isPartnerLoan =
+    letter.loan_broker_role === "broker" && letter.partner_first_name;
+
+  if (isPartnerLoan) {
+    const partnerLicenseHtml = letter.partner_license_number
+      ? `<p style="margin:3px 0; font-size:13px; color:#555;">NMLS# ${letter.partner_license_number}</p>`
+      : "";
+    const partnerPhotoHtml = letter.partner_photo_url
+      ? `<div style="width:72px; height:72px; border-radius:50%; overflow:hidden; border:3px solid #1a3a5c; box-sizing:border-box;"><img src="${letter.partner_photo_url}" style="width:100%; height:100%; object-fit:cover; display:block;" /></div>`
+      : `<div style="width:72px; height:72px; border-radius:50%; background:#e8edf5; border:3px solid #1a3a5c; text-align:center; line-height:72px; font-size:24px; font-weight:bold; color:#1a3a5c; box-sizing:border-box;">${(letter.partner_first_name?.[0] ?? "") + (letter.partner_last_name?.[0] ?? "")}</div>`;
+    return `<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="vertical-align: top; width: 88px;">${brokerPhotoHtml}</td>
+    <td style="vertical-align: top; padding-left: 16px; padding-right: 28px; font-size: 13px; border-right: 1px solid #e5e7eb;">
+      <p style="margin: 0 0 3px;"><strong>${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}</strong></p>
+      <p style="margin: 0 0 3px; color: #444;">Mortgage Banker</p>
+      ${mbLicenseHtml}
+      <p style="margin: 3px 0; color: #444;">${letter.company_name ?? "Encore Mortgage"}</p>
+      <p style="margin: 3px 0; color: #444;">${letter.broker_phone ?? ""}</p>
+      <p style="margin: 0; color: #444;">${letter.broker_email ?? ""}</p>
+    </td>
+    <td style="vertical-align: top; padding-left: 24px; padding-right: 0; width: 88px;">${partnerPhotoHtml}</td>
+    <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
+      <p style="margin: 0 0 3px;"><strong>${letter.partner_first_name} ${letter.partner_last_name}</strong></p>
+      <p style="margin: 0 0 3px; color: #444;">Partner</p>
+      ${partnerLicenseHtml}
+      <p style="margin: 3px 0; color: #444;">${letter.partner_phone ?? ""}</p>
+      <p style="margin: 0; color: #444;">${letter.partner_email ?? ""}</p>
+    </td>
+  </tr>
+</table>`;
+  }
+
+  return `<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="vertical-align: top; width: 88px;">${brokerPhotoHtml}</td>
+    <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
+      <p style="margin: 0 0 3px;"><strong>${letter.broker_first_name ?? ""} ${letter.broker_last_name ?? ""}</strong></p>
+      <p style="margin: 0 0 3px; color: #444;">Mortgage Banker</p>
+      ${mbLicenseHtml}
+      <p style="margin: 3px 0; color: #444;">${letter.company_name ?? "Encore Mortgage"}</p>
+      <p style="margin: 3px 0; color: #444;">${letter.broker_phone ?? ""}</p>
+      <p style="margin: 0; color: #444;">${letter.broker_email ?? ""}</p>
+    </td>
+  </tr>
+</table>`;
+}
+
 function buildDefaultPreApprovalHtml(): string {
   return `<div style="font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;">
 
@@ -9906,25 +10013,8 @@ function buildDefaultPreApprovalHtml(): string {
     Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.
   </p>
 
-  <!-- REALTOR PARTNER -->
-  <p style="margin: 0 0 32px; font-size: 13px;">Realtor Partner: </p>
-
-  <!-- BROKER SIGNATURE -->
-  <table style="width: 100%; border-collapse: collapse;">
-    <tr>
-      <td style="vertical-align: top; width: 100px;">
-        {{BROKER_PHOTO}}
-      </td>
-      <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
-        <p style="margin: 0 0 3px;"><strong>{{BROKER_FULL_NAME}}</strong></p>
-        <p style="margin: 0 0 3px; color: #444;">Mortgage Banker</p>
-        {{BROKER_LICENSE}}
-        <p style="margin: 0 0 3px; color: #444;">{{COMPANY_NAME}}</p>
-        <p style="margin: 0 0 3px; color: #444;">{{BROKER_PHONE}}</p>
-        <p style="margin: 0; color: #444;">{{BROKER_EMAIL}}</p>
-      </td>
-    </tr>
-  </table>
+  <!-- BROKER + PARTNER SIGNATURE -->
+  {{BROKER_SIGNATURE_SECTION}}
 
 </div>`;
 }
@@ -10125,6 +10215,13 @@ const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
           b.phone       AS broker_phone,
           b.license_number AS broker_license_number,
           bp.avatar_url AS broker_photo_url,
+          lb.role          AS loan_broker_role,
+          lb.first_name    AS partner_first_name,
+          lb.last_name     AS partner_last_name,
+          lb.email         AS partner_email,
+          lb.phone         AS partner_phone,
+          lb.license_number AS partner_license_number,
+          lbp.avatar_url   AS partner_photo_url,
           c.first_name  AS client_first_name,
           c.last_name   AS client_last_name,
           c.email       AS client_email,
@@ -10139,9 +10236,12 @@ const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'      AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
        FROM pre_approval_letters pal
-       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       INNER JOIN brokers b_creator ON pal.created_by_broker_id = b_creator.id
+       LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
+       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.application_id = ? AND pal.tenant_id = ?
        ORDER BY pal.created_at DESC
@@ -10182,13 +10282,7 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
     const { loanId } = req.params;
     const brokerId = (req as any).brokerId;
     const brokerRole: string = (req as any).brokerRole;
-
-    if (brokerRole !== "admin") {
-      return res.status(403).json({
-        success: false,
-        error: "Only admin brokers can create pre-approval letters",
-      });
-    }
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
 
     const {
       max_approved_amount,
@@ -10198,17 +10292,19 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       expires_at,
     } = req.body;
 
-    if (!max_approved_amount || isNaN(Number(max_approved_amount))) {
-      return res
-        .status(400)
-        .json({ success: false, error: "max_approved_amount is required" });
-    }
     if (!approved_amount || isNaN(Number(approved_amount))) {
       return res
         .status(400)
         .json({ success: false, error: "approved_amount is required" });
     }
-    if (Number(approved_amount) > Number(max_approved_amount)) {
+
+    // Partners cannot set max — their max equals their approved amount
+    const effectiveMax =
+      isAdmin && max_approved_amount
+        ? Number(max_approved_amount)
+        : Number(approved_amount);
+
+    if (Number(approved_amount) > effectiveMax) {
       return res.status(400).json({
         success: false,
         error: "approved_amount cannot exceed max_approved_amount",
@@ -10240,7 +10336,11 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       });
     }
 
-    const finalHtml = html_content?.trim() || buildDefaultPreApprovalHtml();
+    // Partners cannot provide custom HTML — always use the default template
+    const finalHtml =
+      isAdmin && html_content?.trim()
+        ? html_content.trim()
+        : buildDefaultPreApprovalHtml();
     const finalDate = letter_date || new Date().toISOString().split("T")[0];
 
     const [result] = await pool.query<any>(
@@ -10250,8 +10350,8 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       [
         loan.tenant_id,
         loanId,
-        approved_amount,
-        max_approved_amount,
+        Number(approved_amount),
+        effectiveMax,
         finalHtml,
         finalDate,
         expires_at || null,
@@ -10293,6 +10393,9 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
           b.first_name AS broker_first_name, b.last_name AS broker_last_name,
           b.email AS broker_email, b.phone AS broker_phone,
           b.license_number AS broker_license_number, bp.avatar_url AS broker_photo_url,
+          lb.role AS loan_broker_role, lb.first_name AS partner_first_name, lb.last_name AS partner_last_name,
+          lb.email AS partner_email, lb.phone AS partner_phone,
+          lb.license_number AS partner_license_number, lbp.avatar_url AS partner_photo_url,
           c.first_name AS client_first_name, c.last_name AS client_last_name, c.email AS client_email,
           la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url' AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
@@ -10301,9 +10404,12 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'    AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
        FROM pre_approval_letters pal
-       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       INNER JOIN brokers b_creator ON pal.created_by_broker_id = b_creator.id
+       LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
+       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.id = ?`,
       [
@@ -10384,17 +10490,8 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       max_approved_amount,
     } = req.body;
 
-    // Non-admins cannot change max_approved_amount
-    if (max_approved_amount !== undefined && brokerRole !== "admin") {
-      return res.status(403).json({
-        success: false,
-        error: "Only admin brokers can change the maximum pre-approved amount",
-      });
-    }
-
-    // Enforce amount cap
     const newMax =
-      max_approved_amount !== undefined
+      max_approved_amount !== undefined && brokerRole === "admin"
         ? Number(max_approved_amount)
         : parseFloat(existing.max_approved_amount);
     const newAmount =
@@ -10406,6 +10503,14 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: `approved_amount (${newAmount}) cannot exceed max_approved_amount (${newMax})`,
+      });
+    }
+
+    // Non-admins cannot edit HTML content
+    if (html_content !== undefined && brokerRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        error: "Only admin brokers can edit the letter content",
       });
     }
 
@@ -10492,6 +10597,9 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
           b.first_name AS broker_first_name, b.last_name AS broker_last_name,
           b.email AS broker_email, b.phone AS broker_phone,
           b.license_number AS broker_license_number, bp.avatar_url AS broker_photo_url,
+          lb.role AS loan_broker_role, lb.first_name AS partner_first_name, lb.last_name AS partner_last_name,
+          lb.email AS partner_email, lb.phone AS partner_phone,
+          lb.license_number AS partner_license_number, lbp.avatar_url AS partner_photo_url,
           c.first_name AS client_first_name, c.last_name AS client_last_name, c.email AS client_email,
           la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url' AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
@@ -10500,9 +10608,12 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'    AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
        FROM pre_approval_letters pal
-       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       INNER JOIN brokers b_creator ON pal.created_by_broker_id = b_creator.id
+       LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
+       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.id = ?`,
       [tenantId, tenantId, tenantId, tenantId, tenantId, existing.id],
@@ -10562,6 +10673,9 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
           b.first_name AS broker_first_name, b.last_name AS broker_last_name,
           b.email AS broker_email, b.phone AS broker_phone,
           b.license_number AS broker_license_number, bp.avatar_url AS broker_photo_url,
+          lb.role AS loan_broker_role, lb.first_name AS partner_first_name, lb.last_name AS partner_last_name,
+          lb.email AS partner_email, lb.phone AS partner_phone,
+          lb.license_number AS partner_license_number, lbp.avatar_url AS partner_photo_url,
           c.first_name AS client_first_name, c.last_name AS client_last_name,
           c.email AS client_email, c.id AS client_id,
           la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
@@ -10571,9 +10685,12 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_phone'    AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_phone,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_nmls'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_nmls
        FROM pre_approval_letters pal
-       INNER JOIN brokers b ON pal.created_by_broker_id = b.id
+       INNER JOIN brokers b_creator ON pal.created_by_broker_id = b_creator.id
+       LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
+       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.application_id = ? AND pal.tenant_id = ? AND pal.is_active = 1
        ORDER BY pal.created_at DESC LIMIT 1`,
@@ -10667,6 +10784,7 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
       "{{BROKER_LICENSE}}": brokerLicenseHtml,
       "{{BROKER_PHONE}}": letter.broker_phone ?? "",
       "{{BROKER_EMAIL}}": letter.broker_email ?? "",
+      "{{BROKER_SIGNATURE_SECTION}}": buildSignatureSectionHtml(letter),
     };
 
     let renderedLetterHtml = letter.html_content as string;
@@ -10827,13 +10945,6 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
     const { loanId } = req.params;
     const brokerId = (req as any).brokerId;
     const brokerRole: string = (req as any).brokerRole;
-
-    if (brokerRole !== "admin") {
-      return res.status(403).json({
-        success: false,
-        error: "Only admin brokers can delete pre-approval letters",
-      });
-    }
 
     const [tenantRows] = await pool.query<RowDataPacket[]>(
       "SELECT tenant_id FROM brokers WHERE id = ?",
