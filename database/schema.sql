@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Mar 04, 2026 at 07:38 PM
+-- Generation Time: Mar 04, 2026 at 08:34 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -70,25 +70,6 @@ CREATE TABLE `application_status_history` (
   `notes` text COLLATE utf8mb4_unicode_ci,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `application_status_history`
---
-
-INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `from_status`, `to_status`, `changed_by_broker_id`, `notes`, `created_at`) VALUES
-(48, 1, 28, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:37:49'),
-(49, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:37:58'),
-(50, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:02'),
-(51, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:08'),
-(52, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:11'),
-(53, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:25'),
-(54, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:30'),
-(55, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:38:36'),
-(56, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:40:54'),
-(57, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:41:00'),
-(58, 1, 28, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:41:05'),
-(59, 1, 28, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-04 18:41:10'),
-(60, 1, 28, 'under_review', 'underwriting', 1, 'Auto-updated based on task statuses', '2026-03-04 18:41:43');
 
 -- --------------------------------------------------------
 
@@ -251,7 +232,14 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (129, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 8, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:36:10'),
 (130, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 9, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:36:20'),
 (131, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 9, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:36:35'),
-(132, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 10, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:38:06');
+(132, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 10, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:38:06'),
+(133, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 10, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:39:36'),
+(134, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 11, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:44:09'),
+(135, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 11, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:44:38'),
+(136, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 12, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:46:04'),
+(137, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 12, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:46:39'),
+(138, 1, NULL, 8, 'broker', 'create_pre_approval_letter', 'pre_approval_letter', 13, '{\"application_id\": \"28\", \"approved_amount\": 440000, \"max_approved_amount\": 440000}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:47:46'),
+(139, 1, NULL, 8, 'broker', 'delete_pre_approval_letter', 'pre_approval_letter', 13, '{\"application_id\": \"28\"}', 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-03-04 19:48:24');
 
 -- --------------------------------------------------------
 
@@ -433,7 +421,7 @@ CREATE TABLE `clients` (
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `citizenship_status`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
 (14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
 (22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-02-24 17:48:05', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-02-24 17:48:05'),
-(27, 1, 'tonatiuh.gom@gmail.com', '', 'Jane', 'Doe', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', 'employed', 'W-2', 120000.00, 740, 'us_citizen', 'active', 0, 0, '2026-03-04 18:37:44', 8, 'public_wizard', NULL, '2026-03-04 18:34:10', '2026-03-04 19:23:31');
+(28, 1, 'tonatiuh.gom@gmail.com', '', 'Jane', 'Doe', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', 'retired_with_pension', 'W-2', 120000.00, 740, 'us_citizen', 'active', 0, 0, NULL, 8, 'public_wizard', NULL, '2026-03-04 20:32:17', '2026-03-04 20:32:17');
 
 -- --------------------------------------------------------
 
@@ -617,13 +605,6 @@ CREATE TABLE `documents` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Dumping data for table `documents`
---
-
-INSERT INTO `documents` (`id`, `tenant_id`, `application_id`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `document_type`, `document_name`, `file_path`, `file_size_bytes`, `mime_type`, `status`, `is_required`, `reviewed_by_broker_id`, `reviewed_at`, `review_notes`, `expiration_date`, `created_at`, `updated_at`) VALUES
-(10, 1, 28, NULL, 8, 'other', 'Pre-Approval Letter - March 12, 2026', '/pre-approval-letters/10', NULL, 'text/html', 'approved', 0, NULL, NULL, NULL, NULL, '2026-03-04 19:38:06', '2026-03-04 19:38:06');
-
 -- --------------------------------------------------------
 
 --
@@ -739,7 +720,7 @@ CREATE TABLE `loan_applications` (
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`, `citizenship_status`) VALUES
 (15, 2, 'LA65421662', 14, 6, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'submitted', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', '2026-02-11 21:03:41', NULL),
 (23, 1, 'LA73590546', 22, 3, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, 'submitted', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-02-24 16:53:10', '2026-02-24 16:53:10', NULL),
-(28, 1, 'LA70850493', 27, 8, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'underwriting', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'dc63d1fa-1829-11f1-83cc-525400bd6b5d', '2026-03-04 18:34:10', '2026-03-04 18:41:43', '2026-03-04 18:34:10', 'us_citizen');
+(29, 1, 'LA77937794', 28, 8, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'submitted', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: retired_with_pension, Employer: Acme Corp, Years employed: 5', 'dc63d1fa-1829-11f1-83cc-525400bd6b5d', '2026-03-04 20:32:17', '2026-03-04 20:32:17', '2026-03-04 20:32:17', 'us_citizen');
 
 -- --------------------------------------------------------
 
@@ -767,13 +748,7 @@ CREATE TABLE `notifications` (
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
 (18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL),
 (36, 1, 22, 'New Loan Application Created', 'Your loan application LA73590546 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-24 16:53:10', NULL),
-(55, 1, 27, 'Application Received', 'Your loan application LA70850493 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-03-04 18:34:11', NULL),
-(56, 1, 27, 'Task Approved', 'Your task \"Purchase Agreement / Offer Letter\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:28', NULL),
-(57, 1, 27, 'Task Approved', 'Your task \"Government-Issued ID\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:31', NULL),
-(58, 1, 27, 'Task Approved', 'Your task \"Social Security Card (SSN)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:34', NULL),
-(59, 1, 27, 'Task Approved', 'Your task \"Housing Payment Statement (2 Months)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:36', NULL),
-(60, 1, 27, 'Task Approved', 'Your task \"Homeowner\'s Insurance Policy\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:40', NULL),
-(61, 1, 27, 'Task Approved', 'Your task \"W-2 Form\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-04 18:41:43', NULL);
+(62, 1, 28, 'Application Received', 'Your loan application LA77937794 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-03-04 20:32:18', NULL);
 
 -- --------------------------------------------------------
 
@@ -821,8 +796,7 @@ CREATE TABLE `pre_approval_letters` (
 
 INSERT INTO `pre_approval_letters` (`id`, `tenant_id`, `application_id`, `approved_amount`, `max_approved_amount`, `html_content`, `letter_date`, `expires_at`, `is_active`, `created_by_broker_id`, `updated_by_broker_id`, `created_at`, `updated_at`) VALUES
 (5, 1, 26, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; max-width: 750px; margin: 0 auto; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- REALTOR PARTNER -->\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\n\n  <!-- BROKER SIGNATURE -->\n  <table style=\"width: 100%; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 100px;\">\n        {{BROKER_PHOTO}}\n      </td>\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px;\">\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\n        {{BROKER_LICENSE}}\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\n      </td>\n    </tr>\n  </table>\n\n</div>', '2026-02-27', '2026-02-28', 1, 1, NULL, '2026-02-26 22:54:21', '2026-02-26 22:54:21'),
-(6, 1, 27, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- REALTOR PARTNER -->\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\n\n  <!-- BROKER SIGNATURE -->\n  <table style=\"width: 100%; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 100px;\">\n        {{BROKER_PHOTO}}\n      </td>\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px;\">\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\n        {{BROKER_LICENSE}}\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\n      </td>\n    </tr>\n  </table>\n\n</div>', '2026-03-05', '2026-04-09', 1, 1, NULL, '2026-03-02 19:09:17', '2026-03-02 19:09:17'),
-(10, 1, 28, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- BROKER + PARTNER SIGNATURE -->\n  {{BROKER_SIGNATURE_SECTION}}\n\n</div>', '2026-03-13', '2026-03-25', 1, 8, NULL, '2026-03-04 19:38:06', '2026-03-04 19:38:06');
+(6, 1, 27, 440000.00, 440000.00, '<div style=\"font-family: Arial, Helvetica, sans-serif; width: 100%; box-sizing: border-box; padding: 48px; background: #fff; color: #222;\">\n\n  <!-- HEADER: Logo left, company info right -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 55%;\">\n        {{COMPANY_LOGO}}\n      </td>\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\n        <strong>{{COMPANY_NAME}}</strong><br>\n        P. {{COMPANY_PHONE}}<br>\n        NMLS# {{COMPANY_NMLS}}\n      </td>\n    </tr>\n  </table>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- DATE + EXPIRES row -->\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\n    <tr>\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\n    </tr>\n  </table>\n\n  <!-- RE LINE -->\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\n\n  <!-- BODY -->\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">\n    This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:\n  </p>\n\n  <!-- LOAN DETAILS -->\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\n\n  <!-- REVIEWED SECTION -->\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\n    <li>Verified applicant&#39;s assets documentation</li>\n  </ul>\n\n  <!-- DISCLAIMER -->\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">\n    Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.\n  </p>\n\n  <!-- REALTOR PARTNER -->\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\n\n  <!-- BROKER SIGNATURE -->\n  <table style=\"width: 100%; border-collapse: collapse;\">\n    <tr>\n      <td style=\"vertical-align: top; width: 100px;\">\n        {{BROKER_PHOTO}}\n      </td>\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px;\">\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\n        {{BROKER_LICENSE}}\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\n      </td>\n    </tr>\n  </table>\n\n</div>', '2026-03-05', '2026-04-09', 1, 1, NULL, '2026-03-02 19:09:17', '2026-03-02 19:09:17');
 
 -- --------------------------------------------------------
 
@@ -987,12 +961,16 @@ CREATE TABLE `tasks` (
 
 INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`, `approval_status`, `approved_by_broker_id`, `approved_at`, `reopened_by_broker_id`, `reopened_at`, `reopen_reason`, `status_change_reason`, `status_changed_by_broker_id`, `status_changed_at`) VALUES
 (23, 2, NULL, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(63, 1, 34, 0, 28, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-11 18:34:11', '2026-03-04 18:38:08', '2026-03-04 18:34:10', '2026-03-04 18:41:31', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:31', NULL, NULL, NULL, NULL, NULL, NULL),
-(64, 1, 37, 0, 28, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-11 18:34:11', '2026-03-04 18:38:25', '2026-03-04 18:34:10', '2026-03-04 18:41:34', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:34', NULL, NULL, NULL, NULL, NULL, NULL),
-(65, 1, 38, 0, 28, 'Housing Payment Statement (2 Months)', 'Provide the last two months of bank or mortgage statements showing your housing payment.', 'document_verification', 'approved', 'medium', 27, NULL, NULL, '2026-03-18 18:34:11', '2026-03-04 18:38:36', '2026-03-04 18:34:10', '2026-03-04 18:41:36', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:36', NULL, NULL, NULL, NULL, NULL, NULL),
-(66, 1, 39, 0, 28, 'Homeowner\'s Insurance Policy', 'Provide the current homeowner\'s insurance policy for the property.', 'document_verification', 'approved', 'medium', 27, NULL, NULL, '2026-03-18 18:34:11', '2026-03-04 18:41:00', '2026-03-04 18:34:11', '2026-03-04 18:41:40', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:40', NULL, NULL, NULL, NULL, NULL, NULL),
-(67, 1, 40, 0, 28, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-18 18:34:11', '2026-03-04 18:41:10', '2026-03-04 18:34:11', '2026-03-04 18:41:43', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:43', NULL, NULL, NULL, NULL, NULL, NULL),
-(68, 1, 53, 0, 28, 'Purchase Agreement / Offer Letter', 'Provide a fully executed purchase agreement or offer letter for the property.', 'document_verification', 'approved', 'high', 27, NULL, NULL, '2026-03-09 18:34:11', '2026-03-04 18:37:59', '2026-03-04 18:34:11', '2026-03-04 18:41:28', 0, NULL, 1, 0, 'approved', 1, '2026-03-04 18:41:28', NULL, NULL, NULL, NULL, NULL, NULL);
+(69, 1, 34, 0, 29, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'pending', 'high', 28, NULL, NULL, '2026-03-11 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(70, 1, 37, 0, 29, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'pending', 'high', 28, NULL, NULL, '2026-03-11 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(71, 1, 40, 0, 29, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'pending', 'high', 28, NULL, NULL, '2026-03-18 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(72, 1, 47, 0, 29, 'Pension / Retirement Award Letter', 'Provide a pension or retirement benefit award letter showing monthly income.', 'document_verification', 'pending', 'medium', 28, NULL, NULL, '2026-03-18 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(73, 1, 56, 0, 29, 'Existing Lease Agreements', 'Provide copies of all current lease agreements for the rental units.', 'document_verification', 'pending', 'medium', 28, NULL, NULL, '2026-03-18 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(74, 1, 58, 0, 29, '2 Months Bank Statements', 'Provide your last two months of bank statements for all accounts.', 'document_verification', 'pending', 'medium', 28, NULL, NULL, '2026-03-18 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(75, 1, 59, 0, 29, 'Most Recent Pay-Stubs (1 Month)', 'Provide your most recent one month of consecutive pay stubs from your employer.', 'document_verification', 'pending', 'high', 28, NULL, NULL, '2026-03-14 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(76, 1, 60, 0, 29, 'Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)', 'Provide your federal income tax returns or Schedule C for the last two tax years.', 'document_verification', 'pending', 'high', 28, NULL, NULL, '2026-03-18 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(77, 1, 61, 0, 29, 'Mortgage Statement', 'Provide the most recent mortgage statement for the subject property.', 'document_verification', 'pending', 'medium', 28, NULL, NULL, '2026-03-14 20:32:18', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(78, 1, 62, 0, 29, 'Insurance Policy', 'Provide the current homeowners or property insurance policy for the subject property.', 'document_verification', 'pending', 'medium', 28, NULL, NULL, '2026-03-18 20:32:19', NULL, '2026-03-04 20:32:18', '2026-03-04 20:32:18', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1014,18 +992,6 @@ CREATE TABLE `task_documents` (
   `uploaded_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `notes` text COLLATE utf8mb4_unicode_ci
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Document attachments for tasks';
-
---
--- Dumping data for table `task_documents`
---
-
-INSERT INTO `task_documents` (`id`, `task_id`, `field_id`, `document_type`, `filename`, `original_filename`, `file_path`, `file_size`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `uploaded_at`, `notes`) VALUES
-(29, 68, 54, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d0664e754.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/68/pdfs/2026_02_15_14_33_51_229_receipt_69a8d0664e754.pdf', 16707, 27, NULL, '2026-03-04 18:37:58', NULL),
-(30, 63, 35, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d06f7e7fc.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/63/pdfs/2026_02_15_14_33_51_229_receipt_69a8d06f7e7fc.pdf', 16707, 27, NULL, '2026-03-04 18:38:07', NULL),
-(31, 64, 38, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d081268f5.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/64/pdfs/2026_02_15_14_33_51_229_receipt_69a8d081268f5.pdf', 16707, 27, NULL, '2026-03-04 18:38:25', NULL),
-(32, 65, 39, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d08b897ca.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/65/pdfs/2026_02_15_14_33_51_229_receipt_69a8d08b897ca.pdf', 16707, 27, NULL, '2026-03-04 18:38:35', NULL),
-(33, 66, 40, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d11c0a6b0.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/66/pdfs/2026_02_15_14_33_51_229_receipt_69a8d11c0a6b0.pdf', 16707, 27, NULL, '2026-03-04 18:41:00', NULL),
-(34, 67, 41, 'pdf', '2026_02_15_14_33_51_229_receipt_69a8d125a575e.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/67/pdfs/2026_02_15_14_33_51_229_receipt_69a8d125a575e.pdf', 16707, 27, NULL, '2026-03-04 18:41:09', NULL);
 
 -- --------------------------------------------------------
 
@@ -1076,7 +1042,13 @@ INSERT INTO `task_form_fields` (`id`, `task_template_id`, `field_name`, `field_l
 (55, 54, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the architectural/engineering plans for the construction project and the signed builder contract including total cost breakdown.', '2026-02-26 18:03:40'),
 (56, 55, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the current HOA dues statement and the master/blanket insurance policy (hazard + liability) for the condo association.', '2026-02-26 18:03:40'),
 (57, 56, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach all signed lease agreements currently in effect for each rental unit in the property. Include lease start/end dates and monthly rent amounts.', '2026-02-26 18:03:40'),
-(58, 57, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last 2 years of income statements and balance sheets for the business operating at or owning the commercial property. CPA-prepared preferred.', '2026-02-26 18:03:40');
+(58, 57, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last 2 years of income statements and balance sheets for the business operating at or owning the commercial property. CPA-prepared preferred.', '2026-02-26 18:03:40'),
+(66, 58, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the last two months of all bank account statements. Must show account holder name, partial account number, and all transactions.', '2026-03-04 20:24:14'),
+(67, 59, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your most recent consecutive pay stubs covering at least one month. Must show employer name, gross pay, deductions, and year-to-date totals.', '2026-03-04 20:24:14'),
+(68, 60, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your complete and signed federal tax returns (Form 1040) or Schedule C for the last two tax years. Include all schedules and attachments.', '2026-03-04 20:24:14'),
+(69, 61, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your most recent mortgage statement showing outstanding balance, monthly payment, lender name, and property address.', '2026-03-04 20:24:14'),
+(70, 62, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach the current insurance policy (declaration page). Must include policy number, coverage amounts, property address, named insured, and effective dates.', '2026-03-04 20:24:14'),
+(71, 63, 'document_upload', 'Attach Document', 'file_pdf', NULL, 1, NULL, NULL, 0, 'Attach your most recent mortgage statement or an official payoff letter from your lender. Must show current balance, monthly payment, and lender contact information.', '2026-03-04 20:24:14');
 
 -- --------------------------------------------------------
 
@@ -1186,7 +1158,7 @@ INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_t
 (39, 1, 'Homeowner\'s Insurance Policy', 'Provide the current homeowner\'s insurance policy for the property.', 'document_verification', 'medium', 14, 15, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach the active homeowner\'s insurance policy. It must include the policy number, coverage details, insured name, and effective dates.', 0, 0),
 (40, 1, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'high', 14, 16, 1, 1, '2026-02-25 20:23:05', '2026-02-25 20:23:05', 1, 'Attach all W-2 forms from the most recent tax year. If you have multiple employers, include the W-2 from each one.', 0, 0),
 (41, 1, '1099 Forms (Last 2 Years)', 'Provide all 1099 forms received in the last two tax years.', 'document_verification', 'high', 14, 20, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach all 1099 forms (1099-MISC, 1099-NEC, 1099-INT, etc.) for the last two tax years. Include all issuers.', 0, 0),
-(42, 1, 'Federal Tax Returns (Last 2 Years)', 'Provide signed federal tax returns (Form 1040) for the last two years, including all schedules.', 'document_verification', 'high', 14, 21, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach complete and signed IRS Form 1040 with all schedules (Schedule C, E, etc.) for the last two tax years.', 0, 0),
+(42, 1, 'Federal Tax Returns Last 2 Years Including Business Tax Returns', 'Provide signed federal tax returns (Form 1040) for the last two years, including all business tax returns (Schedule C, 1120-S, 1065, etc.) and all schedules.', 'document_verification', 'high', 14, 21, 1, 1, '2026-02-25 21:40:00', '2026-03-04 20:24:13', 1, 'Attach complete and signed IRS Form 1040 with all business tax returns (Schedule C, 1120-S, 1065, etc.) for the last two tax years.', 0, 0),
 (43, 1, 'Business License', 'Provide a copy of your current business license or registration.', 'document_verification', 'medium', 10, 22, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach a copy of your valid business license, DBA registration, or LLC/corporation certificate.', 0, 0),
 (44, 1, 'Profit & Loss Statement (Current Year)', 'Provide a year-to-date profit & loss statement for your business.', 'document_verification', 'high', 10, 23, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach a YTD profit & loss statement prepared by a CPA or bookkeeper. Must include revenue, expenses, and net income.', 0, 0),
 (45, 1, 'Business Bank Statements (3 Months)', 'Provide the last 3 months of business bank statements.', 'document_verification', 'high', 14, 24, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the last 3 months of all business bank statements. Must show account holder name, account number (partial), and all transactions.', 0, 0),
@@ -1201,7 +1173,13 @@ INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_t
 (54, 1, 'Construction Plans & Builder Contract', 'Provide the construction plans and a signed contract with your builder.', 'document_verification', 'high', 10, 33, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the architectural/engineering plans for the construction project and the signed builder contract including total cost breakdown.', 0, 0),
 (55, 1, 'HOA Statement & Master Insurance Policy', 'Provide the current HOA statement and the master insurance policy for the condo community.', 'document_verification', 'medium', 14, 34, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the current HOA dues statement and the master/blanket insurance policy (hazard + liability) for the condo association.', 0, 0),
 (56, 1, 'Existing Lease Agreements', 'Provide copies of all current lease agreements for the rental units.', 'document_verification', 'medium', 14, 35, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach all signed lease agreements currently in effect for each rental unit in the property. Include lease start/end dates and monthly rent amounts.', 0, 0),
-(57, 1, 'Business Financial Statements', 'Provide the last 2 years of business financial statements (income statement & balance sheet).', 'document_verification', 'high', 14, 36, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the last 2 years of income statements and balance sheets for the business operating at or owning the commercial property. CPA-prepared preferred.', 0, 0);
+(57, 1, 'Business Financial Statements', 'Provide the last 2 years of business financial statements (income statement & balance sheet).', 'document_verification', 'high', 14, 36, 1, 1, '2026-02-25 21:40:00', '2026-02-25 21:40:00', 1, 'Attach the last 2 years of income statements and balance sheets for the business operating at or owning the commercial property. CPA-prepared preferred.', 0, 0),
+(58, 1, '2 Months Bank Statements', 'Provide your last two months of bank statements for all accounts.', 'document_verification', 'medium', 14, 14, 1, 1, '2026-03-04 20:24:13', '2026-03-04 20:24:13', 1, 'Attach the last two months of all bank account statements. Must show account holder name, partial account number, and all transactions.', 0, 0),
+(59, 1, 'Most Recent Pay-Stubs (1 Month)', 'Provide your most recent one month of consecutive pay stubs from your employer.', 'document_verification', 'high', 10, 17, 1, 1, '2026-03-04 20:24:13', '2026-03-04 20:24:13', 1, 'Attach your most recent consecutive pay stubs covering at least one month. Must show employer name, gross pay, deductions, and year-to-date totals.', 0, 0),
+(60, 1, 'Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)', 'Provide your federal income tax returns or Schedule C for the last two tax years.', 'document_verification', 'high', 14, 22, 1, 1, '2026-03-04 20:24:13', '2026-03-04 20:24:13', 1, 'Attach your complete and signed federal tax returns (Form 1040) or Schedule C for the last two tax years. Include all schedules and attachments.', 0, 0),
+(61, 1, 'Mortgage Statement', 'Provide the most recent mortgage statement for the subject property.', 'document_verification', 'medium', 10, 31, 1, 1, '2026-03-04 20:24:13', '2026-03-04 20:24:13', 1, 'Attach your most recent mortgage statement showing outstanding balance, monthly payment, lender name, and property address.', 0, 0),
+(62, 1, 'Insurance Policy', 'Provide the current homeowners or property insurance policy for the subject property.', 'document_verification', 'medium', 14, 32, 1, 1, '2026-03-04 20:24:13', '2026-03-04 20:24:13', 1, 'Attach the current insurance policy (declaration page). Must include policy number, coverage amounts, property address, named insured, and effective dates.', 0, 0),
+(63, 1, 'Current Mortgage Statement / Payoff Letter', 'Provide the most recent mortgage statement or an official payoff letter for the property being refinanced.', 'document_verification', 'high', 7, 33, 1, 1, '2026-03-04 20:24:13', '2026-03-04 20:24:13', 1, 'Attach your most recent mortgage statement or an official payoff letter from your lender. Must show current balance, monthly payment, and lender contact information.', 0, 0);
 
 -- --------------------------------------------------------
 
@@ -1303,7 +1281,7 @@ CREATE TABLE `user_profiles` (
   `state` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `zip_code` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `country` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT 'USA',
-  `employment_status` enum('employed','self_employed','unemployed','retired') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `employment_status` enum('employed','self_employed','unemployed','retired','retired_with_pension') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `employer_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `annual_income` decimal(12,2) DEFAULT NULL,
   `credit_score` int(11) DEFAULT NULL,
@@ -1334,8 +1312,7 @@ CREATE TABLE `user_sessions` (
 --
 
 INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(11, 22, 603385, 1, NULL, NULL, '2026-02-25 00:02:48', '2026-02-24 23:47:48'),
-(16, 27, 498447, 1, NULL, NULL, '2026-03-05 00:52:33', '2026-03-05 00:37:33');
+(11, 22, 603385, 1, NULL, NULL, '2026-02-25 00:02:48', '2026-02-24 23:47:48');
 
 --
 -- Indexes for dumped tables
@@ -1764,7 +1741,7 @@ ALTER TABLE `application_status_history`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=133;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=140;
 
 --
 -- AUTO_INCREMENT for table `brokers`
@@ -1800,7 +1777,7 @@ ALTER TABLE `campaign_recipients`
 -- AUTO_INCREMENT for table `clients`
 --
 ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
 
 --
 -- AUTO_INCREMENT for table `communications`
@@ -1830,7 +1807,7 @@ ALTER TABLE `conversation_threads`
 -- AUTO_INCREMENT for table `documents`
 --
 ALTER TABLE `documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `environment_keys`
@@ -1854,13 +1831,13 @@ ALTER TABLE `lead_activities`
 -- AUTO_INCREMENT for table `loan_applications`
 --
 ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=63;
 
 --
 -- AUTO_INCREMENT for table `pipeline_step_templates`
@@ -1872,7 +1849,7 @@ ALTER TABLE `pipeline_step_templates`
 -- AUTO_INCREMENT for table `pre_approval_letters`
 --
 ALTER TABLE `pre_approval_letters`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `reminder_flows`
@@ -1908,7 +1885,7 @@ ALTER TABLE `system_settings`
 -- AUTO_INCREMENT for table `tasks`
 --
 ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=79;
 
 --
 -- AUTO_INCREMENT for table `task_documents`
@@ -1920,7 +1897,7 @@ ALTER TABLE `task_documents`
 -- AUTO_INCREMENT for table `task_form_fields`
 --
 ALTER TABLE `task_form_fields`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=66;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `task_form_responses`
@@ -1944,7 +1921,7 @@ ALTER TABLE `task_sign_documents`
 -- AUTO_INCREMENT for table `task_templates`
 --
 ALTER TABLE `task_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=58;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=64;
 
 --
 -- AUTO_INCREMENT for table `templates`

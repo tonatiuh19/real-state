@@ -1787,7 +1787,7 @@ const ApplicationWizard = () => {
                         <div className="grid gap-5 md:grid-cols-2">
                           <div className="space-y-1.5 md:col-span-2">
                             <Label>Employment Status *</Label>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                               {[
                                 { v: "employed", label: "Employed" },
                                 {
@@ -1795,6 +1795,10 @@ const ApplicationWizard = () => {
                                   label: "Self-Employed",
                                 },
                                 { v: "retired", label: "Retired" },
+                                {
+                                  v: "retired_with_pension",
+                                  label: "Retired with Pension",
+                                },
                                 { v: "other", label: "Other" },
                               ].map(({ v, label }) => (
                                 <button

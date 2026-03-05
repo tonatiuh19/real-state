@@ -27,6 +27,12 @@ import {
   Shield,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -751,7 +757,7 @@ export function LoanOverlay({
   // Check if all tasks are fully completed (approved) for MISMO export
   const areAllTasksCompleted = totalTasks > 0 && approvedTasks === totalTasks;
   const canExportMISMO = sessionToken && areAllTasksCompleted; // Only brokers/admins with completed tasks
-  const canShowPreApproval = sessionToken; // Always visible for brokers
+  const canShowPreApproval = sessionToken && areAllTasksCompleted; // Only when all tasks are approved
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -800,31 +806,51 @@ export function LoanOverlay({
                     {isSubmitting ? "Generating..." : "Export MISMO"}
                   </Button>
                 ) : totalTasks > 0 && !areAllTasksCompleted ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled
-                    className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-500 bg-gray-50 cursor-not-allowed"
-                    title={`Complete all tasks to export MISMO (${approvedTasks}/${totalTasks} approved)`}
-                  >
-                    <Download className="h-3 w-3" />
-                    Export MISMO
-                  </Button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled
+                            className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-500 bg-gray-50 pointer-events-none"
+                          >
+                            <Download className="h-3 w-3" />
+                            Export MISMO
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Complete all tasks to export MISMO ({approvedTasks}/{totalTasks} approved)
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 ) : totalTasks === 0 ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled
-                    className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-500 bg-gray-50 cursor-not-allowed"
-                    title="Add tasks before exporting MISMO"
-                  >
-                    <Download className="h-3 w-3" />
-                    Export MISMO
-                  </Button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled
+                            className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-500 bg-gray-50 pointer-events-none"
+                          >
+                            <Download className="h-3 w-3" />
+                            Export MISMO
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Add tasks before exporting MISMO
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 ) : null}
 
                 {/* Pre-Approval Letter Button */}
-                {canShowPreApproval && (
+                {canShowPreApproval ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -841,7 +867,49 @@ export function LoanOverlay({
                       ? "View Pre-Approval"
                       : "Pre-Approval Letter"}
                   </Button>
-                )}
+                ) : totalTasks > 0 && !areAllTasksCompleted ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled
+                            className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-400 bg-gray-50 pointer-events-none"
+                          >
+                            <Award className="h-3 w-3" />
+                            Pre-Approval Letter
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        All tasks must be approved ({approvedTasks}/{totalTasks} done)
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : totalTasks === 0 ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled
+                            className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-400 bg-gray-50 pointer-events-none"
+                          >
+                            <Award className="h-3 w-3" />
+                            Pre-Approval Letter
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Add and approve tasks before issuing a Pre-Approval Letter
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : null}
               </div>
             </SheetHeader>
 

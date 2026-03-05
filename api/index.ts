@@ -2666,78 +2666,88 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     // ── Auto-assign tasks from templates based on client profile ──────────────
     //
     // Always:
-    //   Government-Issued ID, Social Security Card (SSN),
-    //   Housing Payment Statement (2 Months), Homeowner's Insurance Policy
+    //   Government-Issued ID, Social Security Card (SSN), 2 Months Bank Statements
     //
     // Citizenship:
     //   permanent_resident → Green Card (Permanent Resident Card)
     //   non_resident       → Visa / Work Authorization Document, ITIN Assignment Letter
     //
     // Income type:
-    //   W-2            → W-2 Form
-    //   1099           → 1099 Forms (Last 2 Years)
-    //   Self-Employed  → Federal Tax Returns (Last 2 Years), Business License,
-    //                    Profit & Loss Statement (Current Year), Business Bank Statements (3 Months)
-    //   Investor       → Investment / Brokerage Account Statements (2 Months)
-    //   Mixed          → W-2 Form, 1099 Forms (Last 2 Years)
+    //   W-2           → W-2 Form + Most Recent Pay-Stubs (1 Month)
+    //                   + Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)
+    //   1099          → 1099 Forms (Last 2 Years)
+    //                   + Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)
+    //   Self-Employed → 1099 Forms (Last 2 Years) + Profit & Loss Statement (Current Year)
+    //                   + Federal Tax Returns Last 2 Years Including Business Tax Returns
+    //                   + Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)
+    //   Mixed         → Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)
+    //   Investor      → (no auto-assign)
     //
     // Employment status:
-    //   retired        → Pension / Retirement Award Letter, Social Security Award Letter
+    //   retired              → Social Security Award Letter
+    //   retired_with_pension → Pension / Retirement Award Letter
     //
     // Loan type:
-    //   refinance / home_equity → Current Mortgage Statement, Most Recent Property Tax Bill
-    //   purchase                → Purchase Agreement / Offer Letter
-    //   construction            → Construction Plans & Builder Contract
+    //   refinance / home_equity → Insurance Policy + Current Mortgage Statement / Payoff Letter
+    //   purchase                → (no tasks — amount inquiry only)
+    //   construction            → (no tasks — obtained from title company at closing)
     //
-    // Property type:
-    //   condo        → HOA Statement & Master Insurance Policy
-    //   multi_family → Existing Lease Agreements
-    //   commercial   → Business Financial Statements
+    // Property type (if client owns other property):
+    //   condo         → HOA Statement & Master Insurance Policy + Mortgage Statement + Insurance Policy
+    //   single_family → Existing Lease Agreements + Mortgage Statement + Insurance Policy
+    //   multi_family  → Existing Lease Agreements + Mortgage Statement + Insurance Policy
+    //   commercial    → (no auto-assign)
 
-    const templateTitlesToAssign: string[] = [
+    const templateTitlesSet = new Set<string>();
+    const addTask = (...titles: string[]) =>
+      titles.forEach((t) => templateTitlesSet.add(t));
+
+    // Always assigned
+    addTask(
       "Government-Issued ID",
       "Social Security Card (SSN)",
-      "Housing Payment Statement (2 Months)",
-      "Homeowner's Insurance Policy",
-    ];
+      "2 Months Bank Statements",
+    );
 
     // Citizenship
     if (resolvedCitizenshipStatus === "permanent_resident") {
-      templateTitlesToAssign.push("Green Card (Permanent Resident Card)");
+      addTask("Green Card (Permanent Resident Card)");
     }
     if (resolvedCitizenshipStatus === "non_resident") {
-      templateTitlesToAssign.push(
-        "Visa / Work Authorization Document",
-        "ITIN Assignment Letter",
-      );
+      addTask("Visa / Work Authorization Document", "ITIN Assignment Letter");
     }
 
     // Income type
     if (resolvedIncomeType === "W-2") {
-      templateTitlesToAssign.push("W-2 Form");
-    } else if (resolvedIncomeType === "1099") {
-      templateTitlesToAssign.push("1099 Forms (Last 2 Years)");
-    } else if (resolvedIncomeType === "Self-Employed") {
-      templateTitlesToAssign.push(
-        "Federal Tax Returns (Last 2 Years)",
-        "Business License",
-        "Profit & Loss Statement (Current Year)",
-        "Business Bank Statements (3 Months)",
+      addTask(
+        "W-2 Form",
+        "Most Recent Pay-Stubs (1 Month)",
+        "Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)",
       );
-    } else if (resolvedIncomeType === "Investor") {
-      templateTitlesToAssign.push(
-        "Investment / Brokerage Account Statements (2 Months)",
+    } else if (resolvedIncomeType === "1099") {
+      addTask(
+        "1099 Forms (Last 2 Years)",
+        "Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)",
+      );
+    } else if (resolvedIncomeType === "Self-Employed") {
+      addTask(
+        "1099 Forms (Last 2 Years)",
+        "Profit & Loss Statement (Current Year)",
+        "Federal Tax Returns Last 2 Years Including Business Tax Returns",
+        "Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)",
       );
     } else if (resolvedIncomeType === "Mixed") {
-      templateTitlesToAssign.push("W-2 Form", "1099 Forms (Last 2 Years)");
+      addTask(
+        "Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)",
+      );
     }
+    // Investor: no auto-assign per flowchart
 
     // Employment status
     if (employment_status === "retired") {
-      templateTitlesToAssign.push(
-        "Pension / Retirement Award Letter",
-        "Social Security Award Letter",
-      );
+      addTask("Social Security Award Letter");
+    } else if (employment_status === "retired_with_pension") {
+      addTask("Pension / Retirement Award Letter");
     }
 
     // Loan type
@@ -2745,24 +2755,31 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       resolvedLoanType === "refinance" ||
       resolvedLoanType === "home_equity"
     ) {
-      templateTitlesToAssign.push(
-        "Current Mortgage Statement",
-        "Most Recent Property Tax Bill",
-      );
-    } else if (resolvedLoanType === "purchase") {
-      templateTitlesToAssign.push("Purchase Agreement / Offer Letter");
-    } else if (resolvedLoanType === "construction") {
-      templateTitlesToAssign.push("Construction Plans & Builder Contract");
+      addTask("Insurance Policy", "Current Mortgage Statement / Payoff Letter");
     }
+    // purchase  → no documents needed (amount inquiry only)
+    // construction → obtained from title company at closing
 
     // Property type
     if (resolvedPropertyType === "condo") {
-      templateTitlesToAssign.push("HOA Statement & Master Insurance Policy");
-    } else if (resolvedPropertyType === "multi_family") {
-      templateTitlesToAssign.push("Existing Lease Agreements");
-    } else if (resolvedPropertyType === "commercial") {
-      templateTitlesToAssign.push("Business Financial Statements");
+      addTask(
+        "HOA Statement & Master Insurance Policy",
+        "Mortgage Statement",
+        "Insurance Policy",
+      );
+    } else if (
+      resolvedPropertyType === "single_family" ||
+      resolvedPropertyType === "multi_family"
+    ) {
+      addTask(
+        "Existing Lease Agreements",
+        "Mortgage Statement",
+        "Insurance Policy",
+      );
     }
+    // commercial → not in flowchart, no auto-assign
+
+    const templateTitlesToAssign = Array.from(templateTitlesSet);
 
     const [templateRows] = await connection.query<any[]>(
       `SELECT id, title, description, task_type, priority, default_due_days,
