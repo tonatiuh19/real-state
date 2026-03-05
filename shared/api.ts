@@ -96,6 +96,9 @@ export interface LoanDetails {
   broker_user_id: number | null;
   broker_first_name: string | null;
   broker_last_name: string | null;
+  partner_broker_id: number | null;
+  partner_first_name: string | null;
+  partner_last_name: string | null;
   loan_type: string;
   loan_amount: number;
   property_value: number | null;

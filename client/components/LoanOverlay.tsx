@@ -6,6 +6,7 @@ import {
   DollarSign,
   MapPin,
   User,
+  Users,
   UserX,
   UserPlus,
   CheckCircle2,
@@ -172,6 +173,7 @@ export function LoanOverlay({
     : null;
 
   const [isAssigning, setIsAssigning] = useState(false);
+  const [isAssigningPartner, setIsAssigningPartner] = useState(false);
   const [approvingTaskId, setApprovingTaskId] = useState<number | null>(null);
 
   const handleAssignBroker = async (brokerId: string) => {
@@ -200,6 +202,35 @@ export function LoanOverlay({
       });
     } finally {
       setIsAssigning(false);
+    }
+  };
+
+  const handleAssignPartner = async (partnerId: string) => {
+    if (!selectedLoan) return;
+    try {
+      setIsAssigningPartner(true);
+      await axios.patch(
+        `/api/loans/${selectedLoan.id}/assign-partner`,
+        { partner_id: partnerId === "unassigned" ? null : parseInt(partnerId) },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      toast({
+        title: "Partner Updated",
+        description:
+          partnerId === "unassigned"
+            ? "Partner has been unassigned from this loan."
+            : "Partner has been assigned successfully.",
+      });
+      await dispatch(fetchLoanDetails(selectedLoan.id));
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description:
+          error.response?.data?.error || "Failed to update partner assignment",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAssigningPartner(false);
     }
   };
 
@@ -809,7 +840,10 @@ export function LoanOverlay({
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                        <span
+                          tabIndex={0}
+                          className="inline-flex cursor-not-allowed"
+                        >
                           <Button
                             variant="outline"
                             size="sm"
@@ -822,7 +856,8 @@ export function LoanOverlay({
                         </span>
                       </TooltipTrigger>
                       <TooltipContent>
-                        Complete all tasks to export MISMO ({approvedTasks}/{totalTasks} approved)
+                        Complete all tasks to export MISMO ({approvedTasks}/
+                        {totalTasks} approved)
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -830,7 +865,10 @@ export function LoanOverlay({
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                        <span
+                          tabIndex={0}
+                          className="inline-flex cursor-not-allowed"
+                        >
                           <Button
                             variant="outline"
                             size="sm"
@@ -871,7 +909,10 @@ export function LoanOverlay({
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                        <span
+                          tabIndex={0}
+                          className="inline-flex cursor-not-allowed"
+                        >
                           <Button
                             variant="outline"
                             size="sm"
@@ -884,7 +925,8 @@ export function LoanOverlay({
                         </span>
                       </TooltipTrigger>
                       <TooltipContent>
-                        All tasks must be approved ({approvedTasks}/{totalTasks} done)
+                        All tasks must be approved ({approvedTasks}/{totalTasks}{" "}
+                        done)
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -892,7 +934,10 @@ export function LoanOverlay({
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span tabIndex={0} className="inline-flex cursor-not-allowed">
+                        <span
+                          tabIndex={0}
+                          className="inline-flex cursor-not-allowed"
+                        >
                           <Button
                             variant="outline"
                             size="sm"
@@ -905,7 +950,8 @@ export function LoanOverlay({
                         </span>
                       </TooltipTrigger>
                       <TooltipContent>
-                        Add and approve tasks before issuing a Pre-Approval Letter
+                        Add and approve tasks before issuing a Pre-Approval
+                        Letter
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -1042,7 +1088,7 @@ export function LoanOverlay({
                   <CardHeader className="pb-3 border-b border-gray-100">
                     <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
                       <UserPlus className="h-5 w-5 text-blue-600" />
-                      Assigned Broker
+                      Assigned Mortgage Banker
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="pt-4">
@@ -1065,7 +1111,7 @@ export function LoanOverlay({
                       <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-amber-50 border border-amber-200">
                         <UserX className="h-4 w-4 text-amber-600" />
                         <span className="text-sm text-amber-700 font-medium">
-                          No broker assigned
+                          No mortgage banker assigned
                         </span>
                       </div>
                     )}
@@ -1079,7 +1125,73 @@ export function LoanOverlay({
                       disabled={isAssigning}
                     >
                       <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="Select broker..." />
+                        <SelectValue placeholder="Select mortgage banker..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unassigned">Unassigned</SelectItem>
+                        {brokers
+                          .filter(
+                            (b) => b.status === "active" && b.role === "admin",
+                          )
+                          .map((broker) => (
+                            <SelectItem
+                              key={broker.id}
+                              value={String(broker.id)}
+                            >
+                              {broker.first_name} {broker.last_name} (Mortgage
+                              Banker)
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Partner Assignment */}
+              {(user?.role === "admin" || user?.role === "superadmin") && (
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="pb-3 border-b border-gray-100">
+                    <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
+                      <Users className="h-5 w-5 text-violet-600" />
+                      Assigned Partner
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    {selectedLoan.partner_first_name ? (
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-8 w-8 rounded-full bg-violet-100 flex items-center justify-center">
+                          <User className="h-4 w-4 text-violet-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            {selectedLoan.partner_first_name}{" "}
+                            {selectedLoan.partner_last_name}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Currently assigned
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-amber-50 border border-amber-200">
+                        <UserX className="h-4 w-4 text-amber-600" />
+                        <span className="text-sm text-amber-700 font-medium">
+                          No partner assigned
+                        </span>
+                      </div>
+                    )}
+                    <Select
+                      value={
+                        selectedLoan.partner_broker_id
+                          ? String(selectedLoan.partner_broker_id)
+                          : "unassigned"
+                      }
+                      onValueChange={handleAssignPartner}
+                      disabled={isAssigningPartner}
+                    >
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="Select partner..." />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="unassigned">Unassigned</SelectItem>
@@ -1093,7 +1205,7 @@ export function LoanOverlay({
                               {broker.first_name} {broker.last_name}
                               {broker.role === "admin"
                                 ? " (Mortgage Banker)"
-                                : ""}
+                                : " (Partner)"}
                             </SelectItem>
                           ))}
                       </SelectContent>

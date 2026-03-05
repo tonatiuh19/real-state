@@ -2612,39 +2612,50 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         ? property_type
         : null;
 
-    // Resolve broker from share link token (if provided)
+    // Resolve broker from share link token (if provided).
+    // Admin brokers (Mortgage Bankers) are assigned as broker_user_id.
+    // Partner brokers (role='broker') are assigned as partner_broker_id.
     let resolvedBrokerUserId: number | null = null;
+    let resolvedPartnerBrokerId: number | null = null;
     if (broker_token) {
       const [brokerRows] = await connection.query<any[]>(
-        "SELECT id FROM brokers WHERE public_token = ? AND status = 'active'",
+        "SELECT id, role FROM brokers WHERE public_token = ? AND status = 'active'",
         [broker_token],
       );
       if (brokerRows.length > 0) {
-        resolvedBrokerUserId = brokerRows[0].id;
+        const { id: bkId, role: bkRole } = brokerRows[0];
+        if (bkRole === "admin") {
+          resolvedBrokerUserId = bkId;
+        } else {
+          resolvedPartnerBrokerId = bkId;
+        }
       }
     }
 
-    // Assign broker to this client now that we know the resolved broker id
-    if (resolvedBrokerUserId) {
+    // Assign broker/partner to this client
+    const clientBrokerId = resolvedBrokerUserId ?? resolvedPartnerBrokerId;
+    if (clientBrokerId) {
       await connection.query(
         `UPDATE clients SET assigned_broker_id = COALESCE(assigned_broker_id, ?) WHERE id = ? AND tenant_id = ?`,
-        [resolvedBrokerUserId, clientId, MORTGAGE_TENANT_ID],
+        [clientBrokerId, clientId, MORTGAGE_TENANT_ID],
       );
     }
 
     const [loanResult] = await connection.query<any>(
       `INSERT INTO loan_applications
         (tenant_id, application_number, client_user_id, broker_user_id,
+         partner_broker_id,
          loan_type, loan_amount, property_value, property_address,
          property_city, property_state, property_zip, property_type,
          down_payment, loan_purpose, status, current_step, total_steps,
          priority, notes, broker_token, citizenship_status, submitted_at)
-       VALUES (?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,?,?,NOW())`,
+       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,?,?,NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
         clientId,
         resolvedBrokerUserId,
+        resolvedPartnerBrokerId,
         resolvedLoanType,
         loan_amount,
         propVal || null,
@@ -3000,10 +3011,7 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
     }
 
     const token = rows[0].public_token;
-    const baseUrl =
-      process.env.BASE_URL || process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:8080";
+    const baseUrl = process.env.BASE_URL!;
 
     res.json({
       success: true,
@@ -3041,11 +3049,7 @@ const handleRegenerateShareLink: RequestHandler = async (req, res) => {
     );
 
     const newToken = rows[0].public_token;
-    const baseUrl =
-      process.env.BASE_URL ||
-      (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:8080");
+    const baseUrl = process.env.BASE_URL!;
 
     res.json({
       success: true,
@@ -3088,11 +3092,7 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
     }
 
     const broker = rows[0];
-    const baseUrl =
-      process.env.BASE_URL ||
-      (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:8080");
+    const baseUrl = process.env.BASE_URL!;
     const shareUrl = `${baseUrl}/apply/${broker.public_token}`;
     const clientFirstName = client_name ? client_name.split(" ")[0] : "there";
     const brokerFullName = `${broker.first_name} ${broker.last_name}`;
@@ -3479,7 +3479,7 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
         ? [loanId, MORTGAGE_TENANT_ID]
         : [loanId, brokerId, MORTGAGE_TENANT_ID];
 
-    // Get loan details with client and broker info
+    // Get loan details with client, broker, and partner broker info
     const [loans] = (await pool.query(
       `SELECT 
         la.*,
@@ -3488,10 +3488,13 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
         c.email as client_email,
         c.phone as client_phone,
         b.first_name as broker_first_name,
-        b.last_name as broker_last_name
+        b.last_name as broker_last_name,
+        pb.first_name as partner_first_name,
+        pb.last_name as partner_last_name
       FROM loan_applications la
       INNER JOIN clients c ON la.client_user_id = c.id
       LEFT JOIN brokers b ON la.broker_user_id = b.id
+      LEFT JOIN brokers pb ON la.partner_broker_id = pb.id
       ${whereClause}`,
       queryParams,
     )) as [RowDataPacket[], any];
@@ -3587,6 +3590,50 @@ const handleAssignBroker: RequestHandler = async (req, res) => {
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to assign broker",
+    });
+  }
+};
+
+/**
+ * PATCH /api/loans/:loanId/assign-partner
+ * Assign (or unassign) a partner broker to a loan application.
+ * Admin-only.
+ */
+const handleAssignPartner: RequestHandler = async (req, res) => {
+  try {
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    const loanId = parseInt(req.params.loanId);
+    const { partner_id } = req.body; // null = unassign
+
+    if (partner_id !== null && partner_id !== undefined) {
+      // Verify the partner broker exists and belongs to this tenant
+      const [rows] = (await pool.query(
+        "SELECT id FROM brokers WHERE id = ? AND tenant_id = ?",
+        [partner_id, MORTGAGE_TENANT_ID],
+      )) as [RowDataPacket[], any];
+      if (rows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Partner broker not found" });
+      }
+    }
+
+    await pool.query(
+      "UPDATE loan_applications SET partner_broker_id = ? WHERE id = ? AND tenant_id = ?",
+      [partner_id ?? null, loanId, MORTGAGE_TENANT_ID],
+    );
+
+    res.json({ success: true, message: "Partner assignment updated" });
+  } catch (error) {
+    console.error("Error assigning partner:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to assign partner",
     });
   }
 };
@@ -4364,11 +4411,7 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
         [targetId],
       );
       const newToken = refreshed[0].public_token;
-      const baseUrl =
-        process.env.BASE_URL ||
-        (process.env.VERCEL_URL
-          ? `https://${process.env.VERCEL_URL}`
-          : "http://localhost:8080");
+      const baseUrl = process.env.BASE_URL!;
       return res.json({
         success: true,
         public_token: newToken,
@@ -4376,11 +4419,7 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
       });
     }
 
-    const baseUrl =
-      process.env.BASE_URL ||
-      (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:8080");
+    const baseUrl = process.env.BASE_URL!;
     res.json({
       success: true,
       public_token: token,
@@ -11550,6 +11589,11 @@ function createServer() {
     "/api/loans/:loanId/assign-broker",
     verifyBrokerSession,
     handleAssignBroker,
+  );
+  expressApp.patch(
+    "/api/loans/:loanId/assign-partner",
+    verifyBrokerSession,
+    handleAssignPartner,
   );
   expressApp.patch(
     "/api/loans/:loanId/status",
