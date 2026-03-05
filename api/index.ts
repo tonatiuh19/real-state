@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import twilio from "twilio";
 import crypto from "crypto";
+import { ImapFlow } from "imapflow";
 
 // Validate critical environment variables
 if (
@@ -257,6 +258,7 @@ async function sendEmailMessage(
   subject: string,
   body: string,
   isHTML: boolean = false,
+  conversationId?: string,
 ): Promise<{
   success: boolean;
   external_id?: string;
@@ -281,10 +283,42 @@ async function sendEmailMessage(
       };
     }
 
-    const mailOptions = {
+    // Derive the domain from SMTP_FROM for threading headers.
+    // This makes client replies carry In-Reply-To / References back to us.
+    const smtpFromEmail =
+      process.env.SMTP_FROM?.match(/<([^>]+)>/)?.[1] ||
+      process.env.SMTP_FROM ||
+      "noreply@example.com";
+    const emailDomain = smtpFromEmail.split("@")[1] || "example.com";
+
+    // Encode conversationId into the Message-ID so every email client
+    // will echo it back in In-Reply-To / References when the client hits Reply.
+    // Format: <enc-{conversationId}-{timestamp}@{domain}>
+    const messageId = conversationId
+      ? `<enc-${conversationId}-${Date.now()}@${emailDomain}>`
+      : undefined;
+
+    // Reply-To: use a dedicated IMAP mailbox (IMAP_USER) when configured,
+    // otherwise fall back to the subaddress scheme (INBOUND_EMAIL_DOMAIN),
+    // otherwise fall back to SMTP_FROM.
+    const inboundMailbox = process.env.IMAP_USER;
+    const inboundDomain = process.env.INBOUND_EMAIL_DOMAIN;
+    const replyTo = inboundMailbox
+      ? inboundMailbox
+      : conversationId && inboundDomain
+        ? `reply+${conversationId}@${inboundDomain}`
+        : process.env.SMTP_FROM;
+
+    const headers: Record<string, string> = {};
+    if (conversationId) headers["X-Conversation-Id"] = conversationId;
+    if (messageId) headers["Message-ID"] = messageId;
+
+    const mailOptions: nodemailer.SendMailOptions = {
       from: process.env.SMTP_FROM,
-      to: to,
-      subject: subject,
+      to,
+      subject,
+      replyTo,
+      headers: Object.keys(headers).length ? headers : undefined,
       [isHTML ? "html" : "text"]: body,
     };
 
@@ -3184,12 +3218,39 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
 </body>
 </html>`;
 
-    await sendEmailMessage(
+    const shareLinkSendResult = await sendEmailMessage(
       client_email,
       `${brokerFullName} has shared a mortgage application link with you`,
       emailHtml,
       true,
     );
+
+    // Track this outbound email as a conversation if the recipient is an existing client
+    if (shareLinkSendResult.success) {
+      const [existingClientRows] = await pool.query<RowDataPacket[]>(
+        "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
+        [client_email, MORTGAGE_TENANT_ID],
+      );
+      if (existingClientRows.length > 0) {
+        const foundClientId = existingClientRows[0].id;
+        const convId = `conv_client_${foundClientId}_general`;
+        await pool.query(
+          `INSERT INTO communications
+             (tenant_id, from_broker_id, to_user_id,
+              communication_type, direction, subject, body, status,
+              conversation_id, delivery_status, sent_at)
+           VALUES (?, ?, ?, 'email', 'outbound', ?, ?, 'sent', ?, 'sent', NOW())`,
+          [
+            MORTGAGE_TENANT_ID,
+            brokerId,
+            foundClientId,
+            `${brokerFullName} has shared a mortgage application link with you`,
+            emailHtml,
+            convId,
+          ],
+        );
+      }
+    }
 
     res.json({
       success: true,
@@ -3880,9 +3941,11 @@ const handleGetClients: RequestHandler = async (req, res) => {
         c.status,
         c.created_at,
         COUNT(DISTINCT la.id) as total_applications,
-        SUM(CASE WHEN la.status IN ('submitted', 'under_review', 'documents_pending', 'underwriting', 'conditional_approval') THEN 1 ELSE 0 END) as active_applications
+        SUM(CASE WHEN la.status IN ('submitted', 'under_review', 'documents_pending', 'underwriting', 'conditional_approval') THEN 1 ELSE 0 END) as active_applications,
+        COUNT(DISTINCT ct.id) as total_conversations
       FROM clients c
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
+      LEFT JOIN conversation_threads ct ON ct.client_id = c.id AND ct.tenant_id = c.tenant_id
       WHERE c.tenant_id = ?
         ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ?)"}
       GROUP BY c.id
@@ -3970,6 +4033,19 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
 
     console.log(
       `🗑️ Deleting client ${clientId} "${client.first_name} ${client.last_name}"`,
+    );
+
+    // Cascade: remove all conversation threads and communications for this client
+    const [commResult] = await pool.query<ResultSetHeader>(
+      "DELETE FROM communications WHERE (to_user_id = ? OR from_user_id = ?) AND tenant_id = ?",
+      [clientId, clientId, MORTGAGE_TENANT_ID],
+    );
+    await pool.query(
+      "DELETE FROM conversation_threads WHERE client_id = ? AND tenant_id = ?",
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+    console.log(
+      `🗑️ Deleted ${commResult.affectedRows} communications and conversation threads for client ${clientId}`,
     );
 
     // Safe to delete
@@ -8336,6 +8412,9 @@ async function triggerPipelineAutomation(
         : "Your Loan Officer",
     };
 
+    // Stable conversation_id per client+loan so all automated messages land in the same thread
+    const pipelineConversationId = `conv_client_${loan.client_id}_loan_${loanId}`;
+
     for (const assignment of assignments) {
       const body = processTemplateVariables(assignment.body, variables);
       const subject = processTemplateVariables(
@@ -8352,7 +8431,13 @@ async function triggerPipelineAutomation(
 
       if (assignment.communication_type === "email") {
         if (!loan.email) continue;
-        sendResult = await sendEmailMessage(loan.email, subject, body, true);
+        sendResult = await sendEmailMessage(
+          loan.email,
+          subject,
+          body,
+          true,
+          pipelineConversationId,
+        );
       } else if (assignment.communication_type === "sms") {
         if (!loan.phone) continue;
         sendResult = await sendSMSMessage(loan.phone, body);
@@ -8367,13 +8452,13 @@ async function triggerPipelineAutomation(
         }`,
       );
 
-      // Log to communications table
+      // Log to communications table — include conversation_id so it shows up in Conversations section
       await pool.query(
         `INSERT INTO communications
            (tenant_id, application_id, from_broker_id, to_user_id,
             communication_type, direction, subject, body, status,
-            external_id, template_id, delivery_status, cost, sent_at)
-         VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            external_id, conversation_id, template_id, delivery_status, cost, sent_at)
+         VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           MORTGAGE_TENANT_ID,
           loanId,
@@ -8384,6 +8469,7 @@ async function triggerPipelineAutomation(
           body,
           sendResult.success ? "sent" : "failed",
           sendResult.external_id || null,
+          pipelineConversationId,
           assignment.template_id,
           sendResult.success ? "sent" : "failed",
           sendResult.cost || null,
@@ -8400,6 +8486,407 @@ async function triggerPipelineAutomation(
     console.error("❌ Pipeline automation trigger failed:", err);
   }
 }
+
+// =====================================================
+// IMAP POLLING CRON — HostGator inbound reply tracking
+// =====================================================
+
+/**
+ * GET /api/cron/poll-inbound-email
+ *
+ * Called on a schedule (Vercel Cron or HostGator cPanel cron via curl).
+ * Connects to the IMAP mailbox defined by IMAP_* env vars, reads unseen
+ * messages, extracts the conversation_id from the In-Reply-To / References
+ * or X-Conversation-Id header, and inserts an inbound `communications` row.
+ *
+ * Protected by CRON_SECRET — pass it as:
+ *   Authorization: Bearer {CRON_SECRET}
+ * or ?secret={CRON_SECRET} query param (for curl-based cron).
+ *
+ * Required env vars:
+ *   IMAP_HOST     e.g. mail.yourdomain.com
+ *   IMAP_PORT     993 (TLS) or 143 (STARTTLS)
+ *   IMAP_USER     reply@yourdomain.com
+ *   IMAP_PASSWORD your-email-password
+ *   IMAP_TLS      true | false (default true)
+ *   CRON_SECRET   random secret to protect this endpoint
+ */
+const handlePollInboundEmail: RequestHandler = async (req, res) => {
+  try {
+    // --- Auth ---
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ||
+        (req.query.secret as string);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    // --- Config ---
+    const host = process.env.IMAP_HOST;
+    const user = process.env.IMAP_USER;
+    const pass = process.env.IMAP_PASSWORD;
+
+    if (!host || !user || !pass) {
+      return res.json({
+        success: true,
+        skipped: true,
+        reason: "IMAP not configured",
+      });
+    }
+
+    const port = parseInt(process.env.IMAP_PORT || "993");
+    const tls = process.env.IMAP_TLS !== "false";
+
+    const client = new ImapFlow({
+      host,
+      port,
+      secure: tls,
+      auth: { user, pass },
+      logger: false,
+    });
+
+    await client.connect();
+    let processed = 0;
+    let errors = 0;
+
+    try {
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        // Fetch all unseen messages
+        for await (const msg of client.fetch(
+          { seen: false },
+          {
+            envelope: true,
+            headers: [
+              "in-reply-to",
+              "references",
+              "x-conversation-id",
+              "message-id",
+            ],
+            bodyStructure: true,
+            source: true,
+          },
+        )) {
+          try {
+            // --- Parse raw headers buffer into a lookup map ---
+            const rawHeaders = msg.headers?.toString("utf8") || "";
+            const headerMap: Record<string, string> = {};
+            for (const line of rawHeaders.split(/\r?\n/)) {
+              const colon = line.indexOf(":");
+              if (colon > 0) {
+                const key = line.slice(0, colon).toLowerCase().trim();
+                const val = line.slice(colon + 1).trim();
+                headerMap[key] = val;
+              }
+            }
+
+            // --- Extract conversation_id ---
+            let conversationId: string | null = null;
+
+            // 1. X-Conversation-Id header (set explicitly on outbound)
+            const xConvId = headerMap["x-conversation-id"];
+            if (xConvId) conversationId = xConvId.trim();
+
+            // 2. Parse enc-{conversationId}-{timestamp}@domain from In-Reply-To / References
+            if (!conversationId) {
+              const inReplyTo = headerMap["in-reply-to"] || "";
+              const references = headerMap["references"] || "";
+              const combined = `${inReplyTo} ${references}`;
+              const match = combined.match(/<enc-([^-]+(?:-[^-]+)*)-\d+@/);
+              if (match) {
+                conversationId = match[1];
+              }
+            }
+
+            if (!conversationId) {
+              // Can't route — mark as seen so we don't reprocess, then skip
+              await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true });
+              continue;
+            }
+
+            // --- Get sender address ---
+            const fromAddress = msg.envelope?.from?.[0];
+            const senderEmail = fromAddress?.address || "";
+            const senderName = fromAddress?.name || senderEmail;
+
+            // --- Build plain-text body from source ---
+            // Use raw source for simplicity; strip quoted reply for cleaner preview
+            const rawSource = msg.source?.toString("utf8") || "";
+            // Extract text between headers and quoted reply marker (> or On ... wrote:)
+            const bodyStart = rawSource.indexOf("\r\n\r\n");
+            const rawBody =
+              bodyStart >= 0 ? rawSource.slice(bodyStart + 4) : rawSource;
+            // Trim quoted text (lines starting with >) for the stored preview
+            const bodyLines = rawBody
+              .split("\n")
+              .filter(
+                (l) =>
+                  !l.trimStart().startsWith(">") && !l.match(/^On .+ wrote:/i),
+              )
+              .join("\n")
+              .trim();
+            const bodyText = bodyLines.slice(0, 5000) || "(empty reply)";
+
+            const subject = msg.envelope?.subject || "(no subject)";
+            const messageIdHeader = msg.envelope?.messageId || "";
+
+            // --- Look up the conversation thread ---
+            const [threadRows] = await pool.query<RowDataPacket[]>(
+              `SELECT ct.broker_id, ct.client_id, ct.application_id, ct.lead_id
+               FROM conversation_threads ct
+               WHERE ct.conversation_id = ? AND ct.tenant_id = ?
+               LIMIT 1`,
+              [conversationId, MORTGAGE_TENANT_ID],
+            );
+
+            let brokerId: number | null = null;
+            let clientId: number | null = null;
+            let applicationId: number | null = null;
+            let leadId: number | null = null;
+
+            if (threadRows.length > 0) {
+              brokerId = threadRows[0].broker_id;
+              clientId = threadRows[0].client_id;
+              applicationId = threadRows[0].application_id;
+              leadId = threadRows[0].lead_id;
+            } else if (senderEmail) {
+              // Thread doesn't exist yet — match by sender email
+              const [clientRows] = await pool.query<RowDataPacket[]>(
+                "SELECT id, assigned_broker_id FROM clients WHERE email = ? AND tenant_id = ? LIMIT 1",
+                [senderEmail, MORTGAGE_TENANT_ID],
+              );
+              if (clientRows.length > 0) {
+                clientId = clientRows[0].id;
+                brokerId = clientRows[0].assigned_broker_id;
+              }
+            }
+
+            // --- Insert inbound communications record ---
+            await pool.query(
+              `INSERT INTO communications (
+                tenant_id, application_id, lead_id,
+                from_user_id, to_broker_id,
+                communication_type, direction,
+                subject, body, status,
+                conversation_id, message_type,
+                delivery_status, external_id,
+                sent_at, created_at
+              ) VALUES (?, ?, ?, ?, ?, 'email', 'inbound', ?, ?, 'delivered',
+                        ?, 'text', 'delivered', ?, NOW(), NOW())`,
+              [
+                MORTGAGE_TENANT_ID,
+                applicationId || null,
+                leadId || null,
+                clientId || null,
+                brokerId || null,
+                subject,
+                bodyText,
+                conversationId,
+                messageIdHeader || null,
+              ],
+            );
+
+            // Mark email as seen so it won't be picked up next poll
+            await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true });
+            processed++;
+            console.log(
+              `📥 Inbound reply stored: conv=${conversationId} from=${senderEmail}`,
+            );
+          } catch (msgErr) {
+            console.error("❌ Error processing inbound message:", msgErr);
+            errors++;
+          }
+        }
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await client.logout();
+    }
+
+    res.json({ success: true, processed, errors });
+  } catch (error) {
+    console.error("❌ IMAP poll error:", error);
+    res.status(500).json({ success: false, error: "IMAP poll failed" });
+  }
+};
+
+// =====================================================
+// INBOUND EMAIL WEBHOOK
+// =====================================================
+
+/**
+ * POST /api/webhooks/inbound-email
+ *
+ * Receives inbound email payloads from Postmark, Mailgun, or SendGrid.
+ * The provider must be configured to POST to:
+ *   https://yourdomain.com/api/webhooks/inbound-email
+ * with a shared secret in the header "X-Webhook-Secret" (= INBOUND_WEBHOOK_SECRET env var)
+ * and set to catch emails sent to  reply+*@{INBOUND_EMAIL_DOMAIN}.
+ *
+ * Normalises the three provider formats into one shape, extracts the
+ * conversation_id from the recipient address, and inserts an inbound
+ * `communications` row so the thread appears in the Conversations section.
+ *
+ * Provider body shapes expected:
+ *   Postmark : { From, To, Subject, TextBody, HtmlBody, Headers[], MessageID, ... }
+ *   Mailgun  : { sender, recipient, subject, "body-plain", "body-html", "Message-Id", ... }
+ *   SendGrid : JSON array [{ from, to, subject, text, html, headers, ... }]
+ */
+const handleInboundEmail: RequestHandler = async (req, res) => {
+  try {
+    // Verify shared secret to reject unauthenticated POSTs
+    const secret = process.env.INBOUND_WEBHOOK_SECRET;
+    if (secret) {
+      const provided =
+        req.headers["x-webhook-secret"] ||
+        req.headers["x-postmark-secret"] ||
+        req.query.secret;
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    // ---- Normalise payload across Postmark / Mailgun / SendGrid ----
+    let rawPayload = req.body;
+    // SendGrid wraps events in an array
+    if (Array.isArray(rawPayload)) rawPayload = rawPayload[0];
+
+    const fromAddress: string =
+      rawPayload.From || rawPayload.from || rawPayload.sender || "";
+
+    const toAddress: string =
+      rawPayload.To || rawPayload.to || rawPayload.recipient || "";
+
+    const subjectRaw: string =
+      rawPayload.Subject || rawPayload.subject || "(no subject)";
+
+    const textBody: string =
+      rawPayload.TextBody || rawPayload["body-plain"] || rawPayload.text || "";
+
+    const htmlBody: string =
+      rawPayload.HtmlBody || rawPayload["body-html"] || rawPayload.html || "";
+
+    const messageId: string =
+      rawPayload.MessageID ||
+      rawPayload["Message-Id"] ||
+      rawPayload.headers?.["Message-Id"] ||
+      "";
+
+    const body = textBody || htmlBody || "(empty message)";
+
+    // ---- Extract conversation_id ----
+    // Look for reply+{conversation_id}@domain in the To address first,
+    // then fall back to custom X-Conversation-Id header embedded on send.
+    let conversationId: string | null = null;
+
+    const subAddressMatch = toAddress.match(/reply\+([^@]+)@/);
+    if (subAddressMatch) {
+      conversationId = subAddressMatch[1];
+    }
+
+    // Check custom header (Postmark passes them in Headers[])
+    if (!conversationId) {
+      const headers: any[] = rawPayload.Headers || [];
+      const convHeader = headers.find(
+        (h: any) => h.Name?.toLowerCase() === "x-conversation-id",
+      );
+      if (convHeader) conversationId = convHeader.Value;
+    }
+
+    // Mailgun / SendGrid store headers as an object
+    if (!conversationId && rawPayload.headers) {
+      conversationId =
+        rawPayload.headers["x-conversation-id"] ||
+        rawPayload.headers["X-Conversation-Id"] ||
+        null;
+    }
+
+    if (!conversationId) {
+      console.warn("⚠️  Inbound email received but no conversation_id found", {
+        toAddress,
+        fromAddress,
+      });
+      // Acknowledge the webhook so the provider doesn't retry
+      return res.json({
+        success: true,
+        message: "Acknowledged — no conversation matched",
+      });
+    }
+
+    // ---- Look up the conversation thread to get broker + client context ----
+    const [threadRows] = await pool.query<RowDataPacket[]>(
+      `SELECT ct.broker_id, ct.client_id, ct.application_id, ct.lead_id
+       FROM conversation_threads ct
+       WHERE ct.conversation_id = ? AND ct.tenant_id = ?
+       LIMIT 1`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+
+    let brokerId: number | null = null;
+    let clientId: number | null = null;
+    let applicationId: number | null = null;
+    let leadId: number | null = null;
+
+    if (threadRows.length > 0) {
+      brokerId = threadRows[0].broker_id;
+      clientId = threadRows[0].client_id;
+      applicationId = threadRows[0].application_id;
+      leadId = threadRows[0].lead_id;
+    } else {
+      // Thread doesn't exist yet — try matching by sender email to find the client
+      const senderEmail = fromAddress.match(/<([^>]+)>/)?.[1] || fromAddress;
+      const [clientRows] = await pool.query<RowDataPacket[]>(
+        `SELECT c.id, c.assigned_broker_id
+         FROM clients c
+         WHERE c.email = ? AND c.tenant_id = ?
+         LIMIT 1`,
+        [senderEmail, MORTGAGE_TENANT_ID],
+      );
+      if (clientRows.length > 0) {
+        clientId = clientRows[0].id;
+        brokerId = clientRows[0].assigned_broker_id;
+      }
+    }
+
+    // ---- Insert the inbound communications record ----
+    await pool.query(
+      `INSERT INTO communications (
+        tenant_id, application_id, lead_id,
+        from_user_id, to_broker_id,
+        communication_type, direction,
+        subject, body, status,
+        conversation_id, message_type,
+        delivery_status, external_id,
+        sent_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'email', 'inbound', ?, ?, 'delivered', ?, 'text', 'delivered', ?, NOW(), NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        applicationId || null,
+        leadId || null,
+        clientId || null,
+        brokerId || null,
+        subjectRaw,
+        body,
+        conversationId,
+        messageId || null,
+      ],
+    );
+
+    console.log(
+      `📥 Inbound email stored: conv=${conversationId} from=${fromAddress}`,
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error("❌ Inbound email webhook error:", error);
+    // Always return 200 so the provider doesn't flood with retries
+    res.status(200).json({ success: false, error: "Internal error" });
+  }
+};
 
 // =====================================================
 // CONVERSATION HANDLERS
@@ -8794,11 +9281,14 @@ const handleSendMessage: RequestHandler = async (req, res) => {
 
         case "email":
           if (finalRecipientEmail) {
+            // Auto-detect HTML content so template-based emails render correctly
+            const isHtmlEmail = /<[a-z][\s\S]*>/i.test(processedBody);
             sendResult = await sendEmailMessage(
               finalRecipientEmail,
               processedSubject || "Message from Mortgage Professional",
               processedBody,
-              false, // You can make this configurable for HTML emails
+              isHtmlEmail,
+              finalConversationId,
             );
           } else {
             sendResult = {
@@ -11910,6 +12400,12 @@ function createServer() {
     verifyBrokerSession,
     handleDeletePipelineStepTemplate,
   );
+
+  // Inbound email webhook — no broker auth, protected by INBOUND_WEBHOOK_SECRET
+  expressApp.post("/api/webhooks/inbound-email", handleInboundEmail);
+
+  // Inbound IMAP poll cron — called by Vercel Cron or HostGator cPanel cron via curl
+  expressApp.get("/api/cron/poll-inbound-email", handlePollInboundEmail);
 
   // Conversation routes
   expressApp.get(

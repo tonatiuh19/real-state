@@ -696,6 +696,7 @@ export interface GetClientsResponse {
     created_at: string;
     total_applications: number;
     active_applications: number;
+    total_conversations: number;
   }>;
 }
 

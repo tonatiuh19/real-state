@@ -307,27 +307,46 @@ const Clients = () => {
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete Client</AlertDialogTitle>
-              <AlertDialogDescription className="space-y-2">
+              <AlertDialogTitle className="text-destructive flex items-center gap-2">
+                <Trash2 className="h-5 w-5" />
+                Delete Client — Permanent Action
+              </AlertDialogTitle>
+              <AlertDialogDescription className="space-y-3">
                 <p>
-                  Are you sure you want to delete "{clientToDelete?.first_name}{" "}
-                  {clientToDelete?.last_name}"?
+                  You are about to permanently delete{" "}
+                  <strong>
+                    {clientToDelete?.first_name} {clientToDelete?.last_name}
+                  </strong>
+                  . This action <strong>cannot be undone</strong>.
                 </p>
                 {clientToDelete && (
-                  <div className="p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-500">
-                    <div className="text-sm">
-                      <p className="font-semibold">Warning:</p>
-                      <p>
-                        This client has {clientToDelete.total_applications}{" "}
-                        total applications and{" "}
-                        {clientToDelete.active_applications} active
-                        applications.
+                  <div className="p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-400 space-y-2">
+                    <p className="font-semibold text-sm">
+                      ⚠️ The following data will be permanently deleted:
+                    </p>
+                    <ul className="text-sm space-y-1 list-disc list-inside">
+                      <li>
+                        <strong>
+                          {clientToDelete.total_applications ?? 0}
+                        </strong>{" "}
+                        loan application(s) (
+                        {clientToDelete.active_applications ?? 0} active)
+                      </li>
+                      {(clientToDelete.total_conversations ?? 0) > 0 && (
+                        <li>
+                          <strong>{clientToDelete.total_conversations}</strong>{" "}
+                          conversation thread(s) and all associated messages
+                          (emails, SMS, WhatsApp)
+                        </li>
+                      )}
+                      <li>All client profile data and documents</li>
+                    </ul>
+                    {(clientToDelete.active_applications ?? 0) > 0 && (
+                      <p className="text-sm font-semibold mt-2 text-red-600 dark:text-red-400">
+                        ⛔ This client has active applications — reassign or
+                        close them before deleting.
                       </p>
-                      <p className="mt-1">
-                        All associated data must be reassigned or completed
-                        before deletion.
-                      </p>
-                    </div>
+                    )}
                   </div>
                 )}
               </AlertDialogDescription>
