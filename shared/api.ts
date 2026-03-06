@@ -196,6 +196,11 @@ export interface ClientApplication {
   broker_phone: string | null;
   broker_email: string | null;
   broker_avatar_url: string | null;
+  partner_first_name: string | null;
+  partner_last_name: string | null;
+  partner_phone: string | null;
+  partner_email: string | null;
+  partner_avatar_url: string | null;
   completed_tasks: number;
   total_tasks: number;
 }

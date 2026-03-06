@@ -789,7 +789,10 @@ export function LoanOverlay({
   const areAllTasksCompleted = totalTasks > 0 && approvedTasks === totalTasks;
   const canExportMISMO =
     sessionToken && areAllTasksCompleted && user?.role !== "broker"; // Partners cannot export MISMO
+  const isPartner = user?.role === "broker";
   const canShowPreApproval = sessionToken && areAllTasksCompleted; // Only when all tasks are approved
+  const partnerAwaitingLetter =
+    isPartner && canShowPreApproval && !preApprovalLetter; // Partner: tasks done but MB hasn't set amount
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -891,7 +894,31 @@ export function LoanOverlay({
                 ) : null}
 
                 {/* Pre-Approval Letter Button */}
-                {canShowPreApproval ? (
+                {partnerAwaitingLetter ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          tabIndex={0}
+                          className="inline-flex cursor-not-allowed"
+                        >
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled
+                            className="gap-2 h-8 px-3 text-xs border-amber-200 text-amber-500 bg-amber-50 pointer-events-none"
+                          >
+                            <Award className="h-3 w-3" />
+                            Pre-Approval Letter
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Waiting for Mortgage Banker to set the approved amount
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : canShowPreApproval ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -999,7 +1026,8 @@ export function LoanOverlay({
                           <span className="ml-2">
                             · Expires{" "}
                             {new Date(
-                              preApprovalLetter.expires_at + "T00:00:00",
+                              preApprovalLetter.expires_at.slice(0, 10) +
+                                "T12:00:00",
                             ).toLocaleDateString("en-US", {
                               month: "short",
                               day: "numeric",

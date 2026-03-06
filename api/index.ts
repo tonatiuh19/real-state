@@ -3104,12 +3104,26 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
       [brokerId],
     );
 
-    if (rows.length === 0 || !rows[0].public_token) {
+    if (rows.length === 0) {
       res.status(404).json({ success: false, error: "Broker not found" });
       return;
     }
 
-    const token = rows[0].public_token;
+    let token = rows[0].public_token;
+
+    // Auto-generate token if missing
+    if (!token) {
+      await pool.query(
+        "UPDATE brokers SET public_token = UUID() WHERE id = ?",
+        [brokerId],
+      );
+      const [refreshed] = await pool.query<any[]>(
+        "SELECT public_token FROM brokers WHERE id = ?",
+        [brokerId],
+      );
+      token = refreshed[0].public_token;
+    }
+
     const baseUrl = getBaseUrl();
 
     res.json({
@@ -4273,8 +4287,8 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
     const createdByBrokerId = role === "broker" ? brokerId : null;
     const [result] = (await pool.query(
       `INSERT INTO brokers 
-        (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified, created_by_broker_id) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?)`,
+        (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified, created_by_broker_id, public_token) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, UUID())`,
       [
         MORTGAGE_TENANT_ID,
         email,
@@ -7379,16 +7393,25 @@ const handleGetClientApplications: RequestHandler = async (req, res) => {
         la.estimated_close_date,
         la.created_at,
         la.submitted_at,
-        b.first_name as broker_first_name,
-        b.last_name as broker_last_name,
-        b.phone as broker_phone,
-        b.email as broker_email,
-        bp.avatar_url as broker_avatar_url,
+        COALESCE(b.first_name, mb.first_name) as broker_first_name,
+        COALESCE(b.last_name,  mb.last_name)  as broker_last_name,
+        COALESCE(b.phone,      mb.phone)      as broker_phone,
+        COALESCE(b.email,      mb.email)      as broker_email,
+        COALESCE(bp.avatar_url, mbp.avatar_url) as broker_avatar_url,
+        pb.first_name  as partner_first_name,
+        pb.last_name   as partner_last_name,
+        pb.phone       as partner_phone,
+        pb.email       as partner_email,
+        pbp.avatar_url as partner_avatar_url,
         (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND status = 'completed' AND tenant_id = ?) as completed_tasks,
         (SELECT COUNT(*) FROM tasks WHERE application_id = la.id AND tenant_id = ?) as total_tasks
       FROM loan_applications la
-      LEFT JOIN brokers b ON la.broker_user_id = b.id
+      LEFT JOIN brokers b   ON la.broker_user_id = b.id
       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+      LEFT JOIN brokers pb  ON la.partner_broker_id = pb.id
+      LEFT JOIN broker_profiles pbp ON pbp.broker_id = pb.id
+      LEFT JOIN brokers mb  ON pb.created_by_broker_id = mb.id
+      LEFT JOIN broker_profiles mbp ON mbp.broker_id = mb.id
       WHERE la.client_user_id = ? AND la.tenant_id = ?
       ORDER BY la.created_at DESC`,
       [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, clientId, MORTGAGE_TENANT_ID],
@@ -11441,7 +11464,12 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
     const placeholders: Record<string, string> = {
       "{{COMPANY_LOGO}}": logoHtml,
       "{{COMPANY_ADDRESS}}": letter.company_address ?? "",
-      "{{COMPANY_PHONE}}": letter.company_phone ?? "",
+      "{{COMPANY_PHONE}}": (() => {
+        const d = String(letter.company_phone ?? "").replace(/\D/g, "");
+        return d.length === 10
+          ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
+          : String(letter.company_phone ?? "");
+      })(),
       "{{COMPANY_NMLS}}": letter.company_nmls ?? "",
       "{{LETTER_DATE}}": letterDateFormatted,
       "{{CLIENT_FULL_NAME}}": clientName || "Applicant",
@@ -11460,6 +11488,7 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
       "{{BROKER_LICENSE}}": brokerLicenseHtml,
       "{{BROKER_PHONE}}": letter.broker_phone ?? "",
       "{{BROKER_EMAIL}}": letter.broker_email ?? "",
+      "{{BROKER_LICENSE_NUMBER}}": letter.broker_license_number ?? "",
       "{{BROKER_SIGNATURE_SECTION}}": buildSignatureSectionHtml(letter),
     };
 
@@ -11627,6 +11656,14 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
       [brokerId],
     );
     const tenantId = tenantRows[0]?.tenant_id;
+
+    // Partners (role = 'broker') cannot delete pre-approval letters
+    if (brokerRole === "broker") {
+      return res.status(403).json({
+        success: false,
+        error: "Partners are not authorized to delete pre-approval letters",
+      });
+    }
 
     const [existing] = await pool.query<RowDataPacket[]>(
       "SELECT id FROM pre_approval_letters WHERE application_id = ? AND tenant_id = ?",

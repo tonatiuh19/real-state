@@ -114,6 +114,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Tasks",
       icon: <CheckCircle2 className="h-4 w-4" />,
       path: "/admin/tasks",
+      hidden: isPartner,
     },
     // {
     //   id: "marketing",
@@ -147,6 +148,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Conversations",
       icon: <MessageCircle className="h-4 w-4" />,
       path: "/admin/conversations",
+      hidden: isPartner,
     },
     {
       id: "reports",

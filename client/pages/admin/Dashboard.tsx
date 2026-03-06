@@ -74,7 +74,7 @@ const AdminDashboard = () => {
     isLoading: statsLoading,
     error: statsError,
   } = useAppSelector((state) => state.dashboard);
-  const { user } = useAppSelector((state) => state.brokerAuth);
+  const { user, sessionToken } = useAppSelector((state) => state.brokerAuth);
   const isPartner = user?.role === "broker";
   const partnerAsBroker: Broker | null = user
     ? {
@@ -93,13 +93,14 @@ const AdminDashboard = () => {
     : null;
 
   useEffect(() => {
+    if (!sessionToken) return;
     try {
       dispatch(fetchLoans({}));
       dispatch(fetchDashboardStats());
     } catch (error) {
       logger.error("Error loading dashboard data:", error);
     }
-  }, [dispatch]);
+  }, [dispatch, sessionToken]);
 
   const handleLoanCreated = () => {
     try {

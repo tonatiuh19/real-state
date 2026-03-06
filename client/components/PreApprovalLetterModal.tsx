@@ -197,8 +197,13 @@ function renderLetterHtml(
   const replacements: Record<string, string> = {
     "{{COMPANY_LOGO}}": logoHtml,
     "{{COMPANY_ADDRESS}}": letter.company_address ?? "",
-    "{{COMPANY_PHONE}}": letter.company_phone ?? "",
-    "{{COMPANY_NMLS}}": letter.company_nmls ?? "",
+    "{{COMPANY_PHONE}}": (() => {
+      const d = String(letter.company_phone ?? "").replace(/\D/g, "");
+      return d.length === 10
+        ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
+        : String(letter.company_phone ?? "");
+    })(),
+    "{{COMPANY_NMLS}}": String(letter.company_nmls ?? ""),
     "{{LETTER_DATE}}": letterDateFormatted,
     "{{CLIENT_FULL_NAME}}": clientName || "Applicant",
     "{{PROPERTY_ADDRESS}}": propertyAddr || "Property Address TBD",
@@ -212,6 +217,7 @@ function renderLetterHtml(
     "{{BROKER_LICENSE}}": brokerLicenseHtml,
     "{{BROKER_PHONE}}": letter.broker_phone ?? "",
     "{{BROKER_EMAIL}}": letter.broker_email ?? "",
+    "{{BROKER_LICENSE_NUMBER}}": letter.broker_license_number ?? "",
     "{{BROKER_SIGNATURE_SECTION}}": brokerSignatureSection,
     "{{LOAN_TYPE}}": letter.loan_type ?? "",
     "{{FICO_SCORE}}": letter.fico_score ? String(letter.fico_score) : "",
@@ -259,6 +265,7 @@ export function PreApprovalLetterModal({
   );
 
   const isAdmin = user?.role === "admin" || user?.role === "superadmin";
+  const isPartner = user?.role === "broker";
   const isLoading = loadingLoanIds.includes(loanId);
   const isSaving = savingLoanIds.includes(loanId);
 
@@ -715,6 +722,19 @@ export function PreApprovalLetterModal({
                               {...createFormik.getFieldProps(
                                 "max_approved_amount",
                               )}
+                              onChange={(e) => {
+                                createFormik.handleChange(e);
+                                const newMax = Number(e.target.value);
+                                const curApproved = Number(
+                                  createFormik.values.approved_amount,
+                                );
+                                if (newMax > 0 && curApproved > newMax) {
+                                  createFormik.setFieldValue(
+                                    "approved_amount",
+                                    String(newMax),
+                                  );
+                                }
+                              }}
                               className={cn(
                                 "pl-7",
                                 createFormik.touched.max_approved_amount &&
@@ -985,15 +1005,17 @@ export function PreApprovalLetterModal({
                       Send to Client
                     </Button>
 
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setDeleteConfirmOpen(true)}
-                      className="gap-1.5 h-8 px-3 text-xs border-destructive/30 text-destructive hover:bg-destructive/5"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Delete
-                    </Button>
+                    {!isPartner && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDeleteConfirmOpen(true)}
+                        className="gap-1.5 h-8 px-3 text-xs border-destructive/30 text-destructive hover:bg-destructive/5"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </Button>
+                    )}
                   </div>
                 </div>
 

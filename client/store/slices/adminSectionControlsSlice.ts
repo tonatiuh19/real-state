@@ -1,4 +1,8 @@
-import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import {
+  createSlice,
+  createAsyncThunk,
+  createSelector,
+} from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
 import type {
@@ -121,12 +125,13 @@ export const { clearError } = adminSectionControlsSlice.actions;
 // ─── Selectors ────────────────────────────────────────────────────────────────
 
 /** Returns a map of section_id → AdminSectionControl for fast lookup */
-export const selectSectionControlsMap = (state: RootState) =>
-  state.adminSectionControls.controls.reduce<
-    Record<string, AdminSectionControl>
-  >((acc, ctrl) => {
-    acc[ctrl.section_id] = ctrl;
-    return acc;
-  }, {});
+export const selectSectionControlsMap = createSelector(
+  (state: RootState) => state.adminSectionControls.controls,
+  (controls) =>
+    controls.reduce<Record<string, AdminSectionControl>>((acc, ctrl) => {
+      acc[ctrl.section_id] = ctrl;
+      return acc;
+    }, {}),
+);
 
 export default adminSectionControlsSlice.reducer;
