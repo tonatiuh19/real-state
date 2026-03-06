@@ -213,6 +213,8 @@ function renderLetterHtml(
     "{{BROKER_PHONE}}": letter.broker_phone ?? "",
     "{{BROKER_EMAIL}}": letter.broker_email ?? "",
     "{{BROKER_SIGNATURE_SECTION}}": brokerSignatureSection,
+    "{{LOAN_TYPE}}": letter.loan_type ?? "",
+    "{{FICO_SCORE}}": letter.fico_score ? String(letter.fico_score) : "",
   };
 
   let rendered = html;
@@ -380,6 +382,13 @@ export function PreApprovalLetterModal({
         Yup.ref("max_approved_amount"),
         "Cannot exceed the maximum allowed amount",
       ),
+    loan_type: Yup.string().required("Loan type is required"),
+    fico_score: Yup.number()
+      .typeError("Enter a valid score")
+      .integer("Must be a whole number")
+      .min(300, "Min 300")
+      .max(850, "Max 850")
+      .required("FICO score is required"),
     letter_date: Yup.string().required("Letter date is required"),
     expires_at: Yup.string().required("Expiry date is required"),
   });
@@ -390,6 +399,8 @@ export function PreApprovalLetterModal({
       max_approved_amount:
         isOpen && !letter ? String(Math.round(loanAmount)) : "",
       approved_amount: isOpen && !letter ? String(Math.round(loanAmount)) : "",
+      loan_type: "",
+      fico_score: "",
       letter_date: "",
       expires_at: "",
     },
@@ -408,6 +419,10 @@ export function PreApprovalLetterModal({
               html_content: "",
               letter_date: values.letter_date,
               expires_at: values.expires_at || null,
+              loan_type: values.loan_type,
+              fico_score: values.fico_score
+                ? Number(values.fico_score)
+                : undefined,
             },
           }),
         ).unwrap();
@@ -759,6 +774,79 @@ export function PreApprovalLetterModal({
                         ) : (
                           <p className="text-xs text-muted-foreground">
                             Amount shown on the letter (≤ max)
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium text-foreground/80">
+                          Loan Type <span className="text-destructive">*</span>
+                        </Label>
+                        <Select
+                          value={createFormik.values.loan_type}
+                          onValueChange={(v) =>
+                            createFormik.setFieldValue("loan_type", v)
+                          }
+                        >
+                          <SelectTrigger
+                            className={cn(
+                              createFormik.touched.loan_type &&
+                                createFormik.errors.loan_type &&
+                                "border-destructive",
+                            )}
+                          >
+                            <SelectValue placeholder="Select loan type..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {[
+                              "FHA",
+                              "Conventional",
+                              "USDA",
+                              "VA",
+                              "Non-QM",
+                            ].map((t) => (
+                              <SelectItem key={t} value={t}>
+                                {t}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {createFormik.touched.loan_type &&
+                          createFormik.errors.loan_type && (
+                            <p className="text-xs text-destructive flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3" />
+                              {createFormik.errors.loan_type}
+                            </p>
+                          )}
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium text-foreground/80">
+                          FICO Score <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          type="number"
+                          id="fico_score"
+                          {...createFormik.getFieldProps("fico_score")}
+                          placeholder="720"
+                          min={300}
+                          max={850}
+                          className={cn(
+                            createFormik.touched.fico_score &&
+                              createFormik.errors.fico_score &&
+                              "border-destructive focus:ring-destructive/20",
+                          )}
+                        />
+                        {createFormik.touched.fico_score &&
+                        createFormik.errors.fico_score ? (
+                          <p className="text-xs text-destructive flex items-center gap-1">
+                            <AlertCircle className="h-3 w-3" />
+                            {createFormik.errors.fico_score}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Range: 300–850
                           </p>
                         )}
                       </div>

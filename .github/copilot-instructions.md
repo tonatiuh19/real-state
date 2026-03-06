@@ -10,6 +10,7 @@
 - **NO EXCEPTIONS to these rules**
 - **NEVER touch schema.sql, any database changes must be made through migration files in `database/migrations/`**
 - **When using any console logging for debugging use logger functions from `client/utils/logger.ts` for consistent formatting and log levels only in UI components**
+- **NEVER Patch issues, always fix the root cause of type errors or bugs immediately**
 
 ### Package Manager
 

@@ -315,44 +315,48 @@ const Clients = () => {
                 <Trash2 className="h-5 w-5" />
                 Delete Client — Permanent Action
               </AlertDialogTitle>
-              <AlertDialogDescription className="space-y-3">
-                <p>
-                  You are about to permanently delete{" "}
-                  <strong>
-                    {clientToDelete?.first_name} {clientToDelete?.last_name}
-                  </strong>
-                  . This action <strong>cannot be undone</strong>.
-                </p>
-                {clientToDelete && (
-                  <div className="p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-400 space-y-2">
-                    <p className="font-semibold text-sm">
-                      ⚠️ The following data will be permanently deleted:
-                    </p>
-                    <ul className="text-sm space-y-1 list-disc list-inside">
-                      <li>
-                        <strong>
-                          {clientToDelete.total_applications ?? 0}
-                        </strong>{" "}
-                        loan application(s) (
-                        {clientToDelete.active_applications ?? 0} active)
-                      </li>
-                      {(clientToDelete.total_conversations ?? 0) > 0 && (
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-sm text-muted-foreground">
+                  <span className="block">
+                    You are about to permanently delete{" "}
+                    <strong>
+                      {clientToDelete?.first_name} {clientToDelete?.last_name}
+                    </strong>
+                    . This action <strong>cannot be undone</strong>.
+                  </span>
+                  {clientToDelete && (
+                    <div className="p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-400 space-y-2">
+                      <span className="block font-semibold text-sm">
+                        ⚠️ The following data will be permanently deleted:
+                      </span>
+                      <ul className="text-sm space-y-1 list-disc list-inside">
                         <li>
-                          <strong>{clientToDelete.total_conversations}</strong>{" "}
-                          conversation thread(s) and all associated messages
-                          (emails, SMS, WhatsApp)
+                          <strong>
+                            {clientToDelete.total_applications ?? 0}
+                          </strong>{" "}
+                          loan application(s) (
+                          {clientToDelete.active_applications ?? 0} active)
                         </li>
+                        {(clientToDelete.total_conversations ?? 0) > 0 && (
+                          <li>
+                            <strong>
+                              {clientToDelete.total_conversations}
+                            </strong>{" "}
+                            conversation thread(s) and all associated messages
+                            (emails, SMS, WhatsApp)
+                          </li>
+                        )}
+                        <li>All client profile data and documents</li>
+                      </ul>
+                      {(clientToDelete.active_applications ?? 0) > 0 && (
+                        <span className="block text-sm font-semibold mt-2 text-red-600 dark:text-red-400">
+                          ⛔ This client has active applications — reassign or
+                          close them before deleting.
+                        </span>
                       )}
-                      <li>All client profile data and documents</li>
-                    </ul>
-                    {(clientToDelete.active_applications ?? 0) > 0 && (
-                      <p className="text-sm font-semibold mt-2 text-red-600 dark:text-red-400">
-                        ⛔ This client has active applications — reassign or
-                        close them before deleting.
-                      </p>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

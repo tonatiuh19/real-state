@@ -2695,15 +2695,19 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     let resolvedPartnerBrokerId: number | null = null;
     if (broker_token) {
       const [brokerRows] = await connection.query<any[]>(
-        "SELECT id, role FROM brokers WHERE public_token = ? AND status = 'active'",
+        "SELECT id, role, created_by_broker_id FROM brokers WHERE public_token = ? AND status = 'active'",
         [broker_token],
       );
       if (brokerRows.length > 0) {
-        const { id: bkId, role: bkRole } = brokerRows[0];
+        const { id: bkId, role: bkRole, created_by_broker_id } = brokerRows[0];
         if (bkRole === "admin") {
           resolvedBrokerUserId = bkId;
         } else {
+          // Partner broker — assign them as partner and their parent MB as the mortgage banker
           resolvedPartnerBrokerId = bkId;
+          if (created_by_broker_id) {
+            resolvedBrokerUserId = created_by_broker_id;
+          }
         }
       }
     }
@@ -3528,6 +3532,9 @@ const handleGetLoans: RequestHandler = async (req, res) => {
         b.email as broker_email,
         pb.first_name as partner_first_name,
         pb.last_name as partner_last_name,
+        COALESCE(b.first_name, mb.first_name) as effective_broker_first_name,
+        COALESCE(b.last_name, mb.last_name) as effective_broker_last_name,
+        COALESCE(b.id, mb.id) as effective_broker_id,
         (SELECT title 
          FROM tasks 
          WHERE application_id = la.id 
@@ -3551,6 +3558,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
       INNER JOIN clients c ON la.client_user_id = c.id
       LEFT JOIN brokers b ON la.broker_user_id = b.id
       LEFT JOIN brokers pb ON la.partner_broker_id = pb.id
+      LEFT JOIN brokers mb ON pb.created_by_broker_id = mb.id
       ${whereClause}
       ${orderClause}
       LIMIT ? OFFSET ?`,
@@ -3616,11 +3624,15 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
         b.first_name as broker_first_name,
         b.last_name as broker_last_name,
         pb.first_name as partner_first_name,
-        pb.last_name as partner_last_name
+        pb.last_name as partner_last_name,
+        COALESCE(b.first_name, mb.first_name) as effective_broker_first_name,
+        COALESCE(b.last_name, mb.last_name) as effective_broker_last_name,
+        COALESCE(b.id, mb.id) as effective_broker_id
       FROM loan_applications la
       INNER JOIN clients c ON la.client_user_id = c.id
       LEFT JOIN brokers b ON la.broker_user_id = b.id
       LEFT JOIN brokers pb ON la.partner_broker_id = pb.id
+      LEFT JOIN brokers mb ON pb.created_by_broker_id = mb.id
       ${whereClause}`,
       queryParams,
     )) as [RowDataPacket[], any];
@@ -4030,15 +4042,20 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
   try {
     const { clientId } = req.params;
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
 
     // Check if client exists and belongs to this broker
     const [clientRows] = await pool.query<RowDataPacket[]>(
       `SELECT c.*, COUNT(DISTINCT la.id) as total_applications
        FROM clients c 
        LEFT JOIN loan_applications la ON c.id = la.client_user_id
-       WHERE c.id = ? AND c.assigned_broker_id = ? AND c.tenant_id = ?
+       WHERE c.id = ? AND c.tenant_id = ?
+         ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ?)"}
        GROUP BY c.id`,
-      [clientId, brokerId, MORTGAGE_TENANT_ID],
+      isAdmin
+        ? [clientId, MORTGAGE_TENANT_ID]
+        : [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId],
     );
 
     if (!Array.isArray(clientRows) || clientRows.length === 0) {
@@ -4050,46 +4067,48 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
 
     const client = clientRows[0];
 
-    // Use the safety check utility
-    const safetyCheck = await checkDeletionSafety(
-      "clients",
-      parseInt(clientId.toString()),
-      [
-        {
-          table: "loan_applications",
-          foreignKey: "client_user_id",
-          tenantFilter: true,
-          friendlyName: "loan applications",
-        },
-        {
-          table: "tasks",
-          foreignKey: "assigned_to_user_id",
-          tenantFilter: true,
-          friendlyName: "assigned tasks",
-        },
-      ],
+    // Block deletion only if client has ACTIVE loan applications
+    const ACTIVE_STATUSES = [
+      "submitted",
+      "under_review",
+      "documents_pending",
+      "underwriting",
+      "conditional_approval",
+    ];
+    const placeholders = ACTIVE_STATUSES.map(() => "?").join(",");
+    const [activeRows] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as count FROM loan_applications
+       WHERE client_user_id = ? AND tenant_id = ? AND status IN (${placeholders})`,
+      [clientId, MORTGAGE_TENANT_ID, ...ACTIVE_STATUSES],
     );
-
-    if (!safetyCheck.canDelete) {
-      const totalViolations = safetyCheck.violations.reduce(
-        (sum, v) => sum + v.count,
-        0,
-      );
+    const activeCount = activeRows[0]?.count || 0;
+    if (activeCount > 0) {
       return res.status(400).json({
         success: false,
-        error:
-          "Cannot delete client: Client has associated data that must be handled first",
+        error: `Cannot delete client: ${activeCount} active loan application(s) must be closed or reassigned first`,
         details: {
           client_name: `${client.first_name} ${client.last_name}`,
-          client_email: client.email,
-          violations: safetyCheck.violations,
-          message: `This client has ${totalViolations} associated records. Please reassign or complete these items before deletion.`,
+          active_applications: activeCount,
         },
       });
     }
 
     console.log(
       `🗑️ Deleting client ${clientId} "${client.first_name} ${client.last_name}"`,
+    );
+
+    // Cascade: remove tasks linked to this client's loan applications
+    await pool.query(
+      `DELETE t FROM tasks t
+       INNER JOIN loan_applications la ON t.loan_id = la.id
+       WHERE la.client_user_id = ? AND la.tenant_id = ?`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+
+    // Cascade: remove loan applications
+    await pool.query(
+      "DELETE FROM loan_applications WHERE client_user_id = ? AND tenant_id = ?",
+      [clientId, MORTGAGE_TENANT_ID],
     );
 
     // Cascade: remove all conversation threads and communications for this client
@@ -4106,10 +4125,10 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
     );
 
     // Safe to delete
-    await pool.query(
-      "DELETE FROM clients WHERE id = ? AND assigned_broker_id = ? AND tenant_id = ?",
-      [clientId, brokerId, MORTGAGE_TENANT_ID],
-    );
+    await pool.query("DELETE FROM clients WHERE id = ? AND tenant_id = ?", [
+      clientId,
+      MORTGAGE_TENANT_ID,
+    ]);
 
     console.log(`✅ Successfully deleted client ${clientId}`);
 
@@ -10640,9 +10659,9 @@ function buildDefaultPreApprovalHtml(): string {
 
   <!-- LOAN DETAILS -->
   <p style="margin: 0 0 5px; font-size: 13px;">Purchase Price: {{APPROVED_AMOUNT}}</p>
-  <p style="margin: 0 0 5px; font-size: 13px;">Loan Type: </p>
+  <p style="margin: 0 0 5px; font-size: 13px;">Loan Type: {{LOAN_TYPE}}</p>
   <p style="margin: 0 0 5px; font-size: 13px;">Term: 30 years</p>
-  <p style="margin: 0 0 5px; font-size: 13px;">FICO Score: </p>
+  <p style="margin: 0 0 5px; font-size: 13px;">FICO Score: {{FICO_SCORE}}</p>
   <p style="margin: 0 0 20px; font-size: 13px;">Property Address: {{PROPERTY_ADDRESS}}</p>
 
   <!-- REVIEWED SECTION -->
@@ -10885,7 +10904,7 @@ const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
        LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
-       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN brokers lb ON la.partner_broker_id = lb.id
        LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.application_id = ? AND pal.tenant_id = ?
@@ -10929,13 +10948,23 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
     const brokerRole: string = (req as any).brokerRole;
     const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
 
-    const {
+    const [
       max_approved_amount,
       approved_amount,
       html_content,
       letter_date,
       expires_at,
-    } = req.body;
+      loan_type,
+      fico_score,
+    ] = [
+      req.body.max_approved_amount,
+      req.body.approved_amount,
+      req.body.html_content,
+      req.body.letter_date,
+      req.body.expires_at,
+      req.body.loan_type,
+      req.body.fico_score,
+    ];
 
     if (!approved_amount || isNaN(Number(approved_amount))) {
       return res
@@ -10990,8 +11019,8 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
 
     const [result] = await pool.query<any>(
       `INSERT INTO pre_approval_letters
-         (tenant_id, application_id, approved_amount, max_approved_amount, html_content, letter_date, expires_at, is_active, created_by_broker_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+         (tenant_id, application_id, approved_amount, max_approved_amount, html_content, letter_date, expires_at, loan_type, fico_score, is_active, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [
         loan.tenant_id,
         loanId,
@@ -11000,6 +11029,8 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
         finalHtml,
         finalDate,
         expires_at || null,
+        loan_type || null,
+        fico_score ? Number(fico_score) : null,
         brokerId,
       ],
     );
@@ -11053,7 +11084,7 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
        LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
-       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN brokers lb ON la.partner_broker_id = lb.id
        LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.id = ?`,
@@ -11257,7 +11288,7 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
        LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
-       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN brokers lb ON la.partner_broker_id = lb.id
        LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.id = ?`,
@@ -11334,7 +11365,7 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
        LEFT JOIN brokers b ON b.id = IF(b_creator.role = 'admin', b_creator.id, COALESCE(b_creator.created_by_broker_id, b_creator.id))
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        INNER JOIN loan_applications la ON pal.application_id = la.id
-       LEFT JOIN brokers lb ON la.broker_user_id = lb.id AND lb.role = 'broker'
+       LEFT JOIN brokers lb ON la.partner_broker_id = lb.id
        LEFT JOIN broker_profiles lbp ON lbp.broker_id = lb.id
        INNER JOIN clients c ON la.client_user_id = c.id
        WHERE pal.application_id = ? AND pal.tenant_id = ? AND pal.is_active = 1

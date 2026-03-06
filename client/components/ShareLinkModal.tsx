@@ -157,7 +157,7 @@ export default function ShareLinkModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-full sm:max-w-[520px] p-0 overflow-hidden rounded-2xl border border-gray-100 shadow-2xl">
+      <DialogContent className="w-full max-w-[calc(100%-2rem)] sm:max-w-[520px] p-0 overflow-hidden rounded-2xl border border-gray-100 shadow-2xl">
         {/* ── Accent top bar ── */}
         <div className="h-1 w-full bg-primary rounded-t-2xl" />
 
@@ -206,7 +206,7 @@ export default function ShareLinkModal({
         </div>
 
         {/* ── Body ── */}
-        <div className="px-6 py-5">
+        <div className="px-6 py-5 overflow-x-hidden">
           <AnimatePresence mode="wait">
             {/* ── Copy & Share Tab ── */}
             {activeTab === "link" && (
@@ -326,8 +326,9 @@ export default function ShareLinkModal({
                       <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest mb-3">
                         How it works
                       </p>
-                      <div className="relative flex items-start">
-                        <div className="absolute top-3 left-[12px] right-[12px] h-px bg-gray-200" />
+                      {/* 2×2 grid on mobile, single row on sm+ */}
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-3 sm:grid-cols-4 sm:gap-y-0 sm:relative">
+                        <div className="hidden sm:block absolute top-3 left-[12px] right-[12px] h-px bg-gray-200" />
                         {(
                           [
                             {
@@ -350,7 +351,7 @@ export default function ShareLinkModal({
                         ).map((step, i) => (
                           <div
                             key={i}
-                            className="relative z-10 flex-1 flex flex-col items-center gap-1.5 text-center"
+                            className="relative z-10 flex flex-col items-center gap-1.5 text-center"
                           >
                             <div className="flex h-6 w-6 items-center justify-center rounded-full bg-white border border-gray-200 shadow-sm text-primary">
                               {step.icon}

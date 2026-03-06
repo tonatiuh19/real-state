@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
 import type { GetClientsResponse } from "@shared/api";
+import { logger } from "@/lib/logger";
 
 interface ClientsState {
   clients: GetClientsResponse["clients"];
@@ -37,14 +38,19 @@ export const deleteClient = createAsyncThunk(
   async (clientId: number, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
+      logger.info(`[deleteClient] Sending DELETE /api/clients/${clientId}`);
       const { data } = await axios.delete(`/api/clients/${clientId}`, {
         headers: { Authorization: `Bearer ${sessionToken}` },
       });
+      logger.info(`[deleteClient] Success:`, data);
       return { clientId, message: data.message };
     } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.error || "Failed to delete client",
+      const errMsg = error.response?.data?.error || "Failed to delete client";
+      logger.error(
+        `[deleteClient] Failed (${error.response?.status}):`,
+        error.response?.data,
       );
+      return rejectWithValue(errMsg);
     }
   },
 );

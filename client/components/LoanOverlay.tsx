@@ -1095,18 +1095,23 @@ export function LoanOverlay({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="pt-4">
-                    {selectedLoan.broker_first_name ? (
+                    {selectedLoan.effective_broker_first_name ||
+                    selectedLoan.broker_first_name ? (
                       <div className="flex items-center gap-2 mb-3">
                         <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
                           <User className="h-4 w-4 text-blue-600" />
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-900">
-                            {selectedLoan.broker_first_name}{" "}
-                            {selectedLoan.broker_last_name}
+                            {selectedLoan.effective_broker_first_name ||
+                              selectedLoan.broker_first_name}{" "}
+                            {selectedLoan.effective_broker_last_name ||
+                              selectedLoan.broker_last_name}
                           </p>
                           <p className="text-xs text-gray-500">
-                            Currently assigned
+                            {selectedLoan.broker_user_id
+                              ? "Currently assigned"
+                              : "Via partner assignment"}
                           </p>
                         </div>
                       </div>
@@ -1120,8 +1125,12 @@ export function LoanOverlay({
                     )}
                     <Select
                       value={
-                        selectedLoan.broker_user_id
-                          ? String(selectedLoan.broker_user_id)
+                        selectedLoan.broker_user_id ||
+                        selectedLoan.effective_broker_id
+                          ? String(
+                              selectedLoan.broker_user_id ||
+                                selectedLoan.effective_broker_id,
+                            )
                           : "unassigned"
                       }
                       onValueChange={handleAssignBroker}
@@ -1250,11 +1259,12 @@ export function LoanOverlay({
                           <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
                           <div className="text-xs">
                             <p className="text-amber-800 font-medium mb-1">
-                              MISMO Export Unavailable
+                              MISMO Export & Preapproval Letter are locked until
+                              all tasks are approved.
                             </p>
                             <p className="text-amber-700">
-                              All tasks must be approved before MISMO export is
-                              available.
+                              All tasks must be approved to ensure data accuracy
+                              and compliance. There are currently
                               {totalTasks - approvedTasks} task
                               {totalTasks - approvedTasks !== 1 ? "s" : ""}{" "}
                               remaining.

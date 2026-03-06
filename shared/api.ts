@@ -1253,6 +1253,8 @@ export interface PreApprovalLetter {
   html_content: string;
   letter_date: string;
   expires_at: string | null;
+  loan_type: string | null;
+  fico_score: number | null;
   is_active: boolean;
   created_by_broker_id: number;
   updated_by_broker_id: number | null;
@@ -1299,6 +1301,8 @@ export interface CreatePreApprovalLetterRequest {
   html_content: string;
   letter_date: string;
   expires_at?: string | null;
+  loan_type?: string;
+  fico_score?: number | null;
 }
 
 export interface CreatePreApprovalLetterResponse {
