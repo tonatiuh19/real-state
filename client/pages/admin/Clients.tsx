@@ -42,6 +42,8 @@ const Clients = () => {
   const { clients, isLoading: loading } = useAppSelector(
     (state) => state.clients,
   );
+  const { user } = useAppSelector((state) => state.brokerAuth);
+  const isPartner = user?.role === "broker";
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -215,7 +217,7 @@ const Clients = () => {
                       <TableHead>Active</TableHead>
                       <TableHead>Date of Birth</TableHead>
                       <TableHead>SSN</TableHead>
-                      <TableHead>Actions</TableHead>
+                      {!isPartner && <TableHead>Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -281,18 +283,20 @@ const Clients = () => {
                           <TableCell>
                             <span className="text-sm font-mono">N/A</span>
                           </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleDeleteClick(client)}
-                              disabled={isDeleting}
-                              className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                              Delete
-                            </Button>
-                          </TableCell>
+                          {!isPartner && (
+                            <TableCell>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDeleteClick(client)}
+                                disabled={isDeleting}
+                                className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Delete
+                              </Button>
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))
                     )}

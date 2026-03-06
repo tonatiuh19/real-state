@@ -787,7 +787,8 @@ export function LoanOverlay({
 
   // Check if all tasks are fully completed (approved) for MISMO export
   const areAllTasksCompleted = totalTasks > 0 && approvedTasks === totalTasks;
-  const canExportMISMO = sessionToken && areAllTasksCompleted; // Only brokers/admins with completed tasks
+  const canExportMISMO =
+    sessionToken && areAllTasksCompleted && user?.role !== "broker"; // Partners cannot export MISMO
   const canShowPreApproval = sessionToken && areAllTasksCompleted; // Only when all tasks are approved
 
   return (
@@ -836,7 +837,9 @@ export function LoanOverlay({
                     <Download className="h-3 w-3" />
                     {isSubmitting ? "Generating..." : "Export MISMO"}
                   </Button>
-                ) : totalTasks > 0 && !areAllTasksCompleted ? (
+                ) : user?.role !== "broker" &&
+                  totalTasks > 0 &&
+                  !areAllTasksCompleted ? (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -861,7 +864,7 @@ export function LoanOverlay({
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                ) : totalTasks === 0 ? (
+                ) : user?.role !== "broker" && totalTasks === 0 ? (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>

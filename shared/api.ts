@@ -1089,10 +1089,19 @@ export interface MortgageBankerPublicInfo {
   license_number: string | null;
   bio: string | null;
   avatar_url: string | null;
+  office_address: string | null;
   office_city: string | null;
   office_state: string | null;
+  office_zip: string | null;
   years_experience: number | null;
   total_loans_closed: number;
+  // Social networks
+  facebook_url: string | null;
+  instagram_url: string | null;
+  linkedin_url: string | null;
+  twitter_url: string | null;
+  youtube_url: string | null;
+  website_url: string | null;
 }
 
 export interface BrokerPublicProfile {
@@ -1111,8 +1120,16 @@ export interface BrokerPublicProfile {
   office_address: string | null;
   office_city: string | null;
   office_state: string | null;
+  office_zip: string | null;
   years_experience: number | null;
   total_loans_closed: number;
+  // Social networks
+  facebook_url: string | null;
+  instagram_url: string | null;
+  linkedin_url: string | null;
+  twitter_url: string | null;
+  youtube_url: string | null;
+  website_url: string | null;
   // Populated when the broker is a partner (role="broker") and has an associated Mortgage Banker
   mortgage_banker: MortgageBankerPublicInfo | null;
 }
@@ -1166,6 +1183,13 @@ export interface BrokerProfileDetails {
   office_zip: string | null;
   years_experience: number | null;
   total_loans_closed: number;
+  // Social networks
+  facebook_url: string | null;
+  instagram_url: string | null;
+  linkedin_url: string | null;
+  twitter_url: string | null;
+  youtube_url: string | null;
+  website_url: string | null;
 }
 
 export interface GetBrokerProfileResponse {
@@ -1185,6 +1209,13 @@ export interface UpdateBrokerProfileRequest {
   office_state?: string;
   office_zip?: string;
   years_experience?: number | null;
+  // Social networks
+  facebook_url?: string | null;
+  instagram_url?: string | null;
+  linkedin_url?: string | null;
+  twitter_url?: string | null;
+  youtube_url?: string | null;
+  website_url?: string | null;
 }
 
 export interface UpdateBrokerProfileResponse {

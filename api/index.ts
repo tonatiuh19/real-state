@@ -2084,7 +2084,9 @@ const handleGetBrokerProfile: RequestHandler = async (req, res) => {
         b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
         b.license_number, b.specializations,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
-        bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+        bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
+        bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
+        bp.youtube_url, bp.website_url
       FROM brokers b
       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
       WHERE b.id = ? AND b.tenant_id = ?`,
@@ -2135,6 +2137,12 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
       office_state,
       office_zip,
       years_experience,
+      facebook_url,
+      instagram_url,
+      linkedin_url,
+      twitter_url,
+      youtube_url,
+      website_url,
     } = req.body;
 
     // Update brokers table
@@ -2202,6 +2210,30 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
           : null,
       );
     }
+    if (facebook_url !== undefined) {
+      profileUpdateCols.push("facebook_url");
+      profileValues.push(facebook_url || null);
+    }
+    if (instagram_url !== undefined) {
+      profileUpdateCols.push("instagram_url");
+      profileValues.push(instagram_url || null);
+    }
+    if (linkedin_url !== undefined) {
+      profileUpdateCols.push("linkedin_url");
+      profileValues.push(linkedin_url || null);
+    }
+    if (twitter_url !== undefined) {
+      profileUpdateCols.push("twitter_url");
+      profileValues.push(twitter_url || null);
+    }
+    if (youtube_url !== undefined) {
+      profileUpdateCols.push("youtube_url");
+      profileValues.push(youtube_url || null);
+    }
+    if (website_url !== undefined) {
+      profileUpdateCols.push("website_url");
+      profileValues.push(website_url || null);
+    }
 
     if (profileUpdateCols.length > 0) {
       const [existing] = await pool.query<any[]>(
@@ -2232,7 +2264,9 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
         b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
         b.license_number, b.specializations,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
-        bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+        bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
+        bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
+        bp.youtube_url, bp.website_url
       FROM brokers b
       LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
       WHERE b.id = ? AND b.tenant_id = ?`,
@@ -2955,7 +2989,9 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
         b.id, b.first_name, b.last_name, b.email, b.phone, b.role,
         b.license_number, b.specializations, b.public_token, b.created_by_broker_id,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
-        bp.office_state, bp.years_experience, bp.total_loans_closed
+        bp.office_state, bp.office_zip, bp.years_experience, bp.total_loans_closed,
+        bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
+        bp.youtube_url, bp.website_url
        FROM brokers b
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        WHERE b.public_token = ? AND b.status = 'active'`,
@@ -2975,8 +3011,10 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
       const [mbRows] = await pool.query<any[]>(
         `SELECT
           b.id, b.first_name, b.last_name, b.email, b.phone, b.license_number,
-          bp.bio, bp.avatar_url, bp.office_city, bp.office_state,
-          bp.years_experience, bp.total_loans_closed
+          bp.bio, bp.avatar_url, bp.office_address, bp.office_city, bp.office_state,
+          bp.office_zip, bp.years_experience, bp.total_loans_closed,
+          bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
+          bp.youtube_url, bp.website_url
          FROM brokers b
          LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
          WHERE b.id = ? AND b.status = 'active'`,
@@ -2993,10 +3031,18 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
           license_number: mb.license_number,
           bio: mb.bio,
           avatar_url: mb.avatar_url,
+          office_address: mb.office_address,
           office_city: mb.office_city,
           office_state: mb.office_state,
+          office_zip: mb.office_zip,
           years_experience: mb.years_experience,
           total_loans_closed: mb.total_loans_closed || 0,
+          facebook_url: mb.facebook_url,
+          instagram_url: mb.instagram_url,
+          linkedin_url: mb.linkedin_url,
+          twitter_url: mb.twitter_url,
+          youtube_url: mb.youtube_url,
+          website_url: mb.website_url,
         };
       }
     }
@@ -3022,8 +3068,15 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
         office_address: row.office_address,
         office_city: row.office_city,
         office_state: row.office_state,
+        office_zip: row.office_zip,
         years_experience: row.years_experience,
         total_loans_closed: row.total_loans_closed || 0,
+        facebook_url: row.facebook_url,
+        instagram_url: row.instagram_url,
+        linkedin_url: row.linkedin_url,
+        twitter_url: row.twitter_url,
+        youtube_url: row.youtube_url,
+        website_url: row.website_url,
         mortgage_banker: mortgageBanker,
       },
     });
@@ -3284,15 +3337,16 @@ const handleGetLoans: RequestHandler = async (req, res) => {
     } = req.query;
 
     // Build base WHERE clause for authorization
+    // Partners may appear as broker_user_id OR as partner_broker_id (share-link submissions)
     let whereClause =
       brokerRole === "admin"
         ? "WHERE la.tenant_id = ?"
-        : "WHERE la.broker_user_id = ? AND la.tenant_id = ?";
+        : "WHERE (la.broker_user_id = ? OR la.partner_broker_id = ?) AND la.tenant_id = ?";
 
     const baseParams =
       brokerRole === "admin"
         ? [MORTGAGE_TENANT_ID]
-        : [brokerId, MORTGAGE_TENANT_ID];
+        : [brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     const subqueryParams = [
       MORTGAGE_TENANT_ID, // For first subquery (next_task)
@@ -3391,7 +3445,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
     const countQueryParams =
       brokerRole === "admin"
         ? [MORTGAGE_TENANT_ID]
-        : [brokerId, MORTGAGE_TENANT_ID];
+        : [brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     // Add filter parameters to count query
     if (status && status !== "all") {
@@ -3472,6 +3526,8 @@ const handleGetLoans: RequestHandler = async (req, res) => {
         b.first_name as broker_first_name,
         b.last_name as broker_last_name,
         b.email as broker_email,
+        pb.first_name as partner_first_name,
+        pb.last_name as partner_last_name,
         (SELECT title 
          FROM tasks 
          WHERE application_id = la.id 
@@ -3494,6 +3550,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
       FROM loan_applications la
       INNER JOIN clients c ON la.client_user_id = c.id
       LEFT JOIN brokers b ON la.broker_user_id = b.id
+      LEFT JOIN brokers pb ON la.partner_broker_id = pb.id
       ${whereClause}
       ${orderClause}
       LIMIT ? OFFSET ?`,
@@ -3538,15 +3595,15 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
     const brokerRole = (req as any).brokerRole;
     const loanId = req.params.loanId;
 
-    // Admins can view any loan, regular brokers only their own
+    // Admins can view any loan, regular brokers only their own (via broker_user_id or partner_broker_id)
     const whereClause =
       brokerRole === "admin"
         ? "WHERE la.id = ? AND la.tenant_id = ?"
-        : "WHERE la.id = ? AND la.broker_user_id = ? AND la.tenant_id = ?";
+        : "WHERE la.id = ? AND (la.broker_user_id = ? OR la.partner_broker_id = ?) AND la.tenant_id = ?";
     const queryParams =
       brokerRole === "admin"
         ? [loanId, MORTGAGE_TENANT_ID]
-        : [loanId, brokerId, MORTGAGE_TENANT_ID];
+        : [loanId, brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     // Get loan details with client, broker, and partner broker info
     const [loans] = (await pool.query(
@@ -3827,9 +3884,9 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         COALESCE(SUM(loan_amount), 0) as totalPipelineValue,
         COUNT(*) as activeApplications
       FROM loan_applications
-      WHERE broker_user_id = ? AND tenant_id = ?
+      WHERE (broker_user_id = ? OR partner_broker_id = ?) AND tenant_id = ?
         AND status NOT IN ('denied', 'cancelled', 'closed')`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      [brokerId, brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get average closing days (from submitted to closed)
@@ -3837,12 +3894,12 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
       `SELECT 
         COALESCE(AVG(DATEDIFF(actual_close_date, submitted_at)), 0) as avgClosingDays
       FROM loan_applications
-      WHERE broker_user_id = ? AND tenant_id = ?
+      WHERE (broker_user_id = ? OR partner_broker_id = ?) AND tenant_id = ?
         AND status = 'closed'
         AND actual_close_date IS NOT NULL
         AND submitted_at IS NOT NULL
         AND submitted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      [brokerId, brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get closure rate (approved/closed vs denied/cancelled)
@@ -3851,9 +3908,9 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         COUNT(CASE WHEN status IN ('approved', 'closed') THEN 1 END) as successful,
         COUNT(CASE WHEN status IN ('denied', 'cancelled') THEN 1 END) as unsuccessful
       FROM loan_applications
-      WHERE broker_user_id = ? AND tenant_id = ?
+      WHERE (broker_user_id = ? OR partner_broker_id = ?) AND tenant_id = ?
         AND status IN ('approved', 'closed', 'denied', 'cancelled')`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      [brokerId, brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     const successful = closureRateStats[0]?.successful || 0;
@@ -3868,11 +3925,11 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         COUNT(*) as applications,
         COUNT(CASE WHEN status IN ('approved', 'closed') THEN 1 END) as closed
       FROM loan_applications
-      WHERE broker_user_id = ? AND tenant_id = ?
+      WHERE (broker_user_id = ? OR partner_broker_id = ?) AND tenant_id = ?
         AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
       GROUP BY DATE(created_at)
       ORDER BY DATE(created_at) ASC`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      [brokerId, brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     // Get status breakdown
@@ -3881,11 +3938,11 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
         status,
         COUNT(*) as count
       FROM loan_applications
-      WHERE broker_user_id = ? AND tenant_id = ?
+      WHERE (broker_user_id = ? OR partner_broker_id = ?) AND tenant_id = ?
         AND status NOT IN ('denied', 'cancelled')
       GROUP BY status
       ORDER BY count DESC`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      [brokerId, brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
     const stats = {
@@ -4539,7 +4596,9 @@ const handleGetBrokerProfileByAdmin: RequestHandler = async (req, res) => {
               b.license_number, b.specializations,
               bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
               bp.office_state, bp.office_zip, bp.years_experience,
-              COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+              COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
+              bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
+              bp.youtube_url, bp.website_url
        FROM brokers b
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        WHERE b.id = ? AND b.tenant_id = ?`,
@@ -4583,6 +4642,12 @@ const handleUpdateBrokerProfileByAdmin: RequestHandler = async (req, res) => {
       office_state,
       office_zip,
       years_experience,
+      facebook_url,
+      instagram_url,
+      linkedin_url,
+      twitter_url,
+      youtube_url,
+      website_url,
     } = req.body;
 
     const [adminCheck] = await pool.query<RowDataPacket[]>(
@@ -4624,6 +4689,30 @@ const handleUpdateBrokerProfileByAdmin: RequestHandler = async (req, res) => {
           : null,
       );
     }
+    if (facebook_url !== undefined) {
+      profileCols.push("facebook_url");
+      profileVals.push(facebook_url || null);
+    }
+    if (instagram_url !== undefined) {
+      profileCols.push("instagram_url");
+      profileVals.push(instagram_url || null);
+    }
+    if (linkedin_url !== undefined) {
+      profileCols.push("linkedin_url");
+      profileVals.push(linkedin_url || null);
+    }
+    if (twitter_url !== undefined) {
+      profileCols.push("twitter_url");
+      profileVals.push(twitter_url || null);
+    }
+    if (youtube_url !== undefined) {
+      profileCols.push("youtube_url");
+      profileVals.push(youtube_url || null);
+    }
+    if (website_url !== undefined) {
+      profileCols.push("website_url");
+      profileVals.push(website_url || null);
+    }
 
     if (profileCols.length > 0) {
       const [existing] = await pool.query<RowDataPacket[]>(
@@ -4651,7 +4740,9 @@ const handleUpdateBrokerProfileByAdmin: RequestHandler = async (req, res) => {
               b.license_number, b.specializations,
               bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
               bp.office_state, bp.office_zip, bp.years_experience,
-              COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
+              COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
+              bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
+              bp.youtube_url, bp.website_url
        FROM brokers b
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
        WHERE b.id = ? AND b.tenant_id = ?`,

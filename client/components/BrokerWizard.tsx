@@ -21,7 +21,23 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { X, User, MapPin, Briefcase, Loader2, Camera } from "lucide-react";
+import {
+  X,
+  User,
+  MapPin,
+  Briefcase,
+  Loader2,
+  Camera,
+  Globe,
+  Share2,
+} from "lucide-react";
+import {
+  FaFacebook,
+  FaInstagram,
+  FaLinkedin,
+  FaXTwitter,
+  FaYoutube,
+} from "react-icons/fa6";
 import type { Broker } from "@shared/api";
 import { logger } from "@/lib/logger";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
@@ -58,6 +74,13 @@ export interface BrokerFormValues {
   office_state: string;
   office_zip: string;
   years_experience: string;
+  // Social networks
+  facebook_url: string;
+  instagram_url: string;
+  linkedin_url: string;
+  twitter_url: string;
+  youtube_url: string;
+  website_url: string;
 }
 
 const validationSchema = Yup.object({
@@ -85,6 +108,12 @@ const validationSchema = Yup.object({
     .max(60, "Must be 60 or less")
     .optional()
     .nullable(),
+  facebook_url: Yup.string().url("Must be a valid URL").optional().nullable(),
+  instagram_url: Yup.string().url("Must be a valid URL").optional().nullable(),
+  linkedin_url: Yup.string().url("Must be a valid URL").optional().nullable(),
+  twitter_url: Yup.string().url("Must be a valid URL").optional().nullable(),
+  youtube_url: Yup.string().url("Must be a valid URL").optional().nullable(),
+  website_url: Yup.string().url("Must be a valid URL").optional().nullable(),
 });
 
 const specializationOptions = [
@@ -147,6 +176,12 @@ export function BrokerWizard({
       office_state: "",
       office_zip: "",
       years_experience: "",
+      facebook_url: "",
+      instagram_url: "",
+      linkedin_url: "",
+      twitter_url: "",
+      youtube_url: "",
+      website_url: "",
     },
     validationSchema,
     enableReinitialize: true,
@@ -178,6 +213,12 @@ export function BrokerWizard({
           selectedBrokerProfile.years_experience != null
             ? String(selectedBrokerProfile.years_experience)
             : "",
+        facebook_url: (selectedBrokerProfile as any).facebook_url || "",
+        instagram_url: (selectedBrokerProfile as any).instagram_url || "",
+        linkedin_url: (selectedBrokerProfile as any).linkedin_url || "",
+        twitter_url: (selectedBrokerProfile as any).twitter_url || "",
+        youtube_url: (selectedBrokerProfile as any).youtube_url || "",
+        website_url: (selectedBrokerProfile as any).website_url || "",
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -651,6 +692,152 @@ export function BrokerWizard({
                               {formik.errors.years_experience}
                             </p>
                           )}
+                      </section>
+
+                      <Separator />
+
+                      {/* Social Networks */}
+                      <section className="space-y-4">
+                        <div className="flex items-center gap-2">
+                          <Share2 className="h-4 w-4 text-red-500" />
+                          <h3 className="text-sm font-semibold text-gray-900">
+                            Social Networks
+                          </h3>
+                        </div>
+                        <div className="space-y-3">
+                          {/* Website */}
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="website_url"
+                              className="flex items-center gap-1.5"
+                            >
+                              <Globe className="h-3.5 w-3.5 text-gray-400" />{" "}
+                              Website
+                            </Label>
+                            <Input
+                              id="website_url"
+                              type="url"
+                              placeholder="https://yourwebsite.com"
+                              {...formik.getFieldProps("website_url")}
+                            />
+                            {formik.touched.website_url &&
+                              formik.errors.website_url && (
+                                <p className="text-xs text-red-500">
+                                  {formik.errors.website_url}
+                                </p>
+                              )}
+                          </div>
+                          {/* LinkedIn */}
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="linkedin_url"
+                              className="flex items-center gap-1.5"
+                            >
+                              <FaLinkedin className="h-3.5 w-3.5 text-[#0A66C2]" />{" "}
+                              LinkedIn
+                            </Label>
+                            <Input
+                              id="linkedin_url"
+                              type="url"
+                              placeholder="https://linkedin.com/in/yourprofile"
+                              {...formik.getFieldProps("linkedin_url")}
+                            />
+                            {formik.touched.linkedin_url &&
+                              formik.errors.linkedin_url && (
+                                <p className="text-xs text-red-500">
+                                  {formik.errors.linkedin_url}
+                                </p>
+                              )}
+                          </div>
+                          {/* Facebook */}
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="facebook_url"
+                              className="flex items-center gap-1.5"
+                            >
+                              <FaFacebook className="h-3.5 w-3.5 text-[#1877F2]" />{" "}
+                              Facebook
+                            </Label>
+                            <Input
+                              id="facebook_url"
+                              type="url"
+                              placeholder="https://facebook.com/yourpage"
+                              {...formik.getFieldProps("facebook_url")}
+                            />
+                            {formik.touched.facebook_url &&
+                              formik.errors.facebook_url && (
+                                <p className="text-xs text-red-500">
+                                  {formik.errors.facebook_url}
+                                </p>
+                              )}
+                          </div>
+                          {/* Instagram */}
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="instagram_url"
+                              className="flex items-center gap-1.5"
+                            >
+                              <FaInstagram className="h-3.5 w-3.5 text-[#E1306C]" />{" "}
+                              Instagram
+                            </Label>
+                            <Input
+                              id="instagram_url"
+                              type="url"
+                              placeholder="https://instagram.com/yourhandle"
+                              {...formik.getFieldProps("instagram_url")}
+                            />
+                            {formik.touched.instagram_url &&
+                              formik.errors.instagram_url && (
+                                <p className="text-xs text-red-500">
+                                  {formik.errors.instagram_url}
+                                </p>
+                              )}
+                          </div>
+                          {/* X / Twitter */}
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="twitter_url"
+                              className="flex items-center gap-1.5"
+                            >
+                              <FaXTwitter className="h-3.5 w-3.5 text-gray-900" />{" "}
+                              X
+                            </Label>
+                            <Input
+                              id="twitter_url"
+                              type="url"
+                              placeholder="https://x.com/yourhandle"
+                              {...formik.getFieldProps("twitter_url")}
+                            />
+                            {formik.touched.twitter_url &&
+                              formik.errors.twitter_url && (
+                                <p className="text-xs text-red-500">
+                                  {formik.errors.twitter_url}
+                                </p>
+                              )}
+                          </div>
+                          {/* YouTube */}
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor="youtube_url"
+                              className="flex items-center gap-1.5"
+                            >
+                              <FaYoutube className="h-3.5 w-3.5 text-[#FF0000]" />{" "}
+                              YouTube
+                            </Label>
+                            <Input
+                              id="youtube_url"
+                              type="url"
+                              placeholder="https://youtube.com/@yourchannel"
+                              {...formik.getFieldProps("youtube_url")}
+                            />
+                            {formik.touched.youtube_url &&
+                              formik.errors.youtube_url && (
+                                <p className="text-xs text-red-500">
+                                  {formik.errors.youtube_url}
+                                </p>
+                              )}
+                          </div>
+                        </div>
                       </section>
                     </>
                   )}

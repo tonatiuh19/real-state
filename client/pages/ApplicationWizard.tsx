@@ -30,7 +30,15 @@ import {
   MapPin,
   Phone,
   Star,
+  Globe,
 } from "lucide-react";
+import {
+  FaFacebook,
+  FaInstagram,
+  FaLinkedin,
+  FaXTwitter,
+  FaYoutube,
+} from "react-icons/fa6";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
@@ -197,8 +205,8 @@ const AvatarCircle = ({
   size?: "sm" | "lg";
   onClick?: () => void;
 }) => {
-  const dim = size === "lg" ? "h-[88px] w-[88px]" : "h-8 w-8";
-  const text = size === "lg" ? "text-2xl" : "text-xs";
+  const dim = size === "lg" ? "h-[110px] w-[110px]" : "h-8 w-8";
+  const text = size === "lg" ? "text-3xl" : "text-xs";
   return (
     <button
       type="button"
@@ -249,11 +257,19 @@ const ApplicationWizard = () => {
     license_number: string | null;
     bio: string | null;
     avatar_url: string | null;
+    office_address: string | null;
     office_city: string | null;
     office_state: string | null;
+    office_zip: string | null;
     role?: string;
     years_experience?: number | null;
     total_loans_closed?: number;
+    facebook_url?: string | null;
+    instagram_url?: string | null;
+    linkedin_url?: string | null;
+    twitter_url?: string | null;
+    youtube_url?: string | null;
+    website_url?: string | null;
   } | null>(null);
 
   const navigate = useNavigate();
@@ -432,7 +448,7 @@ const ApplicationWizard = () => {
           <img
             src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
             alt="Encore Mortgage"
-            className="h-10 w-auto"
+            className="h-12 w-auto"
           />
         </motion.div>
 
@@ -472,7 +488,7 @@ const ApplicationWizard = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
-              className="w-full max-w-sm"
+              className="w-full max-w-md"
             >
               {(() => {
                 const isHomeTeam =
@@ -482,7 +498,7 @@ const ApplicationWizard = () => {
                   <>
                     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                       <div className="h-1 bg-primary" />
-                      <div className="p-7">
+                      <div className="p-9">
                         {isHomeTeam ? (
                           /* ── My Home Team Layout ── */
                           <>
@@ -512,10 +528,10 @@ const ApplicationWizard = () => {
 
                             {/* Title */}
                             <div className="text-center mb-5">
-                              <h1 className="text-xl font-extrabold text-gray-900 tracking-tight">
+                              <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">
                                 My Home Team
                               </h1>
-                              <p className="text-xs text-gray-400 mt-1">
+                              <p className="text-sm text-gray-400 mt-1">
                                 Your dedicated home loan professionals
                               </p>
                             </div>
@@ -527,7 +543,7 @@ const ApplicationWizard = () => {
                                 onClick={() =>
                                   setContactModalPerson(brokerInfo)
                                 }
-                                className="text-sm font-semibold text-primary hover:underline underline-offset-2 transition-colors"
+                                className="text-base font-semibold text-primary hover:underline underline-offset-2 transition-colors"
                               >
                                 {brokerInfo.first_name} {brokerInfo.last_name}
                               </button>
@@ -541,7 +557,7 @@ const ApplicationWizard = () => {
                                     brokerInfo.mortgage_banker,
                                   )
                                 }
-                                className="text-sm font-semibold text-primary hover:underline underline-offset-2 transition-colors"
+                                className="text-base font-semibold text-primary hover:underline underline-offset-2 transition-colors"
                               >
                                 {brokerInfo.mortgage_banker!.first_name}{" "}
                                 {brokerInfo.mortgage_banker!.last_name}
@@ -553,7 +569,7 @@ const ApplicationWizard = () => {
                         ) : (
                           /* ── Single Mortgage Banker Layout ── */
                           <>
-                            <div className="flex items-center gap-4 mb-6">
+                            <div className="flex items-center gap-5 mb-7">
                               <AvatarCircle
                                 person={brokerInfo}
                                 onClick={() =>
@@ -568,22 +584,14 @@ const ApplicationWizard = () => {
                                   }
                                   className="text-left"
                                 >
-                                  <h1 className="text-lg font-bold text-gray-900 truncate hover:underline underline-offset-2">
+                                  <h1 className="text-xl font-bold text-gray-900 truncate hover:underline underline-offset-2">
                                     {brokerInfo.first_name}{" "}
                                     {brokerInfo.last_name}
                                   </h1>
                                 </button>
-                                <p className="text-xs text-gray-500 mt-0.5">
+                                <p className="text-sm text-gray-500 mt-0.5">
                                   Mortgage Banker
                                 </p>
-                                {brokerInfo.license_number && (
-                                  <Badge
-                                    variant="outline"
-                                    className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
-                                  >
-                                    NMLS #{brokerInfo.license_number}
-                                  </Badge>
-                                )}
                               </div>
                             </div>
 
@@ -593,19 +601,6 @@ const ApplicationWizard = () => {
                               (brokerInfo.specializations?.length ?? 0) >
                                 0) && (
                               <div className="flex gap-2 mb-5">
-                                {brokerInfo.years_experience && (
-                                  <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
-                                    <Award className="h-3.5 w-3.5 text-primary shrink-0" />
-                                    <div>
-                                      <p className="text-sm font-bold text-gray-900 leading-none">
-                                        {brokerInfo.years_experience}
-                                      </p>
-                                      <p className="text-[10px] text-gray-400">
-                                        Yrs exp.
-                                      </p>
-                                    </div>
-                                  </div>
-                                )}
                                 {brokerInfo.total_loans_closed > 0 && (
                                   <div className="flex-1 flex items-center gap-1.5 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
                                     <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
@@ -632,29 +627,9 @@ const ApplicationWizard = () => {
                             )}
 
                             {brokerInfo.bio && (
-                              <p className="text-xs text-gray-500 italic leading-relaxed mb-5 border-l-2 border-primary/40 pl-3">
+                              <p className="text-sm text-gray-500 italic leading-relaxed mb-5 border-l-2 border-primary/40 pl-3">
                                 "{brokerInfo.bio}"
                               </p>
-                            )}
-
-                            {(brokerInfo.phone || brokerInfo.office_city) && (
-                              <div className="flex flex-wrap gap-3 mb-5">
-                                {brokerInfo.phone && (
-                                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                                    <Phone className="h-3 w-3 text-gray-400" />{" "}
-                                    {brokerInfo.phone}
-                                  </div>
-                                )}
-                                {brokerInfo.office_city && (
-                                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                                    <MapPin className="h-3 w-3 text-gray-400" />
-                                    {brokerInfo.office_city}
-                                    {brokerInfo.office_state
-                                      ? `, ${brokerInfo.office_state}`
-                                      : ""}
-                                  </div>
-                                )}
-                              </div>
                             )}
 
                             <Separator className="mb-5" />
@@ -663,16 +638,16 @@ const ApplicationWizard = () => {
 
                         {/* Email form — shared by both layouts */}
                         <div className="space-y-1">
-                          <h2 className="text-base font-bold text-gray-900 mb-0.5">
+                          <h2 className="text-lg font-bold text-gray-900 mb-0.5">
                             Ready to get started?
                           </h2>
-                          <p className="text-xs text-gray-500 mb-3">
+                          <p className="text-sm text-gray-500 mb-3">
                             Enter your email to begin your mortgage application.
                           </p>
                           <div className="space-y-1.5">
                             <label
                               htmlFor="guest-email"
-                              className="text-xs font-semibold text-gray-700"
+                              className="text-sm font-semibold text-gray-700"
                             >
                               Your Email Address
                             </label>
@@ -784,14 +759,6 @@ const ApplicationWizard = () => {
                             ? "Mortgage Banker"
                             : "Partner"}
                         </p>
-                        {contactModalPerson.license_number && (
-                          <Badge
-                            variant="outline"
-                            className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
-                          >
-                            NMLS #{contactModalPerson.license_number}
-                          </Badge>
-                        )}
                       </div>
                     </div>
                   </DialogHeader>
@@ -837,41 +804,126 @@ const ApplicationWizard = () => {
                         </p>
                       </div>
                     </a>
-                    {(contactModalPerson.office_city ||
-                      contactModalPerson.office_state) && (
-                      <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                          <MapPin className="h-3.5 w-3.5 text-primary" />
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
-                            Location
-                          </p>
-                          <p className="text-sm font-semibold text-gray-900">
-                            {contactModalPerson.office_city}
-                            {contactModalPerson.office_state
-                              ? `, ${contactModalPerson.office_state}`
-                              : ""}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                    {contactModalPerson.years_experience && (
-                      <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                          <Award className="h-3.5 w-3.5 text-primary" />
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
-                            Experience
-                          </p>
-                          <p className="text-sm font-semibold text-gray-900">
-                            {contactModalPerson.years_experience} years
-                          </p>
-                        </div>
-                      </div>
-                    )}
+                    {(contactModalPerson.office_address ||
+                      contactModalPerson.office_city ||
+                      contactModalPerson.office_state) &&
+                      (() => {
+                        const addressParts = [
+                          contactModalPerson.office_address,
+                          contactModalPerson.office_city,
+                          contactModalPerson.office_state,
+                          contactModalPerson.office_zip,
+                        ].filter(Boolean);
+                        const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressParts.join(", "))}`;
+                        return (
+                          <a
+                            href={mapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
+                          >
+                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                              <MapPin className="h-3.5 w-3.5 text-primary" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
+                                Address · Open in Maps ↗
+                              </p>
+                              {contactModalPerson.office_address && (
+                                <p className="text-sm font-semibold text-gray-900">
+                                  {contactModalPerson.office_address}
+                                </p>
+                              )}
+                              <p className="text-sm font-semibold text-gray-900">
+                                {[
+                                  contactModalPerson.office_city,
+                                  contactModalPerson.office_state,
+                                  contactModalPerson.office_zip,
+                                ]
+                                  .filter(Boolean)
+                                  .join(", ")}
+                              </p>
+                            </div>
+                          </a>
+                        );
+                      })()}
                   </div>
+
+                  {/* Social Networks */}
+                  {(contactModalPerson.website_url ||
+                    contactModalPerson.linkedin_url ||
+                    contactModalPerson.facebook_url ||
+                    contactModalPerson.instagram_url ||
+                    contactModalPerson.twitter_url ||
+                    contactModalPerson.youtube_url) && (
+                    <div className="mt-4 pt-4 border-t border-gray-100">
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-3">
+                        Connect
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {contactModalPerson.website_url && (
+                          <a
+                            href={contactModalPerson.website_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-xs font-medium text-gray-700"
+                          >
+                            <Globe className="h-3.5 w-3.5" /> Website
+                          </a>
+                        )}
+                        {contactModalPerson.linkedin_url && (
+                          <a
+                            href={contactModalPerson.linkedin_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0A66C2]/10 hover:bg-[#0A66C2]/20 transition-colors text-xs font-medium text-[#0A66C2]"
+                          >
+                            <FaLinkedin className="h-3.5 w-3.5" /> LinkedIn
+                          </a>
+                        )}
+                        {contactModalPerson.facebook_url && (
+                          <a
+                            href={contactModalPerson.facebook_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1877F2]/10 hover:bg-[#1877F2]/20 transition-colors text-xs font-medium text-[#1877F2]"
+                          >
+                            <FaFacebook className="h-3.5 w-3.5" /> Facebook
+                          </a>
+                        )}
+                        {contactModalPerson.instagram_url && (
+                          <a
+                            href={contactModalPerson.instagram_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#E1306C]/10 hover:bg-[#E1306C]/20 transition-colors text-xs font-medium text-[#E1306C]"
+                          >
+                            <FaInstagram className="h-3.5 w-3.5" /> Instagram
+                          </a>
+                        )}
+                        {contactModalPerson.twitter_url && (
+                          <a
+                            href={contactModalPerson.twitter_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-xs font-medium text-gray-900"
+                          >
+                            <FaXTwitter className="h-3.5 w-3.5" /> X
+                          </a>
+                        )}
+                        {contactModalPerson.youtube_url && (
+                          <a
+                            href={contactModalPerson.youtube_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FF0000]/10 hover:bg-[#FF0000]/20 transition-colors text-xs font-medium text-[#FF0000]"
+                          >
+                            <FaYoutube className="h-3.5 w-3.5" /> YouTube
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -2200,14 +2252,6 @@ const ApplicationWizard = () => {
                           ? "Mortgage Banker"
                           : "Partner"}
                       </p>
-                      {contactModalPerson.license_number && (
-                        <Badge
-                          variant="outline"
-                          className="mt-1 text-[10px] text-gray-400 border-gray-200 px-1.5 py-0"
-                        >
-                          NMLS #{contactModalPerson.license_number}
-                        </Badge>
-                      )}
                     </div>
                   </div>
                 </DialogHeader>

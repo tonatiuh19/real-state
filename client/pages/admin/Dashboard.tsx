@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Eye,
   ArrowRight,
+  Link2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -46,15 +47,18 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import NewLoanWizard from "@/components/NewLoanWizard";
+import BrokerShareLinkModal from "@/components/BrokerShareLinkModal";
 import { LoanOverlay } from "@/components/LoanOverlay";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchLoans, fetchLoanDetails } from "@/store/slices/pipelineSlice";
 import { fetchDashboardStats } from "@/store/slices/dashboardSlice";
 import { logger } from "@/lib/logger";
+import type { Broker } from "@shared/api";
 
 const AdminDashboard = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [loanOverlayOpen, setLoanOverlayOpen] = useState(false);
+  const [shareLinkOpen, setShareLinkOpen] = useState(false);
   const [dashboardSearch, setDashboardSearch] = useState("");
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -70,6 +74,23 @@ const AdminDashboard = () => {
     isLoading: statsLoading,
     error: statsError,
   } = useAppSelector((state) => state.dashboard);
+  const { user } = useAppSelector((state) => state.brokerAuth);
+  const isPartner = user?.role === "broker";
+  const partnerAsBroker: Broker | null = user
+    ? {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        phone: user.phone ?? null,
+        role: user.role as "broker" | "admin",
+        status: user.status,
+        email_verified: user.email_verified,
+        last_login: user.last_login ?? null,
+        license_number: user.license_number ?? null,
+        specializations: user.specializations ?? null,
+      }
+    : null;
 
   useEffect(() => {
     try {
@@ -203,14 +224,25 @@ const AdminDashboard = () => {
                 onChange={(e) => setDashboardSearch(e.target.value)}
               />
             </div>
-            <Button
-              className="gap-2 whitespace-nowrap"
-              onClick={() => setWizardOpen(true)}
-            >
-              <Plus className="h-4 w-4" />{" "}
-              <span className="hidden sm:inline">New Loan</span>
-              <span className="sm:hidden">New</span>
-            </Button>
+            {isPartner ? (
+              <Button
+                className="gap-2 whitespace-nowrap"
+                onClick={() => setShareLinkOpen(true)}
+              >
+                <Link2 className="h-4 w-4" />{" "}
+                <span className="hidden sm:inline">Get My Link</span>
+                <span className="sm:hidden">My Link</span>
+              </Button>
+            ) : (
+              <Button
+                className="gap-2 whitespace-nowrap"
+                onClick={() => setWizardOpen(true)}
+              >
+                <Plus className="h-4 w-4" />{" "}
+                <span className="hidden sm:inline">New Loan</span>
+                <span className="sm:hidden">New</span>
+              </Button>
+            )}
           </div>
         </header>
 
@@ -218,6 +250,12 @@ const AdminDashboard = () => {
           open={wizardOpen}
           onOpenChange={setWizardOpen}
           onSuccess={handleLoanCreated}
+        />
+        <BrokerShareLinkModal
+          open={shareLinkOpen}
+          onOpenChange={setShareLinkOpen}
+          broker={partnerAsBroker}
+          useSelfEndpoint
         />
 
         <LoanOverlay
@@ -446,14 +484,25 @@ const AdminDashboard = () => {
                   View All
                   <ArrowRight className="h-3.5 w-3.5" />
                 </Button>
-                <Button
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => setWizardOpen(true)}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  New Loan
-                </Button>
+                {isPartner ? (
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => setShareLinkOpen(true)}
+                  >
+                    <Link2 className="h-3.5 w-3.5" />
+                    Get My Link
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => setWizardOpen(true)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    New Loan
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent>

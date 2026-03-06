@@ -133,7 +133,13 @@ export default function Brokers() {
           values.office_city ||
           values.office_state ||
           values.office_zip ||
-          values.years_experience;
+          values.years_experience ||
+          values.facebook_url ||
+          values.instagram_url ||
+          values.linkedin_url ||
+          values.twitter_url ||
+          values.youtube_url ||
+          values.website_url;
         if (hasProfileData && newBroker?.id) {
           await dispatch(
             updateBrokerProfileByAdmin({
@@ -146,6 +152,12 @@ export default function Brokers() {
               years_experience: values.years_experience
                 ? Number(values.years_experience)
                 : undefined,
+              facebook_url: values.facebook_url || undefined,
+              instagram_url: values.instagram_url || undefined,
+              linkedin_url: values.linkedin_url || undefined,
+              twitter_url: values.twitter_url || undefined,
+              youtube_url: values.youtube_url || undefined,
+              website_url: values.website_url || undefined,
             }),
           ).unwrap();
         }
@@ -175,7 +187,13 @@ export default function Brokers() {
           values.office_city ||
           values.office_state ||
           values.office_zip ||
-          values.years_experience;
+          values.years_experience ||
+          values.facebook_url ||
+          values.instagram_url ||
+          values.linkedin_url ||
+          values.twitter_url ||
+          values.youtube_url ||
+          values.website_url;
         if (hasProfileData) {
           await dispatch(
             updateBrokerProfileByAdmin({
@@ -188,6 +206,12 @@ export default function Brokers() {
               years_experience: values.years_experience
                 ? Number(values.years_experience)
                 : undefined,
+              facebook_url: values.facebook_url || undefined,
+              instagram_url: values.instagram_url || undefined,
+              linkedin_url: values.linkedin_url || undefined,
+              twitter_url: values.twitter_url || undefined,
+              youtube_url: values.youtube_url || undefined,
+              website_url: values.website_url || undefined,
             }),
           ).unwrap();
         }

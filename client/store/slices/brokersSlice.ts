@@ -188,6 +188,25 @@ export const uploadBrokerAvatarByAdmin = createAsyncThunk(
 );
 
 /** Admin: get share link for any broker */
+/** Self-service: fetch the logged-in broker's own share link */
+export const fetchMyShareLink = createAsyncThunk(
+  "brokers/fetchMyShareLink",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<AdminBrokerShareLinkResponse>(
+        `/api/brokers/my-share-link`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch share link",
+      );
+    }
+  },
+);
+
 export const fetchBrokerShareLink = createAsyncThunk(
   "brokers/fetchBrokerShareLink",
   async (brokerId: number, { getState, rejectWithValue }) => {
@@ -303,7 +322,7 @@ const brokersSlice = createSlice({
           state.selectedBrokerProfile.avatar_url = action.payload.avatar_url;
         }
       })
-      // Fetch broker share link
+      // Fetch broker share link (admin)
       .addCase(fetchBrokerShareLink.pending, (state) => {
         state.shareLinkLoading = true;
         state.brokerShareLink = null;
@@ -316,6 +335,21 @@ const brokersSlice = createSlice({
         };
       })
       .addCase(fetchBrokerShareLink.rejected, (state) => {
+        state.shareLinkLoading = false;
+      })
+      // Fetch own share link (partner self-service)
+      .addCase(fetchMyShareLink.pending, (state) => {
+        state.shareLinkLoading = true;
+        state.brokerShareLink = null;
+      })
+      .addCase(fetchMyShareLink.fulfilled, (state, action) => {
+        state.shareLinkLoading = false;
+        state.brokerShareLink = {
+          public_token: action.payload.public_token,
+          share_url: action.payload.share_url,
+        };
+      })
+      .addCase(fetchMyShareLink.rejected, (state) => {
         state.shareLinkLoading = false;
       });
   },

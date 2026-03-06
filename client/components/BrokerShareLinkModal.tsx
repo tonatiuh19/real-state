@@ -24,6 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchBrokerShareLink,
+  fetchMyShareLink,
   clearBrokerShareLink,
 } from "@/store/slices/brokersSlice";
 import type { Broker } from "@shared/api";
@@ -32,12 +33,15 @@ interface BrokerShareLinkModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   broker: Broker | null;
+  /** Set true when the logged-in partner is fetching their own link */
+  useSelfEndpoint?: boolean;
 }
 
 export default function BrokerShareLinkModal({
   open,
   onOpenChange,
   broker,
+  useSelfEndpoint = false,
 }: BrokerShareLinkModalProps) {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
@@ -48,14 +52,18 @@ export default function BrokerShareLinkModal({
   );
 
   useEffect(() => {
-    if (open && broker?.id) {
-      dispatch(fetchBrokerShareLink(broker.id));
+    if (open) {
+      if (useSelfEndpoint) {
+        dispatch(fetchMyShareLink());
+      } else if (broker?.id) {
+        dispatch(fetchBrokerShareLink(broker.id));
+      }
     }
     if (!open) {
       setCopied(false);
       dispatch(clearBrokerShareLink());
     }
-  }, [open, broker?.id, dispatch]);
+  }, [open, broker?.id, useSelfEndpoint, dispatch]);
 
   const handleCopy = async () => {
     if (!brokerShareLink?.share_url) return;

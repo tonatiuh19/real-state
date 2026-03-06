@@ -13,6 +13,7 @@ import {
   Sparkles,
   TrendingUp,
   Clock,
+  Link2,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -42,6 +43,8 @@ import {
 } from "@/store/slices/pipelineSlice";
 import { LoanOverlay } from "@/components/LoanOverlay";
 import NewLoanWizard from "@/components/NewLoanWizard";
+import BrokerShareLinkModal from "@/components/BrokerShareLinkModal";
+import type { Broker } from "@shared/api";
 
 const Pipeline = () => {
   const dispatch = useAppDispatch();
@@ -64,6 +67,24 @@ const Pipeline = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
   const [isNewLoanOpen, setIsNewLoanOpen] = useState(false);
+  const [shareLinkOpen, setShareLinkOpen] = useState(false);
+  const { user } = useAppSelector((state) => state.brokerAuth);
+  const isPartner = user?.role === "broker";
+  const partnerAsBroker: Broker | null = user
+    ? {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        phone: user.phone ?? null,
+        role: user.role as "broker" | "admin",
+        status: user.status,
+        email_verified: user.email_verified,
+        last_login: user.last_login ?? null,
+        license_number: user.license_number ?? null,
+        specializations: user.specializations ?? null,
+      }
+    : null;
 
   useEffect(() => {
     // Fetch loans with current filters
@@ -422,14 +443,24 @@ const Pipeline = () => {
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                {/* New Loan Button */}
-                <Button
-                  onClick={() => setIsNewLoanOpen(true)}
-                  className="gap-2 h-10 px-6 bg-primary text-white"
-                >
-                  <Plus className="h-4 w-4" />
-                  New Loan
-                </Button>
+                {/* New Loan / Get My Link Button */}
+                {isPartner ? (
+                  <Button
+                    onClick={() => setShareLinkOpen(true)}
+                    className="gap-2 h-10 px-6 bg-primary text-white"
+                  >
+                    <Link2 className="h-4 w-4" />
+                    Get My Link
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => setIsNewLoanOpen(true)}
+                    className="gap-2 h-10 px-6 bg-primary text-white"
+                  >
+                    <Plus className="h-4 w-4" />
+                    New Loan
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -527,14 +558,16 @@ const Pipeline = () => {
                             </div>
                           )}
 
-                          {/* Broker */}
+                          {/* Broker / Partner */}
                           <div className="flex items-center gap-1">
-                            {loan.broker_first_name ? (
+                            {loan.broker_first_name ||
+                            loan.partner_first_name ? (
                               <>
                                 <User className="h-3 w-3 text-gray-400" />
                                 <span className="text-xs text-gray-500 truncate">
-                                  {loan.broker_first_name}{" "}
-                                  {loan.broker_last_name}
+                                  {loan.broker_first_name
+                                    ? `${loan.broker_first_name} ${loan.broker_last_name}`
+                                    : `${loan.partner_first_name} ${loan.partner_last_name}`}
                                 </span>
                               </>
                             ) : (
@@ -620,6 +653,12 @@ const Pipeline = () => {
             });
             dispatch(fetchLoans(filtersToApply));
           }}
+        />
+        <BrokerShareLinkModal
+          open={shareLinkOpen}
+          onOpenChange={setShareLinkOpen}
+          broker={partnerAsBroker}
+          useSelfEndpoint
         />
       </div>
     </>
