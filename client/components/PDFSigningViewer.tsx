@@ -73,11 +73,26 @@ const PDFSigningViewer: React.FC<PDFSigningViewerProps> = ({
   const [pdfError, setPdfError] = useState<string | null>(null);
 
   const sigCanvasRef = useRef<SignatureCanvas | null>(null);
+  const sigContainerRef = useRef<HTMLDivElement | null>(null);
+  const [canvasWidth, setCanvasWidth] = useState<number>(450);
 
   const currentPageZones = zones.filter((z) => z.page === currentPage);
   const allSigned =
     zones.length > 0 && zones.every((z) => signatures.has(z.id));
   const signedCount = zones.filter((z) => signatures.has(z.id)).length;
+
+  // Measure the canvas container width so the canvas is never wider than its wrapper
+  useEffect(() => {
+    const updateWidth = () => {
+      if (sigContainerRef.current) {
+        setCanvasWidth(Math.min(450, sigContainerRef.current.offsetWidth));
+      }
+    };
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    if (sigContainerRef.current) observer.observe(sigContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const handleClearCanvas = () => {
     sigCanvasRef.current?.clear();
@@ -373,11 +388,14 @@ const PDFSigningViewer: React.FC<PDFSigningViewerProps> = ({
 
           <div className="space-y-4">
             {/* Signature canvas */}
-            <div className="border-2 border-dashed border-primary rounded-lg overflow-hidden bg-white">
+            <div
+              ref={sigContainerRef}
+              className="border-2 border-dashed border-primary rounded-lg overflow-hidden bg-white"
+            >
               <SignatureCanvas
                 ref={sigCanvasRef}
                 canvasProps={{
-                  width: 450,
+                  width: canvasWidth,
                   height: 180,
                   className: "w-full",
                   style: { touchAction: "none" },

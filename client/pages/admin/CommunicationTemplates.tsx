@@ -760,7 +760,7 @@ const CommunicationTemplates = () => {
             {/* EMAIL FORM */}
             {(editingTemplate?.type || channelTab) === "email" && (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Template Name</Label>
                     <Input
@@ -849,7 +849,7 @@ const CommunicationTemplates = () => {
             {/* SMS FORM */}
             {(editingTemplate?.type || channelTab) === "sms" && (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Template Name</Label>
                     <Input
@@ -927,7 +927,7 @@ const CommunicationTemplates = () => {
             {/* WHATSAPP FORM */}
             {(editingTemplate?.type || channelTab) === "whatsapp" && (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Template Name</Label>
                     <Input

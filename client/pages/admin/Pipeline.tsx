@@ -245,13 +245,13 @@ const Pipeline = () => {
       <div className="min-h-screen bg-gray-50">
         {/* Clean Modern Header */}
         <div className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
-          <div className="px-6 py-4">
-            <div className="flex items-center justify-between">
+          <div className="px-4 sm:px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-4">
                   <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                      <Kanban className="h-8 w-8 text-primary" />
+                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
+                      <Kanban className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
                       Pipeline
                     </h1>
                     <div className="flex items-center gap-2">
@@ -265,7 +265,7 @@ const Pipeline = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 {/* Clean Search */}
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -273,7 +273,7 @@ const Pipeline = () => {
                     placeholder="Search applications, clients..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 w-80 h-10 bg-white border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    className="pl-10 w-full sm:w-80 h-10 bg-white border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   />
                   {searchQuery && (
                     <div className="absolute right-3 top-1/2 transform -translate-y-1/2">

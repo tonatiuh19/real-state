@@ -796,7 +796,7 @@ export function LoanOverlay({
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
-      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white">
+      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white max-h-screen">
         {isLoadingDetails ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
@@ -807,10 +807,10 @@ export function LoanOverlay({
         ) : selectedLoan ? (
           <>
             <SheetHeader className="border-b border-gray-100 pb-4 mb-6">
-              <SheetTitle className="text-2xl font-bold text-gray-900">
+              <SheetTitle className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight">
                 {selectedLoan.client_first_name} {selectedLoan.client_last_name}
               </SheetTitle>
-              <div className="flex items-center gap-3 mt-3 flex-wrap">
+              <div className="flex items-center gap-2 mt-3 flex-wrap">
                 <Badge
                   className={cn(
                     "text-xs font-medium px-3 py-1",
@@ -993,7 +993,7 @@ export function LoanOverlay({
               {/* Pre-Approval Letter Banner — shown when all tasks done and letter exists */}
               {areAllTasksCompleted && preApprovalLetter?.is_active && (
                 <div
-                  className="flex items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-red-50 to-rose-50 border border-red-200 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all duration-200"
+                  className="flex items-start sm:items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-red-50 to-rose-50 border border-red-200 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all duration-200"
                   onClick={() => setPreApprovalLetterOpen(true)}
                   role="button"
                   tabIndex={0}
@@ -1002,7 +1002,7 @@ export function LoanOverlay({
                   }
                 >
                   <div className="flex items-center gap-3">
-                    <div className="p-2 bg-red-100 rounded-lg">
+                    <div className="p-2 bg-red-100 rounded-lg shrink-0">
                       <Award className="h-5 w-5 text-red-600" />
                     </div>
                     <div>
@@ -1014,7 +1014,7 @@ export function LoanOverlay({
                           minimumFractionDigits: 0,
                         }).format(preApprovalLetter.approved_amount)}
                       </p>
-                      <p className="text-xs text-red-600 flex items-center gap-1">
+                      <p className="text-xs text-red-600 flex items-center gap-1 flex-wrap">
                         <Shield className="h-3 w-3" />
                         Max:{" "}
                         {new Intl.NumberFormat("en-US", {
@@ -1038,8 +1038,8 @@ export function LoanOverlay({
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge className="hidden sm:flex bg-red-100 text-red-700 border-red-200 text-xs">
                       <CheckCircle2 className="h-3 w-3 mr-1" />
                       Letter Active
                     </Badge>
@@ -1308,12 +1308,12 @@ export function LoanOverlay({
               {/* Tasks Section */}
               <Card className="border-gray-200 shadow-sm">
                 <CardHeader className="pb-3 border-b border-gray-100">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
                       <FileText className="h-5 w-5 text-blue-600" />
                       Tasks
                     </CardTitle>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Button
                         variant="outline"
                         size="sm"
@@ -1385,7 +1385,7 @@ export function LoanOverlay({
                               </div>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-start justify-between gap-2">
+                              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
                                 <h4
                                   className={cn(
                                     "font-medium text-sm text-gray-900",
@@ -1409,7 +1409,7 @@ export function LoanOverlay({
                                   >
                                     <SelectTrigger
                                       className={cn(
-                                        "h-7 text-xs w-32 border",
+                                        "h-7 text-xs w-full sm:w-32 border",
                                         getTaskStatusColor(task.status),
                                       )}
                                     >
@@ -1877,7 +1877,7 @@ export function LoanOverlay({
               if (!open) setViewSignatureTaskId(null);
             }}
           >
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="w-[calc(100%-2rem)] max-w-3xl max-h-[90vh] overflow-y-auto">
               <DialogTitle className="flex items-center gap-2">
                 <PenTool className="h-5 w-5 text-purple-600" />
                 Signed Document —{" "}
@@ -2121,7 +2121,7 @@ export function LoanOverlay({
       {/* Add Tasks Dialog */}
       <Dialog open={addTasksDialogOpen} onOpenChange={setAddTasksDialogOpen}>
         <DialogContent
-          className="sm:max-w-md"
+          className="w-[calc(100%-2rem)] sm:max-w-md"
           aria-labelledby="add-tasks-dialog-title"
           aria-describedby="add-tasks-dialog-description"
         >

@@ -201,7 +201,7 @@ const PDFSignatureZoneEditor: React.FC<PDFSignatureZoneEditorProps> = ({
   const currentPageZones = zones.filter((z) => z.page === currentPage);
 
   return (
-    <div className="flex gap-4">
+    <div className="flex flex-col md:flex-row gap-4">
       {/* Left: PDF Viewer + Zone Canvas */}
       <div className="flex-1 min-w-0">
         {/* Page Controls */}
@@ -339,7 +339,7 @@ const PDFSignatureZoneEditor: React.FC<PDFSignatureZoneEditorProps> = ({
       </div>
 
       {/* Right: Zone List */}
-      <div className="w-64 shrink-0">
+      <div className="w-full md:w-64 shrink-0">
         <div className="flex items-center gap-2 mb-3">
           <Tag className="h-4 w-4 text-primary" />
           <h4 className="font-semibold text-sm">Signature Zones</h4>

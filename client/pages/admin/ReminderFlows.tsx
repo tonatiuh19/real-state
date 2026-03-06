@@ -26,6 +26,7 @@ import {
   Lightbulb,
   X,
   MoveRight,
+  Monitor,
 } from "lucide-react";
 import { FaSms } from "react-icons/fa";
 import {
@@ -1404,8 +1405,21 @@ function FlowCanvasInner({ flow, onBack, onSaved }: FlowCanvasProps) {
 
       {/* Canvas body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Step Palette */}
-        <div className="w-44 border-r bg-muted/30 flex flex-col shrink-0 overflow-y-auto">
+        {/* Mobile warning — flow editor requires a desktop browser */}
+        <div className="md:hidden flex flex-col items-center justify-center flex-1 gap-4 p-8 text-center bg-muted/20">
+          <Monitor className="h-12 w-12 text-muted-foreground opacity-50" />
+          <div className="space-y-1">
+            <p className="font-semibold text-sm">Desktop Required</p>
+            <p className="text-xs text-muted-foreground max-w-xs">
+              The flow editor uses drag-and-drop and requires a desktop or
+              laptop browser. Please open this page on a larger device to edit
+              flows.
+            </p>
+          </div>
+        </div>
+
+        {/* Step Palette — desktop only */}
+        <div className="hidden md:flex w-44 border-r bg-muted/30 flex-col shrink-0 overflow-y-auto">
           <div className="p-3 border-b">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Step Types
@@ -1542,7 +1556,7 @@ function FlowCanvasInner({ flow, onBack, onSaved }: FlowCanvasProps) {
 
         {/* React Flow Canvas */}
         <div
-          className="flex-1 overflow-hidden relative"
+          className="hidden md:flex flex-1 overflow-hidden relative"
           ref={reactFlowWrapper}
           onDragOver={onDragOver}
           onDrop={onDrop}

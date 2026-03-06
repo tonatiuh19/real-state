@@ -4030,10 +4030,12 @@ const handleGetClients: RequestHandler = async (req, res) => {
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
       LEFT JOIN conversation_threads ct ON ct.client_id = c.id AND ct.tenant_id = c.tenant_id
       WHERE c.tenant_id = ?
-        ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ?)"}
+        ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}
       GROUP BY c.id
       ORDER BY c.created_at DESC`,
-      isAdmin ? [MORTGAGE_TENANT_ID] : [MORTGAGE_TENANT_ID, brokerId, brokerId],
+      isAdmin
+        ? [MORTGAGE_TENANT_ID]
+        : [MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
     );
 
     res.json({
@@ -4065,11 +4067,11 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
        FROM clients c 
        LEFT JOIN loan_applications la ON c.id = la.client_user_id
        WHERE c.id = ? AND c.tenant_id = ?
-         ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ?)"}
+         ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}
        GROUP BY c.id`,
       isAdmin
         ? [clientId, MORTGAGE_TENANT_ID]
-        : [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId],
+        : [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
     );
 
     if (!Array.isArray(clientRows) || clientRows.length === 0) {

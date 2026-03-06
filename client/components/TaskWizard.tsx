@@ -721,7 +721,7 @@ const TaskWizard: React.FC<TaskWizardProps> = ({
                 </TabsTrigger>
               </TabsList>
             ) : (
-              <TabsList className="grid w-full grid-cols-4">
+              <TabsList className="grid w-full grid-cols-4 text-xs sm:text-sm">
                 <TabsTrigger value="basic" className="relative">
                   Basic Info
                   {completedSteps.basic && (

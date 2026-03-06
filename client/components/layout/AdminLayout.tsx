@@ -21,6 +21,8 @@ import {
   UserCog,
   Lock,
   AlarmClock,
+  Menu,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -52,6 +54,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -60,6 +68,7 @@ interface AdminLayoutProps {
 const AdminLayout = ({ children }: AdminLayoutProps) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const location = useLocation();
@@ -197,8 +206,144 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       };
     });
 
+  // Shared menu renderer used by both desktop sidebar and mobile Sheet
+  const renderMenuItems = (onItemClick?: () => void) =>
+    effectiveMenuItems.map((item) => {
+      const menuButton = (
+        <Button
+          key={item.id}
+          variant={location.pathname === item.path ? "secondary" : "ghost"}
+          className={cn(
+            "w-full gap-3 justify-start",
+            location.pathname === item.path
+              ? "bg-primary/10 text-primary hover:bg-primary/20"
+              : "",
+            item.disabled
+              ? "opacity-60 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground"
+              : "",
+          )}
+          onClick={() => {
+            if (!item.disabled) {
+              navigate(item.path);
+              onItemClick?.();
+            }
+          }}
+          aria-disabled={item.disabled}
+        >
+          {item.icon}
+          <span>{item.label}</span>
+          {item.disabled && <Lock className="h-3.5 w-3.5 ml-auto" />}
+        </Button>
+      );
+
+      if (!item.disabled) return menuButton;
+
+      return (
+        <Tooltip key={item.id} delayDuration={250}>
+          <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
+          <TooltipContent side="right">
+            <p>{item.tooltipMessage}</p>
+          </TooltipContent>
+        </Tooltip>
+      );
+    });
+
   return (
     <div className="flex h-screen bg-muted/20 overflow-hidden">
+      {/* Mobile Top Header */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-4 h-14 bg-background border-b shadow-sm">
+        <img
+          src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+          alt="Encore Mortgage"
+          className="h-8 w-auto"
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setMobileMenuOpen(true)}
+          className="h-9 w-9"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+      </div>
+
+      {/* Mobile Navigation Sheet */}
+      <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+        <SheetContent side="left" className="w-72 p-0 flex flex-col">
+          <SheetHeader className="flex flex-row items-center justify-between px-4 h-14 border-b shrink-0">
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <img
+              src="https://disruptinglabs.com/data/encore/assets/images/logo.png"
+              alt="Encore Mortgage"
+              className="h-9 w-auto"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMobileMenuOpen(false)}
+              className="h-8 w-8"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </SheetHeader>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-1">
+            {renderMenuItems(() => setMobileMenuOpen(false))}
+          </div>
+
+          {/* Mobile User Section */}
+          <div className="border-t p-4 shrink-0">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  navigate("/admin/profile");
+                  setMobileMenuOpen(false);
+                }}
+                className="focus:outline-none"
+              >
+                <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
+                  <AvatarImage
+                    src={user?.avatar_url ?? undefined}
+                    alt="Profile"
+                    className="object-cover"
+                  />
+                  <AvatarFallback className="bg-primary text-primary-foreground">
+                    {user?.first_name?.charAt(0) || "A"}
+                  </AvatarFallback>
+                </Avatar>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  navigate("/admin/profile");
+                  setMobileMenuOpen(false);
+                }}
+                className="flex-1 min-w-0 text-left hover:opacity-80"
+              >
+                <p className="text-sm font-medium truncate">
+                  {user ? `${user.first_name} ${user.last_name}` : "Admin User"}
+                </p>
+                <p className="text-xs text-muted-foreground capitalize">
+                  {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
+                </p>
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                onClick={() => {
+                  setShowLogoutConfirm(true);
+                  setMobileMenuOpen(false);
+                }}
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
       {/* Sidebar */}
       <aside
         className={cn(
@@ -403,7 +548,9 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto h-screen">{children}</main>
+      <main className="flex-1 overflow-y-auto h-screen pt-14 md:pt-0">
+        {children}
+      </main>
 
       {/* Logout Confirmation Dialog */}
       <AlertDialog open={showLogoutConfirm} onOpenChange={setShowLogoutConfirm}>

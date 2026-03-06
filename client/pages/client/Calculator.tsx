@@ -588,7 +588,7 @@ const CalculatorPage = () => {
           variant="outline"
           size="sm"
           onClick={handleReset}
-          className="rounded-xl gap-2 hidden sm:flex"
+          className="rounded-xl gap-2 flex"
         >
           <RefreshCw className="h-3.5 w-3.5" />
           Reset
