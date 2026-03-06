@@ -509,6 +509,61 @@ export interface GetDashboardStatsResponse {
 }
 
 /**
+ * Broker Monthly Metrics Types
+ */
+export type LeadSourceCategory =
+  | "current_client_referral"
+  | "past_client"
+  | "past_client_referral"
+  | "personal_friend"
+  | "realtor"
+  | "advertisement"
+  | "business_partner"
+  | "builder"
+  | "other";
+
+export interface BrokerMonthlyMetrics {
+  year: number;
+  month: number;
+  // Goals
+  lead_to_credit_goal: number;
+  credit_to_preapp_goal: number;
+  lead_to_closing_goal: number;
+  leads_goal: number;
+  credit_pulls_goal: number;
+  closings_goal: number;
+  // Actuals (computed from DB)
+  leads_actual: number;
+  credit_pulls_actual: number;
+  pre_approvals_actual: number;
+  closings_actual: number;
+  // Previous year reference
+  prev_year_leads: number | null;
+  prev_year_closings: number | null;
+  // Lead source breakdown
+  lead_sources: { category: LeadSourceCategory; count: number }[];
+}
+
+export interface GetBrokerMetricsResponse {
+  success: boolean;
+  metrics: BrokerMonthlyMetrics;
+}
+
+export interface UpdateBrokerMetricsRequest {
+  year: number;
+  month: number;
+  lead_to_credit_goal?: number;
+  credit_to_preapp_goal?: number;
+  lead_to_closing_goal?: number;
+  leads_goal?: number;
+  credit_pulls_goal?: number;
+  closings_goal?: number;
+  credit_pulls_actual?: number;
+  prev_year_leads?: number | null;
+  prev_year_closings?: number | null;
+}
+
+/**
  * Brokers Types
  */
 export interface Broker {

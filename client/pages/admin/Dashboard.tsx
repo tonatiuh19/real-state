@@ -51,8 +51,12 @@ import BrokerShareLinkModal from "@/components/BrokerShareLinkModal";
 import { LoanOverlay } from "@/components/LoanOverlay";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchLoans, fetchLoanDetails } from "@/store/slices/pipelineSlice";
-import { fetchDashboardStats } from "@/store/slices/dashboardSlice";
+import {
+  fetchDashboardStats,
+  fetchBrokerMetrics,
+} from "@/store/slices/dashboardSlice";
 import { logger } from "@/lib/logger";
+import BrokerMetricsPanel from "@/components/BrokerMetricsPanel";
 import type { Broker } from "@shared/api";
 
 const AdminDashboard = () => {
@@ -97,6 +101,7 @@ const AdminDashboard = () => {
     try {
       dispatch(fetchLoans({}));
       dispatch(fetchDashboardStats());
+      dispatch(fetchBrokerMetrics(undefined));
     } catch (error) {
       logger.error("Error loading dashboard data:", error);
     }
@@ -106,6 +111,7 @@ const AdminDashboard = () => {
     try {
       dispatch(fetchLoans({}));
       dispatch(fetchDashboardStats());
+      dispatch(fetchBrokerMetrics(undefined));
     } catch (error) {
       logger.error("Error refreshing dashboard data:", error);
     }
@@ -465,6 +471,9 @@ const AdminDashboard = () => {
               </CardContent>
             </Card>
           </div>
+
+          {/* Broker Monthly Metrics */}
+          <BrokerMetricsPanel isPartner={isPartner} />
 
           {/* Recent Pipeline Activity */}
           <Card>

@@ -4006,6 +4006,287 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/dashboard/broker-metrics
+ * Get broker monthly performance metrics (computed actuals + stored goals).
+ * Admins (mortgage bankers) see tenant-wide data.
+ * Partners (role='broker') see only their own actuals.
+ */
+const handleGetBrokerMetrics: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+
+    const now = new Date();
+    const year = parseInt(
+      (req.query.year as string) || String(now.getFullYear()),
+      10,
+    );
+    const month = parseInt(
+      (req.query.month as string) || String(now.getMonth() + 1),
+      10,
+    );
+
+    // Admins can filter by multiple broker IDs (comma-separated)
+    const filterBrokerIdsRaw = req.query.filter_broker_ids as
+      | string
+      | undefined;
+    const filterBrokerIds: number[] =
+      isAdmin && filterBrokerIdsRaw
+        ? filterBrokerIdsRaw
+            .split(",")
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => !isNaN(n) && n > 0)
+        : [];
+
+    if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid year or month" });
+    }
+
+    // Partners always scoped to themselves; admins use their filter selection
+    const scopedIds = isAdmin ? filterBrokerIds : [brokerId];
+    const useGlobal = isAdmin && scopedIds.length === 0;
+
+    // Goals always from global (broker_id IS NULL) row
+    const [goalRows] = (await pool.query(
+      `SELECT * FROM broker_monthly_metrics
+       WHERE tenant_id = ? AND broker_id IS NULL AND year = ? AND month = ? LIMIT 1`,
+      [MORTGAGE_TENANT_ID, year, month],
+    )) as [RowDataPacket[], any];
+    const goals: Record<string, any> = goalRows[0] || {};
+
+    // Manual actuals: credit_pulls_actual, prev_year_* — sum across scoped brokers
+    let creditPullsActual = 0;
+    let prevYearLeads: number | null = null;
+    let prevYearClosings: number | null = null;
+
+    if (useGlobal) {
+      creditPullsActual = parseInt(goals.credit_pulls_actual ?? 0);
+      prevYearLeads =
+        goals.prev_year_leads != null ? parseInt(goals.prev_year_leads) : null;
+      prevYearClosings =
+        goals.prev_year_closings != null
+          ? parseInt(goals.prev_year_closings)
+          : null;
+    } else {
+      const [manualRows] = (await pool.query(
+        `SELECT credit_pulls_actual, prev_year_leads, prev_year_closings
+         FROM broker_monthly_metrics
+         WHERE tenant_id = ? AND broker_id IN (?) AND year = ? AND month = ?`,
+        [MORTGAGE_TENANT_ID, scopedIds, year, month],
+      )) as [RowDataPacket[], any];
+      creditPullsActual = (manualRows as any[]).reduce(
+        (s, r) => s + parseInt(r.credit_pulls_actual ?? 0),
+        0,
+      );
+      // prev-year only meaningful for a single broker selection
+      if (scopedIds.length === 1 && (manualRows as any[]).length > 0) {
+        const r = (manualRows as any[])[0];
+        prevYearLeads =
+          r.prev_year_leads != null ? parseInt(r.prev_year_leads) : null;
+        prevYearClosings =
+          r.prev_year_closings != null ? parseInt(r.prev_year_closings) : null;
+      }
+    }
+
+    // Compute leads actual
+    const [leadsRows] = (await pool.query(
+      useGlobal
+        ? `SELECT COUNT(*) as cnt FROM leads
+           WHERE tenant_id = ? AND YEAR(created_at) = ? AND MONTH(created_at) = ?`
+        : `SELECT COUNT(*) as cnt FROM leads
+           WHERE tenant_id = ? AND assigned_broker_id IN (?) AND YEAR(created_at) = ? AND MONTH(created_at) = ?`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year, month]
+        : [MORTGAGE_TENANT_ID, scopedIds, year, month],
+    )) as [RowDataPacket[], any];
+
+    // Compute pre-approvals actual
+    const [preAppRows] = (await pool.query(
+      useGlobal
+        ? `SELECT COUNT(DISTINCT pal.application_id) as cnt
+           FROM pre_approval_letters pal
+           WHERE pal.tenant_id = ? AND YEAR(pal.created_at) = ? AND MONTH(pal.created_at) = ? AND pal.is_active = 1`
+        : `SELECT COUNT(DISTINCT pal.application_id) as cnt
+           FROM pre_approval_letters pal
+           JOIN loan_applications la ON la.id = pal.application_id
+           WHERE pal.tenant_id = ? AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?))
+             AND YEAR(pal.created_at) = ? AND MONTH(pal.created_at) = ? AND pal.is_active = 1`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year, month]
+        : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, year, month],
+    )) as [RowDataPacket[], any];
+
+    // Compute closings actual
+    const [closingsRows] = (await pool.query(
+      useGlobal
+        ? `SELECT COUNT(*) as cnt FROM loan_applications
+           WHERE tenant_id = ? AND status = 'closed'
+             AND YEAR(COALESCE(actual_close_date, updated_at)) = ?
+             AND MONTH(COALESCE(actual_close_date, updated_at)) = ?`
+        : `SELECT COUNT(*) as cnt FROM loan_applications
+           WHERE tenant_id = ? AND (broker_user_id IN (?) OR partner_broker_id IN (?))
+             AND status = 'closed'
+             AND YEAR(COALESCE(actual_close_date, updated_at)) = ?
+             AND MONTH(COALESCE(actual_close_date, updated_at)) = ?`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year, month]
+        : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, year, month],
+    )) as [RowDataPacket[], any];
+
+    // Compute lead source breakdown
+    const [sourceRows] = (await pool.query(
+      useGlobal
+        ? `SELECT COALESCE(source_category, 'other') as category, COUNT(*) as count
+           FROM leads WHERE tenant_id = ? AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+           GROUP BY category ORDER BY count DESC`
+        : `SELECT COALESCE(source_category, 'other') as category, COUNT(*) as count
+           FROM leads WHERE tenant_id = ? AND assigned_broker_id IN (?)
+             AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+           GROUP BY category ORDER BY count DESC`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year, month]
+        : [MORTGAGE_TENANT_ID, scopedIds, year, month],
+    )) as [RowDataPacket[], any];
+
+    const metrics = {
+      year,
+      month,
+      lead_to_credit_goal: parseFloat(goals.lead_to_credit_goal ?? 70),
+      credit_to_preapp_goal: parseFloat(goals.credit_to_preapp_goal ?? 50),
+      lead_to_closing_goal: parseFloat(goals.lead_to_closing_goal ?? 25),
+      leads_goal: parseInt(goals.leads_goal ?? 40),
+      credit_pulls_goal: parseInt(goals.credit_pulls_goal ?? 28),
+      closings_goal: parseInt(goals.closings_goal ?? 10),
+      leads_actual: parseInt(leadsRows[0]?.cnt ?? 0),
+      credit_pulls_actual: creditPullsActual,
+      pre_approvals_actual: parseInt(preAppRows[0]?.cnt ?? 0),
+      closings_actual: parseInt(closingsRows[0]?.cnt ?? 0),
+      prev_year_leads: prevYearLeads,
+      prev_year_closings: prevYearClosings,
+      lead_sources: (sourceRows as any[]).map((r) => ({
+        category: r.category,
+        count: parseInt(r.count),
+      })),
+    };
+
+    res.json({ success: true, metrics });
+  } catch (error) {
+    console.error("Error fetching broker metrics:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch broker metrics",
+    });
+  }
+};
+
+/**
+ * PUT /api/dashboard/broker-metrics
+ * Admins (mortgage bankers): upsert tenant-wide goals + admin-level actuals (broker_id IS NULL row).
+ * Partners (role='broker'): can only upsert their own manual actuals (credit_pulls_actual, prev_year_*)
+ *   on their scoped row — goal fields are ignored and cannot be changed.
+ */
+const handleUpdateBrokerMetrics: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+
+    const {
+      year,
+      month,
+      lead_to_credit_goal,
+      credit_to_preapp_goal,
+      lead_to_closing_goal,
+      leads_goal,
+      credit_pulls_goal,
+      closings_goal,
+      credit_pulls_actual,
+      prev_year_leads,
+      prev_year_closings,
+    } = req.body;
+
+    if (!year || !month || month < 1 || month > 12) {
+      return res
+        .status(400)
+        .json({ success: false, error: "year and month are required" });
+    }
+
+    if (isAdmin) {
+      // Upsert the tenant-wide goals row (broker_id IS NULL)
+      await pool.query(
+        `INSERT INTO broker_monthly_metrics
+          (tenant_id, broker_id, year, month, lead_to_credit_goal, credit_to_preapp_goal, lead_to_closing_goal,
+           leads_goal, credit_pulls_goal, closings_goal, credit_pulls_actual, prev_year_leads, prev_year_closings)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           lead_to_credit_goal   = COALESCE(VALUES(lead_to_credit_goal),   lead_to_credit_goal),
+           credit_to_preapp_goal = COALESCE(VALUES(credit_to_preapp_goal), credit_to_preapp_goal),
+           lead_to_closing_goal  = COALESCE(VALUES(lead_to_closing_goal),  lead_to_closing_goal),
+           leads_goal            = COALESCE(VALUES(leads_goal),            leads_goal),
+           credit_pulls_goal     = COALESCE(VALUES(credit_pulls_goal),     credit_pulls_goal),
+           closings_goal         = COALESCE(VALUES(closings_goal),         closings_goal),
+           credit_pulls_actual   = COALESCE(VALUES(credit_pulls_actual),   credit_pulls_actual),
+           prev_year_leads       = VALUES(prev_year_leads),
+           prev_year_closings    = VALUES(prev_year_closings),
+           updated_at            = CURRENT_TIMESTAMP`,
+        [
+          MORTGAGE_TENANT_ID,
+          year,
+          month,
+          lead_to_credit_goal ?? null,
+          credit_to_preapp_goal ?? null,
+          lead_to_closing_goal ?? null,
+          leads_goal ?? null,
+          credit_pulls_goal ?? null,
+          closings_goal ?? null,
+          credit_pulls_actual ?? null,
+          prev_year_leads ?? null,
+          prev_year_closings ?? null,
+        ],
+      );
+    } else {
+      // Partners: only allowed to update their own manual actuals — no goal fields
+      await pool.query(
+        `INSERT INTO broker_monthly_metrics
+          (tenant_id, broker_id, year, month, credit_pulls_actual, prev_year_leads, prev_year_closings)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           credit_pulls_actual = COALESCE(VALUES(credit_pulls_actual), credit_pulls_actual),
+           prev_year_leads     = VALUES(prev_year_leads),
+           prev_year_closings  = VALUES(prev_year_closings),
+           updated_at          = CURRENT_TIMESTAMP`,
+        [
+          MORTGAGE_TENANT_ID,
+          brokerId,
+          year,
+          month,
+          credit_pulls_actual ?? null,
+          prev_year_leads ?? null,
+          prev_year_closings ?? null,
+        ],
+      );
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error updating broker metrics:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to update broker metrics",
+    });
+  }
+};
+
+/**
  * Get all clients
  */
 const handleGetClients: RequestHandler = async (req, res) => {
@@ -12236,6 +12517,16 @@ function createServer() {
     "/api/dashboard/stats",
     verifyBrokerSession,
     handleGetDashboardStats,
+  );
+  expressApp.get(
+    "/api/dashboard/broker-metrics",
+    verifyBrokerSession,
+    handleGetBrokerMetrics,
+  );
+  expressApp.put(
+    "/api/dashboard/broker-metrics",
+    verifyBrokerSession,
+    handleUpdateBrokerMetrics,
   );
   expressApp.post("/api/loans/create", verifyBrokerSession, handleCreateLoan);
   expressApp.get("/api/loans", verifyBrokerSession, handleGetLoans);
