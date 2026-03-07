@@ -64,15 +64,6 @@ const Footer = () => {
               </li>
               <li>
                 <Link
-                  to="/broker-login"
-                  className="text-muted-foreground hover:text-primary transition-colors inline-flex items-center gap-1.5"
-                >
-                  <LogIn className="h-3.5 w-3.5" />
-                  Broker Login
-                </Link>
-              </li>
-              <li>
-                <Link
                   to="/client-login"
                   className="text-muted-foreground hover:text-primary transition-colors"
                 >
@@ -150,11 +141,18 @@ const Footer = () => {
             </ul>
           </div>
         </div>
-        <div className="mt-12 border-t pt-8 text-center text-sm text-muted-foreground">
+        <div className="mt-12 border-t pt-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-muted-foreground">
           <p>
             © {new Date().getFullYear()} Encore Mortgage. All rights reserved.
             NMLS #1105497
           </p>
+          <Link
+            to="/broker-login"
+            className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-medium text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-all"
+          >
+            <LogIn className="h-3 w-3" />
+            Broker Portal
+          </Link>
         </div>
       </div>
     </footer>
