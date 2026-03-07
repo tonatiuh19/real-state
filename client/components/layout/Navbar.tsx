@@ -88,8 +88,10 @@ const Navbar = () => {
             </Link>
             <div className="hidden md:flex md:ml-10 md:gap-8">
               {navLinks.map((link) => {
-                const linkPath = link.href.split("?")[0];
-                const isActive = location.pathname === linkPath;
+                const [linkPath, linkQuery] = link.href.split("?");
+                const isActive =
+                  location.pathname === linkPath &&
+                  (!linkQuery || location.search === `?${linkQuery}`);
                 return (
                   <Link
                     key={link.href}
@@ -209,14 +211,17 @@ const Navbar = () => {
         >
           <div className="container space-y-1 pb-3 pt-2">
             {navLinks.map((link) => {
-              const linkPath = link.href.split("?")[0];
+              const [linkPath, linkQuery] = link.href.split("?");
+              const isActive =
+                location.pathname === linkPath &&
+                (!linkQuery || location.search === `?${linkQuery}`);
               return (
                 <Link
                   key={link.href}
                   to={link.href}
                   className={cn(
                     "block rounded-xl px-3 py-3 text-base font-semibold transition-all",
-                    location.pathname === linkPath
+                    isActive
                       ? "bg-primary/10 text-primary"
                       : "text-muted-foreground hover:bg-white/5",
                   )}

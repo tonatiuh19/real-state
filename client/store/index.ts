@@ -20,6 +20,7 @@ import preApprovalReducer from "./slices/preApprovalSlice";
 import settingsReducer from "./slices/settingsSlice";
 import reminderFlowsReducer from "./slices/reminderFlowsSlice";
 import adminSectionControlsReducer from "./slices/adminSectionControlsSlice";
+import contactSubmissionsReducer from "./slices/contactSubmissionsSlice";
 
 export const store = configureStore({
   reducer: {
@@ -44,6 +45,7 @@ export const store = configureStore({
     settings: settingsReducer,
     reminderFlows: reminderFlowsReducer,
     adminSectionControls: adminSectionControlsReducer,
+    contactSubmissions: contactSubmissionsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

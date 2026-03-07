@@ -23,6 +23,7 @@ import {
   AlarmClock,
   Menu,
   X,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -183,6 +184,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "People Management",
       icon: <UserCog className="h-4 w-4" />,
       path: "/admin/brokers",
+      hidden: isPartner,
+    },
+    {
+      id: "contact-submissions",
+      label: "Contact Messages",
+      icon: <MessageSquare className="h-4 w-4" />,
+      path: "/admin/contact-submissions",
       hidden: isPartner,
     },
     {

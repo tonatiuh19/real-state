@@ -22,6 +22,7 @@ import Reports from "./pages/admin/Reports";
 import Brokers from "./pages/admin/Brokers";
 import BrokerProfile from "./pages/admin/BrokerProfile";
 import ReminderFlows from "./pages/admin/ReminderFlows";
+import ContactSubmissions from "./pages/admin/ContactSubmissions";
 import ClientDashboard from "./pages/client/Dashboard";
 import ClientLoans from "./pages/client/Loans";
 import ClientTasks from "./pages/client/Tasks";
@@ -29,6 +30,9 @@ import ClientProfile from "./pages/client/Profile";
 import ClientDocuments from "./pages/client/Documents";
 import ClientCalculator from "./pages/client/Calculator";
 import FAQ from "./pages/FAQ";
+import LoanOptions from "./pages/LoanOptions";
+import About from "./pages/About";
+import Contact from "./pages/Contact";
 
 const AppRoutes = () => (
   <Routes>
@@ -113,6 +117,30 @@ const AppRoutes = () => (
       element={
         <AppLayout showHeader={true} showFooter={true}>
           <FAQ />
+        </AppLayout>
+      }
+    />
+    <Route
+      path="/loan-options"
+      element={
+        <AppLayout showHeader={true} showFooter={true}>
+          <LoanOptions />
+        </AppLayout>
+      }
+    />
+    <Route
+      path="/about"
+      element={
+        <AppLayout showHeader={true} showFooter={true}>
+          <About />
+        </AppLayout>
+      }
+    />
+    <Route
+      path="/contact"
+      element={
+        <AppLayout showHeader={true} showFooter={true}>
+          <Contact />
         </AppLayout>
       }
     />
@@ -236,6 +264,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <ReminderFlows />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/contact-submissions"
+      element={
+        <AdminLayout>
+          <ContactSubmissions />
         </AdminLayout>
       }
     />

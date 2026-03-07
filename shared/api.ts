@@ -1690,3 +1690,36 @@ export interface AdminInitResponse {
   profile: BrokerProfileDetails;
   controls: AdminSectionControl[];
 }
+
+// ─── Contact Form ─────────────────────────────────────────────────────────────
+
+export interface ContactSubmissionRequest {
+  name: string;
+  email: string;
+  phone?: string | null;
+  subject: string;
+  message: string;
+}
+
+export interface ContactSubmissionResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface ContactSubmission {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  subject: string;
+  message: string;
+  is_read: boolean;
+  read_by_broker_id: number | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface GetContactSubmissionsResponse {
+  success: boolean;
+  submissions: ContactSubmission[];
+}

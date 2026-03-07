@@ -13253,6 +13253,92 @@ function createServer() {
     handleGetReminderFlowExecutions,
   );
 
+  // ─── Contact Form ────────────────────────────────────────────────────────
+
+  const handleSubmitContact: RequestHandler = async (req, res) => {
+    try {
+      const { name, email, phone, subject, message } = req.body as {
+        name?: string;
+        email?: string;
+        phone?: string | null;
+        subject?: string;
+        message?: string;
+      };
+
+      if (
+        !name?.trim() ||
+        !email?.trim() ||
+        !subject?.trim() ||
+        !message?.trim()
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "name, email, subject, and message are required",
+          });
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid email address" });
+      }
+
+      await pool.execute(
+        `INSERT INTO contact_submissions (tenant_id, name, email, phone, subject, message)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          name.trim().slice(0, 255),
+          email.trim().toLowerCase().slice(0, 255),
+          phone?.trim().slice(0, 30) || null,
+          subject.trim().slice(0, 255),
+          message.trim(),
+        ],
+      );
+
+      return res
+        .status(201)
+        .json({
+          success: true,
+          message: "Message received. We will be in touch shortly.",
+        });
+    } catch (err: any) {
+      console.error("handleSubmitContact error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleGetContactSubmissions: RequestHandler = async (_req, res) => {
+    try {
+      const [rows] = await pool.execute(
+        `SELECT id, name, email, phone, subject, message, is_read, read_by_broker_id, read_at, created_at
+         FROM contact_submissions
+         WHERE tenant_id = ?
+         ORDER BY created_at DESC`,
+        [MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({ success: true, submissions: rows });
+    } catch (err: any) {
+      console.error("handleGetContactSubmissions error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  expressApp.post("/api/contact", handleSubmitContact);
+  expressApp.get(
+    "/api/contact",
+    verifyBrokerSession,
+    handleGetContactSubmissions,
+  );
+
   // 404 handler - only for API routes
   expressApp.use("/api", (_req, res, next) => {
     if (!res.headersSent) {
