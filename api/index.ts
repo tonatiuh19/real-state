@@ -4006,6 +4006,229 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/dashboard/broker-metrics/annual
+ * Returns all 12 monthly snapshots for the given year, quarterly roll-ups, and annual totals.
+ */
+const handleGetAnnualMetrics: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+
+    const now = new Date();
+    const year = parseInt(
+      (req.query.year as string) || String(now.getFullYear()),
+      10,
+    );
+
+    const filterBrokerIdsRaw = req.query.filter_broker_ids as
+      | string
+      | undefined;
+    const filterBrokerIds: number[] =
+      isAdmin && filterBrokerIdsRaw
+        ? filterBrokerIdsRaw
+            .split(",")
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => !isNaN(n) && n > 0)
+        : [];
+
+    const scopedIds = isAdmin ? filterBrokerIds : [brokerId];
+    const useGlobal = isAdmin && scopedIds.length === 0;
+
+    // Fetch goals rows for the year (broker_id IS NULL)
+    const [goalRows] = (await pool.query(
+      `SELECT month, leads_goal, credit_pulls_goal, closings_goal,
+              credit_pulls_actual, prev_year_leads, prev_year_closings
+       FROM broker_monthly_metrics
+       WHERE tenant_id = ? AND broker_id IS NULL AND year = ?`,
+      [MORTGAGE_TENANT_ID, year],
+    )) as [RowDataPacket[], any];
+    const goalsMap = new Map<number, Record<string, any>>();
+    for (const row of goalRows) goalsMap.set(row.month, row);
+
+    // Fetch manual actuals (credit_pulls) from broker-scoped rows summed per month
+    type ManualRow = { month: number; credit_pulls_actual: number };
+    let manualActuals: ManualRow[] = [];
+    if (!useGlobal) {
+      const [manualRows] = (await pool.query(
+        `SELECT month, SUM(COALESCE(credit_pulls_actual,0)) as credit_pulls_actual
+         FROM broker_monthly_metrics
+         WHERE tenant_id = ? AND broker_id IN (?) AND year = ?
+         GROUP BY month`,
+        [MORTGAGE_TENANT_ID, scopedIds, year],
+      )) as [RowDataPacket[], any];
+      manualActuals = (manualRows as any[]).map((r) => ({
+        month: r.month,
+        credit_pulls_actual: parseInt(r.credit_pulls_actual ?? 0),
+      }));
+    }
+    const manualMap = new Map(manualActuals.map((r) => [r.month, r]));
+
+    // Leads per month
+    const [leadsRows] = (await pool.query(
+      useGlobal
+        ? `SELECT MONTH(created_at) as month, COUNT(*) as cnt
+           FROM leads WHERE tenant_id = ? AND YEAR(created_at) = ?
+           GROUP BY month`
+        : `SELECT MONTH(created_at) as month, COUNT(*) as cnt
+           FROM leads WHERE tenant_id = ? AND assigned_broker_id IN (?) AND YEAR(created_at) = ?
+           GROUP BY month`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year]
+        : [MORTGAGE_TENANT_ID, scopedIds, year],
+    )) as [RowDataPacket[], any];
+    const leadsMap = new Map(
+      (leadsRows as any[]).map((r) => [r.month, parseInt(r.cnt)]),
+    );
+
+    // Pre-approvals per month
+    const [preAppRows] = (await pool.query(
+      useGlobal
+        ? `SELECT MONTH(pal.created_at) as month, COUNT(DISTINCT pal.application_id) as cnt
+           FROM pre_approval_letters pal
+           WHERE pal.tenant_id = ? AND YEAR(pal.created_at) = ? AND pal.is_active = 1
+           GROUP BY month`
+        : `SELECT MONTH(pal.created_at) as month, COUNT(DISTINCT pal.application_id) as cnt
+           FROM pre_approval_letters pal
+           JOIN loan_applications la ON la.id = pal.application_id
+           WHERE pal.tenant_id = ? AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?))
+             AND YEAR(pal.created_at) = ? AND pal.is_active = 1
+           GROUP BY month`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year]
+        : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, year],
+    )) as [RowDataPacket[], any];
+    const preAppMap = new Map(
+      (preAppRows as any[]).map((r) => [r.month, parseInt(r.cnt)]),
+    );
+
+    // Closings per month
+    const [closingsRows] = (await pool.query(
+      useGlobal
+        ? `SELECT MONTH(COALESCE(actual_close_date, updated_at)) as month, COUNT(*) as cnt
+           FROM loan_applications
+           WHERE tenant_id = ? AND status = 'closed' AND YEAR(COALESCE(actual_close_date, updated_at)) = ?
+           GROUP BY month`
+        : `SELECT MONTH(COALESCE(actual_close_date, updated_at)) as month, COUNT(*) as cnt
+           FROM loan_applications
+           WHERE tenant_id = ? AND (broker_user_id IN (?) OR partner_broker_id IN (?))
+             AND status = 'closed' AND YEAR(COALESCE(actual_close_date, updated_at)) = ?
+           GROUP BY month`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year]
+        : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, year],
+    )) as [RowDataPacket[], any];
+    const closingsMap = new Map(
+      (closingsRows as any[]).map((r) => [r.month, parseInt(r.cnt)]),
+    );
+
+    // Lead sources for full year
+    const [sourceRows] = (await pool.query(
+      useGlobal
+        ? `SELECT COALESCE(source_category,'other') as category, COUNT(*) as count
+           FROM leads WHERE tenant_id = ? AND YEAR(created_at) = ?
+           GROUP BY category ORDER BY count DESC`
+        : `SELECT COALESCE(source_category,'other') as category, COUNT(*) as count
+           FROM leads WHERE tenant_id = ? AND assigned_broker_id IN (?) AND YEAR(created_at) = ?
+           GROUP BY category ORDER BY count DESC`,
+      useGlobal
+        ? [MORTGAGE_TENANT_ID, year]
+        : [MORTGAGE_TENANT_ID, scopedIds, year],
+    )) as [RowDataPacket[], any];
+
+    // Build monthly snapshots
+    const months: import("@shared/api").MonthlySnapshot[] = [];
+    for (let m = 1; m <= 12; m++) {
+      const g = goalsMap.get(m) || {};
+      const leads = leadsMap.get(m) ?? 0;
+      const creditPulls = useGlobal
+        ? parseInt(g.credit_pulls_actual ?? 0)
+        : (manualMap.get(m)?.credit_pulls_actual ?? 0);
+      const preApprovals = preAppMap.get(m) ?? 0;
+      const closings = closingsMap.get(m) ?? 0;
+      months.push({
+        month: m,
+        leads,
+        credit_pulls: creditPulls,
+        pre_approvals: preApprovals,
+        closings,
+        lead_to_credit_pct:
+          leads > 0 ? Math.round((creditPulls / leads) * 100) : 0,
+        credit_to_preapp_pct:
+          creditPulls > 0 ? Math.round((preApprovals / creditPulls) * 100) : 0,
+        lead_to_closing_pct:
+          leads > 0 ? Math.round((closings / leads) * 100) : 0,
+        leads_goal: parseInt(g.leads_goal ?? 0),
+        closings_goal: parseInt(g.closings_goal ?? 0),
+      });
+    }
+
+    // Calculate quarterly summaries
+    const quarters: import("@shared/api").QuarterSummary[] = [1, 2, 3, 4].map(
+      (q) => {
+        const qMonths = months.slice((q - 1) * 3, q * 3);
+        const leads = qMonths.reduce((s, x) => s + x.leads, 0);
+        const cp = qMonths.reduce((s, x) => s + x.credit_pulls, 0);
+        const pa = qMonths.reduce((s, x) => s + x.pre_approvals, 0);
+        const cl = qMonths.reduce((s, x) => s + x.closings, 0);
+        const activeMonths = qMonths.filter((x) => x.leads > 0).length || 1;
+        return {
+          quarter: q,
+          leads,
+          credit_pulls: cp,
+          pre_approvals: pa,
+          closings: cl,
+          avg_lead_to_credit_pct:
+            leads > 0 ? Math.round((cp / leads) * 100) : 0,
+          avg_credit_to_preapp_pct: cp > 0 ? Math.round((pa / cp) * 100) : 0,
+          avg_lead_to_closing_pct:
+            leads > 0 ? Math.round((cl / leads) * 100) : 0,
+        };
+      },
+    );
+
+    // Annual totals
+    const annual_leads = months.reduce((s, x) => s + x.leads, 0);
+    const annual_cp = months.reduce((s, x) => s + x.credit_pulls, 0);
+    const annual_pa = months.reduce((s, x) => s + x.pre_approvals, 0);
+    const annual_closings = months.reduce((s, x) => s + x.closings, 0);
+
+    const annual: import("@shared/api").AnnualMetrics = {
+      year,
+      months,
+      quarters,
+      annual_leads,
+      annual_credit_pulls: annual_cp,
+      annual_pre_approvals: annual_pa,
+      annual_closings,
+      avg_lead_to_credit_pct:
+        annual_leads > 0 ? Math.round((annual_cp / annual_leads) * 100) : 0,
+      avg_credit_to_preapp_pct:
+        annual_cp > 0 ? Math.round((annual_pa / annual_cp) * 100) : 0,
+      avg_lead_to_closing_pct:
+        annual_leads > 0
+          ? Math.round((annual_closings / annual_leads) * 100)
+          : 0,
+      lead_sources_annual: (sourceRows as any[]).map((r) => ({
+        category: r.category,
+        count: parseInt(r.count),
+      })),
+    };
+
+    res.json({ success: true, annual });
+  } catch (error) {
+    console.error("Error fetching annual metrics:", error);
+    res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch annual metrics",
+    });
+  }
+};
+
+/**
  * GET /api/dashboard/broker-metrics
  * Get broker monthly performance metrics (computed actuals + stored goals).
  * Admins (mortgage bankers) see tenant-wide data.
@@ -12517,6 +12740,11 @@ function createServer() {
     "/api/dashboard/stats",
     verifyBrokerSession,
     handleGetDashboardStats,
+  );
+  expressApp.get(
+    "/api/dashboard/broker-metrics/annual",
+    verifyBrokerSession,
+    handleGetAnnualMetrics,
   );
   expressApp.get(
     "/api/dashboard/broker-metrics",

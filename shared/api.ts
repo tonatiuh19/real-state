@@ -549,6 +549,49 @@ export interface GetBrokerMetricsResponse {
   metrics: BrokerMonthlyMetrics;
 }
 
+export interface MonthlySnapshot {
+  month: number; // 1-12
+  leads: number;
+  credit_pulls: number;
+  pre_approvals: number;
+  closings: number;
+  lead_to_credit_pct: number;
+  credit_to_preapp_pct: number;
+  lead_to_closing_pct: number;
+  leads_goal: number;
+  closings_goal: number;
+}
+
+export interface QuarterSummary {
+  quarter: number; // 1-4
+  leads: number;
+  credit_pulls: number;
+  pre_approvals: number;
+  closings: number;
+  avg_lead_to_credit_pct: number;
+  avg_credit_to_preapp_pct: number;
+  avg_lead_to_closing_pct: number;
+}
+
+export interface AnnualMetrics {
+  year: number;
+  months: MonthlySnapshot[];
+  quarters: QuarterSummary[];
+  annual_leads: number;
+  annual_credit_pulls: number;
+  annual_pre_approvals: number;
+  annual_closings: number;
+  avg_lead_to_credit_pct: number;
+  avg_credit_to_preapp_pct: number;
+  avg_lead_to_closing_pct: number;
+  lead_sources_annual: { category: LeadSourceCategory; count: number }[];
+}
+
+export interface GetAnnualMetricsResponse {
+  success: boolean;
+  annual: AnnualMetrics;
+}
+
 export interface UpdateBrokerMetricsRequest {
   year: number;
   month: number;

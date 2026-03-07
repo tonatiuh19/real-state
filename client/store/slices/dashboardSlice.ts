@@ -7,6 +7,8 @@ import type {
   GetBrokerMetricsResponse,
   BrokerMonthlyMetrics,
   UpdateBrokerMetricsRequest,
+  GetAnnualMetricsResponse,
+  AnnualMetrics,
 } from "@shared/api";
 
 interface DashboardState {
@@ -16,6 +18,9 @@ interface DashboardState {
   brokerMetrics: BrokerMonthlyMetrics | null;
   metricsLoading: boolean;
   metricsError: string | null;
+  annualMetrics: AnnualMetrics | null;
+  annualLoading: boolean;
+  annualError: string | null;
 }
 
 const initialState: DashboardState = {
@@ -25,6 +30,9 @@ const initialState: DashboardState = {
   brokerMetrics: null,
   metricsLoading: false,
   metricsError: null,
+  annualMetrics: null,
+  annualLoading: false,
+  annualError: null,
 };
 
 export const fetchDashboardStats = createAsyncThunk(
@@ -99,6 +107,34 @@ export const updateBrokerMetrics = createAsyncThunk(
   },
 );
 
+export const fetchAnnualMetrics = createAsyncThunk(
+  "dashboard/fetchAnnualMetrics",
+  async (
+    params?: { year?: number; filterBrokerIds?: number[] },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const now = new Date();
+      const year = params?.year ?? now.getFullYear();
+      const filterBrokerIds = params?.filterBrokerIds ?? [];
+      const brokerParam =
+        filterBrokerIds.length > 0
+          ? `&filter_broker_ids=${filterBrokerIds.join(",")}`
+          : "";
+      const { data } = await axios.get<GetAnnualMetricsResponse>(
+        `/api/dashboard/broker-metrics/annual?year=${year}${brokerParam}`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data.annual;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch annual metrics",
+      );
+    }
+  },
+);
+
 const dashboardSlice = createSlice({
   name: "dashboard",
   initialState,
@@ -133,6 +169,18 @@ const dashboardSlice = createSlice({
       .addCase(fetchBrokerMetrics.rejected, (state, action) => {
         state.metricsLoading = false;
         state.metricsError = action.payload as string;
+      })
+      .addCase(fetchAnnualMetrics.pending, (state) => {
+        state.annualLoading = true;
+        state.annualError = null;
+      })
+      .addCase(fetchAnnualMetrics.fulfilled, (state, action) => {
+        state.annualLoading = false;
+        state.annualMetrics = action.payload;
+      })
+      .addCase(fetchAnnualMetrics.rejected, (state, action) => {
+        state.annualLoading = false;
+        state.annualError = action.payload as string;
       });
   },
 });
