@@ -41,7 +41,6 @@ import {
   Trash2,
   Plus,
   Lock,
-  Unlock,
   DollarSign,
   Calendar,
   AlertCircle,
@@ -458,12 +457,11 @@ export function PreApprovalLetterModal({
     try {
       const payload: any = {
         approved_amount: Number(editedAmount),
-        html_content: editedHtml,
-        letter_date: editedDate,
-        expires_at: editedExpiry || null,
       };
       if (isAdmin) {
-        payload.max_approved_amount = Number(editedMaxAmount);
+        payload.html_content = editedHtml;
+        payload.letter_date = editedDate;
+        payload.expires_at = editedExpiry || null;
       }
       await dispatch(updatePreApprovalLetter({ loanId, payload })).unwrap();
       toast({
@@ -958,7 +956,7 @@ export function PreApprovalLetterModal({
                       <Eye className="h-3.5 w-3.5" />
                       Preview
                     </TabsTrigger>
-                    {isAdmin && (
+                    {(isAdmin || isPartner) && (
                       <TabsTrigger
                         value="edit"
                         className="gap-1.5 text-xs h-7 px-3"
@@ -973,37 +971,41 @@ export function PreApprovalLetterModal({
                   </TabsList>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handlePrint}
-                      className="gap-1.5 h-8 px-3 text-xs hover:border-primary/30 hover:text-primary"
-                    >
-                      <Printer className="h-3.5 w-3.5" />
-                      Print
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleDownloadPdf}
-                      disabled={isGeneratingPdf}
-                      className="gap-1.5 h-8 px-3 text-xs hover:border-primary/30 hover:text-primary"
-                    >
-                      {isGeneratingPdf ? (
-                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Download className="h-3.5 w-3.5" />
-                      )}
-                      {isGeneratingPdf ? "Generating…" : "Download PDF"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => setSendEmailOpen(true)}
-                      className="gap-1.5 h-8 px-4 text-xs bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
-                    >
-                      <Mail className="h-3.5 w-3.5" />
-                      Send to Client
-                    </Button>
+                    {activeTab === "preview" && (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handlePrint}
+                          className="gap-1.5 h-8 px-3 text-xs hover:border-primary/30 hover:text-primary"
+                        >
+                          <Printer className="h-3.5 w-3.5" />
+                          Print
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownloadPdf}
+                          disabled={isGeneratingPdf}
+                          className="gap-1.5 h-8 px-3 text-xs hover:border-primary/30 hover:text-primary"
+                        >
+                          {isGeneratingPdf ? (
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Download className="h-3.5 w-3.5" />
+                          )}
+                          {isGeneratingPdf ? "Generating…" : "Download PDF"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => setSendEmailOpen(true)}
+                          className="gap-1.5 h-8 px-4 text-xs bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
+                        >
+                          <Mail className="h-3.5 w-3.5" />
+                          Send to Client
+                        </Button>
+                      </>
+                    )}
 
                     {!isPartner && (
                       <Button
@@ -1051,17 +1053,11 @@ export function PreApprovalLetterModal({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-1.5">
                           <Label className="text-sm text-foreground/80 flex items-center gap-1.5">
-                            {isAdmin ? (
-                              <Unlock className="h-3.5 w-3.5 text-muted-foreground" />
-                            ) : (
-                              <Lock className="h-3.5 w-3.5 text-muted-foreground" />
-                            )}
+                            <Lock className="h-3.5 w-3.5 text-muted-foreground" />
                             Maximum Allowed Amount
-                            {!isAdmin && (
-                              <span className="text-xs text-muted-foreground font-normal">
-                                (admin only)
-                              </span>
-                            )}
+                            <span className="text-xs text-muted-foreground font-normal">
+                              (locked)
+                            </span>
                           </Label>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
@@ -1070,17 +1066,22 @@ export function PreApprovalLetterModal({
                             <Input
                               type="number"
                               value={editedMaxAmount}
-                              onChange={(e) => {
-                                setEditedMaxAmount(e.target.value);
-                                setHasUnsavedChanges(true);
-                              }}
-                              className="pl-7"
-                              disabled={!isAdmin}
+                              className="pl-7 bg-muted/50"
+                              disabled
+                              readOnly
                             />
                           </div>
-                          <p className="text-xs text-muted-foreground">
-                            Hard ceiling — cannot be exceeded
-                          </p>
+                          {isAdmin ? (
+                            <p className="text-xs text-amber-600 flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3" />
+                              Locked after creation — delete the letter to
+                              change
+                            </p>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">
+                              Set by the Mortgage Banker — hard ceiling
+                            </p>
+                          )}
                         </div>
 
                         <div className="space-y-1.5">
@@ -1121,115 +1122,119 @@ export function PreApprovalLetterModal({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-1.5">
-                          <Label className="text-sm text-foreground/80">
-                            Letter Date
-                          </Label>
-                          <Input
-                            type="date"
-                            value={editedDate}
-                            onChange={(e) => {
-                              setEditedDate(e.target.value);
-                              setHasUnsavedChanges(true);
-                            }}
-                          />
+                      {isAdmin && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <Label className="text-sm text-foreground/80">
+                              Letter Date
+                            </Label>
+                            <Input
+                              type="date"
+                              value={editedDate}
+                              onChange={(e) => {
+                                setEditedDate(e.target.value);
+                                setHasUnsavedChanges(true);
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-sm text-foreground/80">
+                              Expiry Date{" "}
+                              <span className="text-muted-foreground font-normal">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              type="date"
+                              value={editedExpiry}
+                              onChange={(e) => {
+                                setEditedExpiry(e.target.value);
+                                setHasUnsavedChanges(true);
+                              }}
+                            />
+                          </div>
                         </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-sm text-foreground/80">
-                            Expiry Date{" "}
-                            <span className="text-muted-foreground font-normal">
-                              (optional)
-                            </span>
-                          </Label>
-                          <Input
-                            type="date"
-                            value={editedExpiry}
-                            onChange={(e) => {
-                              setEditedExpiry(e.target.value);
-                              setHasUnsavedChanges(true);
-                            }}
-                          />
-                        </div>
-                      </div>
+                      )}
                     </div>
 
-                    {/* HTML Editor */}
-                    <div className="bg-white border border-border/50 rounded-xl p-5 shadow-sm space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-medium text-foreground flex items-center gap-2 text-sm">
-                          <Building2 className="h-4 w-4 text-primary" />
-                          Letter HTML Content
-                        </h4>
-                        <div className="flex items-center gap-2">
-                          <p className="text-xs text-muted-foreground">
-                            Use placeholders:{" "}
-                            <code className="bg-muted px-1 rounded text-primary">
-                              {"{{APPROVED_AMOUNT}}"}
-                            </code>
-                            ,{" "}
-                            <code className="bg-muted px-1 rounded text-primary">
-                              {"{{CLIENT_FULL_NAME}}"}
-                            </code>
-                            , etc.
-                          </p>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleResetHtml}
-                            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground/80 gap-1"
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                            Reset
-                          </Button>
+                    {/* HTML Editor (admin only) */}
+                    {isAdmin && (
+                      <div className="bg-white border border-border/50 rounded-xl p-5 shadow-sm space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium text-foreground flex items-center gap-2 text-sm">
+                            <Building2 className="h-4 w-4 text-primary" />
+                            Letter HTML Content
+                          </h4>
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-muted-foreground">
+                              Use placeholders:{" "}
+                              <code className="bg-muted px-1 rounded text-primary">
+                                {"{{APPROVED_AMOUNT}}"}
+                              </code>
+                              ,{" "}
+                              <code className="bg-muted px-1 rounded text-primary">
+                                {"{{CLIENT_FULL_NAME}}"}
+                              </code>
+                              , etc.
+                            </p>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleResetHtml}
+                              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground/80 gap-1"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              Reset
+                            </Button>
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Placeholder legend */}
-                      <div className="flex flex-wrap gap-1.5 p-3 bg-muted/30 rounded-lg border border-border/50">
-                        {[
-                          "{{COMPANY_LOGO}}",
-                          "{{COMPANY_NAME}}",
-                          "{{COMPANY_ADDRESS}}",
-                          "{{COMPANY_PHONE}}",
-                          "{{COMPANY_NMLS}}",
-                          "{{LETTER_DATE}}",
-                          "{{EXPIRES_SHORT}}",
-                          "{{CLIENT_FULL_NAME}}",
-                          "{{PROPERTY_ADDRESS}}",
-                          "{{APPROVED_AMOUNT}}",
-                          "{{EXPIRY_NOTE}}",
-                          "{{BROKER_PHOTO}}",
-                          "{{BROKER_FULL_NAME}}",
-                          "{{BROKER_LICENSE}}",
-                          "{{BROKER_PHONE}}",
-                          "{{BROKER_EMAIL}}",
-                        ].map((placeholder) => (
-                          <button
-                            key={placeholder}
-                            type="button"
-                            onClick={() => {
-                              setEditedHtml((prev) => prev + placeholder);
-                              setHasUnsavedChanges(true);
-                            }}
-                            className="text-xs px-2 py-0.5 rounded bg-primary/8 text-primary border border-primary/20 hover:bg-primary/15 transition-colors font-mono"
-                          >
-                            {placeholder}
-                          </button>
-                        ))}
-                      </div>
+                        {/* Placeholder legend */}
+                        <div className="flex flex-wrap gap-1.5 p-3 bg-muted/30 rounded-lg border border-border/50">
+                          {[
+                            "{{COMPANY_LOGO}}",
+                            "{{COMPANY_NAME}}",
+                            "{{COMPANY_ADDRESS}}",
+                            "{{COMPANY_PHONE}}",
+                            "{{COMPANY_NMLS}}",
+                            "{{LETTER_DATE}}",
+                            "{{EXPIRES_SHORT}}",
+                            "{{CLIENT_FULL_NAME}}",
+                            "{{PROPERTY_ADDRESS}}",
+                            "{{APPROVED_AMOUNT}}",
+                            "{{EXPIRY_NOTE}}",
+                            "{{BROKER_PHOTO}}",
+                            "{{BROKER_FULL_NAME}}",
+                            "{{BROKER_LICENSE}}",
+                            "{{BROKER_PHONE}}",
+                            "{{BROKER_EMAIL}}",
+                          ].map((placeholder) => (
+                            <button
+                              key={placeholder}
+                              type="button"
+                              onClick={() => {
+                                setEditedHtml((prev) => prev + placeholder);
+                                setHasUnsavedChanges(true);
+                              }}
+                              className="text-xs px-2 py-0.5 rounded bg-primary/8 text-primary border border-primary/20 hover:bg-primary/15 transition-colors font-mono"
+                            >
+                              {placeholder}
+                            </button>
+                          ))}
+                        </div>
 
-                      <Textarea
-                        value={editedHtml}
-                        onChange={(e) => {
-                          setEditedHtml(e.target.value);
-                          setHasUnsavedChanges(true);
-                        }}
-                        className="font-mono text-xs min-h-[320px] resize-y border-gray-300"
-                        placeholder="Enter the full HTML content of the letter..."
-                        spellCheck={false}
-                      />
-                    </div>
+                        <Textarea
+                          value={editedHtml}
+                          onChange={(e) => {
+                            setEditedHtml(e.target.value);
+                            setHasUnsavedChanges(true);
+                          }}
+                          className="font-mono text-xs min-h-[320px] resize-y border-gray-300"
+                          placeholder="Enter the full HTML content of the letter..."
+                          spellCheck={false}
+                        />
+                      </div>
+                    )}
 
                     {/* Live Preview inside Edit tab */}
                     <div className="bg-white border border-border/50 rounded-xl shadow-sm overflow-hidden">

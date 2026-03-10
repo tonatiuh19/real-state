@@ -11692,13 +11692,10 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       letter_date,
       expires_at,
       is_active,
-      max_approved_amount,
     } = req.body;
 
-    const newMax =
-      max_approved_amount !== undefined && brokerRole === "admin"
-        ? Number(max_approved_amount)
-        : parseFloat(existing.max_approved_amount);
+    // max_approved_amount is locked after creation — delete and recreate to change it
+    const newMax = parseFloat(existing.max_approved_amount);
     const newAmount =
       approved_amount !== undefined
         ? Number(approved_amount)
@@ -11726,10 +11723,6 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
     if (approved_amount !== undefined) {
       updates.push("approved_amount = ?");
       values.push(newAmount);
-    }
-    if (max_approved_amount !== undefined && brokerRole === "admin") {
-      updates.push("max_approved_amount = ?");
-      values.push(newMax);
     }
     if (html_content !== undefined) {
       updates.push("html_content = ?");
@@ -11785,7 +11778,6 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       entityId: existing.id,
       changes: {
         approved_amount,
-        max_approved_amount,
         html_content: html_content ? "(updated)" : undefined,
         letter_date,
         expires_at,
@@ -13271,12 +13263,10 @@ function createServer() {
         !subject?.trim() ||
         !message?.trim()
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "name, email, subject, and message are required",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "name, email, subject, and message are required",
+        });
       }
 
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -13299,12 +13289,10 @@ function createServer() {
         ],
       );
 
-      return res
-        .status(201)
-        .json({
-          success: true,
-          message: "Message received. We will be in touch shortly.",
-        });
+      return res.status(201).json({
+        success: true,
+        message: "Message received. We will be in touch shortly.",
+      });
     } catch (err: any) {
       console.error("handleSubmitContact error:", err);
       return res
