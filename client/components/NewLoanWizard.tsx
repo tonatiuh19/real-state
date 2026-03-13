@@ -78,10 +78,6 @@ interface SelectedTemplate extends TaskTemplate {
 const loanTypes = [
   { value: "purchase", label: "Purchase" },
   { value: "refinance", label: "Refinance" },
-  { value: "home_equity", label: "Home Equity" },
-  { value: "commercial", label: "Commercial" },
-  { value: "construction", label: "Construction" },
-  { value: "other", label: "Other" },
 ];
 
 const propertyTypes = [

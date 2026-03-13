@@ -26,6 +26,7 @@ import {
   PenTool,
   Award,
   Shield,
+  ArrowRightLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -174,7 +175,51 @@ export function LoanOverlay({
 
   const [isAssigning, setIsAssigning] = useState(false);
   const [isAssigningPartner, setIsAssigningPartner] = useState(false);
+  const [isUpdatingPipelineStatus, setIsUpdatingPipelineStatus] =
+    useState(false);
   const [approvingTaskId, setApprovingTaskId] = useState<number | null>(null);
+
+  const PIPELINE_STATUSES = [
+    { value: "app_sent", label: "App Sent" },
+    { value: "application_received", label: "Application Received" },
+    { value: "prequalified", label: "Prequalified" },
+    { value: "preapproved", label: "Preapproved" },
+    {
+      value: "under_contract_loan_setup",
+      label: "Under Contract / Loan Setup",
+    },
+    { value: "submitted_to_underwriting", label: "Submitted to Underwriting" },
+    { value: "approved_with_conditions", label: "Approved with Conditions" },
+    { value: "clear_to_close", label: "Clear to Close" },
+    { value: "docs_out", label: "Docs Out" },
+    { value: "loan_funded", label: "Loan Funded" },
+  ];
+
+  const handlePipelineStatusChange = async (newStatus: string) => {
+    if (!selectedLoan || newStatus === selectedLoan.status) return;
+    try {
+      setIsUpdatingPipelineStatus(true);
+      await axios.patch(
+        `/api/loans/${selectedLoan.id}/status`,
+        { status: newStatus },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      toast({
+        title: "Pipeline Status Updated",
+        description: `Loan moved to "${PIPELINE_STATUSES.find((s) => s.value === newStatus)?.label ?? newStatus}".`,
+      });
+      await dispatch(fetchLoanDetails(selectedLoan.id));
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description:
+          error.response?.data?.error || "Failed to update pipeline status",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingPipelineStatus(false);
+    }
+  };
 
   const handleAssignBroker = async (brokerId: string) => {
     if (!selectedLoan) return;
@@ -827,7 +872,9 @@ export function LoanOverlay({
                   {selectedLoan.priority} priority
                 </Badge>
                 <Badge className="bg-gray-100 text-gray-700 border-gray-200 text-xs px-3 py-1">
-                  {selectedLoan.status.replace("_", " ")}
+                  {PIPELINE_STATUSES.find(
+                    (s) => s.value === selectedLoan.status,
+                  )?.label ?? selectedLoan.status.replace(/_/g, " ")}
                 </Badge>
                 {canExportMISMO ? (
                   <Button
@@ -1248,6 +1295,40 @@ export function LoanOverlay({
                                 : " (Partner)"}
                             </SelectItem>
                           ))}
+                      </SelectContent>
+                    </Select>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Pipeline Status — admin/mortgage banker only */}
+              {(user?.role === "admin" || user?.role === "superadmin") && (
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="pb-3 border-b border-gray-100">
+                    <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
+                      <ArrowRightLeft className="h-5 w-5 text-blue-600" />
+                      Pipeline Status
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <p className="text-xs text-gray-500 mb-3">
+                      Only mortgage bankers can manually move the pipeline
+                      status.
+                    </p>
+                    <Select
+                      value={selectedLoan.status}
+                      onValueChange={handlePipelineStatusChange}
+                      disabled={isUpdatingPipelineStatus}
+                    >
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PIPELINE_STATUSES.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </CardContent>

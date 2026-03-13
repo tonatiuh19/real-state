@@ -1517,10 +1517,6 @@ const ApplicationWizard = () => {
                             >
                               <option value="purchase">Home Purchase</option>
                               <option value="refinance">Refinance</option>
-                              <option value="home_equity">Home Equity</option>
-                              <option value="commercial">Commercial</option>
-                              <option value="construction">Construction</option>
-                              <option value="other">Other</option>
                             </select>
                           </div>
                           <div className="space-y-1.5">

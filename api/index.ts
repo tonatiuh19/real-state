@@ -744,10 +744,6 @@ async function sendPublicApplicationWelcomeEmail(
     const loanTypeLabel: Record<string, string> = {
       purchase: "Home Purchase",
       refinance: "Refinance",
-      home_equity: "Home Equity",
-      commercial: "Commercial",
-      construction: "Construction",
-      other: "Other",
     };
 
     const portalUrl =
@@ -2415,7 +2411,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         property_value, property_address, property_city, property_state, property_zip,
         property_type, down_payment, loan_purpose, status, current_step, total_steps,
         estimated_close_date, notes, submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, 8, ?, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app_sent', 1, 8, ?, ?, NOW())`,
 
       [
         MORTGAGE_TENANT_ID,
@@ -2663,15 +2659,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     const applicationNumber = `LA${Date.now().toString().slice(-8)}`;
 
     const resolvedLoanType =
-      loan_type &&
-      [
-        "purchase",
-        "refinance",
-        "home_equity",
-        "commercial",
-        "construction",
-        "other",
-      ].includes(loan_type)
+      loan_type && ["purchase", "refinance"].includes(loan_type)
         ? loan_type
         : "purchase";
 
@@ -2729,7 +2717,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
          property_city, property_state, property_zip, property_type,
          down_payment, loan_purpose, status, current_step, total_steps,
          priority, notes, broker_token, citizenship_status, submitted_at)
-       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'submitted',1,8,'medium',?,?,?,NOW())`,
+       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,?,NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
@@ -2842,10 +2830,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     }
 
     // Loan type
-    if (
-      resolvedLoanType === "refinance" ||
-      resolvedLoanType === "home_equity"
-    ) {
+    if (resolvedLoanType === "refinance") {
       addTask("Insurance Policy", "Current Mortgage Statement / Payoff Letter");
     }
     // purchase  → no documents needed (amount inquiry only)
@@ -3803,16 +3788,16 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     const { status: newStatus, notes } = req.body;
 
     const VALID_STATUSES = [
-      "draft",
-      "submitted",
-      "under_review",
-      "documents_pending",
-      "underwriting",
-      "conditional_approval",
-      "approved",
-      "denied",
-      "closed",
-      "cancelled",
+      "app_sent",
+      "application_received",
+      "prequalified",
+      "preapproved",
+      "under_contract_loan_setup",
+      "submitted_to_underwriting",
+      "approved_with_conditions",
+      "clear_to_close",
+      "docs_out",
+      "loan_funded",
     ];
 
     if (!newStatus || !VALID_STATUSES.includes(newStatus)) {
@@ -3822,15 +3807,16 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
       });
     }
 
-    // Verify ownership (admin can update any, broker only their own)
-    const whereClause =
-      brokerRole === "admin"
-        ? "WHERE id = ? AND tenant_id = ?"
-        : "WHERE id = ? AND broker_user_id = ? AND tenant_id = ?";
-    const queryParams =
-      brokerRole === "admin"
-        ? [loanId, MORTGAGE_TENANT_ID]
-        : [loanId, brokerId, MORTGAGE_TENANT_ID];
+    // Only mortgage bankers (admin role) can manually move status
+    if (brokerRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        error: "Only mortgage bankers can update loan pipeline status.",
+      });
+    }
+
+    const whereClause = "WHERE id = ? AND tenant_id = ?";
+    const queryParams = [loanId, MORTGAGE_TENANT_ID];
 
     const [loanRows] = await pool.query<RowDataPacket[]>(
       `SELECT id, status FROM loan_applications ${whereClause}`,
@@ -6864,15 +6850,6 @@ const handleSubmitTaskSignatures: RequestHandler = async (req, res) => {
       [taskId],
     );
 
-    // Sync loan status
-    const [taskInfo] = await pool.query<RowDataPacket[]>(
-      "SELECT application_id FROM tasks WHERE id = ?",
-      [taskId],
-    );
-    if ((taskInfo as any[])[0]?.application_id) {
-      await syncLoanStatusFromTasks((taskInfo as any[])[0].application_id);
-    }
-
     res.json({
       success: true,
       message: "Signatures submitted successfully",
@@ -6940,98 +6917,6 @@ const handleGetTaskSignatures: RequestHandler = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // END DOCUMENT SIGNING HANDLERS
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Auto-sync loan application status based on the aggregate status of its tasks.
- * Only updates if the loan is in an auto-managed transitional state.
- *
- * Mapping rules:
- *  - any task in_progress | reopened  → documents_pending  (client actively working)
- *  - any task pending_approval        → under_review        (broker should review)
- *  - all tasks approved               → underwriting        (ready for underwriting)
- *  - all tasks still pending          → submitted           (no work started yet)
- */
-const syncLoanStatusFromTasks = async (
-  applicationId: number | string,
-  brokerId?: number,
-): Promise<void> => {
-  try {
-    const [loanRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id, status FROM loan_applications WHERE id = ? AND tenant_id = ?",
-      [applicationId, MORTGAGE_TENANT_ID],
-    );
-    if (!Array.isArray(loanRows) || loanRows.length === 0) return;
-
-    const currentStatus = loanRows[0].status;
-    const loanId = loanRows[0].id as number;
-
-    // Only auto-manage transitional statuses; leave final decisions alone
-    const AUTO_MANAGED = [
-      "draft",
-      "submitted",
-      "documents_pending",
-      "under_review",
-      "underwriting",
-    ];
-    if (!AUTO_MANAGED.includes(currentStatus)) return;
-
-    const [taskRows] = await pool.query<RowDataPacket[]>(
-      "SELECT status FROM tasks WHERE application_id = ? AND tenant_id = ?",
-      [applicationId, MORTGAGE_TENANT_ID],
-    );
-    if (!Array.isArray(taskRows) || taskRows.length === 0) return;
-
-    const statuses: string[] = taskRows.map((t) => t.status as string);
-    const hasInProgress = statuses.some(
-      (s) => s === "in_progress" || s === "reopened",
-    );
-    const hasPendingApproval = statuses.some((s) => s === "pending_approval");
-    const allApprovedOrCancelled = statuses.every(
-      (s) => s === "approved" || s === "cancelled",
-    );
-    const allPending = statuses.every((s) => s === "pending");
-
-    let newStatus: string | null = null;
-
-    if (hasInProgress) {
-      newStatus = "documents_pending";
-    } else if (hasPendingApproval) {
-      newStatus = "under_review";
-    } else if (allApprovedOrCancelled) {
-      newStatus = "underwriting";
-    } else if (allPending) {
-      // Nothing started yet — keep loan at submitted
-      newStatus = "submitted";
-    }
-    // Mixed (some approved, some still pending) — don't change loan status
-
-    if (newStatus && newStatus !== currentStatus) {
-      await pool.query(
-        "UPDATE loan_applications SET status = ?, updated_at = NOW() WHERE id = ?",
-        [newStatus, loanId],
-      );
-      await pool.query(
-        `INSERT INTO application_status_history
-           (tenant_id, application_id, from_status, to_status, changed_by_broker_id, notes)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          MORTGAGE_TENANT_ID,
-          loanId,
-          currentStatus,
-          newStatus,
-          brokerId || null,
-          "Auto-updated based on task statuses",
-        ],
-      );
-      console.log(
-        `✅ Loan ${loanId} auto-status: ${currentStatus} → ${newStatus}`,
-      );
-    }
-  } catch (err) {
-    console.error("❌ syncLoanStatusFromTasks error:", err);
-    // Non-blocking — never throw
-  }
-};
 
 /**
  * Approve a completed task
@@ -7117,9 +7002,6 @@ const handleApproveTask: RequestHandler = async (req, res) => {
     //   console.error("Failed to send approval email:", emailError);
     //   // Don't fail the request if email fails
     // }
-
-    // Sync loan status based on all task states
-    await syncLoanStatusFromTasks(task.application_id, brokerId);
 
     res.json({
       success: true,
@@ -7227,9 +7109,6 @@ const handleReopenTask: RequestHandler = async (req, res) => {
         }),
       ],
     );
-
-    // Sync loan status based on all task states
-    await syncLoanStatusFromTasks(task.application_id, brokerId);
 
     res.json({
       success: true,
@@ -8027,9 +7906,6 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
       "UPDATE tasks SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?",
       [actualStatus, completedAt, taskId],
     );
-
-    // Sync loan status based on all task states (non-blocking)
-    syncLoanStatusFromTasks(tasks[0].application_id).catch(() => {});
 
     res.json({
       success: true,

@@ -135,84 +135,84 @@ const Pipeline = () => {
 
   const columns = [
     {
-      id: "draft",
-      name: "Draft",
+      id: "app_sent",
+      name: "App Sent",
       color: "bg-gray-50",
       headerColor: "bg-gray-100",
       textColor: "text-gray-700",
-      description: "Being prepared",
+      description: "Application sent to client",
     },
     {
-      id: "submitted",
-      name: "Submitted",
+      id: "application_received",
+      name: "Application Received",
       color: "bg-blue-50",
       headerColor: "bg-blue-100",
       textColor: "text-blue-700",
-      description: "Ready for review",
+      description: "Application received & reviewing",
     },
     {
-      id: "under_review",
-      name: "In Review",
+      id: "prequalified",
+      name: "Prequalified",
+      color: "bg-cyan-50",
+      headerColor: "bg-cyan-100",
+      textColor: "text-cyan-700",
+      description: "Client prequalified",
+    },
+    {
+      id: "preapproved",
+      name: "Preapproved",
+      color: "bg-teal-50",
+      headerColor: "bg-teal-100",
+      textColor: "text-teal-700",
+      description: "Client preapproved",
+    },
+    {
+      id: "under_contract_loan_setup",
+      name: "Under Contract / Loan Setup",
       color: "bg-yellow-50",
       headerColor: "bg-yellow-100",
       textColor: "text-yellow-700",
-      description: "Under analysis",
+      description: "Under contract, loan setup",
     },
     {
-      id: "documents_pending",
-      name: "Docs Required",
+      id: "submitted_to_underwriting",
+      name: "Submitted to Underwriting",
       color: "bg-orange-50",
       headerColor: "bg-orange-100",
       textColor: "text-orange-700",
-      description: "Awaiting documents",
+      description: "Submitted to underwriting",
     },
     {
-      id: "underwriting",
-      name: "Underwriting",
+      id: "approved_with_conditions",
+      name: "Approved with Conditions",
       color: "bg-purple-50",
       headerColor: "bg-purple-100",
       textColor: "text-purple-700",
-      description: "In underwriting",
-    },
-    {
-      id: "conditional_approval",
-      name: "Conditional",
-      color: "bg-indigo-50",
-      headerColor: "bg-indigo-100",
-      textColor: "text-indigo-700",
       description: "Conditions pending",
     },
     {
-      id: "approved",
-      name: "Approved",
+      id: "clear_to_close",
+      name: "Clear to Close",
+      color: "bg-indigo-50",
+      headerColor: "bg-indigo-100",
+      textColor: "text-indigo-700",
+      description: "Cleared for closing",
+    },
+    {
+      id: "docs_out",
+      name: "Docs Out",
       color: "bg-green-50",
       headerColor: "bg-green-100",
       textColor: "text-green-700",
-      description: "Ready to close",
+      description: "Closing documents sent",
     },
     {
-      id: "closed",
-      name: "Closed",
+      id: "loan_funded",
+      name: "Loan Funded",
       color: "bg-emerald-50",
       headerColor: "bg-emerald-100",
       textColor: "text-emerald-700",
-      description: "Successfully closed",
-    },
-    {
-      id: "denied",
-      name: "Denied",
-      color: "bg-red-50",
-      headerColor: "bg-red-100",
-      textColor: "text-red-700",
-      description: "Application denied",
-    },
-    {
-      id: "cancelled",
-      name: "Cancelled",
-      color: "bg-slate-50",
-      headerColor: "bg-slate-100",
-      textColor: "text-slate-700",
-      description: "Cancelled by client",
+      description: "Loan successfully funded",
     },
   ];
 
@@ -401,12 +401,10 @@ const Pipeline = () => {
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="all">All Types</SelectItem>
-                              <SelectItem value="conventional">
-                                Conventional
+                              <SelectItem value="purchase">Purchase</SelectItem>
+                              <SelectItem value="refinance">
+                                Refinance
                               </SelectItem>
-                              <SelectItem value="fha">FHA</SelectItem>
-                              <SelectItem value="va">VA</SelectItem>
-                              <SelectItem value="usda">USDA</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
