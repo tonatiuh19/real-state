@@ -8,10 +8,6 @@ import {
   Eye,
   Save,
   X,
-  Layers,
-  GitBranch,
-  CheckCircle2,
-  Settings2,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -70,27 +66,13 @@ import {
   createWhatsappTemplate,
   updateWhatsappTemplate,
   deleteWhatsappTemplate,
-  fetchPipelineStepTemplates,
-  upsertPipelineStepTemplate,
-  deletePipelineStepTemplate,
 } from "@/store/slices/communicationTemplatesSlice";
-import type { LoanPipelineStep, CommunicationType } from "@shared/api";
+import type { CommunicationType } from "@shared/api";
 import ReactQuill from "react-quill";
 import "react-quill/dist/quill.snow.css";
 import { cn } from "@/lib/utils";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const PIPELINE_STEPS: { value: LoanPipelineStep; label: string }[] = [
-  { value: "under_review", label: "Under Review" },
-  { value: "documents_pending", label: "Documents Pending" },
-  { value: "underwriting", label: "Underwriting" },
-  { value: "conditional_approval", label: "Conditional Approval" },
-  { value: "approved", label: "Approved" },
-  { value: "denied", label: "Denied" },
-  { value: "closed", label: "Closed" },
-  { value: "cancelled", label: "Cancelled" },
-];
 
 const CHANNELS: {
   value: CommunicationType;
@@ -122,17 +104,10 @@ const CHANNELS: {
 
 const CommunicationTemplates = () => {
   const dispatch = useAppDispatch();
-  const {
-    emailTemplates,
-    smsTemplates,
-    whatsappTemplates,
-    pipelineStepTemplates,
-    isLoading,
-    pipelineLoading,
-  } = useAppSelector((state) => state.communicationTemplates);
+  const { emailTemplates, smsTemplates, whatsappTemplates, isLoading } =
+    useAppSelector((state) => state.communicationTemplates);
   const { toast } = useToast();
 
-  const [section, setSection] = useState<"general" | "pipeline">("general");
   const [channelTab, setChannelTab] = useState<CommunicationType>("email");
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -175,7 +150,6 @@ const CommunicationTemplates = () => {
     dispatch(fetchEmailTemplates());
     dispatch(fetchSmsTemplates());
     dispatch(fetchWhatsappTemplates());
-    dispatch(fetchPipelineStepTemplates());
   }, [dispatch]);
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -326,66 +300,6 @@ const CommunicationTemplates = () => {
     }
   };
 
-  // ── Pipeline helpers ─────────────────────────────────────────────────────────
-
-  const getAssignment = (step: LoanPipelineStep, channel: CommunicationType) =>
-    pipelineStepTemplates.find(
-      (a) => a.pipeline_step === step && a.communication_type === channel,
-    );
-
-  const getTemplatesForChannel = (channel: CommunicationType) => {
-    if (channel === "email") return emailTemplates.filter((t) => t.is_active);
-    if (channel === "sms") return smsTemplates.filter((t) => t.is_active);
-    return whatsappTemplates.filter((t) => t.is_active);
-  };
-
-  const handleAssign = async (
-    step: LoanPipelineStep,
-    channel: CommunicationType,
-    templateId: number | null,
-  ) => {
-    if (templateId === null) {
-      const existing = getAssignment(step, channel);
-      if (existing) {
-        try {
-          await dispatch(
-            deletePipelineStepTemplate({ step, channel }),
-          ).unwrap();
-          toast({
-            title: "Removed",
-            description: `Removed ${channel} template from ${formatLabel(step)}`,
-          });
-        } catch (e: any) {
-          toast({
-            title: "Error",
-            description: e || "Failed to remove assignment",
-            variant: "destructive",
-          });
-        }
-      }
-      return;
-    }
-    try {
-      await dispatch(
-        upsertPipelineStepTemplate({
-          pipeline_step: step,
-          communication_type: channel,
-          template_id: templateId,
-        }),
-      ).unwrap();
-      toast({
-        title: "Saved",
-        description: `${formatLabel(channel)} template assigned to ${formatLabel(step)}`,
-      });
-    } catch (e: any) {
-      toast({
-        title: "Error",
-        description: e || "Failed to assign template",
-        variant: "destructive",
-      });
-    }
-  };
-
   // ── Template card renderer ────────────────────────────────────────────────────
 
   const renderTemplateCards = (
@@ -509,231 +423,72 @@ const CommunicationTemplates = () => {
           </div>
         </header>
 
-        {/* Section switcher */}
-        <div className="flex gap-2 mb-6">
-          <Button
-            variant={section === "general" ? "default" : "outline"}
-            className="gap-2"
-            onClick={() => setSection("general")}
-          >
-            <Layers className="h-4 w-4" />
-            General Templates
-          </Button>
-          <Button
-            variant={section === "pipeline" ? "default" : "outline"}
-            className="gap-2"
-            onClick={() => setSection("pipeline")}
-          >
-            <GitBranch className="h-4 w-4" />
-            Pipeline Automation
-          </Button>
-        </div>
-
-        {/* ── SECTION 1: General Templates ────────────────────────────────────── */}
-        {section === "general" && (
-          <Tabs
-            value={channelTab}
-            onValueChange={(v) => setChannelTab(v as CommunicationType)}
-          >
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-              <TabsList>
-                <TabsTrigger value="email" className="gap-2">
-                  <Mail className="h-4 w-4" />
-                  Email ({emailTemplates.length})
-                </TabsTrigger>
-                <TabsTrigger value="sms" className="gap-2">
-                  <MessageSquare className="h-4 w-4" />
-                  SMS ({smsTemplates.length})
-                </TabsTrigger>
-                <TabsTrigger value="whatsapp" className="gap-2">
-                  <FaWhatsapp className="h-4 w-4" />
-                  WhatsApp ({whatsappTemplates.length})
-                </TabsTrigger>
-              </TabsList>
-              <Button onClick={() => openEditor(channelTab)} className="gap-2">
-                <Plus className="h-4 w-4" />
-                New {formatLabel(channelTab)} Template
-              </Button>
-            </div>
-
-            <TabsContent value="email" className="mt-0">
-              {isLoading ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  Loading email templates…
-                </div>
-              ) : (
-                renderTemplateCards(
-                  emailTemplates,
-                  "email",
-                  "body_html",
-                  (t) => t.subject,
-                )
-              )}
-            </TabsContent>
-
-            <TabsContent value="sms" className="mt-0">
-              {isLoading ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  Loading SMS templates…
-                </div>
-              ) : (
-                renderTemplateCards(
-                  smsTemplates,
-                  "sms",
-                  "body",
-                  (t) => `${t.body.length} / 1600 chars`,
-                )
-              )}
-            </TabsContent>
-
-            <TabsContent value="whatsapp" className="mt-0">
-              {isLoading ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  Loading WhatsApp templates…
-                </div>
-              ) : (
-                renderTemplateCards(whatsappTemplates, "whatsapp", "body")
-              )}
-            </TabsContent>
-          </Tabs>
-        )}
-
-        {/* ── SECTION 2: Pipeline Automation ──────────────────────────────────── */}
-        {section === "pipeline" && (
-          <div className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Settings2 className="h-5 w-5 text-primary" />
-                  Pipeline Step Template Assignments
-                </CardTitle>
-                <CardDescription>
-                  Assign which template to send automatically when a loan enters
-                  each pipeline step. One template per channel (Email, SMS,
-                  WhatsApp) per step.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-0">
-                {pipelineLoading ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    Loading assignments…
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b bg-muted/50">
-                          <th className="text-left px-4 py-3 font-semibold w-48">
-                            Pipeline Step
-                          </th>
-                          {CHANNELS.map((ch) => (
-                            <th
-                              key={ch.value}
-                              className="text-left px-4 py-3 font-semibold min-w-56"
-                            >
-                              <span
-                                className={cn(
-                                  "flex items-center gap-2",
-                                  ch.color,
-                                )}
-                              >
-                                {ch.icon}
-                                {ch.label}
-                              </span>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {PIPELINE_STEPS.map((step, idx) => (
-                          <tr
-                            key={step.value}
-                            className={cn(
-                              "border-b transition-colors hover:bg-muted/30",
-                              idx % 2 === 0 ? "bg-background" : "bg-muted/10",
-                            )}
-                          >
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <div className="h-2 w-2 rounded-full bg-primary/60 shrink-0" />
-                                <span className="font-medium">
-                                  {step.label}
-                                </span>
-                              </div>
-                            </td>
-                            {CHANNELS.map((ch) => {
-                              const assignment = getAssignment(
-                                step.value,
-                                ch.value,
-                              );
-                              const templates = getTemplatesForChannel(
-                                ch.value,
-                              );
-                              return (
-                                <td key={ch.value} className="px-4 py-3">
-                                  <div className="flex items-center gap-2">
-                                    <Select
-                                      value={
-                                        assignment
-                                          ? String(assignment.template_id)
-                                          : "none"
-                                      }
-                                      onValueChange={(val) =>
-                                        handleAssign(
-                                          step.value,
-                                          ch.value,
-                                          val === "none" ? null : Number(val),
-                                        )
-                                      }
-                                    >
-                                      <SelectTrigger className="h-8 text-xs max-w-52">
-                                        <SelectValue placeholder="— None —" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        <SelectItem value="none">
-                                          <span className="text-muted-foreground">
-                                            — None —
-                                          </span>
-                                        </SelectItem>
-                                        {templates.map((t) => (
-                                          <SelectItem
-                                            key={t.id}
-                                            value={String(t.id)}
-                                          >
-                                            {t.name}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                    {assignment && (
-                                      <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                                    )}
-                                  </div>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <p className="text-xs text-muted-foreground px-1">
-              Only active templates are shown. To add more options, create
-              templates in the{" "}
-              <button
-                className="underline underline-offset-2 text-primary"
-                onClick={() => setSection("general")}
-              >
-                General Templates
-              </button>{" "}
-              section.
-            </p>
+        {/* ── Templates ────────────────────────────────────────────────────── */}
+        <Tabs
+          value={channelTab}
+          onValueChange={(v) => setChannelTab(v as CommunicationType)}
+        >
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
+            <TabsList>
+              <TabsTrigger value="email" className="gap-2">
+                <Mail className="h-4 w-4" />
+                Email ({emailTemplates.length})
+              </TabsTrigger>
+              <TabsTrigger value="sms" className="gap-2">
+                <MessageSquare className="h-4 w-4" />
+                SMS ({smsTemplates.length})
+              </TabsTrigger>
+              <TabsTrigger value="whatsapp" className="gap-2">
+                <FaWhatsapp className="h-4 w-4" />
+                WhatsApp ({whatsappTemplates.length})
+              </TabsTrigger>
+            </TabsList>
+            <Button onClick={() => openEditor(channelTab)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              New {formatLabel(channelTab)} Template
+            </Button>
           </div>
-        )}
+
+          <TabsContent value="email" className="mt-0">
+            {isLoading ? (
+              <div className="text-center py-12 text-muted-foreground">
+                Loading email templates…
+              </div>
+            ) : (
+              renderTemplateCards(
+                emailTemplates,
+                "email",
+                "body_html",
+                (t) => t.subject,
+              )
+            )}
+          </TabsContent>
+
+          <TabsContent value="sms" className="mt-0">
+            {isLoading ? (
+              <div className="text-center py-12 text-muted-foreground">
+                Loading SMS templates…
+              </div>
+            ) : (
+              renderTemplateCards(
+                smsTemplates,
+                "sms",
+                "body",
+                (t) => `${t.body.length} / 1600 chars`,
+              )
+            )}
+          </TabsContent>
+
+          <TabsContent value="whatsapp" className="mt-0">
+            {isLoading ? (
+              <div className="text-center py-12 text-muted-foreground">
+                Loading WhatsApp templates…
+              </div>
+            ) : (
+              renderTemplateCards(whatsappTemplates, "whatsapp", "body")
+            )}
+          </TabsContent>
+        </Tabs>
 
         {/* ── Editor Dialog ── */}
         <Dialog open={isEditorOpen} onOpenChange={setIsEditorOpen}>

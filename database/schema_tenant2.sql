@@ -2051,6 +2051,125 @@ INSERT INTO `templates` (`id`, `tenant_id`, `name`, `description`, `template_typ
 (91, 1, 'Loan Funded – SMS', 'SMS sent on the close date when the loan funds', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉🔑 YOUR LOAN HAS FUNDED! Congratulations — your loan (#{{application_number}}) is officially closed and the keys are yours! It has been a pleasure working with you. Wishing you many happy years in your new home! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
 (92, 1, 'Loan Funded – Email', 'Email sent on the close date when the loan funds', 'email', 'follow_up', '🎉 Your Loan Has Funded — Congratulations!', 'Hi {{first_name}},\n\nThis is the moment you\'ve been working toward — **your loan has officially funded and closed!** 🎊\n\nApplication #: {{application_number}}\n\nOn behalf of the entire team at Encore Mortgage, we want to say **congratulations** and thank you for trusting us with such an important milestone in your life.\n\n**Here\'s a summary of what just happened:**\n✅ Your loan documents were signed and notarized\n✅ The lender wired the funds to the title company\n✅ The title company recorded the transaction with the county\n✅ Ownership has been officially transferred — the property is YOURS\n\n**What to expect next:**\n\n📬 **Loan documents** — You\'ll receive your complete closing package by mail within 1–2 weeks. Keep these documents in a safe place — you\'ll need them for tax purposes.\n\n💳 **Your first mortgage payment** — Your first payment is typically due on the 1st of the month following 30 days after closing. Watch for your welcome letter from your loan servicer with payment instructions.\n\n🏠 **Loan servicer** — Your loan may be transferred to a loan servicer (which may differ from the lender). You\'ll receive a notification if this happens — it doesn\'t affect your loan terms.\n\n🧾 **Tax benefits** — Mortgage interest and property taxes may be deductible. Consult your tax advisor for details.\n\n📞 **We\'re still here** — If you ever need a refinance, have questions, or want to refer a friend or family member who needs a mortgage, we\'re always here for you.\n\nThank you again for choosing Encore Mortgage. We\'re so proud to have been part of your journey.\n\nWith warm congratulations,\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 23:02:15', '2026-03-12 23:02:15');
 
+-- Simplify reminder flows/templates to a general baseline
+DELETE FROM `reminder_flow_connections` WHERE `flow_id` IN (2,3);
+DELETE FROM `reminder_flow_steps` WHERE `flow_id` IN (2,3);
+DELETE FROM `reminder_flow_connections` WHERE `flow_id` NOT IN (2,3);
+DELETE FROM `reminder_flow_steps` WHERE `flow_id` NOT IN (2,3);
+DELETE FROM `reminder_flows` WHERE `id` NOT IN (2,3);
+
+UPDATE `reminder_flows`
+SET `name` = 'Application Started - General Follow-Up',
+    `description` = 'General reminder flow triggered when an application is sent. Uses a short email/SMS cadence with no loan-type branching.',
+    `trigger_event` = 'app_sent',
+    `trigger_delay_days` = 0,
+    `is_active` = 1,
+    `apply_to_all_loans` = 1,
+    `loan_type_filter` = 'all'
+WHERE `id` = 2;
+
+UPDATE `reminder_flows`
+SET `name` = 'Application Received - General Follow-Up',
+    `description` = 'General reminder flow triggered when an application is received. Uses a light follow-up cadence to keep momentum.',
+    `trigger_event` = 'application_received',
+    `trigger_delay_days` = 0,
+    `is_active` = 1,
+    `apply_to_all_loans` = 1,
+    `loan_type_filter` = 'all'
+WHERE `id` = 3;
+
+INSERT INTO `reminder_flow_steps` (`id`, `flow_id`, `step_key`, `step_type`, `label`, `description`, `config`, `position_x`, `position_y`, `created_at`, `updated_at`) VALUES
+(1, 2, 'trigger', 'trigger', 'Application Sent Trigger', 'Fires when loan status becomes app_sent', NULL, 450, 50, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(2, 2, 'email_1', 'send_email', 'Welcome Email', 'Initial reminder email', '{"template_id": 7}', 450, 200, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(3, 2, 'wait_2d', 'wait', 'Wait 2 Days', NULL, '{"delay_days": 2}', 450, 350, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(4, 2, 'sms_1', 'send_sms', 'Reminder SMS', 'Follow-up SMS reminder', '{"template_id": 8}', 450, 500, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(5, 2, 'wait_5d', 'wait', 'Wait 5 Days', NULL, '{"delay_days": 5}', 450, 650, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(6, 2, 'email_2', 'send_email', 'Final Follow-Up Email', 'Final generic follow-up', '{"template_id": 9}', 450, 800, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(7, 2, 'end', 'end', 'End', 'Flow complete', NULL, 450, 950, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(8, 3, 'trigger', 'trigger', 'Application Received Trigger', 'Fires when loan status becomes application_received', NULL, 850, 50, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(9, 3, 'sms_1', 'send_sms', 'Welcome SMS', 'Immediate follow-up SMS', '{"template_id": 10}', 850, 200, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(10, 3, 'wait_1d', 'wait', 'Wait 1 Day', NULL, '{"delay_days": 1}', 850, 350, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(11, 3, 'email_1', 'send_email', 'Status Update Email', 'General status update message', '{"template_id": 11}', 850, 500, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(12, 3, 'wait_3d', 'wait', 'Wait 3 Days', NULL, '{"delay_days": 3}', 850, 650, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(13, 3, 'sms_2', 'send_sms', 'Final Check-In SMS', 'Final generic check-in', '{"template_id": 12}', 850, 800, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(14, 3, 'end', 'end', 'End', 'Flow complete', NULL, 850, 950, '2026-03-12 22:05:46', '2026-03-12 22:05:46');
+
+INSERT INTO `reminder_flow_connections` (`id`, `flow_id`, `edge_key`, `source_step_key`, `target_step_key`, `label`, `edge_type`, `created_at`) VALUES
+(1, 2, 'e_trigger_email_1', 'trigger', 'email_1', NULL, 'default', '2026-03-12 21:56:35'),
+(2, 2, 'e_email_1_wait_2d', 'email_1', 'wait_2d', NULL, 'default', '2026-03-12 21:56:35'),
+(3, 2, 'e_wait_2d_sms_1', 'wait_2d', 'sms_1', NULL, 'default', '2026-03-12 21:56:35'),
+(4, 2, 'e_sms_1_wait_5d', 'sms_1', 'wait_5d', NULL, 'default', '2026-03-12 21:56:35'),
+(5, 2, 'e_wait_5d_email_2', 'wait_5d', 'email_2', NULL, 'default', '2026-03-12 21:56:35'),
+(6, 2, 'e_email_2_end', 'email_2', 'end', NULL, 'default', '2026-03-12 21:56:35'),
+(7, 3, 'e_trigger_sms_1', 'trigger', 'sms_1', NULL, 'default', '2026-03-12 22:05:46'),
+(8, 3, 'e_sms_1_wait_1d', 'sms_1', 'wait_1d', NULL, 'default', '2026-03-12 22:05:46'),
+(9, 3, 'e_wait_1d_email_1', 'wait_1d', 'email_1', NULL, 'default', '2026-03-12 22:05:46'),
+(10, 3, 'e_email_1_wait_3d', 'email_1', 'wait_3d', NULL, 'default', '2026-03-12 22:05:46'),
+(11, 3, 'e_wait_3d_sms_2', 'wait_3d', 'sms_2', NULL, 'default', '2026-03-12 22:05:46'),
+(12, 3, 'e_sms_2_end', 'sms_2', 'end', NULL, 'default', '2026-03-12 22:05:46');
+
+DELETE FROM `templates` WHERE `id` > 12;
+
+UPDATE `templates`
+SET `name` = 'General Reminder - Welcome Email',
+    `description` = 'Generic welcome/follow-up email used by reminder flows',
+    `template_type` = 'email',
+    `category` = 'follow_up',
+    `subject` = 'We Received Your Loan Application',
+    `body` = 'Hi {{first_name}},\n\nWe received your loan application (#{{application_number}}) and our team is reviewing it.\n\nIf we need anything else, we\'ll contact you right away.\n\nThank you,\n{{broker_name}}\nEncore Mortgage',
+    `variables` = '["first_name", "application_number", "broker_name"]'
+WHERE `id` = 7;
+
+UPDATE `templates`
+SET `name` = 'General Reminder - Check-In SMS',
+    `description` = 'Generic SMS check-in used by reminder flows',
+    `template_type` = 'sms',
+    `category` = 'reminder',
+    `subject` = NULL,
+    `body` = 'Hi {{first_name}}, this is {{broker_name}} from Encore Mortgage. Just checking in on your application (#{{application_number}}). Reply if you need any help. Reply STOP to opt out.',
+    `variables` = '["first_name", "application_number", "broker_name"]'
+WHERE `id` = 8;
+
+UPDATE `templates`
+SET `name` = 'General Reminder - Final Email',
+    `description` = 'Generic final follow-up email used by reminder flows',
+    `template_type` = 'email',
+    `category` = 'follow_up',
+    `subject` = 'Final Follow-Up on Your Application',
+    `body` = 'Hi {{first_name}},\n\nWe wanted to send one final check-in regarding your application (#{{application_number}}).\n\nWhen you are ready, reply to this email and our team will help you with next steps.\n\nBest,\n{{broker_name}}\nEncore Mortgage',
+    `variables` = '["first_name", "application_number", "broker_name"]'
+WHERE `id` = 9;
+
+UPDATE `templates`
+SET `name` = 'General Reminder - Welcome SMS',
+    `description` = 'Generic initial SMS for application received flow',
+    `template_type` = 'sms',
+    `category` = 'follow_up',
+    `subject` = NULL,
+    `body` = 'Hi {{first_name}}! We received your application (#{{application_number}}). We\'ll keep you updated as we review it. - {{broker_name}}, Encore Mortgage. Reply STOP to opt out.',
+    `variables` = '["first_name", "application_number", "broker_name"]'
+WHERE `id` = 10;
+
+UPDATE `templates`
+SET `name` = 'General Reminder - Status Email',
+    `description` = 'Generic status update email for reminder flows',
+    `template_type` = 'email',
+    `category` = 'follow_up',
+    `subject` = 'Status Update on Your Loan Application',
+    `body` = 'Hi {{first_name}},\n\nYour application (#{{application_number}}) is in progress.\n\nIf we need additional items, we\'ll notify you. You can also reply to this email if you have questions.\n\nThanks,\n{{broker_name}}\nEncore Mortgage',
+    `variables` = '["first_name", "application_number", "broker_name"]'
+WHERE `id` = 11;
+
+UPDATE `templates`
+SET `name` = 'General Reminder - Final SMS',
+    `description` = 'Generic final SMS check-in for reminder flows',
+    `template_type` = 'sms',
+    `category` = 'reminder',
+    `subject` = NULL,
+    `body` = 'Hi {{first_name}}, final check-in from {{broker_name}} at Encore Mortgage for application #{{application_number}}. Reply anytime if you want help moving forward. Reply STOP to opt out.',
+    `variables` = '["first_name", "application_number", "broker_name"]'
+WHERE `id` = 12;
+
 -- --------------------------------------------------------
 
 --

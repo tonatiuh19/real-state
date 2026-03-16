@@ -11,6 +11,7 @@ import type {
   ToggleReminderFlowResponse,
   GetReminderFlowExecutionsResponse,
   DeleteReminderFlowResponse,
+  MarkFlowExecutionRespondedResponse,
 } from "@shared/api";
 
 interface ReminderFlowsState {
@@ -81,6 +82,7 @@ export const createReminderFlow = createAsyncThunk(
       description?: string;
       trigger_event: string;
       trigger_delay_days?: number;
+      loan_type_filter?: "all" | "purchase" | "refinance";
     },
     { getState, rejectWithValue },
   ) => {
@@ -178,6 +180,25 @@ export const fetchReminderFlowExecutions = createAsyncThunk(
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch flow executions",
+      );
+    }
+  },
+);
+
+export const markFlowExecutionResponded = createAsyncThunk(
+  "reminderFlows/markResponded",
+  async (executionId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<MarkFlowExecutionRespondedResponse>(
+        `/api/reminder-flow-executions/${executionId}/respond`,
+        {},
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { executionId, message: data.message };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to mark execution as responded",
       );
     }
   },
@@ -284,6 +305,16 @@ const reminderFlowsSlice = createSlice({
         state.isLoading = false;
         state.error = action.payload as string;
       });
+
+    // Mark execution as responded
+    builder.addCase(markFlowExecutionResponded.fulfilled, (state, action) => {
+      const exec = state.executions.find(
+        (e) => e.id === action.payload.executionId,
+      );
+      if (exec) {
+        exec.responded_at = new Date().toISOString();
+      }
+    });
   },
 });
 

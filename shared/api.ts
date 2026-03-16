@@ -432,16 +432,18 @@ export interface WhatsappTemplateResponse {
  * Maps a communication template to a specific loan pipeline step + channel.
  */
 export type LoanPipelineStep =
-  | "draft"
-  | "submitted"
-  | "under_review"
-  | "documents_pending"
-  | "underwriting"
-  | "conditional_approval"
-  | "approved"
-  | "denied"
-  | "closed"
-  | "cancelled";
+  | "app_sent"
+  | "application_received"
+  | "prequalified"
+  | "preapproved"
+  | "under_contract_loan_setup"
+  | "submitted_to_underwriting"
+  | "approved_with_conditions"
+  | "clear_to_close"
+  | "docs_out"
+  | "loan_funded";
+
+export type LoanType = "purchase" | "refinance";
 
 export type CommunicationType = "email" | "sms" | "whatsapp";
 
@@ -1473,41 +1475,71 @@ export interface UpdateSettingsResponse {
 // =============================================================
 
 export type ReminderTriggerEvent =
-  | "application_created"
+  | "app_sent"
+  | "application_received"
+  | "prequalified"
+  | "preapproved"
+  | "under_contract_loan_setup"
+  | "submitted_to_underwriting"
+  | "approved_with_conditions"
+  | "clear_to_close"
+  | "docs_out"
+  | "loan_funded"
   | "task_pending"
   | "task_in_progress"
   | "task_overdue"
   | "no_activity"
-  | "loan_approved"
-  | "loan_documents_pending"
   | "manual";
 
 export type ReminderStepType =
   | "trigger"
   | "wait"
+  | "wait_until_date"
   | "send_notification"
   | "send_email"
   | "send_sms"
+  | "send_whatsapp"
   | "condition"
+  | "branch"
+  | "wait_for_response"
   | "end";
 
-export type FlowEdgeType = "default" | "condition_yes" | "condition_no";
+export type FlowEdgeType =
+  | "default"
+  | "condition_yes"
+  | "condition_no"
+  | "loan_type_purchase"
+  | "loan_type_refinance"
+  | "no_response"
+  | "responded";
 
 export interface ReminderFlowStepConfig {
   // For 'wait' steps
   delay_days?: number;
   delay_hours?: number;
+  delay_minutes?: number;
+  // For 'wait_for_response' steps
+  response_timeout_hours?: number;
+  response_timeout_minutes?: number;
   // For 'send_notification' / 'send_email' / 'send_sms'
   message?: string;
   subject?: string;
   template_id?: number;
-  // For 'condition' steps
+  // For 'condition' / 'branch' steps
   condition_type?:
+    | "loan_type"
     | "task_completed"
     | "task_pending"
     | "inactivity_days"
-    | "loan_status";
+    | "loan_status"
+    | "loan_status_ne"
+    | "field_not_empty"
+    | "field_empty";
   condition_value?: string;
+  // For 'field_not_empty' / 'field_empty' condition types
+  field_name?: string;
+  // For 'wait_until_date' steps — name of the contextData field holding the target date
+  date_field?: string;
 }
 
 export interface ReminderFlowStep {
@@ -1544,6 +1576,8 @@ export interface ReminderFlow {
   trigger_delay_days: number;
   is_active: boolean;
   apply_to_all_loans: boolean;
+  /** Restricts which loan types trigger this flow. 'all' means both purchase and refinance. */
+  loan_type_filter: "all" | "purchase" | "refinance";
   created_by_broker_id: number | null;
   created_at: string;
   updated_at: string;
@@ -1564,6 +1598,10 @@ export interface ReminderFlowExecution {
   status: "active" | "paused" | "completed" | "cancelled" | "failed";
   next_execution_at: string | null;
   completed_steps: string[] | null;
+  /** Runtime context stored during execution (loan_type, application status, etc.) */
+  context_data: Record<string, unknown> | null;
+  last_step_started_at: string | null;
+  responded_at: string | null;
   started_at: string;
   completed_at: string | null;
 }
@@ -1586,6 +1624,7 @@ export interface CreateReminderFlowRequest {
   trigger_delay_days?: number;
   is_active?: boolean;
   apply_to_all_loans?: boolean;
+  loan_type_filter?: "all" | "purchase" | "refinance";
 }
 
 export interface UpdateReminderFlowRequest {
@@ -1595,6 +1634,7 @@ export interface UpdateReminderFlowRequest {
   trigger_delay_days?: number;
   is_active?: boolean;
   apply_to_all_loans?: boolean;
+  loan_type_filter?: "all" | "purchase" | "refinance";
   steps?: SaveReminderFlowStep[];
   connections?: SaveReminderFlowConnection[];
 }
@@ -1624,8 +1664,22 @@ export interface SaveReminderFlowRequest {
   trigger_delay_days?: number;
   is_active?: boolean;
   apply_to_all_loans?: boolean;
+  loan_type_filter?: "all" | "purchase" | "refinance";
   steps: SaveReminderFlowStep[];
   connections: SaveReminderFlowConnection[];
+}
+
+export interface ProcessReminderFlowsResponse {
+  success: boolean;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  errors?: string[];
+}
+
+export interface MarkFlowExecutionRespondedResponse {
+  success: boolean;
+  message: string;
 }
 
 export interface SaveReminderFlowResponse {

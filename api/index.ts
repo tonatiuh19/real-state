@@ -3865,12 +3865,17 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
       console.error("Pipeline automation error:", err),
     );
 
+    // Start reminder flows for this pipeline status change (non-blocking)
+    triggerReminderFlows(loanId, newStatus, MORTGAGE_TENANT_ID).catch((err) =>
+      console.error("Reminder flow trigger error:", err),
+    );
+
     res.json({
       success: true,
       loan_id: loanId,
       from_status: fromStatus,
       to_status: newStatus,
-      message: "Loan status updated. Pipeline automation triggered.",
+      message: "Loan status updated.",
     });
   } catch (error) {
     console.error("Error updating loan status:", error);
@@ -8749,16 +8754,16 @@ const handleUpsertPipelineStepTemplate: RequestHandler = async (req, res) => {
     }
 
     const validSteps = [
-      "draft",
-      "submitted",
-      "under_review",
-      "documents_pending",
-      "underwriting",
-      "conditional_approval",
-      "approved",
-      "denied",
-      "closed",
-      "cancelled",
+      "app_sent",
+      "application_received",
+      "prequalified",
+      "preapproved",
+      "under_contract_loan_setup",
+      "submitted_to_underwriting",
+      "approved_with_conditions",
+      "clear_to_close",
+      "docs_out",
+      "loan_funded",
     ];
     const validChannels = ["email", "sms", "whatsapp"];
 
@@ -9003,8 +9008,681 @@ async function triggerPipelineAutomation(
 }
 
 // =====================================================
-// IMAP POLLING CRON — HostGator inbound reply tracking
+// REMINDER FLOW TRIGGER — auto-start flows on status change
 // =====================================================
+
+/**
+ * Find all active reminder flows whose trigger_event matches newStatus and
+ * whose loan_type_filter allows the loan's loan_type, then create
+ * reminder_flow_executions for each matching flow.
+ * Non-throwing — failures are logged only.
+ */
+async function triggerReminderFlows(
+  loanId: number,
+  newStatus: string,
+  tenantId: number,
+): Promise<void> {
+  try {
+    // Load loan context needed for execution context_data
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT la.id, la.application_number, la.loan_type, la.status,
+              la.actual_close_date, la.estimated_close_date,
+              c.id AS client_id, c.first_name, c.last_name, c.email, c.phone
+       FROM loan_applications la
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE la.id = ? AND la.tenant_id = ?`,
+      [loanId, tenantId],
+    );
+
+    if (!loanRows.length) return;
+    const loan = loanRows[0];
+    const loanType: string = loan.loan_type || "purchase";
+
+    // Find active flows matching this trigger_event and loan_type_filter
+    const [flows] = await pool.query<RowDataPacket[]>(
+      `SELECT rf.id, rf.trigger_delay_days, rf.loan_type_filter
+       FROM reminder_flows rf
+       WHERE rf.tenant_id = ?
+         AND rf.trigger_event = ?
+         AND rf.is_active = 1
+         AND (rf.loan_type_filter = 'all' OR rf.loan_type_filter = ?)`,
+      [tenantId, newStatus, loanType],
+    );
+
+    if (!flows.length) return;
+
+    const contextData = JSON.stringify({
+      loan_type: loanType,
+      loan_status: loan.status,
+      application_number: loan.application_number,
+      client_id: loan.client_id,
+      client_name: `${loan.first_name} ${loan.last_name}`,
+      client_email: loan.email,
+      client_phone: loan.phone,
+      loan_id: loanId,
+      actual_close_date: loan.actual_close_date ?? null,
+      estimated_close_date: loan.estimated_close_date ?? null,
+    });
+
+    for (const flow of flows) {
+      // Find the trigger node for this flow to set current_step_key
+      const [triggerSteps] = await pool.query<RowDataPacket[]>(
+        `SELECT step_key FROM reminder_flow_steps
+         WHERE flow_id = ? AND step_type = 'trigger' LIMIT 1`,
+        [flow.id],
+      );
+      const triggerKey = triggerSteps[0]?.step_key ?? null;
+
+      // Calculate when to first run: NOW + trigger_delay_days
+      const nextExecAt = new Date();
+      nextExecAt.setDate(nextExecAt.getDate() + (flow.trigger_delay_days || 0));
+
+      await pool.query(
+        `INSERT INTO reminder_flow_executions
+           (tenant_id, flow_id, loan_application_id, client_id,
+            current_step_key, status, next_execution_at, completed_steps,
+            context_data, last_step_started_at, started_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?, '[]', ?, NOW(), NOW())`,
+        [
+          tenantId,
+          flow.id,
+          loanId,
+          loan.client_id,
+          triggerKey,
+          nextExecAt,
+          contextData,
+        ],
+      );
+
+      console.log(
+        `🔔 Reminder flow #${flow.id} triggered for loan #${loanId} (${newStatus} / ${loanType})`,
+      );
+    }
+  } catch (err) {
+    console.error("❌ Reminder flow trigger failed:", err);
+  }
+}
+
+// =====================================================
+// FLOW EXECUTION ENGINE — helpers used by the cron
+// =====================================================
+
+type FlowStep = {
+  id: number;
+  step_key: string;
+  step_type: string;
+  config: Record<string, any> | null;
+};
+type FlowConnection = {
+  source_step_key: string;
+  target_step_key: string;
+  edge_type: string;
+};
+
+/** Parse a step config safely from DB (may be parsed object or JSON string). */
+function parseStepConfig(raw: any): Record<string, any> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  return raw as Record<string, any>;
+}
+
+/** Pick the outgoing connection from a step, given a priority-ordered list of edge types. */
+function pickEdge(
+  connections: FlowConnection[],
+  fromKey: string,
+  ...edgeTypes: string[]
+): FlowConnection | undefined {
+  for (const type of edgeTypes) {
+    const edge = connections.find(
+      (c) => c.source_step_key === fromKey && c.edge_type === type,
+    );
+    if (edge) return edge;
+  }
+  return undefined;
+}
+
+/**
+ * Send a message for a send_email / send_sms / send_notification step.
+ * Returns the send result without throwing.
+ */
+async function executeFlowSendStep(
+  step: FlowStep,
+  contextData: Record<string, any>,
+  execution: RowDataPacket,
+): Promise<void> {
+  const config = step.config ?? {};
+  if (!config.message && !config.template_id) return; // nothing to send
+
+  const variables: Record<string, string> = {
+    client_name: String(contextData.client_name ?? ""),
+    first_name: String((contextData.client_name ?? "").split(" ")[0] ?? ""),
+    application_number: String(contextData.application_number ?? ""),
+    loan_type: String(contextData.loan_type ?? ""),
+    status: String(contextData.loan_status ?? ""),
+  };
+
+  let body = config.message ?? "";
+  let subject = config.subject ?? "Loan Update";
+
+  if (config.template_id) {
+    const [tRows] = await pool.query<RowDataPacket[]>(
+      "SELECT subject, body FROM templates WHERE id = ? AND is_active = 1",
+      [config.template_id],
+    );
+    if (tRows.length) {
+      body = processTemplateVariables(tRows[0].body, variables);
+      subject = processTemplateVariables(
+        tRows[0].subject ?? subject,
+        variables,
+      );
+    }
+  } else {
+    body = processTemplateVariables(body, variables);
+    subject = processTemplateVariables(subject, variables);
+  }
+
+  const clientEmail: string = contextData.client_email as string;
+  const clientPhone: string = contextData.client_phone as string;
+  const loanId: number = contextData.loan_id as number;
+  const clientId: number = contextData.client_id as number;
+  const convId = `conv_client_${clientId}_loan_${loanId}_flow_${execution.flow_id}`;
+
+  let sendResult: {
+    success: boolean;
+    external_id?: string;
+    error?: string;
+    cost?: number;
+  } = { success: false, error: "Not configured" };
+
+  if (step.step_type === "send_email") {
+    if (!clientEmail) return;
+    sendResult = await sendEmailMessage(
+      clientEmail,
+      subject,
+      body,
+      true,
+      convId,
+    );
+  } else if (step.step_type === "send_sms") {
+    if (!clientPhone) return;
+    sendResult = await sendSMSMessage(clientPhone, body);
+  } else if (step.step_type === "send_whatsapp") {
+    if (!clientPhone) return;
+    sendResult = await sendWhatsAppMessage(clientPhone, body);
+  } else if (step.step_type === "send_notification") {
+    // Insert in-app notification for client
+    await pool.query(
+      `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, is_read, created_at)
+       VALUES (?, ?, ?, ?, 'info', 0, NOW())`,
+      [MORTGAGE_TENANT_ID, clientId, subject, body],
+    );
+    sendResult = { success: true };
+  }
+
+  if (step.step_type !== "send_notification") {
+    const commType =
+      step.step_type === "send_email"
+        ? "email"
+        : step.step_type === "send_sms"
+          ? "sms"
+          : step.step_type === "send_whatsapp"
+            ? "whatsapp"
+            : "email";
+    await pool.query(
+      `INSERT INTO communications
+         (tenant_id, application_id, from_broker_id, to_user_id,
+          communication_type, direction, subject, body, status,
+          external_id, conversation_id, template_id, delivery_status, cost, sent_at)
+       VALUES (?, ?, NULL, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        loanId,
+        clientId,
+        commType,
+        commType === "email" ? subject : null,
+        body,
+        sendResult.success ? "sent" : "failed",
+        sendResult.external_id ?? null,
+        convId,
+        config.template_id ?? null,
+        sendResult.success ? "sent" : "failed",
+        sendResult.cost ?? null,
+      ],
+    );
+  }
+
+  console.log(
+    `📤 Flow #${execution.flow_id} exec #${execution.id} step [${step.step_type}]: ${
+      sendResult.success ? "✅ sent" : `❌ failed — ${sendResult.error}`
+    }`,
+  );
+}
+
+/**
+ * Process a single active execution one "tick" at a time.
+ * Advances through immediate steps (trigger, send_*, condition, branch)
+ * until reaching a wait / wait_for_response / end step, then saves progress.
+ */
+async function processFlowExecution(execution: RowDataPacket): Promise<void> {
+  const [stepRows] = await pool.query<RowDataPacket[]>(
+    "SELECT * FROM reminder_flow_steps WHERE flow_id = ? ORDER BY id ASC",
+    [execution.flow_id],
+  );
+  const [connRows] = await pool.query<RowDataPacket[]>(
+    "SELECT * FROM reminder_flow_connections WHERE flow_id = ? ORDER BY id ASC",
+    [execution.flow_id],
+  );
+
+  const stepMap = new Map<string, FlowStep>(
+    stepRows.map((s) => [
+      s.step_key,
+      { ...s, config: parseStepConfig(s.config) } as FlowStep,
+    ]),
+  );
+  const connections: FlowConnection[] = connRows as FlowConnection[];
+
+  let completedSteps: string[] = [];
+  try {
+    completedSteps = JSON.parse(execution.completed_steps ?? "[]");
+  } catch {
+    completedSteps = [];
+  }
+
+  const contextData: Record<string, any> = execution.context_data
+    ? typeof execution.context_data === "string"
+      ? JSON.parse(execution.context_data)
+      : execution.context_data
+    : {};
+
+  let currentKey: string = execution.current_step_key ?? "";
+  const MAX_STEPS = 30; // guard against infinite loops in mis-configured flows
+  let iterations = 0;
+
+  while (iterations < MAX_STEPS) {
+    iterations++;
+    const step = stepMap.get(currentKey);
+    if (!step) {
+      // Invalid step key — fail this execution
+      await pool.query(
+        `UPDATE reminder_flow_executions
+         SET status = 'failed', updated_at = NOW(),
+             completed_steps = ?, current_step_key = ?
+         WHERE id = ?`,
+        [JSON.stringify(completedSteps), currentKey, execution.id],
+      );
+      return;
+    }
+
+    completedSteps.push(currentKey);
+
+    // ── end ──────────────────────────────────────────
+    if (step.step_type === "end") {
+      await pool.query(
+        `UPDATE reminder_flow_executions
+         SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+             completed_steps = ?, current_step_key = ?
+         WHERE id = ?`,
+        [JSON.stringify(completedSteps), currentKey, execution.id],
+      );
+      return;
+    }
+
+    // ── trigger ──────────────────────────────────────
+    if (step.step_type === "trigger") {
+      const edge = pickEdge(connections, currentKey, "default");
+      if (!edge) {
+        await pool.query(
+          `UPDATE reminder_flow_executions SET status = 'completed', completed_at = NOW(), updated_at = NOW(), completed_steps = ? WHERE id = ?`,
+          [JSON.stringify(completedSteps), execution.id],
+        );
+        return;
+      }
+      currentKey = edge.target_step_key;
+      continue;
+    }
+
+    // ── wait ─────────────────────────────────────────
+    // Time has already elapsed (cron only picks up executions where next_execution_at <= NOW())
+    if (step.step_type === "wait" || step.step_type === "wait_until_date") {
+      const edge = pickEdge(connections, currentKey, "default");
+      if (!edge) {
+        await pool.query(
+          `UPDATE reminder_flow_executions SET status = 'completed', completed_at = NOW(), updated_at = NOW(), completed_steps = ? WHERE id = ?`,
+          [JSON.stringify(completedSteps), execution.id],
+        );
+        return;
+      }
+      currentKey = edge.target_step_key;
+      continue;
+    }
+
+    // ── wait_for_response ────────────────────────────
+    if (step.step_type === "wait_for_response") {
+      let nextEdge: FlowConnection | undefined;
+      if (execution.responded_at) {
+        nextEdge = pickEdge(connections, currentKey, "responded", "default");
+      } else {
+        // Timeout elapsed without response
+        nextEdge = pickEdge(connections, currentKey, "no_response", "default");
+      }
+      if (!nextEdge) {
+        await pool.query(
+          `UPDATE reminder_flow_executions SET status = 'completed', completed_at = NOW(), updated_at = NOW(), completed_steps = ? WHERE id = ?`,
+          [JSON.stringify(completedSteps), execution.id],
+        );
+        return;
+      }
+      currentKey = nextEdge.target_step_key;
+      continue;
+    }
+
+    // ── send_email / send_sms / send_whatsapp / send_notification ────
+    if (
+      step.step_type === "send_email" ||
+      step.step_type === "send_sms" ||
+      step.step_type === "send_whatsapp" ||
+      step.step_type === "send_notification"
+    ) {
+      await executeFlowSendStep(step, contextData, execution);
+      const edge = pickEdge(connections, currentKey, "default");
+      if (!edge) {
+        await pool.query(
+          `UPDATE reminder_flow_executions SET status = 'completed', completed_at = NOW(), updated_at = NOW(), completed_steps = ? WHERE id = ?`,
+          [JSON.stringify(completedSteps), execution.id],
+        );
+        return;
+      }
+      currentKey = edge.target_step_key;
+
+      // If next step requires waiting, save state and stop for this cron tick
+      const nextStep = stepMap.get(currentKey);
+      if (
+        nextStep &&
+        (nextStep.step_type === "wait" ||
+          nextStep.step_type === "wait_until_date" ||
+          nextStep.step_type === "wait_for_response")
+      ) {
+        const cfg = nextStep.config ?? {};
+        let nextExecAt: Date;
+        if (nextStep.step_type === "wait") {
+          nextExecAt = new Date();
+          nextExecAt.setDate(nextExecAt.getDate() + (cfg.delay_days ?? 0));
+          nextExecAt.setHours(nextExecAt.getHours() + (cfg.delay_hours ?? 0));
+          nextExecAt.setMinutes(
+            nextExecAt.getMinutes() + (cfg.delay_minutes ?? 0),
+          );
+        } else if (nextStep.step_type === "wait_until_date") {
+          // Wait until the date stored in the specified contextData field.
+          // If the date is missing or already in the past, proceed immediately (1-minute buffer).
+          const dateFieldName = cfg.date_field as string | undefined;
+          const rawDate = dateFieldName ? contextData[dateFieldName] : null;
+          const targetDate = rawDate ? new Date(rawDate) : null;
+          if (targetDate && targetDate > new Date()) {
+            nextExecAt = targetDate;
+          } else {
+            nextExecAt = new Date(Date.now() + 60_000); // 1-minute buffer
+          }
+        } else {
+          nextExecAt = new Date();
+          nextExecAt.setHours(
+            nextExecAt.getHours() + (cfg.response_timeout_hours ?? 72),
+          );
+          nextExecAt.setMinutes(
+            nextExecAt.getMinutes() + (cfg.response_timeout_minutes ?? 0),
+          );
+        }
+        await pool.query(
+          `UPDATE reminder_flow_executions
+           SET current_step_key = ?, next_execution_at = ?,
+               completed_steps = ?, last_step_started_at = NOW(), updated_at = NOW()
+           WHERE id = ?`,
+          [
+            currentKey,
+            nextExecAt,
+            JSON.stringify(completedSteps),
+            execution.id,
+          ],
+        );
+        return;
+      }
+      continue;
+    }
+
+    // ── condition / branch ───────────────────────────
+    if (step.step_type === "condition" || step.step_type === "branch") {
+      const cfg = step.config ?? {};
+      const condType = cfg.condition_type as string | undefined;
+      let edgeType = "condition_yes";
+
+      if (condType === "loan_type") {
+        const lt = contextData.loan_type as string;
+        edgeType =
+          lt === "purchase"
+            ? "loan_type_purchase"
+            : lt === "refinance"
+              ? "loan_type_refinance"
+              : "condition_yes";
+      } else if (condType === "loan_status") {
+        edgeType =
+          contextData.loan_status === cfg.condition_value
+            ? "condition_yes"
+            : "condition_no";
+      } else if (condType === "loan_status_ne") {
+        // condition_yes = loan_status does NOT equal condition_value (not adverse)
+        edgeType =
+          contextData.loan_status !== cfg.condition_value
+            ? "condition_yes"
+            : "condition_no";
+      } else if (condType === "inactivity_days") {
+        // Default yes branch when we cannot evaluate dynamically at this time
+        edgeType = "condition_yes";
+      } else if (condType === "task_completed") {
+        edgeType = "condition_yes";
+      } else if (condType === "field_not_empty") {
+        const fieldName = cfg.field_name as string | undefined;
+        const fieldVal = fieldName ? contextData[fieldName] : undefined;
+        edgeType =
+          fieldVal != null && fieldVal !== "" && fieldVal !== "null"
+            ? "condition_yes"
+            : "condition_no";
+      } else if (condType === "field_empty") {
+        const fieldName = cfg.field_name as string | undefined;
+        const fieldVal = fieldName ? contextData[fieldName] : undefined;
+        edgeType =
+          !fieldVal || fieldVal === "" || fieldVal === "null"
+            ? "condition_yes"
+            : "condition_no";
+      }
+
+      const edge =
+        pickEdge(connections, currentKey, edgeType) ??
+        pickEdge(connections, currentKey, "default");
+
+      if (!edge) {
+        await pool.query(
+          `UPDATE reminder_flow_executions SET status = 'completed', completed_at = NOW(), updated_at = NOW(), completed_steps = ? WHERE id = ?`,
+          [JSON.stringify(completedSteps), execution.id],
+        );
+        return;
+      }
+      currentKey = edge.target_step_key;
+      continue;
+    }
+
+    // Unknown step type — skip and follow default edge
+    const fallback = pickEdge(connections, currentKey, "default");
+    if (!fallback) {
+      await pool.query(
+        `UPDATE reminder_flow_executions SET status = 'completed', completed_at = NOW(), updated_at = NOW(), completed_steps = ? WHERE id = ?`,
+        [JSON.stringify(completedSteps), execution.id],
+      );
+      return;
+    }
+    currentKey = fallback.target_step_key;
+  }
+
+  // Max iterations guard — save whatever progress was made
+  await pool.query(
+    `UPDATE reminder_flow_executions SET current_step_key = ?, completed_steps = ?, updated_at = NOW() WHERE id = ?`,
+    [currentKey, JSON.stringify(completedSteps), execution.id],
+  );
+}
+
+// =====================================================
+// CRON: PROCESS REMINDER FLOWS
+// =====================================================
+
+/**
+ * GET /api/cron/process-reminder-flows
+ *
+ * Processes all active reminder_flow_executions whose next_execution_at has
+ * passed.  Should be scheduled via HostGator cPanel cron (or any cron) to
+ * run every 5–15 minutes:
+ *
+ *   curl -s "https://yourdomain.com/api/cron/process-reminder-flows?secret=CRON_SECRET"
+ *
+ * Protected by CRON_SECRET (same env var used by the IMAP polling cron).
+ */
+const handleProcessReminderFlows: RequestHandler = async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ??
+        (req.query.secret as string | undefined);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    // Load all due active executions (next_execution_at <= NOW())
+    const [executions] = await pool.query<RowDataPacket[]>(
+      `SELECT rfe.*, rf.name AS flow_name
+       FROM reminder_flow_executions rfe
+       JOIN reminder_flows rf ON rf.id = rfe.flow_id AND rf.is_active = 1
+       WHERE rfe.status = 'active'
+         AND rfe.next_execution_at IS NOT NULL
+         AND rfe.next_execution_at <= NOW()
+       ORDER BY rfe.next_execution_at ASC
+       LIMIT 100`,
+    );
+
+    if (!executions.length) {
+      return res.json({ success: true, processed: 0, succeeded: 0, failed: 0 });
+    }
+
+    let succeeded = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    for (const execution of executions) {
+      try {
+        await processFlowExecution(execution);
+        succeeded++;
+      } catch (err) {
+        failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`exec#${execution.id}: ${msg}`);
+        console.error(`❌ Flow execution #${execution.id} failed:`, err);
+        // Mark as failed so it won't be retried indefinitely
+        await pool
+          .query(
+            `UPDATE reminder_flow_executions SET status = 'failed', updated_at = NOW() WHERE id = ?`,
+            [execution.id],
+          )
+          .catch(() => {});
+      }
+    }
+
+    console.log(
+      `✅ Reminder flows cron: ${succeeded} succeeded, ${failed} failed (${executions.length} total)`,
+    );
+
+    return res.json({
+      success: true,
+      processed: executions.length,
+      succeeded,
+      failed,
+      ...(errors.length ? { errors } : {}),
+    });
+  } catch (error) {
+    console.error("Error processing reminder flows:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to process reminder flows" });
+  }
+};
+
+/**
+ * POST /api/reminder-flow-executions/:executionId/respond
+ *
+ * Mark an execution as having received a client response.
+ * Called by the inbound-email handler or any other response tracking code.
+ * Sets responded_at and optionally re-schedules next_execution_at so the
+ * cron will process the `responded` branch on the next run.
+ */
+const handleMarkFlowExecutionResponded: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { executionId } = req.params;
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT rfe.id, rfe.status, rfe.responded_at
+       FROM reminder_flow_executions rfe
+       JOIN reminder_flows rf ON rf.id = rfe.flow_id
+       WHERE rfe.id = ? AND rfe.tenant_id = ?`,
+      [executionId, tenantId],
+    );
+
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Execution not found" });
+    }
+    if (rows[0].status !== "active") {
+      return res
+        .status(409)
+        .json({ success: false, error: "Execution is not active" });
+    }
+    if (rows[0].responded_at) {
+      return res.json({
+        success: true,
+        message: "Already marked as responded",
+      });
+    }
+
+    // Set responded_at and schedule immediate processing on next cron tick
+    await pool.query(
+      `UPDATE reminder_flow_executions
+       SET responded_at = NOW(), next_execution_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [executionId],
+    );
+
+    return res.json({
+      success: true,
+      message: "Execution marked as responded",
+    });
+  } catch (error) {
+    console.error("Error marking flow execution as responded:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to mark execution as responded" });
+  }
+};
 
 /**
  * GET /api/cron/poll-inbound-email
@@ -12138,6 +12816,7 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
       trigger_delay_days = 0,
       is_active = true,
       apply_to_all_loans = true,
+      loan_type_filter = "all",
     } = req.body;
 
     if (!name || !trigger_event) {
@@ -12153,8 +12832,8 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [result] = await pool.query<ResultSetHeader>(
-      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, created_by_broker_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, loan_type_filter, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         tenantId,
         name,
@@ -12163,6 +12842,9 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
         trigger_delay_days,
         is_active ? 1 : 0,
         apply_to_all_loans ? 1 : 0,
+        ["all", "purchase", "refinance"].includes(loan_type_filter)
+          ? loan_type_filter
+          : "all",
         brokerId,
       ],
     );
@@ -12255,6 +12937,7 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
       trigger_delay_days = 0,
       is_active,
       apply_to_all_loans,
+      loan_type_filter,
       steps = [],
       connections = [],
     } = req.body;
@@ -12307,6 +12990,13 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
       if (apply_to_all_loans !== undefined) {
         updateFields.push("apply_to_all_loans = ?");
         updateValues.push(apply_to_all_loans ? 1 : 0);
+      }
+      if (
+        loan_type_filter !== undefined &&
+        ["all", "purchase", "refinance"].includes(loan_type_filter)
+      ) {
+        updateFields.push("loan_type_filter = ?");
+        updateValues.push(loan_type_filter);
       }
 
       if (updateFields.length) {
@@ -12955,6 +13645,13 @@ function createServer() {
   // Inbound IMAP poll cron — called by Vercel Cron or HostGator cPanel cron via curl
   expressApp.get("/api/cron/poll-inbound-email", handlePollInboundEmail);
 
+  // Reminder flow execution engine cron — run every 5-15 min via cPanel cron:
+  //   curl -s "https://yourdomain.com/api/cron/process-reminder-flows?secret=CRON_SECRET"
+  expressApp.get(
+    "/api/cron/process-reminder-flows",
+    handleProcessReminderFlows,
+  );
+
   // Conversation routes
   expressApp.get(
     "/api/conversations/threads",
@@ -13119,6 +13816,11 @@ function createServer() {
     "/api/reminder-flow-executions",
     verifyBrokerSession,
     handleGetReminderFlowExecutions,
+  );
+  expressApp.post(
+    "/api/reminder-flow-executions/:executionId/respond",
+    verifyBrokerSession,
+    handleMarkFlowExecutionResponded,
   );
 
   // ─── Contact Form ────────────────────────────────────────────────────────
