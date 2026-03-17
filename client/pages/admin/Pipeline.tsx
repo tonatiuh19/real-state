@@ -14,6 +14,7 @@ import {
   TrendingUp,
   Clock,
   Link2,
+  RefreshCw,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -34,13 +35,26 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchLoans,
   fetchLoanDetails,
   clearSelectedLoan,
+  updateLoanStatus,
+  updateLoanStatusLocal,
 } from "@/store/slices/pipelineSlice";
+import { toast } from "@/hooks/use-toast";
 import { LoanOverlay } from "@/components/LoanOverlay";
 import NewLoanWizard from "@/components/NewLoanWizard";
 import BrokerShareLinkModal from "@/components/BrokerShareLinkModal";
@@ -56,6 +70,7 @@ const Pipeline = () => {
     isLoadingDetails,
   } = useAppSelector((state) => state.pipeline);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [filters, setFilters] = useState({
     status: "all",
@@ -68,6 +83,18 @@ const Pipeline = () => {
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
   const [isNewLoanOpen, setIsNewLoanOpen] = useState(false);
   const [shareLinkOpen, setShareLinkOpen] = useState(false);
+  const [draggingLoanId, setDraggingLoanId] = useState<number | null>(null);
+  const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null);
+  const [draggingFromColumn, setDraggingFromColumn] = useState<string | null>(
+    null,
+  );
+  const [pendingMove, setPendingMove] = useState<{
+    loanId: number;
+    fromColumnId: string;
+    toColumnId: string;
+    loanLabel: string;
+  } | null>(null);
+  const [isConfirming, setIsConfirming] = useState(false);
   const { user } = useAppSelector((state) => state.brokerAuth);
   const isPartner = user?.role === "broker";
   const partnerAsBroker: Broker | null = user
@@ -116,6 +143,85 @@ const Pipeline = () => {
     setTimeout(() => {
       dispatch(clearSelectedLoan());
     }, 300);
+  };
+
+  const handleDragStart = (
+    e: React.DragEvent<HTMLDivElement>,
+    loanId: number,
+    fromColumnId: string,
+  ) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("loanId", String(loanId));
+    setDraggingLoanId(loanId);
+    setDraggingFromColumn(fromColumnId);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingLoanId(null);
+    setDragOverColumnId(null);
+    setDraggingFromColumn(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDragEnter = (columnId: string) => {
+    setDragOverColumnId(columnId);
+  };
+
+  const handleDrop = (
+    e: React.DragEvent<HTMLDivElement>,
+    toColumnId: string,
+  ) => {
+    e.preventDefault();
+    const loanId = parseInt(e.dataTransfer.getData("loanId"), 10);
+    const fromColumnId = draggingFromColumn;
+    setDragOverColumnId(null);
+    setDraggingLoanId(null);
+    setDraggingFromColumn(null);
+
+    if (!loanId || fromColumnId === toColumnId || !fromColumnId) return;
+
+    const loan = loans.find((l) => l.id === loanId);
+    const loanLabel = loan
+      ? `${loan.client_first_name} ${loan.client_last_name} (${loan.application_number})`
+      : `Loan #${loanId}`;
+
+    setPendingMove({ loanId, fromColumnId, toColumnId, loanLabel });
+  };
+
+  const handleConfirmMove = async () => {
+    if (!pendingMove) return;
+    setIsConfirming(true);
+    try {
+      await dispatch(
+        updateLoanStatus({
+          loanId: pendingMove.loanId,
+          status: pendingMove.toColumnId,
+        }),
+      ).unwrap();
+      dispatch(
+        updateLoanStatusLocal({
+          loanId: pendingMove.loanId,
+          status: pendingMove.toColumnId,
+        }),
+      );
+      toast({
+        title: "Status updated",
+        description: `${pendingMove.loanLabel} moved to ${columns.find((c) => c.id === pendingMove.toColumnId)?.name ?? pendingMove.toColumnId}.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Failed to update status",
+        description: String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setIsConfirming(false);
+      setPendingMove(null);
+    }
   };
 
   const formatLoanType = (type: string) => {
@@ -283,6 +389,40 @@ const Pipeline = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Refresh Button */}
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={isRefreshing || loading}
+                  onClick={async () => {
+                    setIsRefreshing(true);
+                    const filtersToApply = {
+                      ...filters,
+                      search: searchQuery || undefined,
+                    };
+                    Object.keys(filtersToApply).forEach((key) => {
+                      if (
+                        filtersToApply[key as keyof typeof filtersToApply] ===
+                          "all" ||
+                        filtersToApply[key as keyof typeof filtersToApply] ===
+                          ""
+                      ) {
+                        delete filtersToApply[
+                          key as keyof typeof filtersToApply
+                        ];
+                      }
+                    });
+                    await dispatch(fetchLoans(filtersToApply));
+                    setIsRefreshing(false);
+                  }}
+                  className="h-10 w-10 border-gray-300 text-gray-600 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-300 transition-colors duration-200"
+                  title="Refresh pipeline"
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 ${isRefreshing || loading ? "animate-spin" : ""}`}
+                  />
+                </Button>
 
                 {/* Clean Filters */}
                 <DropdownMenu open={showFilters} onOpenChange={setShowFilters}>
@@ -499,15 +639,38 @@ const Pipeline = () => {
                   {/* Column Content */}
                   <div
                     className={cn(
-                      "flex-1 space-y-3 p-3 rounded-lg border border-gray-200 min-h-[400px]",
-                      column.color,
+                      "flex-1 space-y-3 p-3 rounded-lg border-2 min-h-[400px] transition-all duration-150",
+                      dragOverColumnId === column.id &&
+                        draggingFromColumn !== column.id
+                        ? "border-blue-400 bg-blue-50 scale-[1.01]"
+                        : cn("border-gray-200", column.color),
                     )}
+                    onDragOver={handleDragOver}
+                    onDragEnter={() => handleDragEnter(column.id)}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setDragOverColumnId(null);
+                      }
+                    }}
+                    onDrop={(e) => handleDrop(e, column.id)}
                   >
                     {loansByColumn[column.id]?.map((loan: any) => (
                       <div
                         key={loan.id}
-                        onClick={() => handleLoanClick(loan.id)}
-                        className="bg-white rounded-lg border border-gray-200 p-3 cursor-pointer hover:shadow-md hover:border-blue-300 transition-all"
+                        draggable={!isPartner}
+                        onDragStart={(e) =>
+                          handleDragStart(e, loan.id, column.id)
+                        }
+                        onDragEnd={handleDragEnd}
+                        onClick={() =>
+                          draggingLoanId === null && handleLoanClick(loan.id)
+                        }
+                        className={cn(
+                          "bg-white rounded-lg border p-3 transition-all duration-150 select-none",
+                          draggingLoanId === loan.id
+                            ? "opacity-40 scale-95 border-blue-400 shadow-inner cursor-grabbing"
+                            : "border-gray-200 cursor-grab hover:shadow-md hover:border-blue-300 active:cursor-grabbing",
+                        )}
                       >
                         {/* Priority Indicator */}
                         <div
@@ -658,6 +821,68 @@ const Pipeline = () => {
           broker={partnerAsBroker}
           useSelfEndpoint
         />
+
+        {/* Status Change Confirmation Dialog */}
+        <AlertDialog
+          open={!!pendingMove}
+          onOpenChange={(open) => {
+            if (!open && !isConfirming) setPendingMove(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Move loan to a new stage?</AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-sm text-muted-foreground">
+                  <p>
+                    You're about to move{" "}
+                    <span className="font-semibold text-foreground">
+                      {pendingMove?.loanLabel}
+                    </span>{" "}
+                    from{" "}
+                    <span className="font-semibold text-foreground">
+                      {
+                        columns.find((c) => c.id === pendingMove?.fromColumnId)
+                          ?.name
+                      }
+                    </span>{" "}
+                    →{" "}
+                    <span className="font-semibold text-foreground">
+                      {
+                        columns.find((c) => c.id === pendingMove?.toColumnId)
+                          ?.name
+                      }
+                    </span>
+                    .
+                  </p>
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800 text-xs leading-relaxed">
+                    ⚡ This will trigger any active{" "}
+                    <strong>Reminder Flows</strong> configured for the{" "}
+                    <em>
+                      {
+                        columns.find((c) => c.id === pendingMove?.toColumnId)
+                          ?.name
+                      }
+                    </em>{" "}
+                    stage — including automated SMS and email sequences to the
+                    client.
+                  </div>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isConfirming}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                disabled={isConfirming}
+                onClick={handleConfirmMove}
+              >
+                {isConfirming ? "Moving…" : "Yes, move loan"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </>
   );

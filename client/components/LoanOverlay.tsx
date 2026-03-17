@@ -20,6 +20,7 @@ import {
   ChevronUp,
   Check,
   RotateCcw,
+  RefreshCw,
   Download,
   Trash2,
   Plus,
@@ -118,6 +119,7 @@ export function LoanOverlay({
     (state) => state.communicationTemplates,
   );
 
+  const [isRefreshingTasks, setIsRefreshingTasks] = useState(false);
   const [taskDocuments, setTaskDocuments] = useState<
     Record<
       number,
@@ -1395,6 +1397,23 @@ export function LoanOverlay({
                       Tasks
                     </CardTitle>
                     <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={isRefreshingTasks}
+                        onClick={async () => {
+                          if (!selectedLoan) return;
+                          setIsRefreshingTasks(true);
+                          await dispatch(fetchLoanDetails(selectedLoan.id));
+                          setIsRefreshingTasks(false);
+                        }}
+                        className="h-8 w-8 p-0 text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors duration-200"
+                        title="Refresh tasks"
+                      >
+                        <RefreshCw
+                          className={`h-4 w-4 ${isRefreshingTasks ? "animate-spin" : ""}`}
+                        />
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"

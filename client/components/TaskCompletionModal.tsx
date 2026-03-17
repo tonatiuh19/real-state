@@ -157,19 +157,15 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
 
   // ─── Is the form ready to submit? ─────────────────────────────────────────
   const isFormReady = React.useMemo(() => {
-    // All required input fields must have a non-empty value
-    const inputsOk = inputFields
-      .filter((f) => f.is_required)
-      .every((f) => {
-        const val = formik.values[`field_${f.id}`];
-        if (f.field_type === "checkbox") return val === true;
-        return val !== undefined && val !== null && String(val).trim() !== "";
-      });
+    // ALL input fields (required or not) must have a non-empty value
+    const inputsOk = inputFields.every((f) => {
+      const val = formik.values[`field_${f.id}`];
+      if (f.field_type === "checkbox") return val === true;
+      return val !== undefined && val !== null && String(val).trim() !== "";
+    });
 
-    // All required file fields must have an uploaded file
-    const filesOk = fileFields
-      .filter((f) => f.is_required)
-      .every((f) => uploadedFiles.has(f.id));
+    // ALL file fields (required or not) must have an uploaded file
+    const filesOk = fileFields.every((f) => uploadedFiles.has(f.id));
 
     return inputsOk && filesOk;
   }, [formik.values, uploadedFiles, inputFields, fileFields]);
@@ -211,10 +207,8 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
       return;
     }
 
-    // Validate required file fields
-    const missingFiles = fileFields.filter(
-      (f) => f.is_required && !uploadedFiles.has(f.id),
-    );
+    // Validate all file fields have uploads
+    const missingFiles = fileFields.filter((f) => !uploadedFiles.has(f.id));
     if (missingFiles.length > 0) {
       toast({
         title: "Missing documents",
