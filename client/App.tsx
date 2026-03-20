@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, useLocation } from "react-router-dom";
+import { BrowserRouter, useLocation, useNavigate } from "react-router-dom";
 import { Provider } from "react-redux";
 import { HelmetProvider } from "react-helmet-async";
 import { store } from "./store";
@@ -33,6 +33,33 @@ const ScrollToHash = () => {
   return null;
 };
 
+// Detects subdomain and enforces route scope:
+// admin.* → only /admin and /broker-login are accessible
+// portal.* → only /portal, /client-login, /wizard, /apply are accessible
+const SubdomainRedirect = () => {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    const subdomain = window.location.hostname.split(".")[0];
+
+    if (subdomain === "admin") {
+      const allowed =
+        pathname.startsWith("/admin") || pathname.startsWith("/broker-login");
+      if (!allowed) navigate("/admin", { replace: true });
+    } else if (subdomain === "portal") {
+      const allowed =
+        pathname.startsWith("/portal") ||
+        pathname.startsWith("/client-login") ||
+        pathname.startsWith("/wizard") ||
+        pathname.startsWith("/apply");
+      if (!allowed) navigate("/portal", { replace: true });
+    }
+  }, [pathname, navigate]);
+
+  return null;
+};
+
 const AppContent = () => {
   useEffect(() => {
     // Validate client session on app load
@@ -51,6 +78,7 @@ const AppContent = () => {
   return (
     <>
       <ScrollToHash />
+      <SubdomainRedirect />
       <AppRoutes />
     </>
   );
