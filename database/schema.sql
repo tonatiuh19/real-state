@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Mar 20, 2026 at 01:14 PM
+-- Generation Time: Mar 23, 2026 at 12:37 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -53,7 +53,7 @@ INSERT INTO `admin_section_controls` (`id`, `tenant_id`, `section_id`, `is_disab
 (9, 1, 'reports', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
 (10, 1, 'brokers', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
 (11, 1, 'settings', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
-(12, 1, 'scheduler', 0, 'Coming Soon', '2026-03-20 12:00:00', '2026-03-20 12:00:00');
+(12, 1, 'scheduler', 1, 'Coming Soon', '2026-03-20 13:48:01', '2026-03-22 19:04:49');
 
 -- --------------------------------------------------------
 
@@ -71,45 +71,6 @@ CREATE TABLE `application_status_history` (
   `notes` text COLLATE utf8mb4_unicode_ci,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `application_status_history`
---
-
-INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `from_status`, `to_status`, `changed_by_broker_id`, `notes`, `created_at`) VALUES
-(101, 1, 31, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:37:46'),
-(102, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:37:54'),
-(103, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:37:57'),
-(104, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:04'),
-(105, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:07'),
-(106, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:15'),
-(107, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:19'),
-(108, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:25'),
-(109, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:29'),
-(110, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:35'),
-(111, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:38'),
-(112, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:44'),
-(113, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:38:51'),
-(114, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:39:01'),
-(115, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:39:07'),
-(116, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:39:14'),
-(117, 1, 31, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:39:18'),
-(118, 1, 31, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-05 23:39:25'),
-(119, 1, 31, 'under_review', 'underwriting', 11, 'Auto-updated based on task statuses', '2026-03-05 23:40:35'),
-(120, 1, 32, 'submitted', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:00'),
-(121, 1, 32, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:37'),
-(122, 1, 32, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:39'),
-(123, 1, 32, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:46'),
-(124, 1, 32, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:48'),
-(125, 1, 32, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:07:55'),
-(126, 1, 32, 'under_review', 'underwriting', 11, 'Auto-updated based on task statuses', '2026-03-09 21:08:32'),
-(127, 1, 32, 'application_received', 'prequalified', 1, NULL, '2026-03-16 21:43:51'),
-(128, 1, 31, 'application_received', 'app_sent', 3, NULL, '2026-03-17 15:38:07'),
-(129, 1, 31, 'app_sent', 'application_received', 3, NULL, '2026-03-17 15:38:11'),
-(130, 1, 32, 'prequalified', 'preapproved', 3, NULL, '2026-03-17 15:38:14'),
-(131, 1, 32, 'preapproved', 'prequalified', 3, NULL, '2026-03-17 15:38:17'),
-(132, 1, 31, 'application_received', 'app_sent', 3, NULL, '2026-03-17 17:51:19'),
-(133, 1, 31, 'app_sent', 'application_received', 4, NULL, '2026-03-18 16:10:55');
 
 -- --------------------------------------------------------
 
@@ -355,7 +316,8 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (211, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_210000_seed_clear_to_close_reminder_flow\", \"description\": \"Created Clear to Close reminder flow: shared SMS, branch by loan type, Purchase email (closing checklist for home buyer) or Refi email (right of rescission + refi closing checklist). Default routes to Purchase.\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 22:57:51'),
 (212, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_220000_seed_loan_funded_reminder_flow\", \"description\": \"Created Loan Funded reminder flow: condition on actual_close_date (field_not_empty), wait_until_date then SMS + Email. Nada branch ends silently. Also added wait_until_date step type and field_not_empty/field_empty condition types to engine and shared types.\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 23:02:15'),
 (213, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:30:21'),
-(214, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:31:20');
+(214, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:31:20'),
+(215, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-22 19:17:20');
 
 -- --------------------------------------------------------
 
@@ -387,7 +349,7 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`, `created_by_broker_id`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-19 20:49:24', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-19 20:49:24', NULL),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', '+524741400363', 'admin', 'active', 1, '2026-03-22 19:16:55', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-22 19:16:55', NULL),
 (3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-03-17 17:54:46', '380277', '[]', '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-03-17 17:54:46', NULL),
 (4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-03-18 16:09:22', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-03-18 16:09:22', NULL),
 (6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-16 17:00:59', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-16 17:00:59', NULL),
@@ -481,7 +443,8 @@ CREATE TABLE `broker_sessions` (
 
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
 (131, 6, 744871, 1, NULL, NULL, '2026-03-16 23:15:36', '2026-03-16 23:00:36'),
-(135, 3, 599254, 1, NULL, NULL, '2026-03-18 00:09:24', '2026-03-17 23:54:24');
+(135, 3, 599254, 1, NULL, NULL, '2026-03-18 00:09:24', '2026-03-17 23:54:24'),
+(150, 1, 958239, 1, NULL, NULL, '2026-03-23 05:47:12', '2026-03-23 05:32:12');
 
 -- --------------------------------------------------------
 
@@ -567,9 +530,8 @@ CREATE TABLE `clients` (
 --
 
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `citizenship_status`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
-(14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '(555) 123-4567', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41'),
-(22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-03-05 22:08:57', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-03-05 22:08:57'),
-(29, 1, 'tonatiuh.gom@gmail.com', '', 'Jane', 'Doe', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', 'employed', 'W-2', 120000.00, 740, 'us_citizen', 'active', 0, 0, '2026-03-09 20:38:47', 8, 'public_wizard', NULL, '2026-03-05 18:57:31', '2026-03-09 20:38:47');
+(14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '+524741400363', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-03-22 19:01:57'),
+(22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-03-05 22:08:57', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-03-05 22:08:57');
 
 -- --------------------------------------------------------
 
@@ -773,14 +735,6 @@ CREATE TABLE `documents` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Dumping data for table `documents`
---
-
-INSERT INTO `documents` (`id`, `tenant_id`, `application_id`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `document_type`, `document_name`, `file_path`, `file_size_bytes`, `mime_type`, `status`, `is_required`, `reviewed_by_broker_id`, `reviewed_at`, `review_notes`, `expiration_date`, `created_at`, `updated_at`) VALUES
-(19, 1, 31, NULL, 3, 'other', 'Pre-Approval Letter - March 6, 2026', '/pre-approval-letters/19', NULL, 'text/html', 'approved', 0, NULL, NULL, NULL, NULL, '2026-03-06 08:43:35', '2026-03-06 08:43:35'),
-(21, 1, 32, NULL, 1, 'other', 'Pre-Approval Letter - March 8, 2026', '/pre-approval-letters/21', NULL, 'text/html', 'approved', 0, NULL, NULL, NULL, NULL, '2026-03-09 21:10:37', '2026-03-09 21:10:37');
-
 -- --------------------------------------------------------
 
 --
@@ -875,7 +829,7 @@ CREATE TABLE `loan_applications` (
   `property_type` enum('single_family','condo','multi_family','commercial','land','other') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `down_payment` decimal(12,2) DEFAULT NULL,
   `loan_purpose` text COLLATE utf8mb4_unicode_ci,
-  `status` enum('app_sent','application_received','prequalified','preapproved','under_contract_loan_setup','submitted_to_underwriting','approved_with_conditions','clear_to_close','docs_out','loan_funded') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'app_sent',
+  `status` enum('draft','app_sent','application_received','prequalified','preapproved','under_contract_loan_setup','submitted_to_underwriting','approved_with_conditions','clear_to_close','docs_out','loan_funded') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `current_step` int(11) DEFAULT '1',
   `total_steps` int(11) DEFAULT '8',
   `priority` enum('low','medium','high','urgent') COLLATE utf8mb4_unicode_ci DEFAULT 'medium',
@@ -897,9 +851,7 @@ CREATE TABLE `loan_applications` (
 
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `partner_broker_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`, `citizenship_status`) VALUES
 (15, 2, 'LA65421662', 14, 6, NULL, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'application_received', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-03-10 22:55:05', '2026-02-11 21:03:41', NULL),
-(23, 1, 'LA73590546', 22, 3, NULL, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, '', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-03-10 22:53:25', '2026-02-24 16:53:10', NULL),
-(31, 1, 'LA74994106', 29, 3, 12, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'application_received', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-05 23:29:54', '2026-03-18 16:10:55', '2026-03-05 23:29:54', 'us_citizen'),
-(32, 1, 'LA10261192', 29, 1, 11, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'prequalified', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-09 20:37:41', '2026-03-17 15:38:17', '2026-03-09 20:37:41', 'us_citizen');
+(23, 1, 'LA73590546', 22, 3, NULL, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, '', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-03-10 22:53:25', '2026-02-24 16:53:10', NULL);
 
 -- --------------------------------------------------------
 
@@ -926,37 +878,7 @@ CREATE TABLE `notifications` (
 
 INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `action_url`, `created_at`, `read_at`) VALUES
 (18, 2, 14, 'New Loan Application Created', 'Your loan application LA65421662 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-11 21:03:42', NULL),
-(36, 1, 22, 'New Loan Application Created', 'Your loan application LA73590546 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-24 16:53:10', NULL),
-(73, 1, 29, 'Application Received', 'Your loan application LA58651486 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-03-05 18:57:32', NULL),
-(74, 1, 29, 'Task Approved', 'Your task \"Government-Issued ID\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:32:08', NULL),
-(75, 1, 29, 'Task Approved', 'Your task \"Social Security Card (SSN)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:32:13', NULL),
-(76, 1, 29, 'Task Approved', 'Your task \"Most Recent Pay-Stubs (1 Month)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:22', NULL),
-(77, 1, 29, 'Task Approved', 'Your task \"Mortgage Statement\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:25', NULL),
-(78, 1, 29, 'Task Approved', 'Your task \"W-2 Form\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:28', NULL),
-(79, 1, 29, 'Task Approved', 'Your task \"Existing Lease Agreements\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:31', NULL),
-(80, 1, 29, 'Task Approved', 'Your task \"2 Months Bank Statements\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:35', NULL),
-(81, 1, 29, 'Task Approved', 'Your task \"Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:37', NULL),
-(82, 1, 29, 'Task Approved', 'Your task \"Insurance Policy\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 19:33:40', NULL),
-(83, 1, 29, 'Application Received', 'Your loan application LA74994106 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-03-05 23:29:55', NULL),
-(84, 1, 29, 'Task Approved', 'Your task \"Government-Issued ID\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:12', NULL),
-(85, 1, 29, 'Task Approved', 'Your task \"Social Security Card (SSN)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:15', NULL),
-(86, 1, 29, 'Task Approved', 'Your task \"Most Recent Pay-Stubs (1 Month)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:18', NULL),
-(87, 1, 29, 'Task Approved', 'Your task \"Mortgage Statement\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:20', NULL),
-(88, 1, 29, 'Task Approved', 'Your task \"W-2 Form\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:23', NULL),
-(89, 1, 29, 'Task Approved', 'Your task \"Existing Lease Agreements\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:26', NULL),
-(90, 1, 29, 'Task Approved', 'Your task \"2 Months Bank Statements\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:30', NULL),
-(91, 1, 29, 'Task Approved', 'Your task \"Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:32', NULL),
-(92, 1, 29, 'Task Approved', 'Your task \"Insurance Policy\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-05 23:40:35', NULL),
-(93, 1, 29, 'Application Received', 'Your loan application LA10261192 has been received. A loan officer will be in touch shortly.', 'info', 0, '/portal', '2026-03-09 20:37:42', NULL),
-(94, 1, 29, 'Task Approved', 'Your task \"Government-Issued ID\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:12', NULL),
-(95, 1, 29, 'Task Approved', 'Your task \"Social Security Card (SSN)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:14', NULL),
-(96, 1, 29, 'Task Approved', 'Your task \"Most Recent Pay-Stubs (1 Month)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:16', NULL),
-(97, 1, 29, 'Task Approved', 'Your task \"Mortgage Statement\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:19', NULL),
-(98, 1, 29, 'Task Approved', 'Your task \"W-2 Form\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:21', NULL),
-(99, 1, 29, 'Task Approved', 'Your task \"Existing Lease Agreements\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:23', NULL),
-(100, 1, 29, 'Task Approved', 'Your task \"2 Months Bank Statements\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:26', NULL),
-(101, 1, 29, 'Task Approved', 'Your task \"Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:29', NULL),
-(102, 1, 29, 'Task Approved', 'Your task \"Insurance Policy\" has been approved. Great job!', 'success', 0, '/portal', '2026-03-09 21:08:31', NULL);
+(36, 1, 22, 'New Loan Application Created', 'Your loan application LA73590546 has been created. Please complete the assigned tasks.', 'info', 0, '/portal', '2026-02-24 16:53:10', NULL);
 
 -- --------------------------------------------------------
 
@@ -1622,6 +1544,134 @@ INSERT INTO `reminder_flow_steps` (`id`, `flow_id`, `step_key`, `step_type`, `la
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `scheduled_meetings`
+--
+
+CREATE TABLE `scheduled_meetings` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `broker_id` int(11) DEFAULT NULL,
+  `client_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `client_email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `client_phone` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `meeting_date` date NOT NULL,
+  `meeting_time` time NOT NULL,
+  `meeting_end_time` time NOT NULL,
+  `meeting_type` enum('phone','video') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'phone',
+  `jitsi_room_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Auto-generated unique Jitsi room name for video calls',
+  `status` enum('pending','confirmed','cancelled','completed','no_show') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'confirmed',
+  `notes` text COLLATE utf8mb4_unicode_ci COMMENT 'Notes from the client at booking time',
+  `broker_notes` text COLLATE utf8mb4_unicode_ci COMMENT 'Private notes from the broker',
+  `booking_token` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'UUID for client self-cancellation',
+  `public_token` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Broker public_token used to make the booking (brokers.public_token)',
+  `cancelled_reason` text COLLATE utf8mb4_unicode_ci,
+  `cancelled_by` enum('client','broker') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `cancelled_at` timestamp NULL DEFAULT NULL,
+  `reminder_24h_sent_at` timestamp NULL DEFAULT NULL,
+  `reminder_1h_sent_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `scheduler_availability`
+--
+
+CREATE TABLE `scheduler_availability` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `broker_id` int(11) NOT NULL,
+  `day_of_week` tinyint(4) NOT NULL COMMENT '0=Sunday,1=Monday,...,6=Saturday',
+  `start_time` time NOT NULL,
+  `end_time` time NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `scheduler_availability`
+--
+
+INSERT INTO `scheduler_availability` (`id`, `tenant_id`, `broker_id`, `day_of_week`, `start_time`, `end_time`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(2, 1, 3, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(3, 1, 4, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(4, 2, 6, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(5, 2, 7, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(6, 1, 11, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(7, 1, 12, 1, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(8, 1, 1, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(9, 1, 3, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(10, 1, 4, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(11, 2, 6, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(12, 2, 7, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(13, 1, 11, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(14, 1, 12, 2, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(15, 1, 1, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(16, 1, 3, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(17, 1, 4, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(18, 2, 6, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(19, 2, 7, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(20, 1, 11, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(21, 1, 12, 3, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(22, 1, 1, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(23, 1, 3, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(24, 1, 4, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(25, 2, 6, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(26, 2, 7, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(27, 1, 11, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(28, 1, 12, 4, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(29, 1, 1, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(30, 1, 3, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(31, 1, 4, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(32, 2, 6, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(33, 2, 7, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(34, 1, 11, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(35, 1, 12, 5, '09:00:00', '17:00:00', 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `scheduler_settings`
+--
+
+CREATE TABLE `scheduler_settings` (
+  `id` int(11) NOT NULL,
+  `tenant_id` int(11) NOT NULL DEFAULT '1',
+  `broker_id` int(11) NOT NULL,
+  `is_enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `meeting_title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Mortgage Consultation',
+  `meeting_description` text COLLATE utf8mb4_unicode_ci,
+  `slot_duration_minutes` int(11) NOT NULL DEFAULT '30',
+  `buffer_time_minutes` int(11) NOT NULL DEFAULT '15',
+  `advance_booking_days` int(11) NOT NULL DEFAULT '30',
+  `min_booking_hours` int(11) NOT NULL DEFAULT '2',
+  `timezone` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'America/Chicago',
+  `allow_phone` tinyint(1) NOT NULL DEFAULT '1',
+  `allow_video` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `scheduler_settings`
+--
+
+INSERT INTO `scheduler_settings` (`id`, `tenant_id`, `broker_id`, `is_enabled`, `meeting_title`, `meeting_description`, `slot_duration_minutes`, `buffer_time_minutes`, `advance_booking_days`, `min_booking_hours`, `timezone`, `allow_phone`, `allow_video`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(2, 1, 3, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(3, 1, 4, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(4, 2, 6, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(5, 2, 7, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(6, 1, 11, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14'),
+(7, 1, 12, 1, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert. We\'ll discuss your goals and walk you through your best loan options.', 30, 15, 30, 2, 'America/Chicago', 1, 1, '2026-03-20 19:48:14', '2026-03-20 19:48:14');
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `system_settings`
 --
 
@@ -1696,25 +1746,7 @@ CREATE TABLE `tasks` (
 --
 
 INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `application_id`, `title`, `description`, `task_type`, `status`, `priority`, `assigned_to_user_id`, `assigned_to_broker_id`, `created_by_broker_id`, `due_date`, `completed_at`, `created_at`, `updated_at`, `form_completed`, `form_completed_at`, `documents_uploaded`, `documents_verified`, `approval_status`, `approved_by_broker_id`, `approved_at`, `reopened_by_broker_id`, `reopened_at`, `reopen_reason`, `status_change_reason`, `status_changed_by_broker_id`, `status_changed_at`) VALUES
-(23, 2, NULL, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(88, 1, 34, 0, 31, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-12 23:29:54', '2026-03-05 23:37:54', '2026-03-05 23:29:54', '2026-03-05 23:40:12', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:12', NULL, NULL, NULL, NULL, NULL, NULL),
-(89, 1, 37, 0, 31, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-12 23:29:55', '2026-03-05 23:38:04', '2026-03-05 23:29:54', '2026-03-05 23:40:15', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:15', NULL, NULL, NULL, NULL, NULL, NULL),
-(90, 1, 40, 0, 31, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-19 23:29:55', '2026-03-05 23:38:35', '2026-03-05 23:29:54', '2026-03-05 23:40:23', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:23', NULL, NULL, NULL, NULL, NULL, NULL),
-(91, 1, 56, 0, 31, 'Existing Lease Agreements', 'Provide copies of all current lease agreements for the rental units.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-19 23:29:55', '2026-03-05 23:38:44', '2026-03-05 23:29:54', '2026-03-05 23:40:26', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:26', NULL, NULL, NULL, NULL, NULL, NULL),
-(92, 1, 58, 0, 31, '2 Months Bank Statements', 'Provide your last two months of bank statements for all accounts.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-19 23:29:55', '2026-03-05 23:39:01', '2026-03-05 23:29:54', '2026-03-05 23:40:29', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:29', NULL, NULL, NULL, NULL, NULL, NULL),
-(93, 1, 59, 0, 31, 'Most Recent Pay-Stubs (1 Month)', 'Provide your most recent one month of consecutive pay stubs from your employer.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-15 23:29:55', '2026-03-05 23:38:16', '2026-03-05 23:29:54', '2026-03-05 23:40:18', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:18', NULL, NULL, NULL, NULL, NULL, NULL),
-(94, 1, 60, 0, 31, 'Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)', 'Provide your federal income tax returns or Schedule C for the last two tax years.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-19 23:29:55', '2026-03-05 23:39:14', '2026-03-05 23:29:54', '2026-03-05 23:40:32', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:32', NULL, NULL, NULL, NULL, NULL, NULL),
-(95, 1, 61, 0, 31, 'Mortgage Statement', 'Provide the most recent mortgage statement for the subject property.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-15 23:29:55', '2026-03-05 23:38:25', '2026-03-05 23:29:55', '2026-03-05 23:40:20', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:20', NULL, NULL, NULL, NULL, NULL, NULL),
-(96, 1, 62, 0, 31, 'Insurance Policy', 'Provide the current homeowners or property insurance policy for the subject property.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-19 23:29:55', '2026-03-05 23:39:25', '2026-03-05 23:29:55', '2026-03-05 23:40:35', 0, NULL, 1, 0, 'approved', 11, '2026-03-05 23:40:35', NULL, NULL, NULL, NULL, NULL, NULL),
-(97, 1, 34, 0, 32, 'Government-Issued ID', 'Provide a valid government-issued photo identification.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-16 20:37:41', '2026-03-09 21:06:37', '2026-03-09 20:37:41', '2026-03-09 21:08:12', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:12', NULL, NULL, NULL, NULL, NULL, NULL),
-(98, 1, 37, 0, 32, 'Social Security Card (SSN)', 'Provide your Social Security card issued by the Social Security Administration (SSA).', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-16 20:37:42', '2026-03-09 21:06:46', '2026-03-09 20:37:41', '2026-03-09 21:08:14', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:14', NULL, NULL, NULL, NULL, NULL, NULL),
-(99, 1, 40, 0, 32, 'W-2 Form', 'Provide your W-2 form(s) for the most recent tax year.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-23 20:37:42', '2026-03-09 21:07:08', '2026-03-09 20:37:41', '2026-03-09 21:08:21', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:21', NULL, NULL, NULL, NULL, NULL, NULL),
-(100, 1, 56, 0, 32, 'Existing Lease Agreements', 'Provide copies of all current lease agreements for the rental units.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-23 20:37:42', '2026-03-09 21:07:17', '2026-03-09 20:37:41', '2026-03-09 21:08:23', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:23', NULL, NULL, NULL, NULL, NULL, NULL),
-(101, 1, 58, 0, 32, '2 Months Bank Statements', 'Provide your last two months of bank statements for all accounts.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-23 20:37:42', '2026-03-09 21:07:25', '2026-03-09 20:37:41', '2026-03-09 21:08:26', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:26', NULL, NULL, NULL, NULL, NULL, NULL),
-(102, 1, 59, 0, 32, 'Most Recent Pay-Stubs (1 Month)', 'Provide your most recent one month of consecutive pay stubs from your employer.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-19 20:37:42', '2026-03-09 21:07:55', '2026-03-09 20:37:41', '2026-03-09 21:08:16', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:16', NULL, NULL, NULL, NULL, NULL, NULL),
-(103, 1, 60, 0, 32, 'Federal Tax Returns (Last 2 Years) or Schedule C (Last 2 Years)', 'Provide your federal income tax returns or Schedule C for the last two tax years.', 'document_verification', 'approved', 'high', 29, NULL, NULL, '2026-03-23 20:37:42', '2026-03-09 21:07:35', '2026-03-09 20:37:41', '2026-03-09 21:08:29', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:29', NULL, NULL, NULL, NULL, NULL, NULL),
-(104, 1, 61, 0, 32, 'Mortgage Statement', 'Provide the most recent mortgage statement for the subject property.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-19 20:37:42', '2026-03-09 21:06:57', '2026-03-09 20:37:41', '2026-03-09 21:08:19', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:19', NULL, NULL, NULL, NULL, NULL, NULL),
-(105, 1, 62, 0, 32, 'Insurance Policy', 'Provide the current homeowners or property insurance policy for the subject property.', 'document_verification', 'approved', 'medium', 29, NULL, NULL, '2026-03-23 20:37:42', '2026-03-09 21:07:44', '2026-03-09 20:37:41', '2026-03-09 21:08:31', 0, NULL, 1, 0, 'approved', 11, '2026-03-09 21:08:31', NULL, NULL, NULL, NULL, NULL, NULL);
+(23, 2, NULL, 0, 15, 'INE Document Verification', '', 'document_verification', 'pending', 'medium', 14, NULL, 6, '2026-02-14 21:03:42', NULL, '2026-02-11 21:03:41', '2026-02-11 21:03:41', 0, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1736,30 +1768,6 @@ CREATE TABLE `task_documents` (
   `uploaded_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `notes` text COLLATE utf8mb4_unicode_ci
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Document attachments for tasks';
-
---
--- Dumping data for table `task_documents`
---
-
-INSERT INTO `task_documents` (`id`, `task_id`, `field_id`, `document_type`, `filename`, `original_filename`, `file_path`, `file_size`, `uploaded_by_user_id`, `uploaded_by_broker_id`, `uploaded_at`, `notes`) VALUES
-(54, 88, 35, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa68316db9c.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/88/pdfs/2026_02_15_14_33_51_229_receipt_69aa68316db9c.pdf', 16707, 29, NULL, '2026-03-05 23:37:53', NULL),
-(55, 89, 38, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa683bbab63.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/89/pdfs/2026_02_15_14_33_51_229_receipt_69aa683bbab63.pdf', 16707, 29, NULL, '2026-03-05 23:38:03', NULL),
-(56, 93, 67, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa68472ed85.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/93/pdfs/2026_02_15_14_33_51_229_receipt_69aa68472ed85.pdf', 16707, 29, NULL, '2026-03-05 23:38:15', NULL),
-(57, 95, 69, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa6850ea60d.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/95/pdfs/2026_02_15_14_33_51_229_receipt_69aa6850ea60d.pdf', 16707, 29, NULL, '2026-03-05 23:38:25', NULL),
-(58, 90, 41, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa685aef09c.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/90/pdfs/2026_02_15_14_33_51_229_receipt_69aa685aef09c.pdf', 16707, 29, NULL, '2026-03-05 23:38:35', NULL),
-(59, 91, 57, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa68636d749.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/91/pdfs/2026_02_15_14_33_51_229_receipt_69aa68636d749.pdf', 16707, 29, NULL, '2026-03-05 23:38:43', NULL),
-(60, 92, 66, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa687489b4a.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/92/pdfs/2026_02_15_14_33_51_229_receipt_69aa687489b4a.pdf', 16707, 29, NULL, '2026-03-05 23:39:00', NULL),
-(61, 94, 68, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa68815579a.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/94/pdfs/2026_02_15_14_33_51_229_receipt_69aa68815579a.pdf', 16707, 29, NULL, '2026-03-05 23:39:13', NULL),
-(62, 96, 70, 'pdf', '2026_02_15_14_33_51_229_receipt_69aa688c538d3.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/96/pdfs/2026_02_15_14_33_51_229_receipt_69aa688c538d3.pdf', 16707, 29, NULL, '2026-03-05 23:39:24', NULL),
-(63, 97, 35, 'pdf', '432210306231__1__69af8abc7a9d9.pdf', '432210306231 (1).pdf', '/data/encore/97/pdfs/432210306231__1__69af8abc7a9d9.pdf', 303662, 29, NULL, '2026-03-09 21:06:36', NULL),
-(64, 98, 38, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8ac569e54.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/98/pdfs/2026_02_15_14_33_51_229_receipt_69af8ac569e54.pdf', 16707, 29, NULL, '2026-03-09 21:06:45', NULL),
-(65, 104, 69, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8ad046105.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/104/pdfs/2026_02_15_14_33_51_229_receipt_69af8ad046105.pdf', 16707, 29, NULL, '2026-03-09 21:06:56', NULL),
-(66, 99, 41, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8adba0757.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/99/pdfs/2026_02_15_14_33_51_229_receipt_69af8adba0757.pdf', 16707, 29, NULL, '2026-03-09 21:07:07', NULL),
-(67, 100, 57, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8ae432e50.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/100/pdfs/2026_02_15_14_33_51_229_receipt_69af8ae432e50.pdf', 16707, 29, NULL, '2026-03-09 21:07:16', NULL),
-(68, 101, 66, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8aecef015.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/101/pdfs/2026_02_15_14_33_51_229_receipt_69af8aecef015.pdf', 16707, 29, NULL, '2026-03-09 21:07:25', NULL),
-(69, 103, 68, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8af71bce7.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/103/pdfs/2026_02_15_14_33_51_229_receipt_69af8af71bce7.pdf', 16707, 29, NULL, '2026-03-09 21:07:35', NULL),
-(70, 105, 70, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8affac554.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/105/pdfs/2026_02_15_14_33_51_229_receipt_69af8affac554.pdf', 16707, 29, NULL, '2026-03-09 21:07:43', NULL),
-(71, 102, 67, 'pdf', '2026_02_15_14_33_51_229_receipt_69af8b0a7cb62.pdf', '2026_02_15_14_33_51_229_receipt.pdf', '/data/encore/102/pdfs/2026_02_15_14_33_51_229_receipt_69af8b0a7cb62.pdf', 16707, 29, NULL, '2026-03-09 21:07:54', NULL);
 
 -- --------------------------------------------------------
 
@@ -2466,6 +2474,30 @@ ALTER TABLE `reminder_flow_steps`
   ADD KEY `idx_flow_steps_flow` (`flow_id`);
 
 --
+-- Indexes for table `scheduled_meetings`
+--
+ALTER TABLE `scheduled_meetings`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_meetings_broker_date` (`broker_id`,`meeting_date`),
+  ADD KEY `idx_meetings_booking_token` (`booking_token`),
+  ADD KEY `idx_meetings_status` (`status`);
+
+--
+-- Indexes for table `scheduler_availability`
+--
+ALTER TABLE `scheduler_availability`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_availability_broker_day` (`broker_id`,`day_of_week`);
+
+--
+-- Indexes for table `scheduler_settings`
+--
+ALTER TABLE `scheduler_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_scheduler_broker` (`tenant_id`,`broker_id`),
+  ADD KEY `fk_scheduler_settings_broker` (`broker_id`);
+
+--
 -- Indexes for table `system_settings`
 --
 ALTER TABLE `system_settings`
@@ -2610,7 +2642,7 @@ ALTER TABLE `application_status_history`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=215;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=216;
 
 --
 -- AUTO_INCREMENT for table `brokers`
@@ -2634,7 +2666,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=140;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=151;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -2757,6 +2789,24 @@ ALTER TABLE `reminder_flow_steps`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=246;
 
 --
+-- AUTO_INCREMENT for table `scheduled_meetings`
+--
+ALTER TABLE `scheduled_meetings`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `scheduler_availability`
+--
+ALTER TABLE `scheduler_availability`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=64;
+
+--
+-- AUTO_INCREMENT for table `scheduler_settings`
+--
+ALTER TABLE `scheduler_settings`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+
+--
 -- AUTO_INCREMENT for table `system_settings`
 --
 ALTER TABLE `system_settings`
@@ -2826,7 +2876,7 @@ ALTER TABLE `user_profiles`
 -- AUTO_INCREMENT for table `user_sessions`
 --
 ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
 
 --
 -- Constraints for dumped tables
@@ -2990,6 +3040,24 @@ ALTER TABLE `reminder_flow_executions`
 --
 ALTER TABLE `reminder_flow_steps`
   ADD CONSTRAINT `fk_flow_steps_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `scheduled_meetings`
+--
+ALTER TABLE `scheduled_meetings`
+  ADD CONSTRAINT `fk_scheduled_meetings_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `scheduler_availability`
+--
+ALTER TABLE `scheduler_availability`
+  ADD CONSTRAINT `fk_scheduler_availability_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `scheduler_settings`
+--
+ALTER TABLE `scheduler_settings`
+  ADD CONSTRAINT `fk_scheduler_settings_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `system_settings`

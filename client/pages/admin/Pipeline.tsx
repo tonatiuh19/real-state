@@ -241,12 +241,12 @@ const Pipeline = () => {
 
   const columns = [
     {
-      id: "app_sent",
-      name: "App Sent",
-      color: "bg-gray-50",
-      headerColor: "bg-gray-100",
-      textColor: "text-gray-700",
-      description: "Application sent to client",
+      id: "draft",
+      name: "Draft",
+      color: "bg-slate-50",
+      headerColor: "bg-slate-100",
+      textColor: "text-slate-600",
+      description: "Application in progress",
     },
     {
       id: "application_received",
@@ -257,16 +257,8 @@ const Pipeline = () => {
       description: "Application received & reviewing",
     },
     {
-      id: "prequalified",
-      name: "Prequalified",
-      color: "bg-cyan-50",
-      headerColor: "bg-cyan-100",
-      textColor: "text-cyan-700",
-      description: "Client prequalified",
-    },
-    {
       id: "preapproved",
-      name: "Preapproved",
+      name: "Pre-Approved",
       color: "bg-teal-50",
       headerColor: "bg-teal-100",
       textColor: "text-teal-700",

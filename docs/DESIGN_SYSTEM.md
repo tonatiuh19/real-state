@@ -4,6 +4,195 @@
 
 ---
 
+## General Info
+
+### What is Encore Mortgage?
+
+**Encore Mortgage** is a **multi-tenant SaaS CRM and loan origination platform** built for mortgage companies. It digitizes and streamlines the entire residential mortgage process — from public application submission to loan funding — connecting three types of users on a single platform.
+
+### Who Uses It
+
+| User Type             | Role in DB    | Description                                                                                                    |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Mortgage Banker**   | `admin`       | The primary operator. Full access to all features, pipeline, team management, reports, settings.               |
+| **Partner (Realtor)** | `broker`      | A real estate agent linked to the mortgage company. Limited access, can view their own referred loans.         |
+| **Client (Borrower)** | `client_user` | The home buyer. Uses the self-service client portal to upload documents, complete tasks, and track their loan. |
+
+### Core Workflow
+
+```
+1. Client submits loan application via public wizard (or broker creates it manually)
+        ↓
+2. Mortgage Banker reviews, assigns loan to a broker and optionally a Realtor partner
+        ↓
+3. Loan moves through the pipeline stages:
+   app_sent → application_received → prequalified → preapproved
+   → under_contract_loan_setup → submitted_to_underwriting
+   → approved_with_conditions → clear_to_close → docs_out → loan_funded
+        ↓
+4. Broker assigns tasks to client (document uploads, form fills, e-signatures)
+        ↓
+5. Client completes tasks via the client portal
+        ↓
+6. Broker reviews and approves tasks
+        ↓
+7. Automated reminders, email/SMS/WhatsApp communications sent at each stage
+        ↓
+8. Broker generates pre-approval letter and MISMO 3.4 XML export for underwriting
+        ↓
+9. Loan funded — metrics logged to broker dashboard and reports
+```
+
+### Key Feature Modules
+
+| Module                      | Description                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**               | KPIs, broker performance metrics (lead-to-credit, credit-to-close ratios), monthly goal tracking                    |
+| **Pipeline**                | Kanban/list view of all loan applications by status. Assign brokers and Realtor partners.                           |
+| **Client Portal**           | Borrower-facing portal at `/portal`. Task list, document uploads, form submissions, e-signatures.                   |
+| **Task System**             | Configurable task templates (document collection, form fields, PDF signature zones). Broker approves each task.     |
+| **Documents**               | Centralized document library. All uploads tied to tasks, stored via CDN (disruptinglabs.com).                       |
+| **Conversations**           | Unified inbox for inbound/outbound email, SMS, and WhatsApp per client/loan thread.                                 |
+| **Communication Templates** | Reusable templates per channel (email, SMS, WhatsApp). Assignable per pipeline step.                                |
+| **Reminder Flows**          | Visual flow builder (nodes + edges) for automated multi-step reminder sequences. Triggered by pipeline events.      |
+| **Scheduler**               | Public booking page for clients. Admins manage availability windows, meeting types (phone/video), Zoom integration. |
+| **Pre-Approval Letters**    | HTML-template letters tied to a loan. Editable approved amount (capped at max set by admin), emailable to client.   |
+| **MISMO Export**            | One-click MISMO 3.4 XML export per loan for underwriting submission.                                                |
+| **Reports**                 | Revenue, performance, and overview analytics with CSV/PDF export.                                                   |
+| **Audit Logs**              | Full activity log of all broker/client actions with entity context.                                                 |
+| **Settings**                | Tenant-level settings (company info, NMLS, notification preferences).                                               |
+| **Team Management**         | Admins invite/manage Partner brokers and other Mortgage Bankers.                                                    |
+| **Section Controls**        | Per-tenant sidebar section enable/disable toggles (DB-driven).                                                      |
+
+### Multi-Tenancy
+
+The platform is **multi-tenant** — a single codebase and database serves multiple mortgage companies. Each tenant is identified by:
+
+- `tenant_id` on every table row
+- A `tenants` table record with `slug`, custom domain, branding overrides (colors, logo, font), and company info
+- Session tokens are tenant-scoped; brokers cannot cross tenant boundaries
+
+**Current tenants in production:**
+
+- `tenant_id: 1` → **Encore Mortgage** (`encoremortgage.us`) — primary tenant
+- `tenant_id: 2` → **The Mortgage Professionals** (`themortgageprofessionals.net`) — secondary tenant
+
+### Tech Stack Summary
+
+| Layer          | Technology                                                                               |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| Frontend       | React 18, TypeScript, Vite, TailwindCSS 3, Redux Toolkit, React Router v6, Framer Motion |
+| Backend        | Node.js, Express (single `api/index.ts` file, ~15k lines), JWT auth                      |
+| Database       | MySQL 5.7 / 8.0 (hosted on HostGator cPanel), 38+ tables                                 |
+| Communications | Nodemailer (email), Twilio (SMS + WhatsApp)                                              |
+| Storage/CDN    | disruptinglabs.com CDN for profile images and documents                                  |
+| Video Meetings | Zoom API (for video meeting type in Scheduler)                                           |
+| Deployment     | Vercel (serverless functions) + HostGator MySQL                                          |
+| OTP Auth       | Passwordless — 6-digit code delivered via email or SMS                                   |
+
+### Vercel Deployment & API Routing
+
+The entire app is deployed as a **single Vercel project**. The `vercel.json` routing config maps all traffic:
+
+```json
+{
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.ts" },
+    { "src": "/(.*\\.(js|css|...static))", "dest": "/$1" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}
+```
+
+| Path pattern                     | Handled by                                  | Description                                                   |
+| -------------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| `/api/*`                         | `api/index.ts` (Vercel Serverless Function) | Every API call — Express app wrapped as a serverless function |
+| `/*.js`, `/*.css`, static assets | `dist/` (Vite build output)                 | Compiled frontend assets                                      |
+| Everything else `/*`             | `index.html`                                | React SPA — client-side routing handles the rest              |
+
+**How it works:**
+
+- `api/index.ts` is the single Express app. Vercel treats it as a serverless function automatically because the file lives inside the `/api` directory.
+- There is **no separate server process** — every request to `/api/*` cold-starts (or reuses) a Node.js Lambda on Vercel's edge infrastructure.
+- The frontend is **statically served** from the `dist/` folder produced by `npm run build` (Vite).
+- Both frontend and API share the **same domain and port** — no CORS issues in production.
+
+**For React Native (and any external client):**
+
+- All API calls go to `https://<your-vercel-domain>/api/<endpoint>`
+- Example: `https://real-state-one-omega.vercel.app/api/admin/auth/send-code`
+- Set `BASE_URL` in `.env` to override the domain (used by `getBaseUrl()` helper in the API)
+
+### Loan Application Status Enum (Full Pipeline)
+
+```
+app_sent
+application_received
+prequalified
+preapproved
+under_contract_loan_setup
+submitted_to_underwriting
+approved_with_conditions
+clear_to_close
+docs_out
+loan_funded
+```
+
+### Loan Types
+
+- `purchase` — New home purchase
+- `refinance` — Refinance of existing mortgage
+
+### Citizenship Status (collected at application)
+
+- `us_citizen` · `permanent_resident` · `non_resident` · `other`
+
+### Database Tables (38 tables)
+
+| Table                        | Purpose                                                    |
+| ---------------------------- | ---------------------------------------------------------- |
+| `tenants`                    | Multi-tenant company records with branding config          |
+| `brokers`                    | All broker accounts (admin + partner roles)                |
+| `broker_profiles`            | Extended profile info (bio, office, social links, avatar)  |
+| `broker_monthly_metrics`     | Monthly performance goals and actuals per broker           |
+| `broker_sessions`            | OTP session tokens for broker auth                         |
+| `clients`                    | Client/borrower accounts                                   |
+| `user_profiles`              | Extended client profile (income, employment, credit score) |
+| `user_sessions`              | OTP session tokens for client auth                         |
+| `loan_applications`          | Core loan record with full pipeline status                 |
+| `application_status_history` | Immutable log of every loan status change                  |
+| `tasks`                      | Task instances linked to a loan + client                   |
+| `task_templates`             | Reusable task definitions (form, document, sign)           |
+| `task_form_fields`           | Field definitions for form-type tasks                      |
+| `task_form_responses`        | Client-submitted form responses                            |
+| `task_documents`             | Documents uploaded against a task                          |
+| `task_sign_documents`        | PDF + signature zone config for sign tasks                 |
+| `task_signatures`            | Collected client signatures                                |
+| `documents`                  | Global document records                                    |
+| `templates`                  | Email/SMS/WhatsApp message templates with variable support |
+| `pipeline_step_templates`    | Maps templates to pipeline stages and channels             |
+| `pre_approval_letters`       | HTML pre-approval letters per loan                         |
+| `conversation_threads`       | Per-client message threads                                 |
+| `communications`             | Individual messages within threads                         |
+| `reminder_flows`             | Visual reminder flow definitions                           |
+| `reminder_flow_steps`        | Step nodes within a flow                                   |
+| `reminder_flow_connections`  | Edge connections between flow steps                        |
+| `reminder_flow_executions`   | Active flow runs per client/loan                           |
+| `leads`                      | Pre-application lead captures                              |
+| `lead_activities`            | Activity history per lead                                  |
+| `notifications`              | In-app notifications for clients                           |
+| `campaigns`                  | Bulk communication campaigns                               |
+| `campaign_recipients`        | Per-recipient status for campaigns                         |
+| `audit_logs`                 | Full broker+client action history                          |
+| `admin_section_controls`     | Per-tenant sidebar section disable toggles                 |
+| `system_settings`            | Tenant-level configuration key-value store                 |
+| `compliance_checklists`      | Compliance requirement checklists                          |
+| `compliance_checklist_items` | Individual checklist items                                 |
+| `contact_submissions`        | Public contact form submissions                            |
+| `environment_keys`           | Stored per-tenant service credentials                      |
+
+---
+
 ## Logo
 
 | Usage              | URL                                                             |

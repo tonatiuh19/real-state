@@ -59,6 +59,7 @@ import {
   fetchBrokerPublicInfo,
   clearBrokerInfo,
   saveDraft,
+  saveDraftToServer,
   loadDraft,
   clearDraft,
 } from "@/store/slices/applicationWizardSlice";
@@ -282,6 +283,7 @@ const ApplicationWizard = () => {
     brokerInfoLoading,
     brokerInfoError,
     draft,
+    draftApplicationId,
   } = useAppSelector((s) => s.applicationWizard);
   const { toast } = useToast();
   const isDev = IS_DEV;
@@ -296,8 +298,11 @@ const ApplicationWizard = () => {
     if (draft) {
       formik.setValues(draft.values as typeof initialValues);
       setCurrentStep(draft.currentStep);
-      if (draft.currentStep > 1) setStep0Completed(true);
-      if (draft.values.email) setGuestEmail(draft.values.email);
+      if (draft.currentStep >= 1) setStep0Completed(true);
+      if (draft.values.email) {
+        setGuestEmail(draft.values.email);
+        setGuestEmailInput(draft.values.email);
+      }
     }
     // Only run once when draft first loads
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -426,7 +431,15 @@ const ApplicationWizard = () => {
         return;
       }
     }
-    setCurrentStep((prev) => Math.min(prev + 1, STEPS.length));
+    const nextStepNum = Math.min(currentStep + 1, STEPS.length);
+    setCurrentStep(nextStepNum);
+    dispatch(
+      saveDraftToServer({
+        values: formik.values,
+        currentStep: nextStepNum,
+        brokerToken: brokerToken || undefined,
+      }),
+    );
   };
 
   const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 1));
@@ -2135,11 +2148,10 @@ const ApplicationWizard = () => {
                             size="lg"
                             onClick={() => {
                               dispatch(
-                                saveDraft({
+                                saveDraftToServer({
                                   values: formik.values,
                                   currentStep,
                                   brokerToken: brokerToken || undefined,
-                                  savedAt: new Date().toISOString(),
                                 }),
                               );
                               toast({

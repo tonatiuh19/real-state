@@ -21,6 +21,7 @@ export interface WizardDraft {
   currentStep: number;
   brokerToken?: string;
   savedAt: string;
+  draftApplicationId?: number;
 }
 
 export interface PublicApplicationPayload {
@@ -75,6 +76,7 @@ interface ApplicationWizardState {
   sendShareEmailError: string | null;
   // Draft (persisted to localStorage)
   draft: WizardDraft | null;
+  draftApplicationId: number | null;
 }
 
 const initialState: ApplicationWizardState = {
@@ -92,7 +94,77 @@ const initialState: ApplicationWizardState = {
   sendingShareEmail: false,
   sendShareEmailError: null,
   draft: null,
+  draftApplicationId: null,
 };
+
+export const saveDraftToServer = createAsyncThunk(
+  "applicationWizard/saveDraftToServer",
+  async (
+    payload: {
+      values: Omit<PublicApplicationPayload, "broker_token">;
+      currentStep: number;
+      brokerToken?: string;
+    },
+    { getState, dispatch },
+  ) => {
+    const { values, currentStep, brokerToken } = payload;
+    // Need at minimum email + name to create a server record
+    if (
+      !values.email?.trim() ||
+      !values.first_name?.trim() ||
+      !values.last_name?.trim()
+    ) {
+      // Not enough data yet — save only to localStorage
+      dispatch(
+        saveDraft({
+          values,
+          currentStep,
+          brokerToken,
+          savedAt: new Date().toISOString(),
+        }),
+      );
+      return null;
+    }
+
+    const state = getState() as RootState;
+    const draftApplicationId = state.applicationWizard.draftApplicationId;
+
+    try {
+      const { data } = await axios.post<{
+        success: boolean;
+        draft_id: number;
+        application_number: string;
+      }>("/api/apply/draft", {
+        ...values,
+        broker_token: brokerToken,
+        wizard_step: currentStep,
+        draft_id: draftApplicationId || undefined,
+      });
+      dispatch(
+        saveDraft({
+          values,
+          currentStep,
+          brokerToken,
+          savedAt: new Date().toISOString(),
+          draftApplicationId: data.draft_id,
+        }),
+      );
+      return data;
+    } catch {
+      // Server save failed — still persist locally
+      dispatch(
+        saveDraft({
+          values,
+          currentStep,
+          brokerToken,
+          savedAt: new Date().toISOString(),
+          draftApplicationId: draftApplicationId ?? undefined,
+        }),
+      );
+      return null;
+    }
+  },
+);
 
 export const submitPublicApplication = createAsyncThunk(
   "applicationWizard/submit",
@@ -195,6 +267,9 @@ const applicationWizardSlice = createSlice({
     },
     saveDraft(state, action: PayloadAction<WizardDraft>) {
       state.draft = action.payload;
+      if (action.payload.draftApplicationId) {
+        state.draftApplicationId = action.payload.draftApplicationId;
+      }
       try {
         localStorage.setItem(DRAFT_KEY, JSON.stringify(action.payload));
       } catch {}
@@ -202,11 +277,18 @@ const applicationWizardSlice = createSlice({
     loadDraft(state) {
       try {
         const raw = localStorage.getItem(DRAFT_KEY);
-        if (raw) state.draft = JSON.parse(raw) as WizardDraft;
+        if (raw) {
+          const parsed = JSON.parse(raw) as WizardDraft;
+          state.draft = parsed;
+          if (parsed.draftApplicationId) {
+            state.draftApplicationId = parsed.draftApplicationId;
+          }
+        }
       } catch {}
     },
     clearDraft(state) {
       state.draft = null;
+      state.draftApplicationId = null;
       try {
         localStorage.removeItem(DRAFT_KEY);
       } catch {}

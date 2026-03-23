@@ -2522,7 +2522,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         property_value, property_address, property_city, property_state, property_zip,
         property_type, down_payment, loan_purpose, status, current_step, total_steps,
         estimated_close_date, notes, submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app_sent', 1, 8, ?, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, 8, ?, ?, NOW())`,
 
       [
         MORTGAGE_TENANT_ID,
@@ -3065,6 +3065,259 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       error:
         error instanceof Error ? error.message : "Failed to submit application",
     });
+  } finally {
+    connection.release();
+  }
+};
+
+// ─── Public Save Draft Handler ────────────────────────────────────────────────
+
+/**
+ * POST /api/apply/draft
+ * Creates or updates a draft loan application from the public wizard.
+ * Minimum required: first_name, last_name, email.
+ * If draft_id is provided and matches an existing draft for this client, it updates instead of inserting.
+ */
+const handlePublicSaveDraft: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const {
+      draft_id,
+      first_name,
+      last_name,
+      email,
+      phone,
+      address_street,
+      address_city,
+      address_state,
+      address_zip,
+      loan_type,
+      property_value,
+      down_payment,
+      property_type,
+      property_address,
+      property_city,
+      property_state,
+      property_zip,
+      loan_purpose,
+      citizenship_status,
+      broker_token,
+      wizard_step,
+    } = req.body;
+
+    if (!email || !first_name || !last_name) {
+      res.status(400).json({
+        success: false,
+        error: "first_name, last_name, and email are required to save a draft",
+      });
+      return;
+    }
+
+    const normalizedEmail = String(email).toLowerCase().trim();
+
+    // Upsert client
+    const [existingClients] = await connection.query<any[]>(
+      "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
+      [normalizedEmail, MORTGAGE_TENANT_ID],
+    );
+
+    let clientId: number;
+    if (existingClients.length > 0) {
+      clientId = existingClients[0].id;
+      await connection.query(
+        `UPDATE clients SET first_name = ?, last_name = ?,
+          phone = COALESCE(?, phone),
+          address_street = COALESCE(NULLIF(?, ''), address_street),
+          address_city   = COALESCE(NULLIF(?, ''), address_city),
+          address_state  = COALESCE(NULLIF(?, ''), address_state),
+          address_zip    = COALESCE(NULLIF(?, ''), address_zip),
+          updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          first_name,
+          last_name,
+          phone || null,
+          address_street || null,
+          address_city || null,
+          address_state || null,
+          address_zip || null,
+          clientId,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+    } else {
+      const [clientResult] = await connection.query<any>(
+        `INSERT INTO clients
+          (tenant_id, email, first_name, last_name, phone,
+           address_street, address_city, address_state, address_zip,
+           status, email_verified, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 'public_wizard')`,
+        [
+          MORTGAGE_TENANT_ID,
+          normalizedEmail,
+          first_name,
+          last_name,
+          phone || null,
+          address_street || null,
+          address_city || null,
+          address_state || null,
+          address_zip || null,
+        ],
+      );
+      clientId = clientResult.insertId;
+    }
+
+    // Resolve broker from share link token
+    let resolvedBrokerUserId: number | null = null;
+    let resolvedPartnerBrokerId: number | null = null;
+    if (broker_token) {
+      const [brokerRows] = await connection.query<any[]>(
+        "SELECT id, role, created_by_broker_id FROM brokers WHERE public_token = ? AND status = 'active'",
+        [broker_token],
+      );
+      if (brokerRows.length > 0) {
+        const { id: bkId, role: bkRole, created_by_broker_id } = brokerRows[0];
+        if (bkRole === "admin") {
+          resolvedBrokerUserId = bkId;
+        } else {
+          resolvedPartnerBrokerId = bkId;
+          if (created_by_broker_id) resolvedBrokerUserId = created_by_broker_id;
+        }
+      }
+    }
+
+    const resolvedLoanType =
+      loan_type && ["purchase", "refinance"].includes(loan_type)
+        ? loan_type
+        : "purchase";
+
+    const resolvedPropertyType =
+      property_type &&
+      [
+        "single_family",
+        "condo",
+        "multi_family",
+        "commercial",
+        "land",
+        "other",
+      ].includes(property_type)
+        ? property_type
+        : null;
+
+    const resolvedCitizenshipStatus =
+      citizenship_status &&
+      ["us_citizen", "permanent_resident", "non_resident", "other"].includes(
+        citizenship_status,
+      )
+        ? citizenship_status
+        : null;
+
+    const propVal = parseFloat(property_value) || 0;
+    const dp = parseFloat(down_payment) || 0;
+    const loan_amount = propVal > dp ? propVal - dp : propVal || 0;
+
+    let applicationId: number | null = null;
+    let applicationNumber: string = "";
+
+    // Try to update existing draft record
+    if (draft_id) {
+      const [existing] = await connection.query<any[]>(
+        "SELECT id, application_number FROM loan_applications WHERE id = ? AND status = 'draft' AND client_user_id = ? AND tenant_id = ?",
+        [draft_id, clientId, MORTGAGE_TENANT_ID],
+      );
+      if (existing.length > 0) {
+        applicationId = existing[0].id;
+        applicationNumber = existing[0].application_number;
+        await connection.query(
+          `UPDATE loan_applications SET
+            loan_type = ?,
+            loan_amount = IF(? > 0, ?, loan_amount),
+            property_value = COALESCE(IF(? > 0, ?, NULL), property_value),
+            down_payment = COALESCE(IF(? > 0, ?, NULL), down_payment),
+            property_address = COALESCE(NULLIF(?, ''), property_address),
+            property_city = COALESCE(NULLIF(?, ''), property_city),
+            property_state = COALESCE(NULLIF(?, ''), property_state),
+            property_zip = COALESCE(NULLIF(?, ''), property_zip),
+            property_type = COALESCE(?, property_type),
+            loan_purpose = COALESCE(NULLIF(?, ''), loan_purpose),
+            citizenship_status = COALESCE(?, citizenship_status),
+            current_step = ?,
+            updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            resolvedLoanType,
+            loan_amount,
+            loan_amount,
+            propVal,
+            propVal,
+            dp,
+            dp,
+            property_address || null,
+            property_city || null,
+            property_state || null,
+            property_zip || null,
+            resolvedPropertyType,
+            loan_purpose || null,
+            resolvedCitizenshipStatus,
+            wizard_step || 1,
+            applicationId,
+            MORTGAGE_TENANT_ID,
+          ],
+        );
+        await connection.commit();
+        res.json({
+          success: true,
+          draft_id: applicationId,
+          application_number: applicationNumber,
+        });
+        return;
+      }
+    }
+
+    // Create new draft record
+    applicationNumber = `LA${Date.now().toString().slice(-8)}`;
+    const [loanResult] = await connection.query<any>(
+      `INSERT INTO loan_applications
+        (tenant_id, application_number, client_user_id, broker_user_id, partner_broker_id,
+         loan_type, loan_amount, property_value, property_address, property_city,
+         property_state, property_zip, property_type, down_payment, loan_purpose,
+         status, current_step, total_steps, priority, broker_token, citizenship_status)
+       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, 'draft',?,8,'medium',?,?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        applicationNumber,
+        clientId,
+        resolvedBrokerUserId,
+        resolvedPartnerBrokerId,
+        resolvedLoanType,
+        loan_amount,
+        propVal || null,
+        property_address || null,
+        property_city || null,
+        property_state || null,
+        property_zip || null,
+        resolvedPropertyType,
+        dp || null,
+        loan_purpose || null,
+        wizard_step || 1,
+        broker_token || null,
+        resolvedCitizenshipStatus,
+      ],
+    );
+    applicationId = loanResult.insertId;
+
+    await connection.commit();
+    res.json({
+      success: true,
+      draft_id: applicationId,
+      application_number: applicationNumber,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error saving wizard draft:", error);
+    res.status(500).json({ success: false, error: "Failed to save draft" });
   } finally {
     connection.release();
   }
@@ -3899,6 +4152,7 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     const { status: newStatus, notes } = req.body;
 
     const VALID_STATUSES = [
+      "draft",
       "app_sent",
       "application_received",
       "prequalified",
@@ -8865,6 +9119,7 @@ const handleUpsertPipelineStepTemplate: RequestHandler = async (req, res) => {
     }
 
     const validSteps = [
+      "draft",
       "app_sent",
       "application_received",
       "prequalified",
@@ -13366,6 +13621,7 @@ function createServer() {
 
   // Public apply route (no auth required)
   expressApp.post("/api/apply", handlePublicApply);
+  expressApp.post("/api/apply/draft", handlePublicSaveDraft);
 
   // Public broker info for share link (no auth required)
   expressApp.get("/api/public/broker/:token", handleGetBrokerPublicInfo);

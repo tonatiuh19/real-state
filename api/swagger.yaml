@@ -1132,6 +1132,67 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /apply/draft:
+    post:
+      tags: [Public]
+      summary: Save or update a wizard draft application
+      description: >
+        Creates or updates a draft loan application from the public wizard.
+        Minimum required: first_name, last_name, email.
+        If draft_id is supplied and matches an existing draft for this client it performs an UPDATE,
+        otherwise a new draft record is inserted. No authentication required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, email]
+              properties:
+                draft_id:
+                  {
+                    type: integer,
+                    description: "ID of an existing draft to update",
+                  }
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string }
+                address_street: { type: string }
+                address_city: { type: string }
+                address_state: { type: string }
+                address_zip: { type: string }
+                loan_type: { type: string }
+                property_value: { type: number }
+                down_payment: { type: number }
+                property_type: { type: string }
+                property_address: { type: string }
+                property_city: { type: string }
+                property_state: { type: string }
+                property_zip: { type: string }
+                loan_purpose: { type: string }
+                citizenship_status: { type: string }
+                broker_token: { type: string }
+                wizard_step:
+                  { type: integer, description: "Current wizard step (1-5)" }
+      responses:
+        "200":
+          description: Draft saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      draft_id: { type: integer }
+                      application_number: { type: string }
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   # ── Public Broker Info ────────────────────────────────────────────────────────
   /public/broker/{token}:
     get:
