@@ -13,6 +13,7 @@ import {
   Zap,
   Home,
   X,
+  MessageSquare,
 } from "lucide-react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
@@ -40,6 +41,9 @@ const ClientLogin = () => {
 
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
+  const [deliveryMethod, setDeliveryMethod] = useState<"email" | "sms">(
+    "email",
+  );
 
   // Redirect authenticated users to portal
   useEffect(() => {
@@ -68,7 +72,12 @@ const ClientLogin = () => {
     }),
     onSubmit: async (values) => {
       setEmail(values.email);
-      const result = await dispatch(sendClientCode({ email: values.email }));
+      const result = await dispatch(
+        sendClientCode({
+          email: values.email,
+          delivery_method: deliveryMethod,
+        }),
+      );
 
       if (sendClientCode.fulfilled.match(result)) {
         if (!shouldRedirect) {
@@ -101,6 +110,7 @@ const ClientLogin = () => {
 
   const handleBackToEmail = () => {
     setStep("email");
+    setDeliveryMethod("email");
     codeFormik.resetForm();
     dispatch(clearClientError());
   };
@@ -321,12 +331,16 @@ const ClientLogin = () => {
               </button>
             </div>
             <h2 className="text-3xl font-bold mb-2">
-              {step === "email" ? "Client Portal Access" : "Verify Your Email"}
+              {step === "email"
+                ? "Client Portal Access"
+                : "Verify Your Identity"}
             </h2>
             <p className="text-muted-foreground">
               {step === "email"
                 ? "Enter your email to access your loan applications"
-                : "We've sent a code to protect your account"}
+                : deliveryMethod === "sms"
+                  ? "We've sent a code to your phone"
+                  : "We've sent a code to protect your account"}
             </p>
 
             {/* Feature Pills */}
@@ -395,6 +409,44 @@ const ClientLogin = () => {
                   )}
                 </div>
 
+                {/* Delivery Method Toggle */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold flex items-center gap-2">
+                    Send code via
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("email")}
+                      className={`flex items-center justify-center gap-2 h-11 rounded-xl border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "email"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border/50 text-muted-foreground hover:border-border"
+                      }`}
+                    >
+                      <Mail className="h-4 w-4" />
+                      Email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("sms")}
+                      className={`flex items-center justify-center gap-2 h-11 rounded-xl border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "sms"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border/50 text-muted-foreground hover:border-border"
+                      }`}
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      SMS
+                    </button>
+                  </div>
+                  {deliveryMethod === "sms" && (
+                    <p className="text-xs text-muted-foreground">
+                      Code will be sent to your registered phone number.
+                    </p>
+                  )}
+                </div>
+
                 {error && !shouldRedirect && (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.95 }}
@@ -404,9 +456,23 @@ const ClientLogin = () => {
                       variant="destructive"
                       className="border-destructive/50 bg-destructive/10"
                     >
-                      <AlertDescription className="flex items-center gap-2">
-                        <div className="h-1.5 w-1.5 rounded-full bg-destructive animate-pulse" />
-                        {error}
+                      <AlertDescription className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-1.5 rounded-full bg-destructive animate-pulse shrink-0" />
+                          {error}
+                        </div>
+                        {deliveryMethod === "sms" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeliveryMethod("email");
+                              dispatch(clearClientError());
+                            }}
+                            className="self-start text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+                          >
+                            Try with email instead →
+                          </button>
+                        )}
                       </AlertDescription>
                     </Alert>
                   </motion.div>
@@ -508,14 +574,20 @@ const ClientLogin = () => {
                         <Sparkles className="h-4 w-4 text-primary" />
                       </p>
                       <p className="text-muted-foreground leading-relaxed">
-                        We sent a 6-digit verification code to{" "}
-                        <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
-                          {email}
-                        </span>
+                        We sent a 6-digit verification code to your{" "}
+                        {deliveryMethod === "sms" ? (
+                          <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
+                            phone
+                          </span>
+                        ) : (
+                          <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
+                            {email}
+                          </span>
+                        )}
                       </p>
                       <p className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
                         <Lock className="h-3 w-3" />
-                        Expires in 10 minutes
+                        Expires in 15 minutes
                       </p>
                     </div>
                   </div>

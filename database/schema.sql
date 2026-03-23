@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Mar 15, 2026 at 07:26 PM
+-- Generation Time: Mar 20, 2026 at 01:14 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -52,7 +52,8 @@ INSERT INTO `admin_section_controls` (`id`, `tenant_id`, `section_id`, `is_disab
 (8, 1, 'conversations', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:38:02'),
 (9, 1, 'reports', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
 (10, 1, 'brokers', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
-(11, 1, 'settings', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37');
+(11, 1, 'settings', 0, 'Coming Soon', '2026-02-28 17:35:37', '2026-02-28 17:35:37'),
+(12, 1, 'scheduler', 0, 'Coming Soon', '2026-03-20 12:00:00', '2026-03-20 12:00:00');
 
 -- --------------------------------------------------------
 
@@ -101,7 +102,14 @@ INSERT INTO `application_status_history` (`id`, `tenant_id`, `application_id`, `
 (123, 1, 32, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:46'),
 (124, 1, 32, 'under_review', 'documents_pending', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:06:48'),
 (125, 1, 32, 'documents_pending', 'under_review', NULL, 'Auto-updated based on task statuses', '2026-03-09 21:07:55'),
-(126, 1, 32, 'under_review', 'underwriting', 11, 'Auto-updated based on task statuses', '2026-03-09 21:08:32');
+(126, 1, 32, 'under_review', 'underwriting', 11, 'Auto-updated based on task statuses', '2026-03-09 21:08:32'),
+(127, 1, 32, 'application_received', 'prequalified', 1, NULL, '2026-03-16 21:43:51'),
+(128, 1, 31, 'application_received', 'app_sent', 3, NULL, '2026-03-17 15:38:07'),
+(129, 1, 31, 'app_sent', 'application_received', 3, NULL, '2026-03-17 15:38:11'),
+(130, 1, 32, 'prequalified', 'preapproved', 3, NULL, '2026-03-17 15:38:14'),
+(131, 1, 32, 'preapproved', 'prequalified', 3, NULL, '2026-03-17 15:38:17'),
+(132, 1, 31, 'application_received', 'app_sent', 3, NULL, '2026-03-17 17:51:19'),
+(133, 1, 31, 'app_sent', 'application_received', 4, NULL, '2026-03-18 16:10:55');
 
 -- --------------------------------------------------------
 
@@ -345,7 +353,9 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (209, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_190000_seed_submitted_to_underwriting_reminder_flow\", \"description\": \"Created Submitted to Underwriting reminder flow: immediate SMS + Email explaining the underwriting process, no branching\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 22:51:53'),
 (210, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_200000_seed_approved_with_conditions_reminder_flow\", \"description\": \"Created Approved with Conditions reminder flow: immediate SMS + Email to client, then 3 internal notifications to alert team to contact Buyer Agent, Listing Agent, and Title Agent\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 22:55:03'),
 (211, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_210000_seed_clear_to_close_reminder_flow\", \"description\": \"Created Clear to Close reminder flow: shared SMS, branch by loan type, Purchase email (closing checklist for home buyer) or Refi email (right of rescission + refi closing checklist). Default routes to Purchase.\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 22:57:51'),
-(212, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_220000_seed_loan_funded_reminder_flow\", \"description\": \"Created Loan Funded reminder flow: condition on actual_close_date (field_not_empty), wait_until_date then SMS + Email. Nada branch ends silently. Also added wait_until_date step type and field_not_empty/field_empty condition types to engine and shared types.\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 23:02:15');
+(212, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_220000_seed_loan_funded_reminder_flow\", \"description\": \"Created Loan Funded reminder flow: condition on actual_close_date (field_not_empty), wait_until_date then SMS + Email. Nada branch ends silently. Also added wait_until_date step type and field_not_empty/field_empty condition types to engine and shared types.\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 23:02:15'),
+(213, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:30:21'),
+(214, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:31:20');
 
 -- --------------------------------------------------------
 
@@ -377,13 +387,13 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`, `created_by_broker_id`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-10 22:54:24', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-10 22:54:24', NULL),
-(3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-03-09 14:52:45', '380277', '[]', '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-03-09 14:52:45', NULL),
-(4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-24 17:32:57', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-02-24 18:33:30', NULL),
-(6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-02-12 18:14:25', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-02-24 18:33:30', NULL),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-19 20:49:24', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-19 20:49:24', NULL),
+(3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-03-17 17:54:46', '380277', '[]', '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-03-17 17:54:46', NULL),
+(4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-03-18 16:09:22', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-03-18 16:09:22', NULL),
+(6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-16 17:00:59', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-16 17:00:59', NULL),
 (7, 2, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-02-13 00:04:37', NULL, NULL, '9b99c5ad-11e1-11f1-83cc-525400bd6b5d', '2026-02-03 14:59:53', '2026-02-24 18:33:30', NULL),
 (11, 1, 'tonatiuh.gom@gmail.com', 'Alejandro', 'Gomez', '(474) 140-0363', 'broker', 'active', 0, '2026-03-09 21:24:30', NULL, '[]', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-05 23:18:34', '2026-03-09 21:25:24', 1),
-(12, 1, 'daniel@encoremortgage.org', 'Realtor', 'Partner', '3237180001', 'broker', 'active', 0, '2026-03-09 14:46:04', NULL, NULL, '59051ae7-1bd4-11f1-83cc-525400bd6b5d', '2026-03-09 10:23:46', '2026-03-09 14:46:04', 3);
+(12, 1, 'daniel@encoremortgage.org', 'Realtor', 'Partner', '3237180001', 'broker', 'active', 0, '2026-03-17 17:53:54', NULL, NULL, '59051ae7-1bd4-11f1-83cc-525400bd6b5d', '2026-03-09 10:23:46', '2026-03-17 17:53:54', 3);
 
 -- --------------------------------------------------------
 
@@ -444,7 +454,7 @@ CREATE TABLE `broker_profiles` (
 INSERT INTO `broker_profiles` (`id`, `broker_id`, `bio`, `office_address`, `office_city`, `office_state`, `office_zip`, `facebook_url`, `instagram_url`, `linkedin_url`, `twitter_url`, `youtube_url`, `website_url`, `avatar_url`, `years_experience`, `total_loans_closed`, `created_at`, `updated_at`) VALUES
 (1, 1, NULL, '3301 Lyon St', 'San Francisco', 'CA', '94123', NULL, 'https://www.instagram.com/tonatiuhgbr/', NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-1/main_image/69a6138f45544_1772491663.png', 50, 0, '2026-02-24 20:53:50', '2026-03-05 18:08:40'),
 (3, 4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-4/main_image/69a635b968a3d_1772500409.png', NULL, 0, '2026-03-02 19:13:29', '2026-03-02 19:13:29'),
-(5, 3, 'Sharing my expertise to personally assist thousands of families with sustainable home financing for the past 24 years 🏡💼✨', '15111 Whittier Blvd Suite 101-B', 'Whittier', 'CA', '90603', NULL, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-3/main_image/69a914674dc84_1772688487.png', 24, 0, '2026-03-04 23:28:07', '2026-03-05 12:42:01'),
+(5, 3, 'Sharing my expertise to personally assist thousands of families with sustainable home financing for the past 24 years 🏡💼✨', '15111 Whittier Blvd Suite 101-B', 'Whittier', 'CA', '90603', 'https://www.facebook.com/danielcarrillodc/', 'https://www.instagram.com/danielcarrillodc', 'https://www.linkedin.com/in/danielcarrillodc/', NULL, 'https://www.youtube.com/channel/UCoQr7UzGLfPFR8jyaLhHoJw', 'https://encoremortgage.us/daniel-carrillo', 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-3/main_image/69a914674dc84_1772688487.png', 24, 0, '2026-03-04 23:28:07', '2026-03-16 13:21:53'),
 (8, 11, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-11/main_image/69aa63c41e481_1772774340.png', NULL, 0, '2026-03-05 23:19:00', '2026-03-09 21:25:24'),
 (9, 12, 'https://calendly.com/danielcarrillodc/initial-call ', '123 Main St', 'Whittier', 'CA', '90603', NULL, NULL, NULL, NULL, NULL, 'https://Danielcarrillodc.com', 'https://disruptinglabs.com/data/api/data/encore-profiles/profile-12/main_image/69af30efd69ec_1773089007.png', NULL, 0, '2026-03-09 10:23:46', '2026-03-09 14:43:28');
 
@@ -470,10 +480,8 @@ CREATE TABLE `broker_sessions` (
 --
 
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(63, 6, 303837, 1, NULL, NULL, '2026-02-13 00:29:10', '2026-02-13 00:14:10'),
-(78, 4, 410414, 1, NULL, NULL, '2026-02-24 23:47:32', '2026-02-24 23:32:32'),
-(121, 3, 949646, 1, NULL, NULL, '2026-03-09 21:07:26', '2026-03-09 20:52:26'),
-(127, 1, 568693, 1, NULL, NULL, '2026-03-11 05:09:11', '2026-03-11 04:54:11');
+(131, 6, 744871, 1, NULL, NULL, '2026-03-16 23:15:36', '2026-03-16 23:00:36'),
+(135, 3, 599254, 1, NULL, NULL, '2026-03-18 00:09:24', '2026-03-17 23:54:24');
 
 -- --------------------------------------------------------
 
@@ -890,8 +898,8 @@ CREATE TABLE `loan_applications` (
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `partner_broker_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`, `citizenship_status`) VALUES
 (15, 2, 'LA65421662', 14, 6, NULL, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'application_received', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-03-10 22:55:05', '2026-02-11 21:03:41', NULL),
 (23, 1, 'LA73590546', 22, 3, NULL, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, '', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-03-10 22:53:25', '2026-02-24 16:53:10', NULL),
-(31, 1, 'LA74994106', 29, 3, 12, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'application_received', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-05 23:29:54', '2026-03-10 22:55:10', '2026-03-05 23:29:54', 'us_citizen'),
-(32, 1, 'LA10261192', 29, 1, 11, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'application_received', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-09 20:37:41', '2026-03-10 22:55:15', '2026-03-09 20:37:41', 'us_citizen');
+(31, 1, 'LA74994106', 29, 3, 12, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'application_received', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-05 23:29:54', '2026-03-18 16:10:55', '2026-03-05 23:29:54', 'us_citizen'),
+(32, 1, 'LA10261192', 29, 1, 11, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'prequalified', 1, 8, 'medium', NULL, NULL, NULL, NULL, 'Public wizard submission. Employment: employed, Employer: Acme Corp, Years employed: 5', 'ec5bb0d4-191b-11f1-83cc-525400bd6b5d', '2026-03-09 20:37:41', '2026-03-17 15:38:17', '2026-03-09 20:37:41', 'us_citizen');
 
 -- --------------------------------------------------------
 
@@ -1327,6 +1335,18 @@ CREATE TABLE `reminder_flow_executions` (
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `reminder_flow_executions`
+--
+
+INSERT INTO `reminder_flow_executions` (`id`, `tenant_id`, `flow_id`, `loan_application_id`, `client_id`, `current_step_key`, `status`, `next_execution_at`, `completed_steps`, `context_data`, `last_step_started_at`, `responded_at`, `started_at`, `completed_at`, `created_at`, `updated_at`) VALUES
+(1, 1, 4, 32, 29, 'trigger', 'active', '2026-03-16 21:43:52', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"prequalified\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-16 21:43:51', NULL, '2026-03-16 21:43:51', NULL, '2026-03-16 21:43:51', '2026-03-16 21:43:51'),
+(2, 1, 2, 31, 29, 'trigger', 'active', '2026-03-17 21:38:15', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"app_sent\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', '2026-03-17 15:38:14'),
+(3, 1, 3, 31, 29, 'trigger', 'active', '2026-03-17 21:38:15', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"application_received\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', '2026-03-17 15:38:14'),
+(4, 1, 5, 32, 29, 'trigger', 'active', '2026-03-17 21:38:18', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"preapproved\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-17 15:38:17', NULL, '2026-03-17 15:38:17', NULL, '2026-03-17 15:38:17', '2026-03-17 15:38:17'),
+(5, 1, 4, 32, 29, 'trigger', 'active', '2026-03-17 21:38:22', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"prequalified\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-17 15:38:22', NULL, '2026-03-17 15:38:22', NULL, '2026-03-17 15:38:22', '2026-03-17 15:38:22'),
+(6, 1, 2, 31, 29, 'trigger', 'active', '2026-03-17 23:51:23', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"app_sent\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 17:51:22', NULL, '2026-03-17 17:51:22', NULL, '2026-03-17 17:51:22', '2026-03-17 17:51:22');
 
 -- --------------------------------------------------------
 
@@ -2143,13 +2163,6 @@ CREATE TABLE `user_sessions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
--- Dumping data for table `user_sessions`
---
-
-INSERT INTO `user_sessions` (`id`, `user_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
-(19, 22, 566099, 1, NULL, NULL, '2026-03-06 04:22:11', '2026-03-06 04:07:11');
-
---
 -- Indexes for dumped tables
 --
 
@@ -2585,19 +2598,19 @@ ALTER TABLE `user_sessions`
 -- AUTO_INCREMENT for table `admin_section_controls`
 --
 ALTER TABLE `admin_section_controls`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `application_status_history`
 --
 ALTER TABLE `application_status_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=127;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=134;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=213;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=215;
 
 --
 -- AUTO_INCREMENT for table `brokers`
@@ -2621,7 +2634,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=128;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=140;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
@@ -2735,7 +2748,7 @@ ALTER TABLE `reminder_flow_connections`
 -- AUTO_INCREMENT for table `reminder_flow_executions`
 --
 ALTER TABLE `reminder_flow_executions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `reminder_flow_steps`

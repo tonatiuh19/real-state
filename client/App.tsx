@@ -52,7 +52,8 @@ const SubdomainRedirect = () => {
         pathname.startsWith("/portal") ||
         pathname.startsWith("/client-login") ||
         pathname.startsWith("/wizard") ||
-        pathname.startsWith("/apply");
+        pathname.startsWith("/apply") ||
+        pathname.startsWith("/scheduler");
       if (!allowed) navigate("/portal", { replace: true });
     }
   }, [pathname, navigate]);

@@ -24,6 +24,7 @@ import {
   Menu,
   X,
   MessageSquare,
+  CalendarDays,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -192,6 +193,12 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       icon: <MessageSquare className="h-4 w-4" />,
       path: "/admin/contact-submissions",
       hidden: isPartner,
+    },
+    {
+      id: "scheduler",
+      label: "Scheduler",
+      icon: <CalendarDays className="h-4 w-4" />,
+      path: "/admin/scheduler",
     },
     {
       id: "settings",

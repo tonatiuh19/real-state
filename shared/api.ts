@@ -134,6 +134,7 @@ export interface GetLoanDetailsResponse {
  */
 export interface ClientSendCodeRequest {
   email: string;
+  delivery_method?: "email" | "sms";
 }
 
 export interface ClientSendCodeResponse {
@@ -1776,4 +1777,172 @@ export interface ContactSubmission {
 export interface GetContactSubmissionsResponse {
   success: boolean;
   submissions: ContactSubmission[];
+}
+
+// =====================================================
+// SCHEDULER TYPES
+// =====================================================
+
+export type MeetingType = "phone" | "video";
+export type MeetingStatus =
+  | "pending"
+  | "confirmed"
+  | "cancelled"
+  | "completed"
+  | "no_show";
+
+export interface SchedulerSettings {
+  id: number;
+  broker_id: number;
+  is_enabled: boolean;
+  meeting_title: string;
+  meeting_description: string | null;
+  slot_duration_minutes: number;
+  buffer_time_minutes: number;
+  advance_booking_days: number;
+  min_booking_hours: number;
+  timezone: string;
+  allow_phone: boolean;
+  allow_video: boolean;
+}
+
+export interface SchedulerAvailability {
+  id: number;
+  broker_id: number;
+  day_of_week: number; // 0=Sun ... 6=Sat
+  start_time: string; // "HH:MM:SS"
+  end_time: string;
+  is_active: boolean;
+}
+
+export interface ScheduledMeeting {
+  id: number;
+  tenant_id: number;
+  broker_id: number | null;
+  broker_first_name?: string | null;
+  broker_last_name?: string | null;
+  client_name: string;
+  client_email: string;
+  client_phone: string | null;
+  meeting_date: string; // "YYYY-MM-DD"
+  meeting_time: string; // "HH:MM:SS"
+  meeting_end_time: string;
+  meeting_type: MeetingType;
+  jitsi_room_id: string | null; // kept for backward compat — new bookings use zoom fields
+  zoom_meeting_id: string | null;
+  zoom_join_url: string | null;
+  zoom_start_url: string | null;
+  status: MeetingStatus;
+  notes: string | null;
+  broker_notes: string | null;
+  booking_token: string;
+  public_token: string | null;
+  cancelled_reason: string | null;
+  cancelled_by: "client" | "broker" | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Available time slot returned by public API
+export interface AvailableSlot {
+  time: string; // "HH:MM"
+  end_time: string;
+  available: boolean;
+}
+
+// Public broker info for scheduler page
+export interface PublicSchedulerBrokerInfo {
+  broker_id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string | null;
+  avatar_url: string | null;
+  years_experience: number | null;
+  meeting_title: string;
+  meeting_description: string | null;
+  slot_duration_minutes: number;
+  advance_booking_days: number;
+  min_booking_hours: number;
+  timezone: string;
+  allow_phone: boolean;
+  allow_video: boolean;
+  is_enabled: boolean;
+}
+
+// Request / Response types
+export interface GetPublicSchedulerResponse {
+  success: boolean;
+  broker: PublicSchedulerBrokerInfo;
+  available_dates: string[]; // "YYYY-MM-DD" list of dates that have at least one slot
+}
+
+export interface GetAvailableSlotsResponse {
+  success: boolean;
+  slots: AvailableSlot[];
+}
+
+export interface BookMeetingRequest {
+  broker_token: string; // broker's public_token
+  client_name: string;
+  client_email: string;
+  client_phone?: string;
+  meeting_date: string; // "YYYY-MM-DD"
+  meeting_time: string; // "HH:MM"
+  meeting_type: MeetingType;
+  notes?: string;
+}
+
+export interface BookMeetingResponse {
+  success: boolean;
+  meeting_id: number;
+  booking_token: string;
+  zoom_join_url: string | null;
+  zoom_start_url: string | null;
+  meeting_date: string;
+  meeting_time: string;
+  meeting_type: MeetingType;
+  broker_name: string;
+}
+
+export interface GetSchedulerSettingsResponse {
+  success: boolean;
+  settings: SchedulerSettings;
+  availability: SchedulerAvailability[];
+}
+
+export interface UpdateSchedulerSettingsRequest {
+  is_enabled?: boolean;
+  meeting_title?: string;
+  meeting_description?: string;
+  slot_duration_minutes?: number;
+  buffer_time_minutes?: number;
+  advance_booking_days?: number;
+  min_booking_hours?: number;
+  timezone?: string;
+  allow_phone?: boolean;
+  allow_video?: boolean;
+  availability?: Array<{
+    day_of_week: number;
+    start_time: string;
+    end_time: string;
+    is_active: boolean;
+  }>;
+}
+
+export interface GetScheduledMeetingsResponse {
+  success: boolean;
+  meetings: ScheduledMeeting[];
+  total: number;
+}
+
+export interface UpdateMeetingRequest {
+  status?: MeetingStatus;
+  broker_notes?: string;
+  meeting_date?: string;
+  meeting_time?: string;
+  meeting_type?: MeetingType;
+  cancelled_reason?: string;
+  cancelled_by?: "client" | "broker";
 }

@@ -5,7 +5,7 @@ with all existing data PLUS fully seeded data for tenant_id=2.
 
 Changes vs original schema.sql:
   - Fixes system_settings UNIQUE KEY from global to per-tenant compound key
-  - Adds admin_section_controls rows IDs 12-22 (tenant_id=2)
+  - Adds admin_section_controls rows IDs 13-23 (tenant_id=2)
   - Adds broker_profiles rows IDs 10-11 (for brokers 6 and 7)
   - Adds system_settings rows IDs 13-23 (tenant_id=2)
   - Adds task_form_fields rows IDs 72-101 (for tenant 2 task templates)
@@ -271,8 +271,8 @@ print('  ✓ Added templates IDs 7-12 for tenant 2')
 auto_inc_fixes = [
     # (old_context, new_context)
     (
-        'ALTER TABLE `admin_section_controls`\n  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;',
-        'ALTER TABLE `admin_section_controls`\n  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;'
+        'ALTER TABLE `admin_section_controls`\n  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;',
+        'ALTER TABLE `admin_section_controls`\n  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;'
     ),
     (
         'ALTER TABLE `broker_profiles`\n  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;',
@@ -303,7 +303,7 @@ for old, new in auto_inc_fixes:
         sql = sql.replace(old, new)
 
 print('  ✓ Updated AUTO_INCREMENT values')
-print('    admin_section_controls: 12 → 23')
+print('    admin_section_controls: 13 → 24')
 print('    broker_profiles:        10 → 12')
 print('    system_settings:        13 → 24')
 print('    task_form_fields:       72 → 102')

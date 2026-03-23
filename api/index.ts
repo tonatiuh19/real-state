@@ -160,10 +160,23 @@ async function sendSMSMessage(
   }
 
   try {
-    // Normalize phone number
-    const normalizedPhone = to.startsWith("+")
-      ? to
-      : `+1${to.replace(/\D/g, "")}`;
+    // Normalize to E.164 format:
+    // - Already E.164 (+52..., +1...): use as-is
+    // - 11-digit starting with 1 (15551234567): prepend +
+    // - 10-digit US number (5551234567): prepend +1
+    // - Formatted US (555-123-4567, (555) 123-4567): strip non-digits then prepend +1
+    const digits = to.replace(/\D/g, "");
+    let normalizedPhone: string;
+    if (to.startsWith("+")) {
+      normalizedPhone = to; // already E.164
+    } else if (digits.length === 11 && digits.startsWith("1")) {
+      normalizedPhone = `+${digits}`; // 1XXXXXXXXXX → +1XXXXXXXXXX
+    } else if (digits.length === 10) {
+      normalizedPhone = `+1${digits}`; // XXXXXXXXXX → +1XXXXXXXXXX
+    } else {
+      // Fallback: trust what was stored (may already have + or be international)
+      normalizedPhone = to.startsWith("+") ? to : `+${digits}`;
+    }
 
     const message = await twilioClient.messages.create({
       body,
@@ -185,9 +198,14 @@ async function sendSMSMessage(
     };
   } catch (error: any) {
     console.error("❌ SMS sending failed:", error);
+    // Twilio 21408: SMS not enabled for the destination region/country
+    const userError =
+      error.code === 21408
+        ? "SMS is not enabled for this phone number's region. Please use email verification instead."
+        : error.message || "Failed to send SMS";
     return {
       success: false,
-      error: error.message || "Failed to send SMS",
+      error: userError,
       provider_response: error,
     };
   }
@@ -546,7 +564,7 @@ async function sendClientVerificationEmail(
                   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
                     <tr>
                       <td align="center">
-                        <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to Client Login</a>
+                        <a href="${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to Client Login</a>
                       </td>
                     </tr>
                   </table>
@@ -684,7 +702,7 @@ async function sendClientLoanWelcomeEmail(
                     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:32px;">
                       <tr>
                         <td align="center">
-                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Log In to Your Portal</a>
+                          <a href="${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Log In to Your Portal</a>
                         </td>
                       </tr>
                     </table>
@@ -747,7 +765,7 @@ async function sendPublicApplicationWelcomeEmail(
     };
 
     const portalUrl =
-      process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app";
+      process.env.CLIENT_URL || "https://portal.encoremortgage.org";
 
     const mailOptions = {
       from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
@@ -992,7 +1010,7 @@ async function sendTaskReopenedEmail(
                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td align="center">
-                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Review Task Now</a>
+                          <a href="${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Review Task Now</a>
                         </td>
                       </tr>
                     </table>
@@ -1091,7 +1109,7 @@ async function sendTaskApprovedEmail(
                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td align="center">
-                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/client-login" style="display:inline-block;background-color:#16a34a;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">View My Portal</a>
+                          <a href="${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login" style="display:inline-block;background-color:#16a34a;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">View My Portal</a>
                         </td>
                       </tr>
                     </table>
@@ -1194,7 +1212,7 @@ async function sendNewTaskAssignedEmail(
                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td align="center">
-                          <a href="${process.env.CLIENT_URL || "https://real-state-one-omega.vercel.app"}/portal" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to My Portal</a>
+                          <a href="${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/portal" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Go to My Portal</a>
                         </td>
                       </tr>
                     </table>
@@ -1458,7 +1476,7 @@ const handlePing: RequestHandler = (_req, res) => {
  */
 const handleAdminSendCode: RequestHandler = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, delivery_method = "email" } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -1495,6 +1513,17 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
 
     const broker = brokers[0];
 
+    // If SMS requested, ensure broker has a phone number on file
+    if (delivery_method === "sms") {
+      if (!broker.phone) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "No phone number on file. Please use email verification or contact support to add your phone number.",
+        });
+      }
+    }
+
     // Delete old sessions for this broker
     await pool.query("DELETE FROM broker_sessions WHERE broker_id = ?", [
       broker.id,
@@ -1512,21 +1541,41 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
 
     console.log("✅ Session created with code:", code);
 
-    // Send email with code
-    try {
-      await sendBrokerVerificationEmail(
-        normalizedEmail,
-        code,
-        broker.first_name,
+    if (delivery_method === "sms") {
+      // Send SMS with code via Twilio
+      const smsResult = await sendSMSMessage(
+        broker.phone,
+        `Your Encore Mortgage admin verification code is: ${code}. Valid for 15 minutes. Do not share this code.`,
       );
-    } catch (emailError) {
-      console.error("Failed to send verification email:", emailError);
-      // Continue anyway - the code is still valid
+      if (!smsResult.success) {
+        console.error("Failed to send SMS verification:", smsResult.error);
+        return res.status(500).json({
+          success: false,
+          message:
+            smsResult.error ||
+            "Failed to send SMS. Please try again or use email.",
+        });
+      }
+    } else {
+      // Send email with code
+      try {
+        await sendBrokerVerificationEmail(
+          normalizedEmail,
+          code,
+          broker.first_name,
+        );
+      } catch (emailError) {
+        console.error("Failed to send verification email:", emailError);
+        // Continue anyway - the code is still valid
+      }
     }
 
     res.json({
       success: true,
-      message: "Verification code sent to your email",
+      message:
+        delivery_method === "sms"
+          ? "Verification code sent to your phone"
+          : "Verification code sent to your email",
       debug_code: process.env.NODE_ENV === "development" ? code : undefined,
     });
   } catch (error) {
@@ -1630,11 +1679,23 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
       { expiresIn: "7d" },
     );
 
-    // Update last login
-    await pool.query(
-      "UPDATE brokers SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
-      [broker.id, MORTGAGE_TENANT_ID],
-    );
+    // Update last login and generate public_token if missing
+    if (!broker.public_token) {
+      await pool.query(
+        "UPDATE brokers SET last_login = NOW(), public_token = UUID() WHERE id = ? AND tenant_id = ?",
+        [broker.id, MORTGAGE_TENANT_ID],
+      );
+      const [refreshed] = await pool.query<any[]>(
+        "SELECT public_token FROM brokers WHERE id = ?",
+        [broker.id],
+      );
+      broker.public_token = refreshed[0]?.public_token ?? null;
+    } else {
+      await pool.query(
+        "UPDATE brokers SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
+        [broker.id, MORTGAGE_TENANT_ID],
+      );
+    }
 
     res.json({
       success: true,
@@ -1648,6 +1709,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
         role: broker.role,
         is_active: broker.status === "active",
         avatar_url: broker.avatar_url ?? null,
+        public_token: broker.public_token ?? null,
       },
     });
   } catch (error) {
@@ -1702,6 +1764,19 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
 
       const broker = brokers[0];
 
+      // Auto-generate public_token if missing
+      if (!broker.public_token) {
+        await pool.query(
+          "UPDATE brokers SET public_token = UUID() WHERE id = ?",
+          [broker.id],
+        );
+        const [refreshed] = await pool.query<any[]>(
+          "SELECT public_token FROM brokers WHERE id = ?",
+          [broker.id],
+        );
+        broker.public_token = refreshed[0]?.public_token ?? null;
+      }
+
       res.json({
         success: true,
         admin: {
@@ -1713,6 +1788,7 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
           role: broker.role,
           is_active: broker.status === "active",
           avatar_url: broker.avatar_url ?? null,
+          public_token: broker.public_token ?? null,
         },
       });
     } catch (jwtError) {
@@ -1737,7 +1813,7 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
  */
 const handleClientSendCode: RequestHandler = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, delivery_method = "email" } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -1774,6 +1850,17 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
 
     const client = clients[0];
 
+    // If SMS requested, ensure client has a phone number on file
+    if (delivery_method === "sms") {
+      if (!client.phone) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "No phone number on file. Please use email verification or contact your loan officer to add your phone number.",
+        });
+      }
+    }
+
     // Delete old sessions for this client
     await pool.query("DELETE FROM user_sessions WHERE user_id = ?", [
       client.id,
@@ -1789,12 +1876,36 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
       [client.id, code],
     );
 
-    // Send email with code
-    await sendClientVerificationEmail(normalizedEmail, code, client.first_name);
+    if (delivery_method === "sms") {
+      // Send SMS with code via Twilio
+      const smsResult = await sendSMSMessage(
+        client.phone,
+        `Your Encore Mortgage verification code is: ${code}. Valid for 15 minutes. Do not share this code.`,
+      );
+      if (!smsResult.success) {
+        console.error("Failed to send SMS verification:", smsResult.error);
+        return res.status(500).json({
+          success: false,
+          message:
+            smsResult.error ||
+            "Failed to send SMS. Please try again or use email.",
+        });
+      }
+    } else {
+      // Send email with code
+      await sendClientVerificationEmail(
+        normalizedEmail,
+        code,
+        client.first_name,
+      );
+    }
 
     res.json({
       success: true,
-      message: "Verification code sent to your email",
+      message:
+        delivery_method === "sms"
+          ? "Verification code sent to your phone"
+          : "Verification code sent to your email",
       debug_code: process.env.NODE_ENV === "development" ? code : undefined,
     });
   } catch (error) {
@@ -13821,6 +13932,1409 @@ function createServer() {
     "/api/reminder-flow-executions/:executionId/respond",
     verifyBrokerSession,
     handleMarkFlowExecutionResponded,
+  );
+
+  // ─── Scheduler ──────────────────────────────────────────────────────────
+
+  // ---- Email helpers ----
+
+  async function sendMeetingConfirmationToClient(opts: {
+    email: string;
+    clientName: string;
+    brokerName: string;
+    meetingDate: string; // "YYYY-MM-DD"
+    meetingTime: string; // "HH:MM"
+    meetingEndTime: string;
+    meetingType: "phone" | "video";
+    videoRoomUrl: string | null;
+    brokerPhone: string | null;
+    bookingToken: string;
+    notes: string | null;
+  }): Promise<void> {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+    });
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) return;
+
+    const formattedDate = new Date(
+      opts.meetingDate + "T12:00:00",
+    ).toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const formatTime = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      const ampm = h >= 12 ? "PM" : "AM";
+      return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+    };
+    const connectionHtml =
+      opts.meetingType === "video" && opts.videoRoomUrl
+        ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+            <tr>
+              <td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:14px 18px;">
+                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 Zoom Video Call Link</p>
+                <a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:14px;word-break:break-all;">${opts.videoRoomUrl}</a>
+                <p style="margin:6px 0 0 0;color:#64748b;font-size:12px;">Click the link above at meeting time — no download required if using a browser.</p>
+              </td>
+            </tr>
+          </table>`
+        : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+            <tr>
+              <td style="background-color:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:0 8px 8px 0;padding:14px 18px;">
+                <p style="margin:0 0 4px 0;color:#0f172a;font-size:14px;font-weight:700;">📞 Phone Call</p>
+                <p style="margin:0;color:#475569;font-size:13px;">Your mortgage banker will call you at your provided phone number at the scheduled time.${opts.brokerPhone ? ` You can also reach them at <strong>${opts.brokerPhone}</strong>.` : ""}</p>
+              </td>
+            </tr>
+          </table>`;
+
+    const cancelUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/cancel/${opts.bookingToken}`;
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to: opts.email,
+      subject: `Meeting Confirmed — ${formattedDate} at ${formatTime(opts.meetingTime)}`,
+      html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
+      <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+              <tr><td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;"/>
+              </td></tr>
+              <tr><td style="background-color:#ffffff;padding:40px 32px 32px;">
+                <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hi ${opts.clientName},</h2>
+                <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Your meeting with <strong>${opts.brokerName}</strong> has been confirmed. Here are your details:</p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr><td style="background-color:#fff0f2;border:2px solid #e8192c;border-radius:12px;padding:24px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">📅 Date</span>
+                        <strong style="color:#0f172a;font-size:14px;">${formattedDate}</strong>
+                      </td></tr>
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">⏰ Time</span>
+                        <strong style="color:#0f172a;font-size:14px;">${formatTime(opts.meetingTime)} – ${formatTime(opts.meetingEndTime)}</strong>
+                      </td></tr>
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">👤 With</span>
+                        <strong style="color:#0f172a;font-size:14px;">${opts.brokerName}</strong>
+                      </td></tr>
+                      <tr><td style="padding:6px 0;">
+                        <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">📡 Method</span>
+                        <strong style="color:#0f172a;font-size:14px;">${opts.meetingType === "video" ? "Zoom Video Call" : "Phone Call"}</strong>
+                      </td></tr>
+                    </table>
+                  </td></tr>
+                </table>
+                ${connectionHtml}
+                ${opts.notes ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr><td style="background-color:#f8fafc;border-radius:8px;padding:14px 18px;"><p style="margin:0 0 4px 0;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;">Your Notes</p><p style="margin:0;color:#475569;font-size:14px;">${opts.notes}</p></td></tr></table>` : ""}
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
+                  <tr><td align="center">
+                    <a href="${cancelUrl}" style="display:inline-block;background-color:#f1f5f9;color:#64748b;text-decoration:none;padding:12px 32px;border-radius:8px;font-size:13px;border:1px solid #e2e8f0;">Cancel Meeting</a>
+                  </td></tr>
+                </table>
+                <p style="margin:20px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">Need to reschedule? Reply to this email or call us directly.</p>
+              </td></tr>
+              <tr><td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </body></html>`,
+    });
+  }
+
+  async function sendMeetingNotificationToBroker(opts: {
+    brokerEmail: string;
+    brokerName: string;
+    clientName: string;
+    clientEmail: string;
+    clientPhone: string | null;
+    meetingDate: string;
+    meetingTime: string;
+    meetingEndTime: string;
+    meetingType: "phone" | "video";
+    videoRoomUrl: string | null;
+    zoomStartUrl: string | null;
+    notes: string | null;
+    meetingId: number;
+  }): Promise<void> {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+    });
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) return;
+
+    const formattedDate = new Date(
+      opts.meetingDate + "T12:00:00",
+    ).toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const formatTime = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      const ampm = h >= 12 ? "PM" : "AM";
+      return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+    };
+    const adminUrl = `${process.env.BASE_URL || "https://portal.encoremortgage.org"}/admin/scheduler`;
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to: opts.brokerEmail,
+      subject: `New Meeting Scheduled — ${opts.clientName} on ${formattedDate}`,
+      html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+      <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+              <tr><td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;"/>
+              </td></tr>
+              <tr><td style="background-color:#ffffff;padding:40px 32px 32px;">
+                <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hi ${opts.brokerName},</h2>
+                <p style="margin:0 0 24px 0;color:#475569;font-size:15px;">A new meeting has been scheduled:</p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr><td style="background-color:#fff0f2;border:2px solid #e8192c;border-radius:12px;padding:20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">👤 Client</span>
+                        <strong style="color:#0f172a;font-size:14px;">${opts.clientName}</strong>
+                      </td></tr>
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">✉️ Email</span>
+                        <span style="color:#0f172a;font-size:14px;">${opts.clientEmail}</span>
+                      </td></tr>
+                      ${opts.clientPhone ? `<tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;"><span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">📱 Phone</span><span style="color:#0f172a;font-size:14px;">${opts.clientPhone}</span></td></tr>` : ""}
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">📅 Date</span>
+                        <strong style="color:#0f172a;font-size:14px;">${formattedDate}</strong>
+                      </td></tr>
+                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
+                        <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">⏰ Time</span>
+                        <strong style="color:#0f172a;font-size:14px;">${formatTime(opts.meetingTime)} – ${formatTime(opts.meetingEndTime)}</strong>
+                      </td></tr>
+                      <tr><td style="padding:6px 0;">
+                        <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">📡 Method</span>
+                        <strong style="color:#0f172a;font-size:14px;">${opts.meetingType === "video" ? "Video Call" : "Phone Call"}</strong>
+                      </td></tr>
+                    </table>
+                  </td></tr>
+                </table>
+                ${opts.videoRoomUrl ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">🎥 Zoom — Client Join Link</p><a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:13px;">${opts.videoRoomUrl}</a>${opts.zoomStartUrl ? `<p style="margin:8px 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">▶️ Your Host Start Link</p><a href="${opts.zoomStartUrl}" style="color:#2D8CFF;font-size:13px;">Start the meeting as host</a>` : ""}</td></tr></table>` : ""}
+                ${opts.notes ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#f8fafc;border-radius:8px;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;">Client Notes</p><p style="margin:0;color:#475569;font-size:14px;">${opts.notes}</p></td></tr></table>` : ""}
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
+                  <tr><td align="center">
+                    <a href="${adminUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;">View in Scheduler</a>
+                  </td></tr>
+                </table>
+              </td></tr>
+              <tr><td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                <p style="margin:0;color:#94a3b8;font-size:12px;">Encore Mortgage Admin</p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </body></html>`,
+    });
+  }
+
+  async function sendMeetingCancellationEmail(opts: {
+    email: string;
+    clientName: string;
+    brokerName: string;
+    meetingDate: string;
+    meetingTime: string;
+    cancelledBy: "client" | "broker";
+    reason: string | null;
+  }): Promise<void> {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+    });
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) return;
+
+    const formattedDate = new Date(
+      opts.meetingDate + "T12:00:00",
+    ).toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const formatTime = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      const ampm = h >= 12 ? "PM" : "AM";
+      return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+    };
+    const scheduleUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler`;
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to: opts.email,
+      subject: `Meeting Cancelled — ${formattedDate}`,
+      html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+      <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+          <tr><td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+              <tr><td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;"/>
+              </td></tr>
+              <tr><td style="background-color:#ffffff;padding:40px 32px 32px;">
+                <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hi ${opts.clientName},</h2>
+                <p style="margin:0 0 24px 0;color:#475569;font-size:15px;">Your meeting scheduled for <strong>${formattedDate} at ${formatTime(opts.meetingTime)}</strong> with <strong>${opts.brokerName}</strong> has been cancelled${opts.cancelledBy === "broker" ? " by your mortgage banker" : ""}.</p>
+                ${opts.reason ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;"><tr><td style="background-color:#fef2f2;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:14px;font-weight:700;">Reason</p><p style="margin:0;color:#475569;font-size:14px;">${opts.reason}</p></td></tr></table>` : ""}
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
+                  <tr><td align="center">
+                    <a href="${scheduleUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;">Schedule a New Meeting</a>
+                  </td></tr>
+                </table>
+              </td></tr>
+              <tr><td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </body></html>`,
+    });
+  }
+
+  // ---- Zoom Server-to-Server OAuth helper ----
+
+  let _zoomAccessToken: string | null = null;
+  let _zoomTokenExpiry = 0;
+
+  async function getZoomAccessToken(): Promise<string | null> {
+    const accountId = process.env.ZOOM_ACCOUNT_ID;
+    const clientId = process.env.ZOOM_CLIENT_ID;
+    const clientSecret = process.env.ZOOM_CLIENT_SECRET;
+    if (!accountId || !clientId || !clientSecret) return null;
+
+    if (_zoomAccessToken && Date.now() < _zoomTokenExpiry) {
+      return _zoomAccessToken;
+    }
+
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      "base64",
+    );
+    const resp = await fetch(
+      `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${accountId}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      },
+    );
+    if (!resp.ok) {
+      console.error("Zoom token fetch failed:", resp.status, await resp.text());
+      return null;
+    }
+    const json = (await resp.json()) as {
+      access_token: string;
+      expires_in: number;
+    };
+    _zoomAccessToken = json.access_token;
+    _zoomTokenExpiry = Date.now() + (json.expires_in - 60) * 1000; // refresh 60s early
+    return _zoomAccessToken;
+  }
+
+  async function createZoomMeeting(opts: {
+    topic: string;
+    startDatetime: string; // ISO 8601 e.g. "2026-03-22T14:00:00"
+    durationMinutes: number;
+    timezone: string;
+  }): Promise<{
+    meeting_id: string;
+    join_url: string;
+    start_url: string;
+  } | null> {
+    const token = await getZoomAccessToken();
+    if (!token) return null;
+
+    const resp = await fetch("https://api.zoom.us/v2/users/me/meetings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: opts.topic,
+        type: 2, // scheduled
+        start_time: opts.startDatetime,
+        duration: opts.durationMinutes,
+        timezone: opts.timezone,
+        settings: {
+          waiting_room: false,
+          join_before_host: true,
+          mute_upon_entry: false,
+          participant_video: true,
+          host_video: true,
+        },
+      }),
+    });
+
+    if (!resp.ok) {
+      console.error(
+        "Zoom create meeting failed:",
+        resp.status,
+        await resp.text(),
+      );
+      return null;
+    }
+    const data = (await resp.json()) as {
+      id: number;
+      join_url: string;
+      start_url: string;
+    };
+    return {
+      meeting_id: String(data.id),
+      join_url: data.join_url,
+      start_url: data.start_url,
+    };
+  }
+
+  // ---- Helper: compute available slots for a given date ----
+
+  async function getAvailableSlotsForDate(
+    brokerId: number,
+    dateStr: string, // "YYYY-MM-DD"
+    slotMinutes: number,
+    bufferMinutes: number,
+    minBookingHours: number,
+  ): Promise<Array<{ time: string; end_time: string; available: boolean }>> {
+    const date = new Date(dateStr + "T00:00:00");
+    const dayOfWeek = date.getDay();
+
+    const [avRows] = await pool.query<RowDataPacket[]>(
+      `SELECT start_time, end_time FROM scheduler_availability
+       WHERE broker_id = ? AND day_of_week = ? AND is_active = 1`,
+      [brokerId, dayOfWeek],
+    );
+    if (!avRows.length) return [];
+
+    // Fetch already-booked slots for that day
+    const [bookedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT meeting_time, meeting_end_time FROM scheduled_meetings
+       WHERE broker_id = ? AND meeting_date = ? AND status NOT IN ('cancelled','no_show')`,
+      [brokerId, dateStr],
+    );
+
+    const now = new Date();
+    const minBookingMs = minBookingHours * 60 * 60 * 1000;
+
+    const slots: Array<{ time: string; end_time: string; available: boolean }> =
+      [];
+
+    for (const av of avRows) {
+      const [sh, sm] = (av.start_time as string).split(":").map(Number);
+      const [eh, em] = (av.end_time as string).split(":").map(Number);
+      let cursor = sh * 60 + sm;
+      const endMinutes = eh * 60 + em;
+
+      while (cursor + slotMinutes <= endMinutes) {
+        const slotH = Math.floor(cursor / 60);
+        const slotM = cursor % 60;
+        const endH = Math.floor((cursor + slotMinutes) / 60);
+        const endMinute = (cursor + slotMinutes) % 60;
+
+        const slotTime = `${String(slotH).padStart(2, "0")}:${String(slotM).padStart(2, "0")}`;
+        const slotEndTime = `${String(endH).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}`;
+
+        // Check minimum booking window
+        const slotDateTime = new Date(`${dateStr}T${slotTime}:00`);
+        const tooSoon = slotDateTime.getTime() - now.getTime() < minBookingMs;
+
+        // Check for conflict with existing meetings (include buffer)
+        const conflict = bookedRows.some((b) => {
+          const [bh, bm] = (b.meeting_time as string).split(":").map(Number);
+          const [beh, bem] = (b.meeting_end_time as string)
+            .split(":")
+            .map(Number);
+          const bookedStart = bh * 60 + bm - bufferMinutes;
+          const bookedEnd = beh * 60 + bem + bufferMinutes;
+          return cursor < bookedEnd && cursor + slotMinutes > bookedStart;
+        });
+
+        slots.push({
+          time: slotTime,
+          end_time: slotEndTime,
+          available: !tooSoon && !conflict,
+        });
+
+        cursor += slotMinutes;
+      }
+    }
+
+    return slots;
+  }
+
+  // ---- Public scheduler handlers ----
+
+  const handleGetPublicScheduler: RequestHandler = async (req, res) => {
+    try {
+      const { token } = req.params as { token?: string };
+
+      let brokerRow: RowDataPacket | null = null;
+
+      if (token) {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.tenant_id,
+                  bp.avatar_url, bp.years_experience
+           FROM brokers b
+           LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+           WHERE b.public_token = ? AND b.status = 'active' AND b.tenant_id = ?`,
+          [token, MORTGAGE_TENANT_ID],
+        );
+        brokerRow = rows[0] || null;
+      } else {
+        // Default: first active admin broker
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.tenant_id,
+                  bp.avatar_url, bp.years_experience
+           FROM brokers b
+           LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+           WHERE b.status = 'active' AND b.role = 'admin' AND b.tenant_id = ?
+           ORDER BY b.id ASC LIMIT 1`,
+          [MORTGAGE_TENANT_ID],
+        );
+        brokerRow = rows[0] || null;
+      }
+
+      if (!brokerRow) {
+        return res.status(404).json({
+          success: false,
+          error: "Broker not found or scheduler unavailable",
+        });
+      }
+
+      // Upsert default settings if missing
+      await pool.query(
+        `INSERT IGNORE INTO scheduler_settings
+           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video)
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1)`,
+        [MORTGAGE_TENANT_ID, brokerRow.id],
+      );
+
+      const [[settings]] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        [brokerRow.id, MORTGAGE_TENANT_ID],
+      );
+
+      if (!settings.is_enabled) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Scheduler not available" });
+      }
+
+      // Build list of available dates in the next advance_booking_days days
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const availableDates: string[] = [];
+
+      for (let i = 0; i < settings.advance_booking_days; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        const dateStr = d.toISOString().split("T")[0];
+        const slots = await getAvailableSlotsForDate(
+          brokerRow.id,
+          dateStr,
+          settings.slot_duration_minutes,
+          settings.buffer_time_minutes,
+          settings.min_booking_hours,
+        );
+        if (slots.some((s) => s.available)) {
+          availableDates.push(dateStr);
+        }
+      }
+
+      return res.json({
+        success: true,
+        broker: {
+          broker_id: brokerRow.id,
+          first_name: brokerRow.first_name,
+          last_name: brokerRow.last_name,
+          email: brokerRow.email,
+          phone: brokerRow.phone,
+          avatar_url: brokerRow.avatar_url,
+          years_experience: brokerRow.years_experience,
+          meeting_title: settings.meeting_title,
+          meeting_description: settings.meeting_description,
+          slot_duration_minutes: settings.slot_duration_minutes,
+          advance_booking_days: settings.advance_booking_days,
+          min_booking_hours: settings.min_booking_hours,
+          timezone: settings.timezone,
+          allow_phone: !!settings.allow_phone,
+          allow_video: !!settings.allow_video,
+          is_enabled: !!settings.is_enabled,
+        },
+        available_dates: availableDates,
+      });
+    } catch (err) {
+      console.error("handleGetPublicScheduler error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleGetPublicSlots: RequestHandler = async (req, res) => {
+    try {
+      const { token } = req.params as { token: string };
+      const { date } = req.query as { date?: string };
+
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({
+          success: false,
+          error: "date query param required (YYYY-MM-DD)",
+        });
+      }
+
+      let brokerId: number;
+      if (token === "default") {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT id FROM brokers WHERE status = 'active' AND role = 'admin' AND tenant_id = ? ORDER BY id ASC LIMIT 1`,
+          [MORTGAGE_TENANT_ID],
+        );
+        if (!rows[0])
+          return res
+            .status(404)
+            .json({ success: false, error: "No broker found" });
+        brokerId = rows[0].id;
+      } else {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT id FROM brokers WHERE public_token = ? AND status = 'active' AND tenant_id = ?`,
+          [token, MORTGAGE_TENANT_ID],
+        );
+        if (!rows[0])
+          return res
+            .status(404)
+            .json({ success: false, error: "Broker not found" });
+        brokerId = rows[0].id;
+      }
+
+      const [[settings]] = await pool.query<RowDataPacket[]>(
+        `SELECT slot_duration_minutes, buffer_time_minutes, min_booking_hours FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        [brokerId, MORTGAGE_TENANT_ID],
+      );
+      if (!settings)
+        return res
+          .status(404)
+          .json({ success: false, error: "Scheduler not configured" });
+
+      const slots = await getAvailableSlotsForDate(
+        brokerId,
+        date,
+        settings.slot_duration_minutes,
+        settings.buffer_time_minutes,
+        settings.min_booking_hours,
+      );
+
+      return res.json({ success: true, slots });
+    } catch (err) {
+      console.error("handleGetPublicSlots error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleBookMeeting: RequestHandler = async (req, res) => {
+    try {
+      const {
+        broker_token,
+        client_name,
+        client_email,
+        client_phone,
+        meeting_date,
+        meeting_time,
+        meeting_type,
+        notes,
+      } = req.body as {
+        broker_token?: string;
+        client_name?: string;
+        client_email?: string;
+        client_phone?: string;
+        meeting_date?: string;
+        meeting_time?: string;
+        meeting_type?: "phone" | "video";
+        notes?: string;
+      };
+
+      if (
+        !broker_token ||
+        !client_name ||
+        !client_email ||
+        !meeting_date ||
+        !meeting_time ||
+        !meeting_type
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "broker_token, client_name, client_email, meeting_date, meeting_time, and meeting_type are required",
+        });
+      }
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(meeting_date)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "meeting_date must be YYYY-MM-DD" });
+      }
+      if (!/^\d{2}:\d{2}$/.test(meeting_time)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "meeting_time must be HH:MM" });
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(client_email)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid email address" });
+      }
+
+      let brokerId: number;
+      let brokerData: RowDataPacket;
+
+      if (broker_token === "default") {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token
+           FROM brokers b WHERE b.status = 'active' AND b.role = 'admin' AND b.tenant_id = ?
+           ORDER BY b.id ASC LIMIT 1`,
+          [MORTGAGE_TENANT_ID],
+        );
+        if (!rows[0])
+          return res
+            .status(404)
+            .json({ success: false, error: "No broker available" });
+        brokerData = rows[0];
+      } else {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token
+           FROM brokers b WHERE b.public_token = ? AND b.status = 'active' AND b.tenant_id = ?`,
+          [broker_token, MORTGAGE_TENANT_ID],
+        );
+        if (!rows[0])
+          return res
+            .status(404)
+            .json({ success: false, error: "Broker not found" });
+        brokerData = rows[0];
+      }
+
+      brokerId = brokerData.id;
+
+      const [[settings]] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        [brokerId, MORTGAGE_TENANT_ID],
+      );
+
+      if (!settings || !settings.is_enabled) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Scheduler is not available" });
+      }
+
+      if (meeting_type === "phone" && !settings.allow_phone) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Phone meetings are not available" });
+      }
+      if (meeting_type === "video" && !settings.allow_video) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Video meetings are not available" });
+      }
+
+      // Validate slot is truly available
+      const allSlots = await getAvailableSlotsForDate(
+        brokerId,
+        meeting_date,
+        settings.slot_duration_minutes,
+        settings.buffer_time_minutes,
+        settings.min_booking_hours,
+      );
+
+      const requestedSlot = allSlots.find((s) => s.time === meeting_time);
+      if (!requestedSlot) {
+        return res
+          .status(400)
+          .json({ success: false, error: "This time slot is not available" });
+      }
+      if (!requestedSlot.available) {
+        return res
+          .status(409)
+          .json({ success: false, error: "This time slot is already taken" });
+      }
+
+      const bookingToken = crypto.randomUUID();
+
+      // Create Zoom meeting for video calls; fall back gracefully if Zoom is not configured
+      let zoomMeetingId: string | null = null;
+      let zoomJoinUrl: string | null = null;
+      let zoomStartUrl: string | null = null;
+
+      if (meeting_type === "video") {
+        const zoomMeeting = await createZoomMeeting({
+          topic: settings.meeting_title || "Mortgage Consultation",
+          startDatetime: `${meeting_date}T${meeting_time}:00`,
+          durationMinutes: settings.slot_duration_minutes,
+          timezone: settings.timezone || "America/Chicago",
+        });
+        if (zoomMeeting) {
+          zoomMeetingId = zoomMeeting.meeting_id;
+          zoomJoinUrl = zoomMeeting.join_url;
+          zoomStartUrl = zoomMeeting.start_url;
+        }
+      }
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO scheduled_meetings
+           (tenant_id, broker_id, client_name, client_email, client_phone,
+            meeting_date, meeting_time, meeting_end_time, meeting_type, jitsi_room_id,
+            zoom_meeting_id, zoom_join_url, zoom_start_url,
+            status, notes, booking_token, public_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          brokerId,
+          client_name.trim(),
+          client_email.trim().toLowerCase(),
+          client_phone || null,
+          meeting_date,
+          meeting_time + ":00",
+          requestedSlot.end_time + ":00",
+          meeting_type,
+          zoomMeetingId,
+          zoomJoinUrl,
+          zoomStartUrl,
+          notes || null,
+          bookingToken,
+          brokerData.public_token,
+        ],
+      );
+
+      const brokerName = `${brokerData.first_name} ${brokerData.last_name}`;
+
+      // Send emails (non-blocking — don't fail booking if email fails)
+      sendMeetingConfirmationToClient({
+        email: client_email.trim().toLowerCase(),
+        clientName: client_name.trim(),
+        brokerName,
+        meetingDate: meeting_date,
+        meetingTime: meeting_time,
+        meetingEndTime: requestedSlot.end_time,
+        meetingType: meeting_type,
+        videoRoomUrl: zoomJoinUrl,
+        brokerPhone: brokerData.phone,
+        bookingToken,
+        notes: notes || null,
+      }).catch((e) => console.error("Meeting confirmation email error:", e));
+
+      sendMeetingNotificationToBroker({
+        brokerEmail: brokerData.email,
+        brokerName,
+        clientName: client_name.trim(),
+        clientEmail: client_email.trim().toLowerCase(),
+        clientPhone: client_phone || null,
+        meetingDate: meeting_date,
+        meetingTime: meeting_time,
+        meetingEndTime: requestedSlot.end_time,
+        meetingType: meeting_type,
+        videoRoomUrl: zoomJoinUrl,
+        zoomStartUrl,
+        notes: notes || null,
+        meetingId: result.insertId,
+      }).catch((e) => console.error("Broker notification email error:", e));
+
+      return res.json({
+        success: true,
+        meeting_id: result.insertId,
+        booking_token: bookingToken,
+        zoom_join_url: zoomJoinUrl,
+        zoom_start_url: zoomStartUrl,
+        meeting_date,
+        meeting_time,
+        meeting_type,
+        broker_name: brokerName,
+      });
+    } catch (err) {
+      console.error("handleBookMeeting error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleCancelMeetingByToken: RequestHandler = async (req, res) => {
+    try {
+      const { bookingToken } = req.params as { bookingToken: string };
+      const { reason } = req.body as { reason?: string };
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT sm.*, b.first_name, b.last_name, b.email AS broker_email, b.phone AS broker_phone
+         FROM scheduled_meetings sm
+         LEFT JOIN brokers b ON b.id = sm.broker_id
+         WHERE sm.booking_token = ? AND sm.tenant_id = ?`,
+        [bookingToken, MORTGAGE_TENANT_ID],
+      );
+
+      if (!rows[0]) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Meeting not found" });
+      }
+
+      const meeting = rows[0];
+
+      if (meeting.status === "cancelled") {
+        return res
+          .status(400)
+          .json({ success: false, error: "Meeting is already cancelled" });
+      }
+
+      await pool.query(
+        `UPDATE scheduled_meetings
+         SET status = 'cancelled', cancelled_by = 'client', cancelled_reason = ?, cancelled_at = NOW()
+         WHERE booking_token = ? AND tenant_id = ?`,
+        [reason || null, bookingToken, MORTGAGE_TENANT_ID],
+      );
+
+      const brokerName = meeting.first_name
+        ? `${meeting.first_name} ${meeting.last_name}`
+        : "Your Mortgage Banker";
+
+      sendMeetingCancellationEmail({
+        email: meeting.client_email,
+        clientName: meeting.client_name,
+        brokerName,
+        meetingDate: meeting.meeting_date,
+        meetingTime: meeting.meeting_time,
+        cancelledBy: "client",
+        reason: reason || null,
+      }).catch((e) => console.error("Cancellation email error:", e));
+
+      return res.json({
+        success: true,
+        message: "Meeting cancelled successfully",
+      });
+    } catch (err) {
+      console.error("handleCancelMeetingByToken error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  // ---- Admin scheduler handlers ----
+
+  const handleGetSchedulerSettings: RequestHandler = async (req, res) => {
+    try {
+      const reqBrokerId = (req as any).brokerId as number;
+
+      await pool.query(
+        `INSERT INTO scheduler_settings
+           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video)
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1)
+         ON DUPLICATE KEY UPDATE updated_at = updated_at`,
+        [MORTGAGE_TENANT_ID, reqBrokerId],
+      );
+
+      const [[settings]] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        [reqBrokerId, MORTGAGE_TENANT_ID],
+      );
+
+      if (!settings) {
+        return res.status(404).json({
+          success: false,
+          error:
+            "Scheduler settings not found for this broker. Ensure the broker exists and migrations have been applied.",
+        });
+      }
+
+      const [availability] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM scheduler_availability WHERE broker_id = ? AND tenant_id = ? ORDER BY day_of_week ASC`,
+        [reqBrokerId, MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({
+        success: true,
+        settings: {
+          ...settings,
+          is_enabled: !!settings.is_enabled,
+          allow_phone: !!settings.allow_phone,
+          allow_video: !!settings.allow_video,
+        },
+        availability: availability.map((a) => ({
+          ...a,
+          is_active: !!a.is_active,
+        })),
+      });
+    } catch (err) {
+      console.error("handleGetSchedulerSettings error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleUpdateSchedulerSettings: RequestHandler = async (req, res) => {
+    try {
+      const { brokerId: reqBrokerId } = (req as any).broker as {
+        brokerId: number;
+      };
+      const {
+        is_enabled,
+        meeting_title,
+        meeting_description,
+        slot_duration_minutes,
+        buffer_time_minutes,
+        advance_booking_days,
+        min_booking_hours,
+        timezone,
+        allow_phone,
+        allow_video,
+        availability,
+      } = req.body as {
+        is_enabled?: boolean;
+        meeting_title?: string;
+        meeting_description?: string;
+        slot_duration_minutes?: number;
+        buffer_time_minutes?: number;
+        advance_booking_days?: number;
+        min_booking_hours?: number;
+        timezone?: string;
+        allow_phone?: boolean;
+        allow_video?: boolean;
+        availability?: Array<{
+          day_of_week: number;
+          start_time: string;
+          end_time: string;
+          is_active: boolean;
+        }>;
+      };
+
+      await pool.query(
+        `INSERT INTO scheduler_settings
+           (tenant_id, broker_id, is_enabled, meeting_title, meeting_description,
+            slot_duration_minutes, buffer_time_minutes, advance_booking_days,
+            min_booking_hours, timezone, allow_phone, allow_video)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           is_enabled = COALESCE(VALUES(is_enabled), is_enabled),
+           meeting_title = COALESCE(VALUES(meeting_title), meeting_title),
+           meeting_description = VALUES(meeting_description),
+           slot_duration_minutes = COALESCE(VALUES(slot_duration_minutes), slot_duration_minutes),
+           buffer_time_minutes = COALESCE(VALUES(buffer_time_minutes), buffer_time_minutes),
+           advance_booking_days = COALESCE(VALUES(advance_booking_days), advance_booking_days),
+           min_booking_hours = COALESCE(VALUES(min_booking_hours), min_booking_hours),
+           timezone = COALESCE(VALUES(timezone), timezone),
+           allow_phone = COALESCE(VALUES(allow_phone), allow_phone),
+           allow_video = COALESCE(VALUES(allow_video), allow_video)`,
+        [
+          MORTGAGE_TENANT_ID,
+          reqBrokerId,
+          is_enabled !== undefined ? (is_enabled ? 1 : 0) : null,
+          meeting_title || null,
+          meeting_description || null,
+          slot_duration_minutes || null,
+          buffer_time_minutes || null,
+          advance_booking_days || null,
+          min_booking_hours || null,
+          timezone || null,
+          allow_phone !== undefined ? (allow_phone ? 1 : 0) : null,
+          allow_video !== undefined ? (allow_video ? 1 : 0) : null,
+        ],
+      );
+
+      if (availability && Array.isArray(availability)) {
+        // Replace all availability rows for this broker
+        await pool.query(
+          `DELETE FROM scheduler_availability WHERE broker_id = ? AND tenant_id = ?`,
+          [reqBrokerId, MORTGAGE_TENANT_ID],
+        );
+        for (const av of availability) {
+          if (
+            av.day_of_week >= 0 &&
+            av.day_of_week <= 6 &&
+            av.start_time &&
+            av.end_time
+          ) {
+            await pool.query(
+              `INSERT INTO scheduler_availability (tenant_id, broker_id, day_of_week, start_time, end_time, is_active)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                MORTGAGE_TENANT_ID,
+                reqBrokerId,
+                av.day_of_week,
+                av.start_time,
+                av.end_time,
+                av.is_active ? 1 : 0,
+              ],
+            );
+          }
+        }
+      }
+
+      return res.json({ success: true, message: "Scheduler settings updated" });
+    } catch (err) {
+      console.error("handleUpdateSchedulerSettings error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleGetScheduledMeetings: RequestHandler = async (req, res) => {
+    try {
+      const { brokerId: reqBrokerId, role } = (req as any).broker as {
+        brokerId: number;
+        role: string;
+      };
+      const { status, from, to, broker_id } = req.query as {
+        status?: string;
+        from?: string;
+        to?: string;
+        broker_id?: string;
+      };
+
+      let whereClause = `sm.tenant_id = ?`;
+      const params: any[] = [MORTGAGE_TENANT_ID];
+
+      // Admins can see all, partners only see their own
+      if (role !== "admin") {
+        whereClause += ` AND sm.broker_id = ?`;
+        params.push(reqBrokerId);
+      } else if (broker_id) {
+        whereClause += ` AND sm.broker_id = ?`;
+        params.push(parseInt(broker_id));
+      }
+
+      if (status) {
+        whereClause += ` AND sm.status = ?`;
+        params.push(status);
+      }
+      if (from) {
+        whereClause += ` AND sm.meeting_date >= ?`;
+        params.push(from);
+      }
+      if (to) {
+        whereClause += ` AND sm.meeting_date <= ?`;
+        params.push(to);
+      }
+
+      const [meetings] = await pool.query<RowDataPacket[]>(
+        `SELECT sm.*, b.first_name AS broker_first_name, b.last_name AS broker_last_name
+         FROM scheduled_meetings sm
+         LEFT JOIN brokers b ON b.id = sm.broker_id
+         WHERE ${whereClause}
+         ORDER BY sm.meeting_date ASC, sm.meeting_time ASC`,
+        params,
+      );
+
+      return res.json({
+        success: true,
+        meetings: meetings.map((m) => ({
+          ...m,
+          meeting_date:
+            m.meeting_date instanceof Date
+              ? m.meeting_date.toISOString().split("T")[0]
+              : m.meeting_date,
+        })),
+        total: meetings.length,
+      });
+    } catch (err) {
+      console.error("handleGetScheduledMeetings error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleUpdateScheduledMeeting: RequestHandler = async (req, res) => {
+    try {
+      const { meetingId } = req.params as { meetingId: string };
+      const { brokerId: reqBrokerId, role } = (req as any).broker as {
+        brokerId: number;
+        role: string;
+      };
+      const {
+        status,
+        broker_notes,
+        meeting_date,
+        meeting_time,
+        meeting_type,
+        cancelled_reason,
+        cancelled_by,
+      } = req.body as {
+        status?: string;
+        broker_notes?: string;
+        meeting_date?: string;
+        meeting_time?: string;
+        meeting_type?: "phone" | "video";
+        cancelled_reason?: string;
+        cancelled_by?: "client" | "broker";
+      };
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT sm.*, b.first_name, b.last_name, b.email AS broker_email
+         FROM scheduled_meetings sm
+         LEFT JOIN brokers b ON b.id = sm.broker_id
+         WHERE sm.id = ? AND sm.tenant_id = ?`,
+        [parseInt(meetingId), MORTGAGE_TENANT_ID],
+      );
+
+      if (!rows[0]) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Meeting not found" });
+      }
+
+      const meeting = rows[0];
+
+      if (role !== "admin" && meeting.broker_id !== reqBrokerId) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const updates: string[] = [];
+      const updateParams: any[] = [];
+
+      if (status !== undefined) {
+        updates.push("status = ?");
+        updateParams.push(status);
+      }
+      if (broker_notes !== undefined) {
+        updates.push("broker_notes = ?");
+        updateParams.push(broker_notes);
+      }
+      if (meeting_date !== undefined) {
+        updates.push("meeting_date = ?");
+        updateParams.push(meeting_date);
+      }
+      if (meeting_type !== undefined) {
+        updates.push("meeting_type = ?");
+        updateParams.push(meeting_type);
+      }
+      if (cancelled_reason !== undefined) {
+        updates.push("cancelled_reason = ?");
+        updateParams.push(cancelled_reason);
+      }
+      if (cancelled_by !== undefined) {
+        updates.push("cancelled_by = ?");
+        updateParams.push(cancelled_by);
+      }
+
+      // If rescheduling, recalculate end time
+      if (meeting_time !== undefined) {
+        const [[settings]] = await pool.query<RowDataPacket[]>(
+          `SELECT slot_duration_minutes FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+          [meeting.broker_id, MORTGAGE_TENANT_ID],
+        );
+        const dur = settings?.slot_duration_minutes || 30;
+        const [mh, mm] = meeting_time.split(":").map(Number);
+        const endMin = mh * 60 + mm + dur;
+        const endTime = `${String(Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}:00`;
+        updates.push("meeting_time = ?", "meeting_end_time = ?");
+        updateParams.push(meeting_time + ":00", endTime);
+      }
+
+      if (status === "cancelled") {
+        updates.push("cancelled_at = NOW()");
+        if (!cancelled_by) {
+          updates.push("cancelled_by = ?");
+          updateParams.push("broker");
+        }
+      }
+
+      if (updates.length === 0) {
+        return res
+          .status(400)
+          .json({ success: false, error: "No fields to update" });
+      }
+
+      updateParams.push(parseInt(meetingId), MORTGAGE_TENANT_ID);
+      await pool.query(
+        `UPDATE scheduled_meetings SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
+        updateParams,
+      );
+
+      // Send cancellation email if status changed to cancelled
+      if (status === "cancelled") {
+        const brokerName = meeting.first_name
+          ? `${meeting.first_name} ${meeting.last_name}`
+          : "Your Mortgage Banker";
+        const meetingDateStr =
+          meeting.meeting_date instanceof Date
+            ? meeting.meeting_date.toISOString().split("T")[0]
+            : meeting.meeting_date;
+
+        sendMeetingCancellationEmail({
+          email: meeting.client_email,
+          clientName: meeting.client_name,
+          brokerName,
+          meetingDate: meetingDateStr,
+          meetingTime: meeting.meeting_time,
+          cancelledBy: "broker",
+          reason: cancelled_reason || null,
+        }).catch((e) => console.error("Cancellation email error:", e));
+      }
+
+      return res.json({ success: true, message: "Meeting updated" });
+    } catch (err) {
+      console.error("handleUpdateScheduledMeeting error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleCreateScheduledMeeting: RequestHandler = async (req, res) => {
+    try {
+      const { brokerId: reqBrokerId } = (req as any).broker as {
+        brokerId: number;
+      };
+      const {
+        client_name,
+        client_email,
+        client_phone,
+        meeting_date,
+        meeting_time,
+        meeting_type,
+        notes,
+        target_broker_id,
+      } = req.body as {
+        client_name?: string;
+        client_email?: string;
+        client_phone?: string;
+        meeting_date?: string;
+        meeting_time?: string;
+        meeting_type?: "phone" | "video";
+        notes?: string;
+        target_broker_id?: number;
+      };
+
+      if (
+        !client_name ||
+        !client_email ||
+        !meeting_date ||
+        !meeting_time ||
+        !meeting_type
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "client_name, client_email, meeting_date, meeting_time, and meeting_type are required",
+        });
+      }
+
+      const effectiveBrokerId = target_broker_id || reqBrokerId;
+
+      const [[settings]] = await pool.query<RowDataPacket[]>(
+        `SELECT slot_duration_minutes FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        [effectiveBrokerId, MORTGAGE_TENANT_ID],
+      );
+      const dur = settings?.slot_duration_minutes || 30;
+      const [mh, mm] = meeting_time.split(":").map(Number);
+      const endMin = mh * 60 + mm + dur;
+      const endTime = `${String(Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}:00`;
+
+      const bookingToken = crypto.randomUUID();
+      const jitsiRoomId =
+        meeting_type === "video"
+          ? `encore-${crypto.randomBytes(8).toString("hex")}`
+          : null;
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO scheduled_meetings
+           (tenant_id, broker_id, client_name, client_email, client_phone,
+            meeting_date, meeting_time, meeting_end_time, meeting_type, jitsi_room_id,
+            status, notes, booking_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          effectiveBrokerId,
+          client_name.trim(),
+          client_email.trim().toLowerCase(),
+          client_phone || null,
+          meeting_date,
+          meeting_time + ":00",
+          endTime,
+          meeting_type,
+          jitsiRoomId,
+          notes || null,
+          bookingToken,
+        ],
+      );
+
+      return res.json({
+        success: true,
+        meeting_id: result.insertId,
+        booking_token: bookingToken,
+        jitsi_room_url: jitsiRoomId
+          ? `https://meet.jit.si/${jitsiRoomId}`
+          : null,
+      });
+    } catch (err) {
+      console.error("handleCreateScheduledMeeting error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  // Register routes
+  // Public
+  expressApp.get("/api/public/scheduler", handleGetPublicScheduler);
+  expressApp.get("/api/public/scheduler/:token", handleGetPublicScheduler);
+  expressApp.get("/api/public/scheduler/:token/slots", handleGetPublicSlots);
+  expressApp.post("/api/public/scheduler/book", handleBookMeeting);
+  expressApp.post(
+    "/api/public/scheduler/cancel/:bookingToken",
+    handleCancelMeetingByToken,
+  );
+
+  // Admin (authenticated)
+  expressApp.get(
+    "/api/scheduler/settings",
+    verifyBrokerSession,
+    handleGetSchedulerSettings,
+  );
+  expressApp.put(
+    "/api/scheduler/settings",
+    verifyBrokerSession,
+    handleUpdateSchedulerSettings,
+  );
+  expressApp.get(
+    "/api/scheduler/meetings",
+    verifyBrokerSession,
+    handleGetScheduledMeetings,
+  );
+  expressApp.post(
+    "/api/scheduler/meetings",
+    verifyBrokerSession,
+    handleCreateScheduledMeeting,
+  );
+  expressApp.put(
+    "/api/scheduler/meetings/:meetingId",
+    verifyBrokerSession,
+    handleUpdateScheduledMeeting,
   );
 
   // ─── Contact Form ────────────────────────────────────────────────────────

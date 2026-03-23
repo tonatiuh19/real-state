@@ -22,6 +22,7 @@ interface BrokerUser {
   specializations?: string[];
   email_verified: boolean;
   last_login?: string;
+  public_token?: string | null;
   // profile fields
   avatar_url?: string | null;
   bio?: string | null;
@@ -70,9 +71,18 @@ const initialState: BrokerAuthState = {
 // Async thunks
 export const sendVerificationCode = createAsyncThunk(
   "brokerAuth/sendCode",
-  async (email: string, { rejectWithValue }) => {
+  async (
+    {
+      email,
+      delivery_method = "email",
+    }: { email: string; delivery_method?: "email" | "sms" },
+    { rejectWithValue },
+  ) => {
     try {
-      const response = await axios.post("/api/admin/auth/send-code", { email });
+      const response = await axios.post("/api/admin/auth/send-code", {
+        email,
+        delivery_method,
+      });
       return response.data;
     } catch (error: any) {
       return rejectWithValue(
