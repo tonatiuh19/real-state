@@ -5,7 +5,12 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, useLocation, useNavigate } from "react-router-dom";
+import {
+  BrowserRouter,
+  Navigate,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { Provider } from "react-redux";
 import { HelmetProvider } from "react-helmet-async";
 import { store } from "./store";
@@ -33,32 +38,29 @@ const ScrollToHash = () => {
   return null;
 };
 
-// Detects subdomain and enforces route scope:
+// Detects subdomain and enforces route scope synchronously (no flash):
 // admin.* → only /admin and /broker-login are accessible
 // portal.* → only /portal, /client-login, /wizard, /apply are accessible
-const SubdomainRedirect = () => {
-  const navigate = useNavigate();
+// Wraps children so the redirect happens in the same render pass — no useEffect delay.
+const SubdomainGate = ({ children }: { children: React.ReactNode }) => {
   const { pathname } = useLocation();
+  const subdomain = window.location.hostname.split(".")[0];
 
-  useEffect(() => {
-    const subdomain = window.location.hostname.split(".")[0];
+  if (subdomain === "admin") {
+    const allowed =
+      pathname.startsWith("/admin") || pathname.startsWith("/broker-login");
+    if (!allowed) return <Navigate to="/admin" replace />;
+  } else if (subdomain === "portal") {
+    const allowed =
+      pathname.startsWith("/portal") ||
+      pathname.startsWith("/client-login") ||
+      pathname.startsWith("/wizard") ||
+      pathname.startsWith("/apply") ||
+      pathname.startsWith("/scheduler");
+    if (!allowed) return <Navigate to="/portal" replace />;
+  }
 
-    if (subdomain === "admin") {
-      const allowed =
-        pathname.startsWith("/admin") || pathname.startsWith("/broker-login");
-      if (!allowed) navigate("/admin", { replace: true });
-    } else if (subdomain === "portal") {
-      const allowed =
-        pathname.startsWith("/portal") ||
-        pathname.startsWith("/client-login") ||
-        pathname.startsWith("/wizard") ||
-        pathname.startsWith("/apply") ||
-        pathname.startsWith("/scheduler");
-      if (!allowed) navigate("/portal", { replace: true });
-    }
-  }, [pathname, navigate]);
-
-  return null;
+  return <>{children}</>;
 };
 
 const AppContent = () => {
@@ -79,8 +81,9 @@ const AppContent = () => {
   return (
     <>
       <ScrollToHash />
-      <SubdomainRedirect />
-      <AppRoutes />
+      <SubdomainGate>
+        <AppRoutes />
+      </SubdomainGate>
     </>
   );
 };
