@@ -486,7 +486,12 @@ function EditMeetingDialog({
               {meeting.client_phone && (
                 <span className="flex items-center gap-1.5">
                   <Phone className="h-3 w-3 text-primary" />
-                  {meeting.client_phone}
+                  <a
+                    href={`tel:${meeting.client_phone}`}
+                    className="hover:underline"
+                  >
+                    {meeting.client_phone}
+                  </a>
                 </span>
               )}
               {meeting.zoom_join_url && (

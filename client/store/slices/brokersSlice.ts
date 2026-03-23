@@ -12,11 +12,13 @@ import type {
   UpdateBrokerProfileRequest,
   UpdateBrokerProfileResponse,
   AdminBrokerShareLinkResponse,
+  PaginationInfo,
 } from "@shared/api";
 import type { RootState } from "../index";
 
 interface BrokersState {
   brokers: Broker[];
+  pagination: PaginationInfo | null;
   isLoading: boolean;
   error: string | null;
   // Selected broker profile (for admin editing)
@@ -29,6 +31,7 @@ interface BrokersState {
 
 const initialState: BrokersState = {
   brokers: [],
+  pagination: null,
   isLoading: false,
   error: null,
   selectedBrokerProfile: null,
@@ -37,15 +40,24 @@ const initialState: BrokersState = {
   shareLinkLoading: false,
 };
 
+interface FetchBrokersParams {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+  search?: string;
+}
+
 export const fetchBrokers = createAsyncThunk(
   "brokers/fetchBrokers",
-  async (_, { getState, rejectWithValue }) => {
+  async (params: FetchBrokersParams = {}, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.get<GetBrokersResponse>("/api/brokers", {
         headers: { Authorization: `Bearer ${sessionToken}` },
+        params,
       });
-      return data.brokers;
+      return { brokers: data.brokers, pagination: data.pagination };
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch brokers",
@@ -249,7 +261,8 @@ const brokersSlice = createSlice({
       })
       .addCase(fetchBrokers.fulfilled, (state, action) => {
         state.isLoading = false;
-        state.brokers = action.payload;
+        state.brokers = action.payload.brokers;
+        state.pagination = action.payload.pagination;
       })
       .addCase(fetchBrokers.rejected, (state, action) => {
         state.isLoading = false;

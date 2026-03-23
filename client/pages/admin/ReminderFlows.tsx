@@ -52,6 +52,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
+import { DataGrid } from "@/components/ui/data-grid";
+import type { DataGridColumn } from "@/components/ui/data-grid";
+import type { ReminderFlowExecution } from "@shared/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1758,9 +1761,35 @@ function FlowCard({ flow, onEdit, onToggle, onDelete }: FlowCardProps) {
 const ReminderFlows = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const { flows, selectedFlow, isLoading, executions } = useAppSelector(
-    (s) => s.reminderFlows,
+  const {
+    flows,
+    selectedFlow,
+    isLoading,
+    executions,
+    pagination: execPagination,
+  } = useAppSelector((s) => s.reminderFlows);
+
+  const [execSortBy, setExecSortBy] = useState("flow_name");
+  const [execSortDir, setExecSortDir] = useState<"ASC" | "DESC">("ASC");
+
+  const doFetchExec = useCallback(
+    (params: {
+      page?: number;
+      sortBy?: string;
+      sortOrder?: "ASC" | "DESC";
+    }) => {
+      dispatch(fetchReminderFlowExecutions({ limit: 30, ...params }));
+    },
+    [dispatch],
   );
+
+  const handleExecSort = (field: string) => {
+    const newDir =
+      execSortBy === field && execSortDir === "ASC" ? "DESC" : "ASC";
+    setExecSortBy(field);
+    setExecSortDir(newDir);
+    doFetchExec({ page: 1, sortBy: field, sortOrder: newDir });
+  };
 
   const [view, setView] = useState<"list" | "editor">("list");
   const [tab, setTab] = useState<"flows" | "executions">("flows");
@@ -1777,7 +1806,7 @@ const ReminderFlows = () => {
 
   useEffect(() => {
     dispatch(fetchReminderFlows());
-    dispatch(fetchReminderFlowExecutions({}));
+    doFetchExec({ sortBy: execSortBy, sortOrder: execSortDir });
   }, [dispatch]);
 
   const handleEditFlow = async (flowId: number) => {
@@ -1858,6 +1887,73 @@ const ReminderFlows = () => {
     cancelled: "bg-gray-100 text-gray-600 border-gray-300",
     failed: "bg-red-100 text-red-700 border-red-300",
   };
+
+  const executionColumns: DataGridColumn<ReminderFlowExecution>[] = [
+    {
+      key: "flow_name",
+      label: "Flow",
+      sortable: true,
+      className: "font-medium text-xs",
+      render: (ex) => (
+        <span className="font-medium text-xs">{ex.flow_name}</span>
+      ),
+    },
+    {
+      key: "client_name",
+      label: "Client",
+      sortable: true,
+      className: "text-xs",
+      render: (ex) => <span className="text-xs">{ex.client_name ?? "—"}</span>,
+    },
+    {
+      key: "application_number",
+      label: "Application",
+      sortable: true,
+      className: "text-xs text-muted-foreground",
+      render: (ex) => (
+        <span className="text-xs text-muted-foreground">
+          {ex.application_number ?? "—"}
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      sortable: true,
+      render: (ex) => (
+        <Badge
+          variant="outline"
+          className={cn("text-[10px]", executionStatusColor[ex.status])}
+        >
+          {ex.status}
+        </Badge>
+      ),
+    },
+    {
+      key: "current_step_key",
+      label: "Current Step",
+      sortable: false,
+      className: "text-xs text-muted-foreground font-mono",
+      render: (ex) => (
+        <span className="text-xs text-muted-foreground font-mono">
+          {ex.current_step_key ?? "—"}
+        </span>
+      ),
+    },
+    {
+      key: "next_execution_at",
+      label: "Next Run",
+      sortable: true,
+      className: "text-xs text-muted-foreground",
+      render: (ex) => (
+        <span className="text-xs text-muted-foreground">
+          {ex.next_execution_at
+            ? new Date(ex.next_execution_at).toLocaleDateString()
+            : "—"}
+        </span>
+      ),
+    },
+  ];
 
   // ── Editor view ────────────────────────────────────────────────
   if (view === "editor" && selectedFlow) {
@@ -1998,99 +2094,77 @@ const ReminderFlows = () => {
 
           {/* ── EXECUTIONS TAB ────────────────────────────────────── */}
           <TabsContent value="executions">
-            {executions.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="p-5 rounded-2xl bg-muted mb-4">
-                  <Activity className="h-10 w-10 text-muted-foreground/50" />
-                </div>
-                <h3 className="text-lg font-semibold mb-1">
-                  No executions yet
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Executions will appear here when flows start running for
-                  loans.
-                </p>
-              </div>
-            ) : (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <LayoutList className="h-4 w-4 text-primary" />
-                    Flow Executions
-                  </CardTitle>
-                  <CardDescription>
-                    Active and historical reminder flow executions per loan
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left">
-                          <th className="pb-2 pr-4 font-medium text-muted-foreground text-xs">
-                            Flow
-                          </th>
-                          <th className="pb-2 pr-4 font-medium text-muted-foreground text-xs">
-                            Client
-                          </th>
-                          <th className="pb-2 pr-4 font-medium text-muted-foreground text-xs">
-                            Application
-                          </th>
-                          <th className="pb-2 pr-4 font-medium text-muted-foreground text-xs">
-                            Status
-                          </th>
-                          <th className="pb-2 pr-4 font-medium text-muted-foreground text-xs">
-                            Current Step
-                          </th>
-                          <th className="pb-2 font-medium text-muted-foreground text-xs">
-                            Next Run
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {executions.map((ex) => (
-                          <tr
-                            key={ex.id}
-                            className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                          >
-                            <td className="py-2.5 pr-4 font-medium text-xs">
-                              {ex.flow_name}
-                            </td>
-                            <td className="py-2.5 pr-4 text-xs">
-                              {ex.client_name ?? "—"}
-                            </td>
-                            <td className="py-2.5 pr-4 text-xs text-muted-foreground">
-                              {ex.application_number ?? "—"}
-                            </td>
-                            <td className="py-2.5 pr-4">
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-[10px]",
-                                  executionStatusColor[ex.status],
-                                )}
-                              >
-                                {ex.status}
-                              </Badge>
-                            </td>
-                            <td className="py-2.5 pr-4 text-xs text-muted-foreground font-mono">
-                              {ex.current_step_key ?? "—"}
-                            </td>
-                            <td className="py-2.5 text-xs text-muted-foreground">
-                              {ex.next_execution_at
-                                ? new Date(
-                                    ex.next_execution_at,
-                                  ).toLocaleDateString()
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <LayoutList className="h-4 w-4 text-primary" />
+                  Flow Executions
+                </CardTitle>
+                <CardDescription>
+                  Active and historical reminder flow executions per loan
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <DataGrid<ReminderFlowExecution>
+                  data={executions}
+                  columns={executionColumns}
+                  rowKey={(ex) => ex.id}
+                  sortBy={execSortBy}
+                  sortDir={execSortDir}
+                  onSort={handleExecSort}
+                  pagination={execPagination}
+                  onPageChange={(page) =>
+                    doFetchExec({
+                      page,
+                      sortBy: execSortBy,
+                      sortOrder: execSortDir,
+                    })
+                  }
+                  isLoading={isLoading}
+                  emptyMessage="No executions yet. Executions will appear here when flows start running for loans."
+                  mobileCard={(ex) => (
+                    <div
+                      key={ex.id}
+                      className="rounded-lg border bg-card p-3 flex flex-col gap-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-medium text-sm">
+                          {ex.flow_name}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "text-[10px] shrink-0",
+                            executionStatusColor[ex.status],
+                          )}
+                        >
+                          {ex.status}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {ex.client_name ?? "—"}
+                        {ex.application_number ? (
+                          <span className="ml-2 font-mono">
+                            {ex.application_number}
+                          </span>
+                        ) : null}
+                      </div>
+                      {ex.current_step_key && (
+                        <div className="text-xs font-mono text-muted-foreground">
+                          Step: {ex.current_step_key}
+                        </div>
+                      )}
+                      {ex.next_execution_at && (
+                        <div className="text-xs text-muted-foreground">
+                          Next run:{" "}
+                          {new Date(ex.next_execution_at).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                />
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

@@ -7,6 +7,7 @@ import type {
   TaskSignDocument,
   SignatureZone,
   TaskSignature,
+  PaginationInfo,
 } from "@shared/api";
 import { logger } from "@/lib/logger";
 
@@ -41,6 +42,7 @@ interface TaskTemplateDraft {
 
 interface TasksState {
   tasks: GetTasksResponse["tasks"];
+  pagination: PaginationInfo | null;
   isLoading: boolean;
   error: string | null;
   taskTemplateDraft: TaskTemplateDraft | null;
@@ -48,20 +50,32 @@ interface TasksState {
 
 const initialState: TasksState = {
   tasks: [],
+  pagination: null,
   isLoading: false,
   error: null,
   taskTemplateDraft: null,
 };
 
+interface FetchTasksParams {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+  search?: string;
+}
+
 export const fetchTasks = createAsyncThunk(
   "tasks/fetchAll",
-  async (_, { getState, rejectWithValue }) => {
+  async (params: FetchTasksParams = {}, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
-      const { data } = await axios.get<GetTasksResponse>("/api/tasks", {
+      const { data } = await axios.get<
+        GetTasksResponse & { pagination: PaginationInfo }
+      >("/api/tasks", {
         headers: { Authorization: `Bearer ${sessionToken}` },
+        params,
       });
-      return data.tasks;
+      return { tasks: data.tasks, pagination: data.pagination };
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch tasks",
@@ -480,7 +494,8 @@ const tasksSlice = createSlice({
       })
       .addCase(fetchTasks.fulfilled, (state, action) => {
         state.isLoading = false;
-        state.tasks = action.payload;
+        state.tasks = action.payload.tasks;
+        state.pagination = action.payload.pagination;
       })
       .addCase(fetchTasks.rejected, (state, action) => {
         state.isLoading = false;

@@ -573,7 +573,12 @@ const Conversations = () => {
                           {currentThread.client_phone && (
                             <span className="flex items-center space-x-1">
                               <Phone className="h-3 w-3" />
-                              <span>{currentThread.client_phone}</span>
+                              <a
+                                href={`tel:${currentThread.client_phone}`}
+                                className="hover:underline"
+                              >
+                                {currentThread.client_phone}
+                              </a>
                             </span>
                           )}
                           {currentThread.client_email && (

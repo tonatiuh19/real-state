@@ -1,30 +1,41 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
-import type { GetClientsResponse } from "@shared/api";
+import type { GetClientsResponse, PaginationInfo } from "@shared/api";
 import { logger } from "@/lib/logger";
+
+interface FetchClientsParams {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+  search?: string;
+}
 
 interface ClientsState {
   clients: GetClientsResponse["clients"];
+  pagination: PaginationInfo | null;
   isLoading: boolean;
   error: string | null;
 }
 
 const initialState: ClientsState = {
   clients: [],
+  pagination: null,
   isLoading: false,
   error: null,
 };
 
 export const fetchClients = createAsyncThunk(
   "clients/fetchClients",
-  async (_, { getState, rejectWithValue }) => {
+  async (params: FetchClientsParams = {}, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.get<GetClientsResponse>("/api/clients", {
         headers: { Authorization: `Bearer ${sessionToken}` },
+        params,
       });
-      return data.clients;
+      return { clients: data.clients, pagination: data.pagination };
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch clients",
@@ -72,7 +83,8 @@ const clientsSlice = createSlice({
       })
       .addCase(fetchClients.fulfilled, (state, action) => {
         state.isLoading = false;
-        state.clients = action.payload;
+        state.clients = action.payload.clients;
+        state.pagination = action.payload.pagination;
       })
       .addCase(fetchClients.rejected, (state, action) => {
         state.isLoading = false;

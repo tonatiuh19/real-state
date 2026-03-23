@@ -474,7 +474,9 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
   };
 
   const monthName = MONTH_NAMES_FULL[m.month - 1];
-  const sourceMap = new Map(m.lead_sources.map((s) => [s.category, s.count]));
+  // Lead source table uses annual data so loans from any month of the year are included
+  const annualSourceData = annualMetrics?.lead_sources_annual ?? m.lead_sources;
+  const sourceMap = new Map(annualSourceData.map((s) => [s.category, s.count]));
   const totalLeadsFromSources = ALL_SOURCES.reduce(
     (s, k) =>
       s + (sourceMap.get(k as import("@shared/api").LeadSourceCategory) ?? 0),

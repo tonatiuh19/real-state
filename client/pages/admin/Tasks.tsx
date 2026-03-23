@@ -10,6 +10,9 @@ import {
   File,
   FileText,
   PenTool,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -65,6 +68,7 @@ import {
 import TaskWizard from "@/components/TaskWizard";
 import type { TaskTemplate } from "@shared/api";
 import { toast } from "@/hooks/use-toast";
+import { useSortableData } from "@/hooks/use-sortable-data";
 
 const Tasks = () => {
   const dispatch = useAppDispatch();
@@ -180,6 +184,13 @@ const Tasks = () => {
     }
     return true;
   });
+
+  const {
+    sorted: sortedTasks,
+    sortKey: taskSortKey,
+    sortDir: taskSortDir,
+    requestSort: sortTasks,
+  } = useSortableData(filteredTasks as Record<string, unknown>[], "title");
 
   const taskStats = {
     total: tasks.length,
@@ -323,7 +334,7 @@ const Tasks = () => {
               <CardContent>
                 {/* Mobile Card View */}
                 <div className="block lg:hidden space-y-3">
-                  {filteredTasks.map((task) => (
+                  {(sortedTasks as TaskTemplate[]).map((task) => (
                     <Card key={task.id} className="p-4">
                       <div className="space-y-3">
                         <div className="flex items-start justify-between gap-2">
@@ -435,16 +446,76 @@ const Tasks = () => {
                           Order
                         </TableHead> */}
                         <TableHead className="min-w-[200px]">
-                          Task Template
+                          <button
+                            type="button"
+                            onClick={() => sortTasks("title")}
+                            className="flex items-center gap-1 hover:text-foreground transition-colors"
+                          >
+                            Task Template{" "}
+                            {taskSortKey === "title" ? (
+                              taskSortDir === "asc" ? (
+                                <ChevronUp className="h-3 w-3" />
+                              ) : (
+                                <ChevronDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="min-w-[120px] whitespace-nowrap">
-                          Type
+                          <button
+                            type="button"
+                            onClick={() => sortTasks("task_type")}
+                            className="flex items-center gap-1 hover:text-foreground transition-colors"
+                          >
+                            Type{" "}
+                            {taskSortKey === "task_type" ? (
+                              taskSortDir === "asc" ? (
+                                <ChevronUp className="h-3 w-3" />
+                              ) : (
+                                <ChevronDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="min-w-[100px] whitespace-nowrap">
-                          Priority
+                          <button
+                            type="button"
+                            onClick={() => sortTasks("priority")}
+                            className="flex items-center gap-1 hover:text-foreground transition-colors"
+                          >
+                            Priority{" "}
+                            {taskSortKey === "priority" ? (
+                              taskSortDir === "asc" ? (
+                                <ChevronUp className="h-3 w-3" />
+                              ) : (
+                                <ChevronDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="min-w-[100px] whitespace-nowrap">
-                          Due Days
+                          <button
+                            type="button"
+                            onClick={() => sortTasks("default_due_days")}
+                            className="flex items-center gap-1 hover:text-foreground transition-colors"
+                          >
+                            Due Days{" "}
+                            {taskSortKey === "default_due_days" ? (
+                              taskSortDir === "asc" ? (
+                                <ChevronUp className="h-3 w-3" />
+                              ) : (
+                                <ChevronDown className="h-3 w-3" />
+                              )
+                            ) : (
+                              <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                            )}
+                          </button>
                         </TableHead>
                         <TableHead className="min-w-[120px] whitespace-nowrap">
                           Requirements
@@ -458,7 +529,7 @@ const Tasks = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredTasks.map((task) => (
+                      {(sortedTasks as TaskTemplate[]).map((task) => (
                         <TableRow key={task.id}>
                           {/* <TableCell className="min-w-[50px] whitespace-nowrap">
                             <Badge variant="outline" className="text-xs">

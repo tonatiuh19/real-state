@@ -8,6 +8,9 @@ import {
   Eye,
   RefreshCw,
   Inbox,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { Button } from "@/components/ui/button";
@@ -38,6 +41,7 @@ import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchContactSubmissions } from "@/store/slices/contactSubmissionsSlice";
 import type { ContactSubmission } from "@shared/api";
+import { useSortableData } from "@/hooks/use-sortable-data";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -86,6 +90,17 @@ const ContactSubmissions = () => {
       (s.phone || "").toLowerCase().includes(q)
     );
   });
+
+  const {
+    sorted: sortedSubmissions,
+    sortKey: subSortKey,
+    sortDir: subSortDir,
+    requestSort: sortSubs,
+  } = useSortableData(
+    filtered as Record<string, unknown>[],
+    "created_at",
+    "desc",
+  );
 
   const unreadCount = submissions.filter((s) => !s.is_read).length;
 
@@ -206,21 +221,68 @@ const ContactSubmissions = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-6" />
-                    <TableHead>From</TableHead>
-                    <TableHead>Subject</TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => sortSubs("name")}
+                        className="flex items-center gap-1 hover:text-foreground transition-colors"
+                      >
+                        From{" "}
+                        {subSortKey === "name" ? (
+                          subSortDir === "asc" ? (
+                            <ChevronUp className="h-3 w-3" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3" />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                        )}
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => sortSubs("subject")}
+                        className="flex items-center gap-1 hover:text-foreground transition-colors"
+                      >
+                        Subject{" "}
+                        {subSortKey === "subject" ? (
+                          subSortDir === "asc" ? (
+                            <ChevronUp className="h-3 w-3" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3" />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                        )}
+                      </button>
+                    </TableHead>
                     <TableHead className="hidden md:table-cell">
                       Phone
                     </TableHead>
                     <TableHead className="hidden sm:table-cell">
-                      <span className="flex items-center gap-1">
-                        <Clock className="h-3.5 w-3.5" /> Date
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => sortSubs("created_at")}
+                        className="flex items-center gap-1 hover:text-foreground transition-colors"
+                      >
+                        <Clock className="h-3.5 w-3.5" /> Date{" "}
+                        {subSortKey === "created_at" ? (
+                          subSortDir === "asc" ? (
+                            <ChevronUp className="h-3 w-3" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3" />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                        )}
+                      </button>
                     </TableHead>
                     <TableHead className="w-16 text-right">View</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.map((sub) => (
+                  {(sortedSubmissions as ContactSubmission[]).map((sub) => (
                     <TableRow
                       key={sub.id}
                       className={cn(
@@ -250,7 +312,16 @@ const ContactSubmissions = () => {
                         </span>
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
-                        {sub.phone || "—"}
+                        {sub.phone ? (
+                          <a
+                            href={`tel:${sub.phone}`}
+                            className="hover:underline"
+                          >
+                            {sub.phone}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                       <TableCell className="hidden sm:table-cell text-xs text-muted-foreground whitespace-nowrap">
                         {formatDate(sub.created_at)}

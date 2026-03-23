@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchBrokers,
@@ -15,14 +15,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -34,6 +26,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { BrokerWizard, type BrokerFormValues } from "@/components/BrokerWizard";
 import BrokerShareLinkModal from "@/components/BrokerShareLinkModal";
+import { DataGrid, type DataGridColumn } from "@/components/ui/data-grid";
 import {
   UserCog,
   Plus,
@@ -51,12 +44,16 @@ import { adminPageMeta } from "@/lib/seo-helpers";
 export default function Brokers() {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const { brokers, isLoading } = useAppSelector((state) => state.brokers);
+  const { brokers, isLoading, pagination } = useAppSelector(
+    (state) => state.brokers,
+  );
   const { user: currentBroker, sessionToken } = useAppSelector(
     (state) => state.brokerAuth,
   );
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState("first_name");
+  const [sortDir, setSortDir] = useState<"ASC" | "DESC">("ASC");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardMode, setWizardMode] = useState<"create" | "edit">("create");
   const [selectedBroker, setSelectedBroker] = useState<Broker | null>(null);
@@ -69,23 +66,44 @@ export default function Brokers() {
 
   const isAdmin = currentBroker?.role === "admin";
 
+  const doFetch = useCallback(
+    (params: {
+      page?: number;
+      sortBy?: string;
+      sortOrder?: "ASC" | "DESC";
+      search?: string;
+    }) => {
+      dispatch(fetchBrokers({ limit: 30, ...params }));
+    },
+    [dispatch],
+  );
+
+  const handleSort = (field: string) => {
+    const newDir = sortBy === field && sortDir === "ASC" ? "DESC" : "ASC";
+    setSortBy(field);
+    setSortDir(newDir);
+    doFetch({
+      page: 1,
+      sortBy: field,
+      sortOrder: newDir,
+      search: searchQuery || undefined,
+    });
+  };
+
+  const handleSearch = (q: string) => {
+    setSearchQuery(q);
+    doFetch({ page: 1, sortBy, sortOrder: sortDir, search: q || undefined });
+  };
+
   useEffect(() => {
-    // Validate session to load user data if not already loaded
     if (!currentBroker && sessionToken) {
       dispatch(validateSession());
     }
   }, [dispatch, currentBroker, sessionToken]);
 
   useEffect(() => {
-    dispatch(fetchBrokers());
+    doFetch({ page: 1, sortBy, sortOrder: sortDir });
   }, [dispatch]);
-
-  const filteredBrokers = brokers.filter(
-    (broker) =>
-      broker.first_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      broker.last_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      broker.email.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
 
   const handleCreateBroker = () => {
     setWizardMode("create");
@@ -307,120 +325,111 @@ export default function Brokers() {
           <Input
             placeholder="Search brokers by name or email..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearch(e.target.value)}
             className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
           />
         </div>
 
         {/* Brokers Table */}
-        <div className="bg-white rounded-lg border shadow-sm">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>License</TableHead>
-                <TableHead>Specializations</TableHead>
-                {isAdmin && (
-                  <TableHead className="text-right">Actions</TableHead>
-                )}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={isAdmin ? 7 : 6}
-                    className="text-center py-8"
-                  >
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="h-5 w-5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                      <span className="text-sm text-gray-600">
-                        Loading brokers...
-                      </span>
+        <div className="bg-white rounded-lg border shadow-sm p-4">
+          <DataGrid<Broker>
+            data={brokers}
+            rowKey={(b) => b.id}
+            columns={[
+              {
+                key: "first_name",
+                label: "Name",
+                sortable: true,
+                render: (b) => (
+                  <span className="font-medium">
+                    {b.first_name} {b.last_name}
+                  </span>
+                ),
+              },
+              {
+                key: "email",
+                label: "Contact",
+                render: (b) => (
+                  <div className="flex flex-col gap-1 text-sm">
+                    <div className="flex items-center gap-1.5 text-gray-600">
+                      <Mail className="h-3.5 w-3.5" />
+                      <span>{b.email}</span>
                     </div>
-                  </TableCell>
-                </TableRow>
-              ) : filteredBrokers.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={isAdmin ? 7 : 6}
-                    className="text-center py-8"
-                  >
-                    <p className="text-sm text-gray-600">No brokers found</p>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredBrokers.map((broker) => (
-                  <TableRow key={broker.id}>
-                    <TableCell className="font-medium">
-                      {broker.first_name} {broker.last_name}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1 text-sm">
-                        <div className="flex items-center gap-1.5 text-gray-600">
-                          <Mail className="h-3.5 w-3.5" />
-                          <span>{broker.email}</span>
-                        </div>
-                        {broker.phone && (
-                          <div className="flex items-center gap-1.5 text-gray-600">
-                            <Phone className="h-3.5 w-3.5" />
-                            <span>{broker.phone}</span>
-                          </div>
-                        )}
+                    {b.phone && (
+                      <div className="flex items-center gap-1.5 text-gray-600">
+                        <Phone className="h-3.5 w-3.5" />
+                        <a href={`tel:${b.phone}`} className="hover:underline">
+                          {b.phone}
+                        </a>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={getRoleBadgeColor(broker.role)}>
-                        {broker.role === "admin"
-                          ? "Mortgage Banker"
-                          : "Partner"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={getStatusBadgeVariant(broker.status)}>
-                        {broker.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600">
-                        {broker.license_number || "—"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      {broker.specializations &&
-                      Array.isArray(broker.specializations) &&
-                      broker.specializations.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {broker.specializations.slice(0, 2).map((spec) => (
-                            <Badge
-                              key={spec}
-                              variant="outline"
-                              className="text-xs"
-                            >
-                              {spec}
-                            </Badge>
-                          ))}
-                          {broker.specializations.length > 2 && (
-                            <Badge variant="outline" className="text-xs">
-                              +{broker.specializations.length - 2}
-                            </Badge>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-gray-400">—</span>
+                    )}
+                  </div>
+                ),
+              },
+              {
+                key: "role",
+                label: "Role",
+                sortable: true,
+                render: (b) => (
+                  <Badge className={getRoleBadgeColor(b.role)}>
+                    {b.role === "admin" ? "Mortgage Banker" : "Partner"}
+                  </Badge>
+                ),
+              },
+              {
+                key: "status",
+                label: "Status",
+                sortable: true,
+                render: (b) => (
+                  <Badge variant={getStatusBadgeVariant(b.status)}>
+                    {b.status}
+                  </Badge>
+                ),
+              },
+              {
+                key: "license_number",
+                label: "License",
+                sortable: true,
+                render: (b) => (
+                  <span className="text-sm text-gray-600">
+                    {b.license_number || "\u2014"}
+                  </span>
+                ),
+              },
+              {
+                key: "specializations",
+                label: "Specializations",
+                render: (b) =>
+                  b.specializations && b.specializations.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {b.specializations.slice(0, 2).map((spec) => (
+                        <Badge key={spec} variant="outline" className="text-xs">
+                          {spec}
+                        </Badge>
+                      ))}
+                      {b.specializations.length > 2 && (
+                        <Badge variant="outline" className="text-xs">
+                          +{b.specializations.length - 2}
+                        </Badge>
                       )}
-                    </TableCell>
-                    {isAdmin && (
-                      <TableCell className="text-right">
+                    </div>
+                  ) : (
+                    <span className="text-sm text-gray-400">\u2014</span>
+                  ),
+              },
+              ...(isAdmin
+                ? [
+                    {
+                      key: "actions",
+                      label: "Actions",
+                      headerClassName: "text-right",
+                      render: (b: Broker) => (
                         <div className="flex items-center justify-end gap-2">
                           <Button
                             variant="ghost"
                             size="sm"
                             title="Get share link"
-                            onClick={() => handleShareLinkClick(broker)}
+                            onClick={() => handleShareLinkClick(b)}
                             className="h-8 w-8 p-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                           >
                             <Link2 className="h-4 w-4" />
@@ -428,7 +437,7 @@ export default function Brokers() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleEditBroker(broker)}
+                            onClick={() => handleEditBroker(b)}
                             className="h-8 w-8 p-0"
                           >
                             <Pencil className="h-4 w-4" />
@@ -436,20 +445,97 @@ export default function Brokers() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleDeleteClick(broker)}
+                            onClick={() => handleDeleteClick(b)}
                             className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                            disabled={broker.id === currentBroker?.id}
+                            disabled={b.id === currentBroker?.id}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
-                      </TableCell>
+                      ),
+                    } as DataGridColumn<Broker>,
+                  ]
+                : []),
+            ]}
+            sortBy={sortBy}
+            sortDir={sortDir}
+            onSort={handleSort}
+            pagination={pagination}
+            onPageChange={(page) =>
+              doFetch({
+                page,
+                sortBy,
+                sortOrder: sortDir,
+                search: searchQuery || undefined,
+              })
+            }
+            isLoading={isLoading}
+            emptyMessage="No brokers found."
+            mobileCard={(broker) => (
+              <div className="p-4 space-y-2 border-b">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-semibold text-sm">
+                      {broker.first_name} {broker.last_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {broker.email}
+                    </p>
+                    {broker.phone && (
+                      <a
+                        href={`tel:${broker.phone}`}
+                        className="text-xs text-muted-foreground hover:underline"
+                      >
+                        {broker.phone}
+                      </a>
                     )}
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <Badge className={getRoleBadgeColor(broker.role)}>
+                      {broker.role === "admin" ? "Mortgage Banker" : "Partner"}
+                    </Badge>
+                    <Badge variant={getStatusBadgeVariant(broker.status)}>
+                      {broker.status}
+                    </Badge>
+                  </div>
+                </div>
+                {broker.license_number && (
+                  <p className="text-xs text-muted-foreground">
+                    License: {broker.license_number}
+                  </p>
+                )}
+                {isAdmin && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleShareLinkClick(broker)}
+                      className="h-8 gap-1 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                    >
+                      <Link2 className="h-3.5 w-3.5" /> Link
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleEditBroker(broker)}
+                      className="h-8"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeleteClick(broker)}
+                      className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                      disabled={broker.id === currentBroker?.id}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+          />
         </div>
 
         {/* Broker Wizard */}

@@ -1183,9 +1183,12 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                         </div>
                         <div>
                           <p className="text-muted-foreground text-xs">Phone</p>
-                          <p className="font-medium">
+                          <a
+                            href={`tel:${formik.values.client_phone}`}
+                            className="font-medium hover:underline"
+                          >
                             {formik.values.client_phone}
-                          </p>
+                          </a>
                         </div>
                         <div>
                           <p className="text-muted-foreground text-xs">

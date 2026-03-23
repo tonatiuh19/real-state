@@ -345,11 +345,11 @@ const About: React.FC = () => {
                   Apply Now <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
-              <Link to="/contact">
+              <a href="tel:+15623370000">
                 <Button size="lg" variant="secondary" className="gap-2">
                   <Phone className="h-4 w-4" /> (562) 337-0000
                 </Button>
-              </Link>
+              </a>
             </div>
           </div>
         </div>

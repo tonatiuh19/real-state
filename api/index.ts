@@ -4053,6 +4053,78 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
 };
 
 /**
+ * PATCH /api/loans/:loanId/source
+ * Update the lead source category of a loan application.
+ * Admin-only.
+ */
+const handleUpdateLoanSourceCategory: RequestHandler = async (req, res) => {
+  try {
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "admin") {
+      return res.status(403).json({ success: false, error: "Admins only" });
+    }
+
+    const loanId = parseInt(req.params.loanId);
+    const { source_category } = req.body;
+
+    const VALID_SOURCES = [
+      "current_client_referral",
+      "past_client",
+      "past_client_referral",
+      "personal_friend",
+      "realtor",
+      "advertisement",
+      "business_partner",
+      "builder",
+      "other",
+    ];
+
+    if (source_category !== null && !VALID_SOURCES.includes(source_category)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid source_category. Must be one of: ${VALID_SOURCES.join(", ")}`,
+      });
+    }
+
+    const [existing] = await pool.query<RowDataPacket[]>(
+      "SELECT id, client_user_id FROM loan_applications WHERE id = ? AND tenant_id = ?",
+      [loanId, MORTGAGE_TENANT_ID],
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: "Loan not found" });
+    }
+
+    // Update the loan application
+    await pool.query(
+      "UPDATE loan_applications SET source_category = ? WHERE id = ? AND tenant_id = ?",
+      [source_category ?? null, loanId, MORTGAGE_TENANT_ID],
+    );
+
+    // Sync to the corresponding lead record (linked via converted_to_client_id = client_user_id)
+    // This keeps the Lead Source Analysis metrics up to date
+    const clientUserId = existing[0].client_user_id;
+    if (clientUserId) {
+      await pool.query(
+        "UPDATE leads SET source_category = ? WHERE converted_to_client_id = ? AND tenant_id = ?",
+        [source_category ?? null, clientUserId, MORTGAGE_TENANT_ID],
+      );
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Error updating loan source category:", error);
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to update source category",
+    });
+  }
+};
+
+/**
  * PATCH /api/loans/:loanId/assign-broker
  * Assign (or unassign) a broker to a loan application.
  * Admin-only.
@@ -4478,18 +4550,48 @@ const handleGetAnnualMetrics: RequestHandler = async (req, res) => {
       (closingsRows as any[]).map((r) => [r.month, parseInt(r.cnt)]),
     );
 
-    // Lead sources for full year
+    // Lead sources for full year — union leads (not yet converted) + loan_applications (avoids double-count)
     const [sourceRows] = (await pool.query(
       useGlobal
-        ? `SELECT COALESCE(source_category,'other') as category, COUNT(*) as count
-           FROM leads WHERE tenant_id = ? AND YEAR(created_at) = ?
+        ? `SELECT COALESCE(category,'other') as category, SUM(cnt) as count
+           FROM (
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM leads
+             WHERE tenant_id = ? AND YEAR(created_at) = ?
+               AND (converted_to_client_id IS NULL)
+             GROUP BY source_category
+             UNION ALL
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM loan_applications
+             WHERE tenant_id = ? AND YEAR(created_at) = ?
+             GROUP BY source_category
+           ) combined
            GROUP BY category ORDER BY count DESC`
-        : `SELECT COALESCE(source_category,'other') as category, COUNT(*) as count
-           FROM leads WHERE tenant_id = ? AND assigned_broker_id IN (?) AND YEAR(created_at) = ?
+        : `SELECT COALESCE(category,'other') as category, SUM(cnt) as count
+           FROM (
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM leads
+             WHERE tenant_id = ? AND assigned_broker_id IN (?) AND YEAR(created_at) = ?
+               AND (converted_to_client_id IS NULL)
+             GROUP BY source_category
+             UNION ALL
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM loan_applications
+             WHERE tenant_id = ? AND (broker_user_id IN (?) OR partner_broker_id IN (?)) AND YEAR(created_at) = ?
+             GROUP BY source_category
+           ) combined
            GROUP BY category ORDER BY count DESC`,
       useGlobal
-        ? [MORTGAGE_TENANT_ID, year]
-        : [MORTGAGE_TENANT_ID, scopedIds, year],
+        ? [MORTGAGE_TENANT_ID, year, MORTGAGE_TENANT_ID, year]
+        : [
+            MORTGAGE_TENANT_ID,
+            scopedIds,
+            year,
+            MORTGAGE_TENANT_ID,
+            scopedIds,
+            scopedIds,
+            year,
+          ],
     )) as [RowDataPacket[], any];
 
     // Build monthly snapshots
@@ -4715,19 +4817,52 @@ const handleGetBrokerMetrics: RequestHandler = async (req, res) => {
         : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, year, month],
     )) as [RowDataPacket[], any];
 
-    // Compute lead source breakdown
+    // Compute lead source breakdown — union leads (not yet converted) + loan_applications (avoids double-count)
     const [sourceRows] = (await pool.query(
       useGlobal
-        ? `SELECT COALESCE(source_category, 'other') as category, COUNT(*) as count
-           FROM leads WHERE tenant_id = ? AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+        ? `SELECT COALESCE(category, 'other') as category, SUM(cnt) as count
+           FROM (
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM leads
+             WHERE tenant_id = ? AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+               AND (converted_to_client_id IS NULL)
+             GROUP BY source_category
+             UNION ALL
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM loan_applications
+             WHERE tenant_id = ? AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+             GROUP BY source_category
+           ) combined
            GROUP BY category ORDER BY count DESC`
-        : `SELECT COALESCE(source_category, 'other') as category, COUNT(*) as count
-           FROM leads WHERE tenant_id = ? AND assigned_broker_id IN (?)
-             AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+        : `SELECT COALESCE(category, 'other') as category, SUM(cnt) as count
+           FROM (
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM leads
+             WHERE tenant_id = ? AND assigned_broker_id IN (?)
+               AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+               AND (converted_to_client_id IS NULL)
+             GROUP BY source_category
+             UNION ALL
+             SELECT source_category as category, COUNT(*) as cnt
+             FROM loan_applications
+             WHERE tenant_id = ? AND (broker_user_id IN (?) OR partner_broker_id IN (?))
+               AND YEAR(created_at) = ? AND MONTH(created_at) = ?
+             GROUP BY source_category
+           ) combined
            GROUP BY category ORDER BY count DESC`,
       useGlobal
-        ? [MORTGAGE_TENANT_ID, year, month]
-        : [MORTGAGE_TENANT_ID, scopedIds, year, month],
+        ? [MORTGAGE_TENANT_ID, year, month, MORTGAGE_TENANT_ID, year, month]
+        : [
+            MORTGAGE_TENANT_ID,
+            scopedIds,
+            year,
+            month,
+            MORTGAGE_TENANT_ID,
+            scopedIds,
+            scopedIds,
+            year,
+            month,
+          ],
     )) as [RowDataPacket[], any];
 
     const metrics = {
@@ -4874,13 +5009,61 @@ const handleGetClients: RequestHandler = async (req, res) => {
     const brokerRole = (req as any).brokerRole;
     const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 30),
+    );
+    const offset = (page - 1) * limit;
+    const search = (req.query.search as string) || "";
+    const sortBy = (req.query.sortBy as string) || "created_at";
+    const sortOrder =
+      ((req.query.sortOrder as string) || "DESC").toUpperCase() === "ASC"
+        ? "ASC"
+        : "DESC";
+
+    const SORT_MAP: Record<string, string> = {
+      first_name: "c.first_name",
+      last_name: "c.last_name",
+      email: "c.email",
+      date_of_birth: "c.date_of_birth",
+      created_at: "c.created_at",
+      total_applications: "total_applications",
+      active_applications: "active_applications",
+    };
+    const safeSortBy = SORT_MAP[sortBy] ?? "c.created_at";
+
+    const baseWhere = `WHERE c.tenant_id = ?${isAdmin ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${search ? " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)" : ""}`;
+
+    const filterParams: any[] = isAdmin
+      ? [MORTGAGE_TENANT_ID]
+      : [MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId];
+    if (search) {
+      const like = `%${search}%`;
+      filterParams.push(like, like, like, like);
+    }
+
+    const [[countRow]] = await pool.query<any[]>(
+      `SELECT COUNT(*) as total FROM (
+        SELECT c.id
+        FROM clients c
+        LEFT JOIN loan_applications la ON c.id = la.client_user_id
+        LEFT JOIN conversation_threads ct ON ct.client_id = c.id AND ct.tenant_id = c.tenant_id
+        ${baseWhere}
+        GROUP BY c.id
+      ) as cnt`,
+      filterParams,
+    );
+    const total = Number(countRow?.total || 0);
+
     const [clients] = await pool.query<any[]>(
-      `SELECT 
+      `SELECT
         c.id,
         c.email,
         c.first_name,
         c.last_name,
         c.phone,
+        c.date_of_birth,
         c.status,
         c.created_at,
         COUNT(DISTINCT la.id) as total_applications,
@@ -4889,18 +5072,17 @@ const handleGetClients: RequestHandler = async (req, res) => {
       FROM clients c
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
       LEFT JOIN conversation_threads ct ON ct.client_id = c.id AND ct.tenant_id = c.tenant_id
-      WHERE c.tenant_id = ?
-        ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}
+      ${baseWhere}
       GROUP BY c.id
-      ORDER BY c.created_at DESC`,
-      isAdmin
-        ? [MORTGAGE_TENANT_ID]
-        : [MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
+      ORDER BY ${safeSortBy} ${sortOrder}
+      LIMIT ? OFFSET ?`,
+      [...filterParams, limit, offset],
     );
 
     res.json({
       success: true,
       clients,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error("Error fetching clients:", error);
@@ -5061,27 +5243,65 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
       });
     }
 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 30),
+    );
+    const offset = (page - 1) * limit;
+    const search = (req.query.search as string) || "";
+    const sortBy = (req.query.sortBy as string) || "first_name";
+    const sortOrder =
+      ((req.query.sortOrder as string) || "ASC").toUpperCase() === "ASC"
+        ? "ASC"
+        : "DESC";
+
+    const BROKER_SORT: Record<string, string> = {
+      first_name: "first_name",
+      last_name: "last_name",
+      email: "email",
+      role: "role",
+      status: "status",
+      license_number: "license_number",
+    };
+    const safeSortBy = BROKER_SORT[sortBy] ?? "first_name";
+
+    const searchWhere = search
+      ? " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)"
+      : "";
+    const searchParams: any[] = search
+      ? [`%${search}%`, `%${search}%`, `%${search}%`]
+      : [];
+
+    const [[countRow]] = (await connection.execute(
+      `SELECT COUNT(*) as total FROM brokers WHERE status = 'active' AND tenant_id = ?${searchWhere}`,
+      [MORTGAGE_TENANT_ID, ...searchParams],
+    )) as [RowDataPacket[], any];
+    const total = Number((countRow as any)?.total || 0);
+
     // Fetch all active brokers
     const [brokers] = (await connection.execute(
-      `SELECT 
-        id, 
-        email, 
-        first_name, 
-        last_name, 
-        phone, 
-        role, 
-        status, 
-        email_verified, 
+      `SELECT
+        id,
+        email,
+        first_name,
+        last_name,
+        phone,
+        role,
+        status,
+        email_verified,
         last_login
-      FROM brokers 
-      WHERE status = 'active' AND tenant_id = ?
-      ORDER BY first_name, last_name`,
-      [MORTGAGE_TENANT_ID],
+      FROM brokers
+      WHERE status = 'active' AND tenant_id = ?${searchWhere}
+      ORDER BY ${safeSortBy} ${sortOrder}
+      LIMIT ? OFFSET ?`,
+      [MORTGAGE_TENANT_ID, ...searchParams, limit, offset],
     )) as [RowDataPacket[], any];
 
     res.json({
       success: true,
       brokers,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error("Error fetching brokers:", error);
@@ -5714,31 +5934,58 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 30),
+    );
+    const offset = (page - 1) * limit;
+    const search = (req.query.search as string) || "";
+    const sortBy = (req.query.sortBy as string) || "order_index";
+    const sortOrder =
+      ((req.query.sortOrder as string) || "ASC").toUpperCase() === "ASC"
+        ? "ASC"
+        : "DESC";
+
+    const TASK_SORT: Record<string, string> = {
+      title: "title",
+      task_type: "task_type",
+      priority: "priority",
+      default_due_days: "default_due_days",
+      order_index: "order_index",
+      created_at: "created_at",
+    };
+    const safeSortBy = TASK_SORT[sortBy] ?? "order_index";
+
+    const searchWhere = search
+      ? " AND (title LIKE ? OR description LIKE ? OR task_type LIKE ?)"
+      : "";
+    const searchParams: any[] = search
+      ? [`%${search}%`, `%${search}%`, `%${search}%`]
+      : [];
+
+    const [[countRow]] = await pool.query<any[]>(
+      `SELECT COUNT(*) as total FROM task_templates WHERE created_by_broker_id = ? AND tenant_id = ?${searchWhere}`,
+      [brokerId, MORTGAGE_TENANT_ID, ...searchParams],
+    );
+    const total = Number(countRow?.total || 0);
+
     const [templates] = await pool.query<any[]>(
-      `SELECT 
-        id,
-        title,
-        description,
-        task_type,
-        priority,
-        default_due_days,
-        order_index,
-        is_active,
-        requires_documents,
-        document_instructions,
-        has_custom_form,
-        has_signing,
-        created_at,
-        updated_at
+      `SELECT
+        id, title, description, task_type, priority, default_due_days,
+        order_index, is_active, requires_documents, document_instructions,
+        has_custom_form, has_signing, created_at, updated_at
       FROM task_templates
-      WHERE created_by_broker_id = ? AND tenant_id = ?
-      ORDER BY order_index ASC, created_at DESC`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      WHERE created_by_broker_id = ? AND tenant_id = ?${searchWhere}
+      ORDER BY ${safeSortBy} ${sortOrder}
+      LIMIT ? OFFSET ?`,
+      [brokerId, MORTGAGE_TENANT_ID, ...searchParams, limit, offset],
     );
 
     res.json({
       success: true,
-      tasks: templates, // Keep same property name for compatibility
+      tasks: templates,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error("Error fetching task templates:", error);
@@ -7843,47 +8090,87 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
 
-    let query = `
-      SELECT 
-        td.*,
-        t.title as task_title,
-        t.task_type,
-        t.status as task_status,
-        a.application_number,
-        a.broker_user_id as broker_id,
-        c.first_name as client_first_name,
-        c.last_name as client_last_name,
-        c.email as client_email,
-        b.first_name as broker_first_name,
-        b.last_name as broker_last_name
-      FROM task_documents td
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 30),
+    );
+    const offset = (page - 1) * limit;
+    const search = (req.query.search as string) || "";
+    const filterType = (req.query.filterType as string) || "";
+    const sortBy = (req.query.sortBy as string) || "uploaded_at";
+    const sortOrder =
+      ((req.query.sortOrder as string) || "DESC").toUpperCase() === "ASC"
+        ? "ASC"
+        : "DESC";
+
+    const DOC_SORT: Record<string, string> = {
+      original_filename: "td.original_filename",
+      uploaded_at: "td.uploaded_at",
+      file_size: "td.file_size",
+      client_first_name: "c.first_name",
+      application_number: "a.application_number",
+      broker_first_name: "b.first_name",
+    };
+    const safeSortBy = DOC_SORT[sortBy] ?? "td.uploaded_at";
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (brokerRole !== "admin") {
+      conditions.push("a.broker_user_id = ?");
+      params.push(brokerId);
+    }
+    if (search) {
+      conditions.push(
+        "(td.original_filename LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR a.application_number LIKE ?)",
+      );
+      const like = `%${search}%`;
+      params.push(like, like, like, like);
+    }
+    if (filterType && filterType !== "all") {
+      conditions.push("td.document_type = ?");
+      params.push(filterType);
+    }
+
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    const baseJoin = `FROM task_documents td
       INNER JOIN tasks t ON td.task_id = t.id
       INNER JOIN loan_applications a ON t.application_id = a.id
       INNER JOIN clients c ON a.client_user_id = c.id
       LEFT JOIN brokers b ON a.broker_user_id = b.id`;
 
-    let params: any[] = [];
+    const [[countRow]] = await pool.query<any[]>(
+      `SELECT COUNT(*) as total ${baseJoin} ${whereClause}`,
+      params,
+    );
+    const total = Number(countRow?.total || 0);
 
-    // If broker is not admin, filter by broker_user_id
-    if (brokerRole !== "admin") {
-      query += ` WHERE a.broker_user_id = ?`;
-      params.push(brokerId);
-    }
-
-    query += ` ORDER BY td.uploaded_at DESC`;
-
-    const [documents] = await pool.query(query, params);
+    const [documents] = await pool.query(
+      `SELECT td.*,
+        t.title as task_title, t.task_type, t.status as task_status,
+        a.application_number, a.broker_user_id as broker_id,
+        c.first_name as client_first_name, c.last_name as client_last_name, c.email as client_email,
+        b.first_name as broker_first_name, b.last_name as broker_last_name
+      ${baseJoin} ${whereClause}
+      ORDER BY ${safeSortBy} ${sortOrder}
+      LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
 
     res.json({
       success: true,
-      documents: documents,
+      documents,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error("❌ Error getting all task documents:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to get task documents",
-    });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to get task documents" });
   }
 };
 
@@ -13524,14 +13811,61 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const { status, flow_id } = req.query;
 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 30),
+    );
+    const offset = (page - 1) * limit;
+    const sortBy = (req.query.sortBy as string) || "created_at";
+    const sortOrder =
+      ((req.query.sortOrder as string) || "DESC").toUpperCase() === "ASC"
+        ? "ASC"
+        : "DESC";
+
+    const EXEC_SORT: Record<string, string> = {
+      flow_name: "rf.name",
+      client_name: "client_name",
+      application_number: "la.application_number",
+      status: "rfe.status",
+      next_execution_at: "rfe.next_execution_at",
+      created_at: "rfe.created_at",
+    };
+    const safeSortBy = EXEC_SORT[sortBy] ?? "rfe.created_at";
+
     const [tenantRows] = await pool.query<RowDataPacket[]>(
       "SELECT tenant_id FROM brokers WHERE id = ?",
       [brokerId],
     );
     const tenantId = tenantRows[0]?.tenant_id;
 
-    let query = `
-      SELECT rfe.*,
+    const conditions: string[] = ["rfe.tenant_id = ?"];
+    const params: any[] = [tenantId];
+
+    if (status) {
+      conditions.push("rfe.status = ?");
+      params.push(status);
+    }
+    if (flow_id) {
+      conditions.push("rfe.flow_id = ?");
+      params.push(flow_id);
+    }
+
+    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+    const [[countRow]] = await pool.query<any[]>(
+      `SELECT COUNT(*) as total
+      FROM reminder_flow_executions rfe
+      JOIN reminder_flows rf ON rf.id = rfe.flow_id
+      LEFT JOIN clients c ON c.id = rfe.client_id
+      LEFT JOIN loan_applications la ON la.id = rfe.loan_application_id
+      ${whereClause}`,
+      params,
+    );
+    const total = Number(countRow?.total || 0);
+
+    const [executions] = await pool.query<RowDataPacket[]>(
+      `SELECT rfe.*,
         rf.name AS flow_name,
         CONCAT(c.first_name, ' ', c.last_name) AS client_name,
         la.application_number
@@ -13539,23 +13873,12 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
       JOIN reminder_flows rf ON rf.id = rfe.flow_id
       LEFT JOIN clients c ON c.id = rfe.client_id
       LEFT JOIN loan_applications la ON la.id = rfe.loan_application_id
-      WHERE rfe.tenant_id = ?`;
-    const params: any[] = [tenantId];
+      ${whereClause}
+      ORDER BY ${safeSortBy} ${sortOrder}
+      LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
 
-    if (status) {
-      query += " AND rfe.status = ?";
-      params.push(status);
-    }
-    if (flow_id) {
-      query += " AND rfe.flow_id = ?";
-      params.push(flow_id);
-    }
-
-    query += " ORDER BY rfe.created_at DESC LIMIT 200";
-
-    const [executions] = await pool.query<RowDataPacket[]>(query, params);
-
-    // Parse JSON
     const parsed = executions.map((e) => ({
       ...e,
       completed_steps: e.completed_steps
@@ -13568,7 +13891,7 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
     return res.json({
       success: true,
       executions: parsed,
-      total: parsed.length,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error("Error fetching flow executions:", error);
@@ -13702,6 +14025,11 @@ function createServer() {
     "/api/loans/:loanId/status",
     verifyBrokerSession,
     handleUpdateLoanStatus,
+  );
+  expressApp.patch(
+    "/api/loans/:loanId/source",
+    verifyBrokerSession,
+    handleUpdateLoanSourceCategory,
   );
   expressApp.get(
     "/api/loans/:loanId/export-mismo",
@@ -15649,17 +15977,61 @@ function createServer() {
     }
   };
 
-  const handleGetContactSubmissions: RequestHandler = async (_req, res) => {
+  const handleGetContactSubmissions: RequestHandler = async (req, res) => {
     try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit as string) || 30),
+      );
+      const offset = (page - 1) * limit;
+      const search = (req.query.search as string) || "";
+      const sortBy = (req.query.sortBy as string) || "created_at";
+      const sortOrder =
+        ((req.query.sortOrder as string) || "DESC").toUpperCase() === "ASC"
+          ? "ASC"
+          : "DESC";
+
+      const CS_SORT: Record<string, string> = {
+        name: "name",
+        email: "email",
+        subject: "subject",
+        created_at: "created_at",
+      };
+      const safeSortBy = CS_SORT[sortBy] ?? "created_at";
+
+      const searchWhere = search
+        ? " AND (name LIKE ? OR email LIKE ? OR subject LIKE ? OR message LIKE ?)"
+        : "";
+      const searchParams: any[] = search
+        ? [`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`]
+        : [];
+
+      const [[countRow]] = (await pool.execute(
+        `SELECT COUNT(*) as total FROM contact_submissions WHERE tenant_id = ?${searchWhere}`,
+        [MORTGAGE_TENANT_ID, ...searchParams],
+      )) as [RowDataPacket[], any];
+      const total = Number((countRow as any)?.total || 0);
+
       const [rows] = await pool.execute(
         `SELECT id, name, email, phone, subject, message, is_read, read_by_broker_id, read_at, created_at
          FROM contact_submissions
-         WHERE tenant_id = ?
-         ORDER BY created_at DESC`,
-        [MORTGAGE_TENANT_ID],
+         WHERE tenant_id = ?${searchWhere}
+         ORDER BY ${safeSortBy} ${sortOrder}
+         LIMIT ? OFFSET ?`,
+        [MORTGAGE_TENANT_ID, ...searchParams, limit, offset],
       );
 
-      return res.json({ success: true, submissions: rows });
+      return res.json({
+        success: true,
+        submissions: rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
     } catch (err: any) {
       console.error("handleGetContactSubmissions error:", err);
       return res

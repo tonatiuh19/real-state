@@ -12,12 +12,14 @@ import type {
   GetReminderFlowExecutionsResponse,
   DeleteReminderFlowResponse,
   MarkFlowExecutionRespondedResponse,
+  PaginationInfo,
 } from "@shared/api";
 
 interface ReminderFlowsState {
   flows: ReminderFlow[];
   selectedFlow: ReminderFlow | null;
   executions: ReminderFlowExecution[];
+  pagination: PaginationInfo | null;
   isLoading: boolean;
   isLoadingFlow: boolean;
   isSaving: boolean;
@@ -28,11 +30,21 @@ const initialState: ReminderFlowsState = {
   flows: [],
   selectedFlow: null,
   executions: [],
+  pagination: null,
   isLoading: false,
   isLoadingFlow: false,
   isSaving: false,
   error: null,
 };
+
+interface FetchReminderFlowExecutionsParams {
+  status?: string;
+  flow_id?: number;
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+}
 
 // ---------------------------------------------------------------
 // Thunks
@@ -164,19 +176,18 @@ export const toggleReminderFlow = createAsyncThunk(
 export const fetchReminderFlowExecutions = createAsyncThunk(
   "reminderFlows/fetchExecutions",
   async (
-    params: { status?: string; flow_id?: number } = {},
+    params: FetchReminderFlowExecutionsParams = {},
     { getState, rejectWithValue },
   ) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
-      const { data } = await axios.get<GetReminderFlowExecutionsResponse>(
-        "/api/reminder-flow-executions",
-        {
-          headers: { Authorization: `Bearer ${sessionToken}` },
-          params,
-        },
-      );
-      return data.executions;
+      const { data } = await axios.get<
+        GetReminderFlowExecutionsResponse & { pagination: PaginationInfo }
+      >("/api/reminder-flow-executions", {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+        params,
+      });
+      return { executions: data.executions, pagination: data.pagination };
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch flow executions",
@@ -299,7 +310,8 @@ const reminderFlowsSlice = createSlice({
       })
       .addCase(fetchReminderFlowExecutions.fulfilled, (state, action) => {
         state.isLoading = false;
-        state.executions = action.payload;
+        state.executions = action.payload.executions;
+        state.pagination = action.payload.pagination;
       })
       .addCase(fetchReminderFlowExecutions.rejected, (state, action) => {
         state.isLoading = false;

@@ -13,6 +13,9 @@ import {
   Eye,
   ArrowRight,
   Link2,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -57,6 +60,7 @@ import {
 } from "@/store/slices/dashboardSlice";
 import { logger } from "@/lib/logger";
 import BrokerMetricsPanel from "@/components/BrokerMetricsPanel";
+import { useSortableData } from "@/hooks/use-sortable-data";
 import type { Broker } from "@shared/api";
 
 const AdminDashboard = () => {
@@ -205,6 +209,13 @@ const AdminDashboard = () => {
         (loan.application_number ?? "").toLowerCase().includes(q),
     );
   }, [loans, dashboardSearch]);
+
+  const {
+    sorted: sortedLoans,
+    sortKey: loanSortKey,
+    sortDir: loanSortDir,
+    requestSort: sortLoans,
+  } = useSortableData(filteredLoans, "client_first_name");
 
   return (
     <>
@@ -528,70 +539,26 @@ const AdminDashboard = () => {
                       : "No active loans yet. Create your first loan application!"}
                   </div>
                 ) : (
-                  <table className="w-full caption-bottom text-sm min-w-[640px]">
-                    <thead className="[&_tr]:border-b">
-                      <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                        <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Client
-                        </th>
-                        <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Broker
-                        </th>
-                        <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Loan Type
-                        </th>
-                        <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Amount
-                        </th>
-                        <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Status
-                        </th>
-                        <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Next Task
-                        </th>
-                        <th className="h-12 px-2 sm:px-4 text-right align-middle font-medium text-muted-foreground whitespace-nowrap">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="[&_tr:last-child]:border-0">
-                      {filteredLoans.map((loan) => (
-                        <tr
+                  <>
+                    {/* Mobile card view */}
+                    <div className="block lg:hidden space-y-3">
+                      {sortedLoans.map((loan) => (
+                        <div
                           key={loan.id}
-                          className="border-b transition-colors hover:bg-muted/50"
+                          className="rounded-lg border p-4 bg-white space-y-2 shadow-sm"
                         >
-                          <td className="p-2 sm:p-4 align-middle font-medium whitespace-nowrap">
-                            {loan.client_first_name || ""}{" "}
-                            {loan.client_last_name || ""}
-                          </td>
-                          <td className="p-2 sm:p-4 align-middle whitespace-nowrap">
-                            {loan.broker_first_name ? (
-                              <Badge variant="outline" className="text-xs">
-                                <User className="h-3 w-3 mr-1" />
-                                {loan.broker_first_name}{" "}
-                                {loan.broker_last_name || ""}
-                              </Badge>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">
-                                Unassigned
-                              </span>
-                            )}
-                          </td>
-                          <td className="p-2 sm:p-4 align-middle whitespace-nowrap">
-                            {loan.loan_type
-                              ? formatLoanType(loan.loan_type)
-                              : "N/A"}
-                          </td>
-                          <td className="p-2 sm:p-4 align-middle font-semibold whitespace-nowrap">
-                            $
-                            {new Intl.NumberFormat("en-US").format(
-                              loan.loan_amount || 0,
-                            )}
-                          </td>
-                          <td className="p-2 sm:p-4 align-middle">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-semibold text-sm">
+                                {loan.client_first_name} {loan.client_last_name}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {loan.application_number}
+                              </p>
+                            </div>
                             <Badge
                               className={cn(
-                                "text-white whitespace-nowrap text-xs",
+                                "text-white text-xs whitespace-nowrap",
                                 getStatusColor(loan.status || "draft"),
                               )}
                             >
@@ -599,58 +566,243 @@ const AdminDashboard = () => {
                                 ? formatLoanType(loan.status)
                                 : "Draft"}
                             </Badge>
-                          </td>
-                          <td className="p-2 sm:p-4 align-middle">
-                            <div className="flex items-center gap-1.5 sm:gap-2">
-                              {loan.next_task ? (
-                                <>
-                                  <AlertCircle className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                                  <span className="text-xs whitespace-nowrap">
-                                    {loan.next_task}
-                                  </span>
-                                </>
+                          </div>
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            {loan.broker_first_name && (
+                              <span className="flex items-center gap-1">
+                                <User className="h-3 w-3" />
+                                {loan.broker_first_name} {loan.broker_last_name}
+                              </span>
+                            )}
+                            <span className="font-semibold text-foreground">
+                              $
+                              {new Intl.NumberFormat("en-US").format(
+                                loan.loan_amount || 0,
+                              )}
+                            </span>
+                            {loan.loan_type && (
+                              <span>{formatLoanType(loan.loan_type)}</span>
+                            )}
+                          </div>
+                          {loan.next_task && (
+                            <p className="text-xs text-muted-foreground flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                              {loan.next_task}
+                            </p>
+                          )}
+                          <div className="flex justify-end pt-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={() => handleOpenLoan(loan.id)}
+                            >
+                              <Eye className="h-3 w-3" /> View
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Desktop table view */}
+                    <table className="hidden lg:table w-full caption-bottom text-sm min-w-[640px]">
+                      <thead className="[&_tr]:border-b">
+                        <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                          <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => sortLoans("client_first_name")}
+                              className="flex items-center gap-1 hover:text-foreground transition-colors"
+                            >
+                              Client{" "}
+                              {loanSortKey === "client_first_name" ? (
+                                loanSortDir === "asc" ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )
+                              ) : (
+                                <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                              )}
+                            </button>
+                          </th>
+                          <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => sortLoans("broker_first_name")}
+                              className="flex items-center gap-1 hover:text-foreground transition-colors"
+                            >
+                              Broker{" "}
+                              {loanSortKey === "broker_first_name" ? (
+                                loanSortDir === "asc" ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )
+                              ) : (
+                                <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                              )}
+                            </button>
+                          </th>
+                          <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => sortLoans("loan_type")}
+                              className="flex items-center gap-1 hover:text-foreground transition-colors"
+                            >
+                              Loan Type{" "}
+                              {loanSortKey === "loan_type" ? (
+                                loanSortDir === "asc" ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )
+                              ) : (
+                                <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                              )}
+                            </button>
+                          </th>
+                          <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => sortLoans("loan_amount")}
+                              className="flex items-center gap-1 hover:text-foreground transition-colors"
+                            >
+                              Amount{" "}
+                              {loanSortKey === "loan_amount" ? (
+                                loanSortDir === "asc" ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )
+                              ) : (
+                                <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                              )}
+                            </button>
+                          </th>
+                          <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => sortLoans("status")}
+                              className="flex items-center gap-1 hover:text-foreground transition-colors"
+                            >
+                              Status{" "}
+                              {loanSortKey === "status" ? (
+                                loanSortDir === "asc" ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )
+                              ) : (
+                                <ChevronsUpDown className="h-3 w-3 opacity-40" />
+                              )}
+                            </button>
+                          </th>
+                          <th className="h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            Next Task
+                          </th>
+                          <th className="h-12 px-2 sm:px-4 text-right align-middle font-medium text-muted-foreground whitespace-nowrap">
+                            Actions
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="[&_tr:last-child]:border-0">
+                        {sortedLoans.map((loan) => (
+                          <tr
+                            key={loan.id}
+                            className="border-b transition-colors hover:bg-muted/50"
+                          >
+                            <td className="p-2 sm:p-4 align-middle font-medium whitespace-nowrap">
+                              {loan.client_first_name || ""}{" "}
+                              {loan.client_last_name || ""}
+                            </td>
+                            <td className="p-2 sm:p-4 align-middle whitespace-nowrap">
+                              {loan.broker_first_name ? (
+                                <Badge variant="outline" className="text-xs">
+                                  <User className="h-3 w-3 mr-1" />
+                                  {loan.broker_first_name}{" "}
+                                  {loan.broker_last_name || ""}
+                                </Badge>
                               ) : (
                                 <span className="text-xs text-muted-foreground">
-                                  No pending tasks
+                                  Unassigned
                                 </span>
                               )}
-                            </div>
-                          </td>
-                          <td className="p-2 sm:p-4 align-middle text-right">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon">
-                                  <MoreVertical className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  className="gap-2"
-                                  onClick={() => handleOpenLoan(loan.id)}
-                                >
-                                  <Eye className="h-4 w-4" /> Open Loan
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  className="gap-2"
-                                  onClick={() => navigate(`/admin/pipeline`)}
-                                >
-                                  <ArrowRight className="h-4 w-4" /> Go to
-                                  Pipeline
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  className="gap-2"
-                                  onClick={() => navigate("/admin/documents")}
-                                >
-                                  <FileText className="h-4 w-4" /> View Docs
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            </td>
+                            <td className="p-2 sm:p-4 align-middle whitespace-nowrap">
+                              {loan.loan_type
+                                ? formatLoanType(loan.loan_type)
+                                : "N/A"}
+                            </td>
+                            <td className="p-2 sm:p-4 align-middle font-semibold whitespace-nowrap">
+                              $
+                              {new Intl.NumberFormat("en-US").format(
+                                loan.loan_amount || 0,
+                              )}
+                            </td>
+                            <td className="p-2 sm:p-4 align-middle">
+                              <Badge
+                                className={cn(
+                                  "text-white whitespace-nowrap text-xs",
+                                  getStatusColor(loan.status || "draft"),
+                                )}
+                              >
+                                {loan.status
+                                  ? formatLoanType(loan.status)
+                                  : "Draft"}
+                              </Badge>
+                            </td>
+                            <td className="p-2 sm:p-4 align-middle">
+                              <div className="flex items-center gap-1.5 sm:gap-2">
+                                {loan.next_task ? (
+                                  <>
+                                    <AlertCircle className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                    <span className="text-xs whitespace-nowrap">
+                                      {loan.next_task}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">
+                                    No pending tasks
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-2 sm:p-4 align-middle text-right">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon">
+                                    <MoreVertical className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem
+                                    className="gap-2"
+                                    onClick={() => handleOpenLoan(loan.id)}
+                                  >
+                                    <Eye className="h-4 w-4" /> Open Loan
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="gap-2"
+                                    onClick={() => navigate(`/admin/pipeline`)}
+                                  >
+                                    <ArrowRight className="h-4 w-4" /> Go to
+                                    Pipeline
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    className="gap-2"
+                                    onClick={() => navigate("/admin/documents")}
+                                  >
+                                    <FileText className="h-4 w-4" /> View Docs
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
                 )}
               </div>
             </CardContent>

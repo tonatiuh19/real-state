@@ -121,6 +121,8 @@ export interface LoanDetails {
   created_at: string;
   updated_at: string;
   submitted_at: string | null;
+  citizenship_status: string | null;
+  source_category: LeadSourceCategory | null;
   tasks: LoanTask[];
 }
 
@@ -612,6 +614,13 @@ export interface UpdateBrokerMetricsRequest {
 /**
  * Brokers Types
  */
+export interface PaginationInfo {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface Broker {
   id: number;
   email: string;
@@ -631,6 +640,7 @@ export interface Broker {
 export interface GetBrokersResponse {
   success: boolean;
   brokers: Broker[];
+  pagination: PaginationInfo;
 }
 
 export interface CreateBrokerRequest {
@@ -798,12 +808,14 @@ export interface GetClientsResponse {
     first_name: string;
     last_name: string;
     phone: string | null;
+    date_of_birth: string | null;
     status: string;
     created_at: string;
     total_applications: number;
     active_applications: number;
     total_conversations: number;
   }>;
+  pagination: PaginationInfo;
 }
 
 export interface GetTasksResponse {

@@ -28,6 +28,11 @@ import {
   Award,
   Shield,
   ArrowRightLeft,
+  Hash,
+  Percent,
+  Home,
+  Globe,
+  TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -92,6 +97,7 @@ import PDFSigningViewer from "@/components/PDFSigningViewer";
 import { PreApprovalLetterModal } from "@/components/PreApprovalLetterModal";
 import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
 import { fetchPreApprovalLetter } from "@/store/slices/preApprovalSlice";
+import { fetchAnnualMetrics } from "@/store/slices/dashboardSlice";
 import axios from "axios";
 import { toast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -179,7 +185,66 @@ export function LoanOverlay({
   const [isAssigningPartner, setIsAssigningPartner] = useState(false);
   const [isUpdatingPipelineStatus, setIsUpdatingPipelineStatus] =
     useState(false);
+  const [isUpdatingSource, setIsUpdatingSource] = useState(false);
   const [approvingTaskId, setApprovingTaskId] = useState<number | null>(null);
+
+  const LEAD_SOURCES: { value: string; label: string; code: string }[] = [
+    {
+      value: "current_client_referral",
+      label: "Current Client Referral",
+      code: "CCR",
+    },
+    { value: "past_client", label: "Past Client", code: "PC" },
+    {
+      value: "past_client_referral",
+      label: "Past Client Referral",
+      code: "PR",
+    },
+    { value: "personal_friend", label: "Personal Friend", code: "PF" },
+    { value: "realtor", label: "Realtor", code: "RLTR" },
+    { value: "advertisement", label: "Advertisement", code: "AD" },
+    { value: "business_partner", label: "Business Partner", code: "BUS" },
+    { value: "builder", label: "Builder", code: "BLDR" },
+    { value: "other", label: "Other", code: "—" },
+  ];
+
+  const handleUpdateSourceCategory = async (value: string) => {
+    if (!selectedLoan) return;
+    const newSource = value === "unset" ? null : value;
+    try {
+      setIsUpdatingSource(true);
+      await axios.patch(
+        `/api/loans/${selectedLoan.id}/source`,
+        { source_category: newSource },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      const label =
+        LEAD_SOURCES.find((s) => s.value === newSource)?.label ?? "Unknown";
+      toast({
+        title: "Lead Source Updated",
+        description: newSource
+          ? `Lead source set to "${label}".`
+          : "Lead source has been cleared.",
+      });
+      await dispatch(fetchLoanDetails(selectedLoan.id));
+      // Refresh annual metrics so the Lead Source Analysis dashboard reflects the change
+      dispatch(
+        fetchAnnualMetrics({
+          year: new Date().getFullYear(),
+          filterBrokerIds: [],
+        }),
+      );
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description:
+          error.response?.data?.error || "Failed to update lead source",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingSource(false);
+    }
+  };
 
   const PIPELINE_STATUSES = [
     { value: "app_sent", label: "App Sent" },
@@ -857,6 +922,10 @@ export function LoanOverlay({
               <SheetTitle className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight">
                 {selectedLoan.client_first_name} {selectedLoan.client_last_name}
               </SheetTitle>
+              <p className="text-xs text-gray-400 font-mono tracking-widest mt-0.5 flex items-center gap-1">
+                <Hash className="h-3 w-3" />
+                {selectedLoan.application_number}
+              </p>
               <div className="flex items-center gap-2 mt-3 flex-wrap">
                 <Badge
                   className={cn(
@@ -1105,60 +1174,247 @@ export function LoanOverlay({
                     Loan Overview
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="pt-4 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <CardContent className="pt-4 space-y-5">
+                  {/* Metric boxes */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                      <p className="text-sm font-medium text-green-800 mb-1">
+                      <p className="text-xs font-medium text-green-700 mb-1">
                         Loan Amount
                       </p>
-                      <p className="text-2xl font-bold text-green-900">
+                      <p className="text-xl font-bold text-green-900">
                         {formatCurrency(selectedLoan.loan_amount)}
                       </p>
                     </div>
-                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                      <p className="text-sm font-medium text-blue-800 mb-1">
-                        Property Value
-                      </p>
-                      <p className="text-2xl font-bold text-blue-900">
-                        {formatCurrency(selectedLoan.property_value)}
-                      </p>
+                    {selectedLoan.property_value != null && (
+                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                        <p className="text-xs font-medium text-blue-700 mb-1">
+                          Property Value
+                        </p>
+                        <p className="text-xl font-bold text-blue-900">
+                          {formatCurrency(selectedLoan.property_value)}
+                        </p>
+                      </div>
+                    )}
+                    {selectedLoan.down_payment != null && (
+                      <div className="p-3 bg-violet-50 border border-violet-200 rounded-lg">
+                        <p className="text-xs font-medium text-violet-700 mb-1">
+                          Down Payment
+                        </p>
+                        <p className="text-xl font-bold text-violet-900">
+                          {formatCurrency(selectedLoan.down_payment)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quick-info badges */}
+                  <div className="flex flex-wrap gap-2">
+                    {selectedLoan.property_value &&
+                      selectedLoan.loan_amount && (
+                        <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-xs px-2 py-1 font-semibold">
+                          <TrendingUp className="h-3 w-3 mr-1" />
+                          LTV{" "}
+                          {(
+                            (selectedLoan.loan_amount /
+                              selectedLoan.property_value) *
+                            100
+                          ).toFixed(1)}
+                          %
+                        </Badge>
+                      )}
+                    <Badge className="bg-indigo-50 text-indigo-700 border-indigo-200 text-xs px-2 py-1 capitalize">
+                      {selectedLoan.loan_type?.replace(/_/g, " ")}
+                    </Badge>
+                    {selectedLoan.property_type && (
+                      <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-xs px-2 py-1 capitalize">
+                        <Home className="h-3 w-3 mr-1" />
+                        {selectedLoan.property_type.replace(/_/g, " ")}
+                      </Badge>
+                    )}
+                    {selectedLoan.loan_term_months && (
+                      <Badge className="bg-teal-50 text-teal-700 border-teal-200 text-xs px-2 py-1">
+                        {selectedLoan.loan_term_months >= 12
+                          ? `${selectedLoan.loan_term_months / 12}yr`
+                          : `${selectedLoan.loan_term_months}mo`}{" "}
+                        term
+                      </Badge>
+                    )}
+                    {selectedLoan.interest_rate && (
+                      <Badge className="bg-rose-50 text-rose-700 border-rose-200 text-xs px-2 py-1">
+                        <Percent className="h-3 w-3 mr-1" />
+                        {selectedLoan.interest_rate}% rate
+                      </Badge>
+                    )}
+                    {selectedLoan.citizenship_status && (
+                      <Badge className="bg-sky-50 text-sky-700 border-sky-200 text-xs px-2 py-1 capitalize">
+                        <Globe className="h-3 w-3 mr-1" />
+                        {selectedLoan.citizenship_status.replace(/_/g, " ")}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* Detail grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 pt-1">
+                    {/* Property Address */}
+                    <div className="flex items-start gap-2">
+                      <MapPin className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-0.5">
+                          Property Address
+                        </p>
+                        <p className="text-sm text-gray-800">
+                          {selectedLoan.property_address || "TBD"}
+                          {(selectedLoan.property_city ||
+                            selectedLoan.property_state) && (
+                            <>
+                              <br />
+                              {[
+                                selectedLoan.property_city,
+                                selectedLoan.property_state,
+                                selectedLoan.property_zip,
+                              ]
+                                .filter(Boolean)
+                                .join(", ")}
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Contact */}
+                    <div className="flex items-start gap-2">
+                      <User className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-0.5">
+                          Contact
+                        </p>
+                        <p className="text-sm text-gray-800">
+                          {selectedLoan.client_email}
+                          {selectedLoan.client_phone && (
+                            <>
+                              <br />
+                              <a
+                                href={`tel:${selectedLoan.client_phone}`}
+                                className="hover:underline"
+                              >
+                                {selectedLoan.client_phone}
+                              </a>
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Application Created */}
+                    <div className="flex items-start gap-2">
+                      <Calendar className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-0.5">
+                          Application Date
+                        </p>
+                        <p className="text-sm text-gray-800">
+                          {new Date(selectedLoan.created_at).toLocaleDateString(
+                            "en-US",
+                            { month: "short", day: "numeric", year: "numeric" },
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Submitted At */}
+                    {selectedLoan.submitted_at && (
+                      <div className="flex items-start gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 mb-0.5">
+                            Submitted
+                          </p>
+                          <p className="text-sm text-gray-800">
+                            {new Date(
+                              selectedLoan.submitted_at,
+                            ).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Estimated Close */}
+                    {selectedLoan.estimated_close_date && (
+                      <div className="flex items-start gap-2">
+                        <Clock className="h-4 w-4 text-amber-400 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 mb-0.5">
+                            Est. Close Date
+                          </p>
+                          <p className="text-sm text-amber-700 font-medium">
+                            {new Date(
+                              selectedLoan.estimated_close_date.slice(0, 10) +
+                                "T12:00:00",
+                            ).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Actual Close */}
+                    {selectedLoan.actual_close_date && (
+                      <div className="flex items-start gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 mb-0.5">
+                            Actual Close Date
+                          </p>
+                          <p className="text-sm text-green-700 font-semibold">
+                            {new Date(
+                              selectedLoan.actual_close_date.slice(0, 10) +
+                                "T12:00:00",
+                            ).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Updated At */}
+                    <div className="flex items-start gap-2">
+                      <RefreshCw className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-0.5">
+                          Last Updated
+                        </p>
+                        <p className="text-sm text-gray-800">
+                          {new Date(selectedLoan.updated_at).toLocaleDateString(
+                            "en-US",
+                            { month: "short", day: "numeric", year: "numeric" },
+                          )}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                  <div className="space-y-3 pt-2">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                        <MapPin className="h-4 w-4 text-gray-500" />
-                        Property Address
+
+                  {/* Loan Purpose */}
+                  {selectedLoan.loan_purpose && (
+                    <div className="pt-3 border-t border-gray-100">
+                      <p className="text-xs font-medium text-gray-500 mb-1.5 flex items-center gap-1">
+                        <FileText className="h-3.5 w-3.5" />
+                        Loan Purpose
                       </p>
-                      <p className="text-sm text-gray-600">
-                        {selectedLoan.property_address}
-                        <br />
-                        {selectedLoan.property_city},{" "}
-                        {selectedLoan.property_state}{" "}
-                        {selectedLoan.property_zip}
+                      <p className="text-sm text-gray-700 leading-relaxed">
+                        {selectedLoan.loan_purpose}
                       </p>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                        <User className="h-4 w-4 text-gray-500" />
-                        Contact Information
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {selectedLoan.client_email}
-                        <br />
-                        {selectedLoan.client_phone}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                        <Calendar className="h-4 w-4 text-gray-500" />
-                        Application Date
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {new Date(selectedLoan.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1329,6 +1585,48 @@ export function LoanOverlay({
                         {PIPELINE_STATUSES.map((s) => (
                           <SelectItem key={s.value} value={s.value}>
                             {s.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Lead Source — admin only */}
+              {(user?.role === "admin" || user?.role === "superadmin") && (
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="pb-3 border-b border-gray-100">
+                    <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
+                      <TrendingUp className="h-5 w-5 text-rose-500" />
+                      Lead Source
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <p className="text-xs text-gray-500 mb-3">
+                      Track where this loan lead originated for metrics
+                      analysis.
+                    </p>
+                    <Select
+                      value={selectedLoan.source_category ?? "unset"}
+                      onValueChange={handleUpdateSourceCategory}
+                      disabled={isUpdatingSource}
+                    >
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="Select source..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unset">
+                          <span className="text-gray-400">— Not set —</span>
+                        </SelectItem>
+                        {LEAD_SOURCES.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>
+                            <span className="flex items-center gap-2">
+                              <span className="inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[10px] font-bold bg-rose-50 text-rose-600 border border-rose-200 min-w-[28px]">
+                                {s.code}
+                              </span>
+                              {s.label}
+                            </span>
                           </SelectItem>
                         ))}
                       </SelectContent>

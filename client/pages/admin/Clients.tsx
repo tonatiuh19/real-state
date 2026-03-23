@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Users, Search, Mail, Phone, Trash2 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -13,14 +13,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -31,39 +23,68 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { cn } from "@/lib/utils";
+import { DataGrid, type DataGridColumn } from "@/components/ui/data-grid";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchClients, deleteClient } from "@/store/slices/clientsSlice";
 import { useToast } from "@/hooks/use-toast";
+import type { GetClientsResponse } from "@shared/api";
+
+type ClientRow = GetClientsResponse["clients"][0];
 
 const Clients = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const { clients, isLoading: loading } = useAppSelector(
-    (state) => state.clients,
-  );
+  const {
+    clients,
+    isLoading: loading,
+    pagination,
+  } = useAppSelector((state) => state.clients);
   const { user } = useAppSelector((state) => state.brokerAuth);
   const isPartner = user?.role === "broker";
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState("first_name");
+  const [sortDir, setSortDir] = useState<"ASC" | "DESC">("ASC");
 
-  const filteredClients = useMemo(() => {
-    if (!searchQuery.trim()) return clients;
-    const q = searchQuery.toLowerCase();
-    return clients.filter(
-      (c) =>
-        c.first_name.toLowerCase().includes(q) ||
-        c.last_name.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        (c.phone || "").toLowerCase().includes(q),
-    );
-  }, [clients, searchQuery]);
+  const doFetch = useCallback(
+    (params: {
+      page?: number;
+      sortBy?: string;
+      sortOrder?: "ASC" | "DESC";
+      search?: string;
+    }) => {
+      dispatch(fetchClients({ limit: 30, ...params }));
+    },
+    [dispatch],
+  );
 
   useEffect(() => {
-    dispatch(fetchClients());
+    doFetch({
+      page: 1,
+      sortBy,
+      sortOrder: sortDir,
+      search: searchQuery || undefined,
+    });
   }, [dispatch]);
+
+  const handleSort = (field: string) => {
+    const newDir = sortBy === field && sortDir === "ASC" ? "DESC" : "ASC";
+    setSortBy(field);
+    setSortDir(newDir);
+    doFetch({
+      page: 1,
+      sortBy: field,
+      sortOrder: newDir,
+      search: searchQuery || undefined,
+    });
+  };
+
+  const handleSearch = (q: string) => {
+    setSearchQuery(q);
+    doFetch({ page: 1, sortBy, sortOrder: sortDir, search: q || undefined });
+  };
 
   const getInitials = (firstName: string, lastName: string) => {
     return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
@@ -100,8 +121,113 @@ const Clients = () => {
     }
   };
 
+  const columns: DataGridColumn<ClientRow>[] = [
+    {
+      key: "first_name",
+      label: "Client",
+      sortable: true,
+      render: (client) => (
+        <div className="flex items-center gap-3">
+          <Avatar>
+            <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+              {getInitials(client.first_name, client.last_name)}
+            </AvatarFallback>
+          </Avatar>
+          <div>
+            <div className="font-medium">
+              {client.first_name} {client.last_name}
+            </div>
+            <div className="text-xs text-muted-foreground">ID: {client.id}</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "email",
+      label: "Contact",
+      sortable: true,
+      render: (client) => (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-sm">
+            <Mail className="h-3 w-3 text-muted-foreground" />
+            <span className="truncate max-w-[200px]">{client.email}</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <Phone className="h-3 w-3 text-muted-foreground" />
+            {client.phone ? (
+              <a href={`tel:${client.phone}`} className="hover:underline">
+                {client.phone}
+              </a>
+            ) : (
+              <span className="text-muted-foreground">No phone</span>
+            )}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "total_applications",
+      label: "Applications",
+      sortable: true,
+      render: (client) => (
+        <Badge variant="outline" className="text-xs">
+          {client.total_applications} total
+        </Badge>
+      ),
+    },
+    {
+      key: "active_applications",
+      label: "Active",
+      sortable: true,
+      render: (client) => (
+        <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
+          {client.active_applications} active
+        </Badge>
+      ),
+    },
+    {
+      key: "date_of_birth",
+      label: "Date of Birth",
+      sortable: true,
+      className: "whitespace-nowrap text-sm",
+      render: (client) =>
+        client.date_of_birth ? (
+          new Date(client.date_of_birth).toLocaleDateString()
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      key: "created_at",
+      label: "Joined",
+      sortable: true,
+      className: "whitespace-nowrap text-sm text-muted-foreground",
+      render: (client) => new Date(client.created_at).toLocaleDateString(),
+    },
+    ...(!isPartner
+      ? [
+          {
+            key: "actions",
+            label: "Actions",
+            render: (client: ClientRow) => (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleDeleteClick(client)}
+                disabled={isDeleting}
+                className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </Button>
+            ),
+          } as DataGridColumn<ClientRow>,
+        ]
+      : []),
+  ];
+
   const clientStats = {
-    total: clients.length,
+    total: pagination?.total ?? clients.length,
     totalApplications: clients.reduce(
       (sum, c) => sum + c.total_applications,
       0,
@@ -138,7 +264,7 @@ const Clients = () => {
                 placeholder="Search clients..."
                 className="pl-9"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearch(e.target.value)}
               />
             </div>
           </div>
@@ -203,105 +329,92 @@ const Clients = () => {
               <CardHeader>
                 <CardTitle>All Clients</CardTitle>
                 <CardDescription>
-                  Showing {filteredClients.length} of {clients.length} clients
+                  {pagination
+                    ? `Showing ${(pagination.page - 1) * pagination.limit + 1}–${Math.min(pagination.page * pagination.limit, pagination.total)} of ${pagination.total} clients`
+                    : `${clients.length} clients`}
                   {searchQuery && ` matching "${searchQuery}"`}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Client</TableHead>
-                      <TableHead>Contact</TableHead>
-                      <TableHead>Applications</TableHead>
-                      <TableHead>Active</TableHead>
-                      <TableHead>Date of Birth</TableHead>
-                      <TableHead>SSN</TableHead>
-                      {!isPartner && <TableHead>Actions</TableHead>}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredClients.length === 0 ? (
-                      <TableRow>
-                        <TableCell
-                          colSpan={7}
-                          className="text-center py-8 text-muted-foreground"
-                        >
-                          No clients match your search.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredClients.map((client) => (
-                        <TableRow key={client.id}>
-                          <TableCell>
-                            <div className="flex items-center gap-3">
-                              <Avatar>
-                                <AvatarFallback className="bg-primary/10 text-primary font-semibold">
-                                  {getInitials(
-                                    client.first_name,
-                                    client.last_name,
-                                  )}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div>
-                                <div className="font-medium">
-                                  {client.first_name} {client.last_name}
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  Client ID: {client.id}
-                                </div>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2 text-sm">
-                                <Mail className="h-3 w-3 text-muted-foreground" />
-                                <span className="truncate max-w-[200px]">
-                                  {client.email}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 text-sm">
-                                <Phone className="h-3 w-3 text-muted-foreground" />
-                                <span>{client.phone || "No phone"}</span>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-xs">
-                              {client.total_applications} total
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
-                              {client.active_applications} active
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm">N/A</span>
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm font-mono">N/A</span>
-                          </TableCell>
-                          {!isPartner && (
-                            <TableCell>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleDeleteClick(client)}
-                                disabled={isDeleting}
-                                className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                                Delete
-                              </Button>
-                            </TableCell>
-                          )}
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <DataGrid<ClientRow>
+                  data={clients}
+                  rowKey={(c) => c.id}
+                  columns={columns}
+                  sortBy={sortBy}
+                  sortDir={sortDir}
+                  onSort={handleSort}
+                  pagination={pagination}
+                  onPageChange={(page) =>
+                    doFetch({
+                      page,
+                      sortBy,
+                      sortOrder: sortDir,
+                      search: searchQuery || undefined,
+                    })
+                  }
+                  isLoading={loading}
+                  emptyMessage="No clients match your search."
+                  tableMinWidth="820px"
+                  mobileCard={(client) => (
+                    <div className="rounded-lg border p-4 space-y-2 bg-white shadow-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <Avatar>
+                            <AvatarFallback className="bg-primary/10 text-primary font-semibold text-xs">
+                              {getInitials(client.first_name, client.last_name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium text-sm">
+                              {client.first_name} {client.last_name}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              ID: {client.id}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <Badge variant="outline" className="text-xs">
+                            {client.total_applications} apps
+                          </Badge>
+                          <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
+                            {client.active_applications} active
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Mail className="h-3 w-3" />
+                          <span className="truncate">{client.email}</span>
+                        </div>
+                        {client.phone && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Phone className="h-3 w-3" />
+                            <a
+                              href={`tel:${client.phone}`}
+                              className="hover:underline"
+                            >
+                              {client.phone}
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                      {!isPartner && (
+                        <div className="flex justify-end pt-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDeleteClick(client)}
+                            disabled={isDeleting}
+                            className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                />
               </CardContent>
             </Card>
           </div>

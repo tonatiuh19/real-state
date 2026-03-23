@@ -250,7 +250,16 @@ const Profile = () => {
                       />
                     ) : (
                       <p className="text-lg font-medium">
-                        {profile.phone || "Not provided"}
+                        {profile.phone ? (
+                          <a
+                            href={`tel:${profile.phone}`}
+                            className="hover:underline"
+                          >
+                            {profile.phone}
+                          </a>
+                        ) : (
+                          "Not provided"
+                        )}
                       </p>
                     )}
                   </div>
