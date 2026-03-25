@@ -126,15 +126,17 @@ const Clients = () => {
       key: "first_name",
       label: "Client",
       sortable: true,
+      sticky: true,
+      className: "min-w-[160px]",
       render: (client) => (
-        <div className="flex items-center gap-3">
-          <Avatar>
+        <div className="flex items-center gap-3 min-w-0">
+          <Avatar className="shrink-0">
             <AvatarFallback className="bg-primary/10 text-primary font-semibold">
               {getInitials(client.first_name, client.last_name)}
             </AvatarFallback>
           </Avatar>
-          <div>
-            <div className="font-medium">
+          <div className="min-w-0">
+            <div className="font-medium truncate">
               {client.first_name} {client.last_name}
             </div>
             <div className="text-xs text-muted-foreground">ID: {client.id}</div>
@@ -146,6 +148,7 @@ const Clients = () => {
       key: "email",
       label: "Contact",
       sortable: true,
+      className: "min-w-[180px]",
       render: (client) => (
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm">
@@ -169,6 +172,7 @@ const Clients = () => {
       key: "total_applications",
       label: "Applications",
       sortable: true,
+      shrink: true,
       render: (client) => (
         <Badge variant="outline" className="text-xs">
           {client.total_applications} total
@@ -179,6 +183,7 @@ const Clients = () => {
       key: "active_applications",
       label: "Active",
       sortable: true,
+      shrink: true,
       render: (client) => (
         <Badge className="text-xs bg-primary/10 text-primary border-primary/20">
           {client.active_applications} active
@@ -189,7 +194,8 @@ const Clients = () => {
       key: "date_of_birth",
       label: "Date of Birth",
       sortable: true,
-      className: "whitespace-nowrap text-sm",
+      shrink: true,
+      className: "text-sm",
       render: (client) =>
         client.date_of_birth ? (
           new Date(client.date_of_birth).toLocaleDateString()
@@ -201,7 +207,8 @@ const Clients = () => {
       key: "created_at",
       label: "Joined",
       sortable: true,
-      className: "whitespace-nowrap text-sm text-muted-foreground",
+      shrink: true,
+      className: "text-sm text-muted-foreground",
       render: (client) => new Date(client.created_at).toLocaleDateString(),
     },
     ...(!isPartner
@@ -209,6 +216,7 @@ const Clients = () => {
           {
             key: "actions",
             label: "Actions",
+            shrink: true,
             render: (client: ClientRow) => (
               <Button
                 variant="outline"
@@ -286,44 +294,6 @@ const Clients = () => {
           </Card>
         ) : (
           <div className="space-y-6">
-            {/* Client Stats */}
-            <div className="grid gap-4 md:grid-cols-3">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    Total Clients
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{clientStats.total}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    Total Applications
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">
-                    {clientStats.totalApplications}
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    Active Applications
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-primary">
-                    {Number(clientStats.activeApplications)}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
             {/* Clients Table */}
             <Card>
               <CardHeader>
@@ -354,7 +324,6 @@ const Clients = () => {
                   }
                   isLoading={loading}
                   emptyMessage="No clients match your search."
-                  tableMinWidth="820px"
                   mobileCard={(client) => (
                     <div className="rounded-lg border p-4 space-y-2 bg-white shadow-sm">
                       <div className="flex items-start justify-between gap-2">

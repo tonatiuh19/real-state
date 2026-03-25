@@ -26,7 +26,7 @@
 2. Mortgage Banker reviews, assigns loan to a broker and optionally a Realtor partner
         ↓
 3. Loan moves through the pipeline stages:
-   app_sent → application_received → prequalified → preapproved
+   draft → app_sent → application_received → prequalified → preapproved
    → under_contract_loan_setup → submitted_to_underwriting
    → approved_with_conditions → clear_to_close → docs_out → loan_funded
         ↓
@@ -126,6 +126,7 @@ The entire app is deployed as a **single Vercel project**. The `vercel.json` rou
 ### Loan Application Status Enum (Full Pipeline)
 
 ```
+draft
 app_sent
 application_received
 prequalified
@@ -137,6 +138,8 @@ clear_to_close
 docs_out
 loan_funded
 ```
+
+> **Note:** `draft` is the initial state when a Mortgage Banker creates a loan manually (before the app is formally sent). The **Pipeline Kanban** board displays 9 of these 11 statuses as columns — it skips `app_sent` and `prequalified` as standalone columns (those statuses still exist in the DB and trigger reminder flows, but loans at those stages appear in the `draft`/`application_received` columns on the board).
 
 ### Loan Types
 
@@ -1049,7 +1052,7 @@ All wrapped in `AdminLayout`. Require broker session.
 | `/admin/conversations`           | `Conversations`          |
 | `/admin/reports`                 | `Reports`                |
 | `/admin/brokers`                 | `Brokers`                |
-| `/admin/broker-profile`          | `BrokerProfile`          |
+| `/admin/broker/:id`              | `BrokerProfile`          |
 | `/admin/reminder-flows`          | `ReminderFlows`          |
 | `/admin/contact-submissions`     | `ContactSubmissions`     |
 | `/admin/scheduler`               | `AdminScheduler`         |
@@ -1063,3 +1066,351 @@ All wrapped in `AdminLayout`. Require broker session.
   - `AdminLayout` → `Drawer.Navigator` (sidebar drawer matching the 13 menu items) inside a `Stack.Navigator`
 - Auth guards: use `useAppSelector` to check `isAuthenticated` and redirect accordingly from a root navigator.
 - The `/apply/:brokerToken` pattern maps to a deep-link or a screen param in RN.
+
+---
+
+## Pipeline Kanban Board
+
+**Route:** `/admin/pipeline` | **File:** `client/pages/admin/Pipeline.tsx`
+
+The Pipeline is a **horizontal Kanban board** — the core loan management view for Mortgage Bankers and Partners.
+
+### Header Controls
+
+| Control                | Behaviour                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Search input           | Real-time filter by applicant name or application number. Shows result count badge when active                        |
+| Refresh button         | Re-fetches loans with current filters; shows spinner                                                                  |
+| Filters dropdown       | Multi-filter: Status, Priority, Loan Type, Date Range. Badge shows active filter count. "Clear all" resets everything |
+| **New Loan** button    | Opens `NewLoanWizard` modal (admin only)                                                                              |
+| **Get My Link** button | Opens `BrokerShareLinkModal` for partner's referral link (partner role)                                               |
+
+**Filter options:**
+
+- **Priority:** Urgent 🔥 / High ⚡ / Medium 📋 / Low 📝
+- **Loan Type:** Purchase / Refinance
+- **Date Range:** Today / This Week / This Month / This Quarter / All Time
+
+### Kanban Columns (9 displayed)
+
+| Column ID                   | Display Name                | Color   |
+| --------------------------- | --------------------------- | ------- |
+| `draft`                     | Draft                       | Slate   |
+| `application_received`      | Application Received        | Blue    |
+| `preapproved`               | Pre-Approved                | Teal    |
+| `under_contract_loan_setup` | Under Contract / Loan Setup | Yellow  |
+| `submitted_to_underwriting` | Submitted to Underwriting   | Orange  |
+| `approved_with_conditions`  | Approved with Conditions    | Purple  |
+| `clear_to_close`            | Clear to Close              | Indigo  |
+| `docs_out`                  | Docs Out                    | Green   |
+| `loan_funded`               | Loan Funded                 | Emerald |
+
+> `app_sent` and `prequalified` are DB statuses that trigger reminder flows but are **not shown as separate Kanban columns** — loans in those states appear in adjacent columns.
+
+Each column header shows: name + count badge + short description.
+
+### Loan Card Structure (per card)
+
+```
+┌──────────────────────────────┐
+│ [Priority color bar top]      │  ← red/orange/blue/gray
+│ Client Name                   │
+│ #LA00000000   (monospace)     │
+│ $440,000      (green)         │
+│ [purchase badge]              │
+│ 123 Oak Ave, San Francisco    │  ← truncated
+│ John Broker   (or [Unassigned]│  ← amber badge if none
+│ Mar 1 · Est: Jun 15           │
+└──────────────────────────────┘
+```
+
+Clicking a card opens the **Loan Detail Sheet** (`LoanOverlay`).
+
+### Drag & Drop
+
+- **Admin only** — Partners cannot drag cards.
+- Uses HTML5 drag-and-drop API. Dragged card gets reduced opacity + scale; drop target column highlights with a blue border.
+- Dropping across columns triggers a **confirmation AlertDialog** showing the from → to column names with a warning that Reminder Flows will be triggered.
+- State: `draggingLoanId` / `dragOverColumnId` tracked in local component state.
+
+### Redux State
+
+- Slice: `pipelineSlice`
+- Key actions: `fetchPipelineLoans`, `updateLoanStatus`, `fetchLoanDetails`
+
+---
+
+## Loan Detail Sheet (LoanOverlay)
+
+**File:** `client/components/LoanOverlay.tsx`
+
+A full-height right-side **Sheet** (`sm:max-w-3xl`) that slides in when a loan card is clicked from the Pipeline, Dashboard, or any loan table. This is the central hub for all per-loan actions.
+
+### Header
+
+| Element                 | Description                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client full name        | Large heading                                                                                                                                        |
+| Application number      | `#ENxxxxxx` monospace badge                                                                                                                          |
+| Priority badge          | Color-coded: urgent (red) / high (orange) / medium (blue) / low (gray)                                                                               |
+| Pipeline status badge   | Current status label                                                                                                                                 |
+| **Export MISMO**        | Downloads MISMO 3.4 XML. Only enabled when all tasks are approved. Hidden for `broker` role                                                          |
+| **Pre-Approval Letter** | Opens `PreApprovalLetterModal`. Locked until all tasks approved. Partners see "Waiting for Mortgage Banker" tooltip if tasks done but amount not set |
+| **Pre-Approval Banner** | Shown when an active letter exists — displays approved amount, max approved amount cap, and expiry date                                              |
+
+### Sections (rendered in order)
+
+#### 1. Loan Overview
+
+- Metric boxes: **Loan Amount**, **Property Value**, **Down Payment**
+- Quick badges: LTV%, loan type, property type, term, interest rate, citizenship status
+- Detail grid: Property Address, Contact (email + phone), Application Date, Submitted Date, Est. Close Date, Actual Close Date, Last Updated, Loan Purpose
+
+#### 2. Assigned Mortgage Banker _(admin only)_
+
+Dropdown to assign/reassign from active `admin`-role brokers. Includes an "unassign" option.
+
+#### 3. Assigned Partner _(admin only)_
+
+Same pattern as above but for `broker`-role users.
+
+#### 4. Pipeline Status _(admin only)_
+
+Dropdown to manually move the loan to any pipeline stage. Triggers a **Status Change Confirmation** dialog requiring a mandatory comment (max 500 chars, written to audit trail). Moving stages triggers reminder flows.
+
+#### 5. Lead Source _(admin only)_
+
+Dropdown to set how this loan was sourced. Updates the **Lead Source Analysis** chart on the Dashboard.
+
+| Option                  | Short Code |
+| ----------------------- | ---------- |
+| Current Client Referral | CCR        |
+| Past Client             | PC         |
+| Past Client Referral    | PCR        |
+| Personal Friend         | PF         |
+| Realtor                 | RE         |
+| Advertisement           | AD         |
+| Business Partner        | BP         |
+| Builder                 | BU         |
+| Other                   | OT         |
+
+#### 6. Task Progress
+
+Progress bar showing `approved / total` tasks with % complete. "Ready for Export" badge shown when 100% complete. Warning callout when tasks are incomplete.
+
+#### 7. Tasks List
+
+Collapsible task cards. Each card shows:
+
+| Element                          | Description                                                                                                      |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Title                            | Strikethrough styling when completed                                                                             |
+| Task type badge                  | `document` / `form` / `document_signing`                                                                         |
+| Due date                         | With overdue highlight                                                                                           |
+| Priority badge                   | urgent / high / medium / low                                                                                     |
+| Status dropdown                  | `pending` / `in_progress` / `completed` / `pending_approval` / `approved` / `reopened` / `cancelled` / `overdue` |
+| **Approve** + **Reopen** buttons | Shown when status is `pending_approval`                                                                          |
+| **Delete** button                | Shown on editable statuses                                                                                       |
+
+**Expanded task sub-sections (revealed on expand):**
+
+- **Form Responses** — field label + client-submitted value pairs
+- **PDF Documents** — filename with external "View" link
+- **Images** — main image + extras with "View" links
+- **Signatures** (for `document_signing` tasks) — signed zones with signature image previews + "View in PDF" button (opens `PDFSigningViewer` in read-only mode)
+
+### Task Actions & Dialogs
+
+| Dialog                         | Trigger                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| **Add Task**                   | "Add Task" button — multi-select list of templates not yet assigned to this loan      |
+| **Status Change Confirmation** | Any manual status move — requires mandatory comment                                   |
+| **Reopen Task Dialog**         | Reopening an approved/completed task — textarea for feedback sent to client via email |
+| **Delete Task Confirmation**   | Shows task title, type, status, and due date before delete                            |
+| **Bulk Delete**                | Toggle bulk mode → checkboxes on all tasks → "Delete Selected" button                 |
+
+### Redux State Sources
+
+`pipelineSlice`, `tasksSlice`, `brokersSlice`, `communicationTemplatesSlice`, `preApprovalSlice`, `clientPortalSlice`, `dashboardSlice`
+
+---
+
+## Pre-Approval Letter Modal
+
+**File:** `client/components/PreApprovalLetterModal.tsx`
+
+Opened from the LoanOverlay header via the **Pre-Approval Letter** button. Handles the full lifecycle: create, preview, edit HTML, download PDF, send to client, and delete.
+
+### Props
+
+```typescript
+interface PreApprovalLetterModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  loanId: number;
+  loanAmount: number; // pre-fills the approved amount field
+}
+```
+
+### Redux Slices Used
+
+| Slice                    | State read                                           | Thunks dispatched                                                                                         |
+| ------------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `brokerAuth`             | `user` (role, name), `sessionToken`                  | —                                                                                                         |
+| `preApproval`            | `letters[loanId]`, `loadingLoanIds`, `savingLoanIds` | `fetchPreApprovalLetter`, `createPreApprovalLetter`, `updatePreApprovalLetter`, `deletePreApprovalLetter` |
+| `communicationTemplates` | `emailTemplates`                                     | `fetchEmailTemplates`                                                                                     |
+
+### Three Visual States
+
+The modal shows one of three states depending on data:
+
+1. **Loading** — spinner + "Loading letter..." (while `loadingLoanIds` contains the `loanId`)
+2. **No letter → Create Form** — when `letters[loanId]` is `null`
+3. **Letter exists → Preview / Edit Tabs** — after a letter is loaded or created
+
+On open, dispatches `fetchPreApprovalLetter(loanId)`.
+
+---
+
+### State 2: Create Form
+
+Uses **Formik + Yup**. `validateOnMount/Change/Blur: true`.
+
+#### Yup Validation
+
+| Field                 | Rules                                                      |
+| --------------------- | ---------------------------------------------------------- |
+| `max_approved_amount` | positive number, required                                  |
+| `approved_amount`     | positive number, required, must be `≤ max_approved_amount` |
+| `loan_type`           | required                                                   |
+| `fico_score`          | integer, 300–850, required                                 |
+| `letter_date`         | date string, required                                      |
+| `expires_at`          | date string, required                                      |
+
+#### Create Form Fields
+
+| Field                      | Type                       | Notes                                                                                                                         |
+| -------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Maximum Allowed Amount** | `number` input, `$` prefix | **Admin only.** Ceiling — partners cannot exceed it when editing. Helper: "Ceiling — brokers cannot exceed this when editing" |
+| **Pre-Approved Amount**    | `number` input, `$` prefix | Visible to all. Pre-filled with `Math.round(loanAmount)`. Auto-clamped if `max` is changed to a lower value                   |
+| **Loan Type**              | `<Select>`                 | Options: `FHA`, `Conventional`, `USDA`, `VA`, `Non-QM`                                                                        |
+| **FICO Score**             | `number` input             | 300–850                                                                                                                       |
+| **Letter Date**            | `date` input               | Required                                                                                                                      |
+| **Expiry Date**            | `date` input               | Required                                                                                                                      |
+
+A blue info banner is shown to partners: "Only Mortgage Bankers can set the maximum allowed amount".
+
+**Submit:** "Create Pre-Approval Letter" button → disabled if invalid or saving. On success: creates letter, shows "Letter Created" toast, switches to Preview tab.
+
+---
+
+### State 3: Letter View
+
+#### Header Pills (when letter exists)
+
+- Approved amount pill — formatted `$XXX,XXX`
+- Active/Inactive badge — green `CheckCircle2` "Active" or gray "Inactive"
+- Expiry badge — amber "Expires \<date\>" (only shown if `expires_at` is set)
+
+#### Toolbar Buttons (Preview tab)
+
+| Button                        | Action                                                                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Print** (`Printer`)         | Opens a new window, injects rendered HTML with print CSS, calls `window.print()` after 250ms                                                                             |
+| **Download PDF** (`Download`) | Dynamically imports `html2pdf.js`, proxies images via `/api/image-proxy` to avoid CORS, outputs `Pre-Approval-<application_number>.pdf` (letter-size portrait, 2× scale) |
+| **Send to Client** (`Mail`)   | Opens the Send Email sub-dialog                                                                                                                                          |
+| **Delete** (`Trash2`)         | Opens the Delete Confirmation `AlertDialog`. Hidden for partners                                                                                                         |
+
+---
+
+### Preview Tab
+
+Renders the saved `html_content` with all `{{PLACEHOLDER}}` tokens replaced via `renderLetterHtml()`. Fixed container width `680px–48rem`, horizontally scrollable on narrow screens. White letter card with shadow + `rounded-2xl`.
+
+---
+
+### Edit Tab
+
+Visible to both admin and partner (with different field access). Shows an amber dot when `hasUnsavedChanges`.
+
+#### Section 1: Amounts & Dates
+
+| Field                      | Admin                                                                 | Partner                                                        |
+| -------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **Maximum Allowed Amount** | Read-only, labeled "Locked after creation — delete to change" (amber) | Read-only, labeled "Set by the Mortgage Banker — hard ceiling" |
+| **Pre-Approved Amount**    | Editable. Red error if exceeds max                                    | Editable. Red error if exceeds max                             |
+| **Letter Date**            | Editable date input                                                   | Hidden                                                         |
+| **Expiry Date**            | Editable date input (optional)                                        | Hidden                                                         |
+
+#### Section 2: HTML Content Editor (admin only)
+
+- **Placeholder chips** — 16 clickable tokens; clicking any appends it to the textarea:
+  ```
+  {{COMPANY_LOGO}}, {{COMPANY_NAME}}, {{COMPANY_ADDRESS}}, {{COMPANY_PHONE}},
+  {{COMPANY_NMLS}}, {{LETTER_DATE}}, {{EXPIRES_SHORT}}, {{CLIENT_FULL_NAME}},
+  {{PROPERTY_ADDRESS}}, {{APPROVED_AMOUNT}}, {{EXPIRY_NOTE}},
+  {{BROKER_PHOTO}}, {{BROKER_FULL_NAME}}, {{BROKER_LICENSE}},
+  {{BROKER_PHONE}}, {{BROKER_EMAIL}}
+  ```
+- **Textarea** — monospace, `min-h-[320px]`, resizable, `spellCheck=false`
+- **Reset button** — reverts HTML to last saved state; clears `hasUnsavedChanges`
+
+#### Section 3: Live Preview (inside Edit tab)
+
+Inline preview that re-renders in real time as the HTML or amount changes.
+
+#### Edit Footer
+
+- Left: amber "You have unsaved changes" warning (`AlertCircle`) when dirty
+- **Cancel** — resets edits, switches to Preview tab
+- **Save Changes** — dispatches `updatePreApprovalLetter`. Admin payload includes `html_content`, `letter_date`, `expires_at`; partner payload only includes `approved_amount`. Disabled if saving or amount exceeds max.
+
+---
+
+### Sub-dialog: Delete Confirm (`AlertDialog`)
+
+> "This will permanently delete the pre-approval letter for this loan application. This action cannot be undone."
+
+Dispatches `deletePreApprovalLetter(loanId)` on confirm. Shows "Letter Deleted" toast.
+
+---
+
+### Sub-dialog: Send to Client (`Dialog`)
+
+Opens with `fetchEmailTemplates()` dispatched and subject pre-filled as `"Your Pre-Approval Letter — <application_number>"`.
+
+| Field              | Description                                                                                                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **To**             | Read-only display: `First Last <email>`. Amber alert if no email on file                                                                                                                   |
+| **Subject**        | Pre-filled, editable `<Input>`                                                                                                                                                             |
+| **Email Template** | Select: "Default template (recommended)", "No template — attach PDF only", or any active email template. Hint shown when a template with `{{pre_approval_letter}}` placeholder is selected |
+| **Custom Message** | `<Textarea>` — only shown for "default" or "no template" options                                                                                                                           |
+
+**Send flow:** Attempts to generate a PDF via `html2pdf.js` first (images proxied through `/api/image-proxy`), then POSTs to `POST /api/loans/:loanId/pre-approval-letter/send-email` with `{ subject, custom_message?, template_id?, pdf_base64? }`. Send still proceeds even if PDF generation fails (letter sent without attachment). Shows "Email Sent" toast on success.
+
+---
+
+### `renderLetterHtml()` — Placeholder Engine
+
+Replaces 20 `{{TOKEN}}` patterns in the HTML template. Notable behaviours:
+
+- **`{{EXPIRY_NOTE}}`** — renders a specific expiry date sentence or a "no expiration" disclaimer depending on whether `expires_at` is set.
+- **`{{BROKER_SIGNATURE_SECTION}}`** — if the loan has both a Mortgage Banker and a Partner, renders a two-column side-by-side signature block (photo, name, license, phone, email). Otherwise single-column.
+- **`{{BROKER_PHOTO}}`** — circular `<img>` if URL present; styled initials `<div>` fallback.
+- **`{{COMPANY_LOGO}}`** — uses `letter.company_logo_url` or falls back to the Disruptinglabs CDN URL.
+- Dates processed with `safeDate()` to strip the ISO `T` portion before constructing `Date` objects (prevents timezone off-by-one errors).
+
+---
+
+### Toast Summary
+
+| Event                        | Variant     |
+| ---------------------------- | ----------- |
+| Letter created               | default     |
+| Letter saved                 | default     |
+| Letter deleted               | default     |
+| Email sent                   | default     |
+| Amount exceeds max on save   | destructive |
+| Save / create / delete error | destructive |
+| Email send failed            | destructive |
+| PDF download failed          | destructive |

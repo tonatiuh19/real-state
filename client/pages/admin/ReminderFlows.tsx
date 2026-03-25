@@ -1893,7 +1893,8 @@ const ReminderFlows = () => {
       key: "flow_name",
       label: "Flow",
       sortable: true,
-      className: "font-medium text-xs",
+      sticky: true,
+      className: "font-medium text-xs min-w-[140px]",
       render: (ex) => (
         <span className="font-medium text-xs">{ex.flow_name}</span>
       ),
@@ -1909,6 +1910,7 @@ const ReminderFlows = () => {
       key: "application_number",
       label: "Application",
       sortable: true,
+      shrink: true,
       className: "text-xs text-muted-foreground",
       render: (ex) => (
         <span className="text-xs text-muted-foreground">
@@ -1920,6 +1922,7 @@ const ReminderFlows = () => {
       key: "status",
       label: "Status",
       sortable: true,
+      shrink: true,
       render: (ex) => (
         <Badge
           variant="outline"
@@ -1944,6 +1947,7 @@ const ReminderFlows = () => {
       key: "next_execution_at",
       label: "Next Run",
       sortable: true,
+      shrink: true,
       className: "text-xs text-muted-foreground",
       render: (ex) => (
         <span className="text-xs text-muted-foreground">

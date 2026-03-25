@@ -340,8 +340,9 @@ export default function Brokers() {
                 key: "first_name",
                 label: "Name",
                 sortable: true,
+                className: "min-w-[140px]",
                 render: (b) => (
-                  <span className="font-medium">
+                  <span className="font-medium truncate block">
                     {b.first_name} {b.last_name}
                   </span>
                 ),
@@ -349,16 +350,20 @@ export default function Brokers() {
               {
                 key: "email",
                 label: "Contact",
+                className: "min-w-[180px]",
                 render: (b) => (
-                  <div className="flex flex-col gap-1 text-sm">
+                  <div className="flex flex-col gap-1 text-sm min-w-0">
                     <div className="flex items-center gap-1.5 text-gray-600">
-                      <Mail className="h-3.5 w-3.5" />
-                      <span>{b.email}</span>
+                      <Mail className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{b.email}</span>
                     </div>
                     {b.phone && (
                       <div className="flex items-center gap-1.5 text-gray-600">
-                        <Phone className="h-3.5 w-3.5" />
-                        <a href={`tel:${b.phone}`} className="hover:underline">
+                        <Phone className="h-3.5 w-3.5 shrink-0" />
+                        <a
+                          href={`tel:${b.phone}`}
+                          className="hover:underline truncate"
+                        >
                           {b.phone}
                         </a>
                       </div>
@@ -370,6 +375,7 @@ export default function Brokers() {
                 key: "role",
                 label: "Role",
                 sortable: true,
+                shrink: true,
                 render: (b) => (
                   <Badge className={getRoleBadgeColor(b.role)}>
                     {b.role === "admin" ? "Mortgage Banker" : "Partner"}
@@ -380,6 +386,7 @@ export default function Brokers() {
                 key: "status",
                 label: "Status",
                 sortable: true,
+                shrink: true,
                 render: (b) => (
                   <Badge variant={getStatusBadgeVariant(b.status)}>
                     {b.status}
@@ -390,6 +397,7 @@ export default function Brokers() {
                 key: "license_number",
                 label: "License",
                 sortable: true,
+                shrink: true,
                 render: (b) => (
                   <span className="text-sm text-gray-600">
                     {b.license_number || "\u2014"}
@@ -399,6 +407,7 @@ export default function Brokers() {
               {
                 key: "specializations",
                 label: "Specializations",
+                wrap: true,
                 render: (b) =>
                   b.specializations && b.specializations.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
@@ -422,6 +431,7 @@ export default function Brokers() {
                     {
                       key: "actions",
                       label: "Actions",
+                      shrink: true,
                       headerClassName: "text-right",
                       render: (b: Broker) => (
                         <div className="flex items-center justify-end gap-2">

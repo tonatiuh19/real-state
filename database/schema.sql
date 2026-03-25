@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Mar 23, 2026 at 03:10 PM
+-- Generation Time: Mar 24, 2026 at 01:36 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -349,7 +349,7 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`, `created_by_broker_id`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', '+524741400363', 'admin', 'active', 1, '2026-03-22 19:16:55', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-22 19:16:55', NULL),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', '+524741400363', 'admin', 'active', 1, '2026-03-23 15:14:17', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-23 15:14:17', NULL),
 (3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-03-17 17:54:46', '380277', '[]', '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-03-17 17:54:46', NULL),
 (4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-03-18 16:09:22', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-03-18 16:09:22', NULL),
 (6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-16 17:00:59', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-16 17:00:59', NULL),
@@ -444,7 +444,7 @@ CREATE TABLE `broker_sessions` (
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
 (131, 6, 744871, 1, NULL, NULL, '2026-03-16 23:15:36', '2026-03-16 23:00:36'),
 (135, 3, 599254, 1, NULL, NULL, '2026-03-18 00:09:24', '2026-03-17 23:54:24'),
-(150, 1, 958239, 1, NULL, NULL, '2026-03-23 05:47:12', '2026-03-23 05:32:12');
+(151, 1, 586666, 1, NULL, NULL, '2026-03-23 21:28:53', '2026-03-23 21:13:53');
 
 -- --------------------------------------------------------
 
@@ -2669,7 +2669,7 @@ ALTER TABLE `broker_profiles`
 -- AUTO_INCREMENT for table `broker_sessions`
 --
 ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=151;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=152;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
