@@ -33,6 +33,7 @@ import {
   Home,
   Globe,
   TrendingUp,
+  Briefcase,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -1415,6 +1416,51 @@ export function LoanOverlay({
                       </p>
                     </div>
                   )}
+
+                  {/* Employment */}
+                  {(selectedLoan.employment_status ||
+                    selectedLoan.employer_name ||
+                    selectedLoan.years_employed) && (
+                    <div className="pt-3 border-t border-gray-100">
+                      <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
+                        <Briefcase className="h-3.5 w-3.5" />
+                        Employment
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-2">
+                        {selectedLoan.employment_status && (
+                          <div>
+                            <p className="text-xs text-gray-400">Status</p>
+                            <p className="text-sm text-gray-800 capitalize">
+                              {selectedLoan.employment_status.replace(
+                                /_/g,
+                                " ",
+                              )}
+                            </p>
+                          </div>
+                        )}
+                        {selectedLoan.employer_name && (
+                          <div>
+                            <p className="text-xs text-gray-400">
+                              Employer / Business
+                            </p>
+                            <p className="text-sm text-gray-800">
+                              {selectedLoan.employer_name}
+                            </p>
+                          </div>
+                        )}
+                        {selectedLoan.years_employed && (
+                          <div>
+                            <p className="text-xs text-gray-400">
+                              Years Employed
+                            </p>
+                            <p className="text-sm text-gray-800">
+                              {selectedLoan.years_employed}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -2242,21 +2288,22 @@ export function LoanOverlay({
                 </CardContent>
               </Card>
 
-              {/* Notes */}
-              {selectedLoan.notes && (
-                <Card className="border-gray-200 shadow-sm">
-                  <CardHeader className="pb-3 border-b border-gray-100">
-                    <CardTitle className="text-lg text-gray-900">
-                      Notes
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-4">
-                    <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-                      {selectedLoan.notes}
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
+              {/* Notes — skip the auto-generated wizard submission text */}
+              {selectedLoan.notes &&
+                !selectedLoan.notes.startsWith("Public wizard submission.") && (
+                  <Card className="border-gray-200 shadow-sm">
+                    <CardHeader className="pb-3 border-b border-gray-100">
+                      <CardTitle className="text-lg text-gray-900">
+                        Notes
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                        {selectedLoan.notes}
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
             </div>
           </>
         ) : (

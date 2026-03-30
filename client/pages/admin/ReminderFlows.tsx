@@ -1326,83 +1326,135 @@ function FlowCanvasInner({ flow, onBack, onSaved }: FlowCanvasProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Canvas Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b bg-background shrink-0 flex-wrap">
+      <div className="flex flex-col gap-2 px-3 md:px-4 py-3 border-b bg-background shrink-0">
         <Button
           variant="ghost"
           size="sm"
-          className="gap-1.5 h-8"
+          className="gap-1.5 h-8 w-fit"
           onClick={onBack}
         >
           <ArrowLeft className="h-4 w-4" />
           Flows
         </Button>
-        <div className="h-5 w-px bg-border" />
-        <div className="flex items-center gap-2 flex-1 min-w-0">
+
+        {/* Desktop editor controls */}
+        <div className="hidden md:flex items-center gap-3">
+          <div className="h-5 w-px bg-border" />
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <Input
+              value={flowName}
+              onChange={(e) => setFlowName(e.target.value)}
+              className="h-8 text-sm font-medium max-w-xs"
+            />
+            <Select
+              value={triggerEvent}
+              onValueChange={(v) => setTriggerEvent(v as ReminderTriggerEvent)}
+            >
+              <SelectTrigger className="h-8 text-sm w-52">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRIGGER_EVENT_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-1.5 text-sm">
+              <Label className="text-xs text-muted-foreground">
+                Start after
+              </Label>
+              <Input
+                type="number"
+                min={0}
+                value={triggerDelay}
+                onChange={(e) => setTriggerDelay(Number(e.target.value))}
+                className="h-8 text-sm w-16"
+              />
+              <span className="text-xs text-muted-foreground">days</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <Switch
+                checked={isActive}
+                onCheckedChange={setIsActive}
+                className="scale-90"
+              />
+              <Label className="text-xs">
+                {isActive ? "Active" : "Inactive"}
+              </Label>
+            </div>
+            <Button
+              size="sm"
+              className="gap-1.5 h-8"
+              onClick={handleSave}
+              disabled={isSaving}
+            >
+              <Save className="h-3.5 w-3.5" />
+              {isSaving ? "Saving…" : "Save Flow"}
+            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-primary"
+                  onClick={() => setShowHelp(true)}
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>How to use the flow editor</TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+
+        {/* Mobile header controls (editor itself is desktop-only) */}
+        <div className="md:hidden space-y-2">
           <Input
             value={flowName}
             onChange={(e) => setFlowName(e.target.value)}
-            className="h-8 text-sm font-medium max-w-xs"
+            className="h-8 text-sm font-medium"
           />
-          <Select
-            value={triggerEvent}
-            onValueChange={(v) => setTriggerEvent(v as ReminderTriggerEvent)}
-          >
-            <SelectTrigger className="h-8 text-sm w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TRIGGER_EVENT_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <div className="flex items-center gap-1.5 text-sm">
-            <Label className="text-xs text-muted-foreground">Start after</Label>
-            <Input
-              type="number"
-              min={0}
-              value={triggerDelay}
-              onChange={(e) => setTriggerDelay(Number(e.target.value))}
-              className="h-8 text-sm w-16"
-            />
-            <span className="text-xs text-muted-foreground">days</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between rounded-md border px-2.5 py-2">
+            <div className="flex items-center gap-1.5">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <Label className="text-xs font-medium">
+                {isActive ? "Active" : "Inactive"}
+              </Label>
+            </div>
             <Switch
               checked={isActive}
               onCheckedChange={setIsActive}
               className="scale-90"
             />
-            <Label className="text-xs">
-              {isActive ? "Active" : "Inactive"}
-            </Label>
           </div>
-          <Button
-            size="sm"
-            className="gap-1.5 h-8"
-            onClick={handleSave}
-            disabled={isSaving}
-          >
-            <Save className="h-3.5 w-3.5" />
-            {isSaving ? "Saving…" : "Save Flow"}
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-primary"
-                onClick={() => setShowHelp(true)}
-              >
-                <HelpCircle className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>How to use the flow editor</TooltipContent>
-          </Tooltip>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="gap-1.5 h-8 flex-1"
+              onClick={handleSave}
+              disabled={isSaving}
+            >
+              <Save className="h-3.5 w-3.5" />
+              {isSaving ? "Saving…" : "Save"}
+            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-primary"
+                  onClick={() => setShowHelp(true)}
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>How to use the flow editor</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
       </div>
 
@@ -2108,7 +2160,7 @@ const ReminderFlows = () => {
                   Active and historical reminder flow executions per loan
                 </CardDescription>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent>
                 <DataGrid<ReminderFlowExecution>
                   data={executions}
                   columns={executionColumns}

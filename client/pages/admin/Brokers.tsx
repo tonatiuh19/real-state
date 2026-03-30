@@ -331,7 +331,7 @@ export default function Brokers() {
         </div>
 
         {/* Brokers Table */}
-        <div className="bg-white rounded-lg border shadow-sm p-4">
+        <div className="bg-white rounded-lg border shadow-sm p-6">
           <DataGrid<Broker>
             data={brokers}
             rowKey={(b) => b.id}

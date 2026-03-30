@@ -168,14 +168,19 @@ export const saveDraftToServer = createAsyncThunk(
 
 export const submitPublicApplication = createAsyncThunk(
   "applicationWizard/submit",
-  async (payload: PublicApplicationPayload, { rejectWithValue }) => {
+  async (payload: PublicApplicationPayload, { rejectWithValue, getState }) => {
     try {
+      const { draftApplicationId } = (getState() as RootState)
+        .applicationWizard;
       const { data } = await axios.post<{
         success: boolean;
         application_number: string;
         application_id: number;
         client_id: number;
-      }>("/api/apply", payload);
+      }>("/api/apply", {
+        ...payload,
+        draft_id: draftApplicationId ?? undefined,
+      });
       return data;
     } catch (error: any) {
       return rejectWithValue(

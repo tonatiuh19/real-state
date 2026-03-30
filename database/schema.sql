@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Mar 24, 2026 at 01:36 PM
+-- Generation Time: Mar 28, 2026 at 06:38 PM
 -- Server version: 5.7.23-23
 -- PHP Version: 8.1.34
 
@@ -28,7 +28,7 @@ SET time_zone = "+00:00";
 --
 
 CREATE TABLE `admin_section_controls` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `section_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Matches the id field in the sidebar menu items',
   `is_disabled` tinyint(1) NOT NULL DEFAULT '0',
@@ -62,7 +62,7 @@ INSERT INTO `admin_section_controls` (`id`, `tenant_id`, `section_id`, `is_disab
 --
 
 CREATE TABLE `application_status_history` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `application_id` int(11) NOT NULL,
   `from_status` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -79,7 +79,7 @@ CREATE TABLE `application_status_history` (
 --
 
 CREATE TABLE `audit_logs` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) DEFAULT NULL,
   `user_id` int(11) DEFAULT NULL,
   `broker_id` int(11) DEFAULT NULL,
@@ -317,7 +317,9 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 (212, 1, NULL, NULL, 'user', 'schema_migration', 'reminder_flows', NULL, '{\"migration\": \"20260312_220000_seed_loan_funded_reminder_flow\", \"description\": \"Created Loan Funded reminder flow: condition on actual_close_date (field_not_empty), wait_until_date then SMS + Email. Nada branch ends silently. Also added wait_until_date step type and field_not_empty/field_empty condition types to engine and shared types.\"}', 'success', NULL, NULL, NULL, NULL, NULL, '2026-03-12 23:02:15'),
 (213, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:30:21'),
 (214, 1, NULL, 4, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-18 16:31:20'),
-(215, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-22 19:17:20');
+(215, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '127.0.0.1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-22 19:17:20'),
+(216, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-24 18:16:29'),
+(217, 1, NULL, 1, 'broker', 'view_audit_logs', NULL, NULL, NULL, 'success', NULL, NULL, NULL, '::1', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', '2026-03-24 18:19:00');
 
 -- --------------------------------------------------------
 
@@ -326,7 +328,7 @@ INSERT INTO `audit_logs` (`id`, `tenant_id`, `user_id`, `broker_id`, `actor_type
 --
 
 CREATE TABLE `brokers` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `first_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -349,7 +351,7 @@ CREATE TABLE `brokers` (
 --
 
 INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `phone`, `role`, `status`, `email_verified`, `last_login`, `license_number`, `specializations`, `public_token`, `created_at`, `updated_at`, `created_by_broker_id`) VALUES
-(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', '+524741400363', 'admin', 'active', 1, '2026-03-23 15:14:17', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-23 15:14:17', NULL),
+(1, 1, 'axgoomez@gmail.com', 'Alex', 'Gomez', '+1 323-475-6240', 'admin', 'active', 1, '2026-03-25 22:12:42', NULL, '[\"FHA Loans\"]', '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-25 22:12:42', NULL),
 (3, 1, 'teamdc@encoremortgage.org', 'Daniel', 'Carrillo', '(562) 449-0000', 'admin', 'active', 0, '2026-03-17 17:54:46', '380277', '[]', '9b99b7b0-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:17', '2026-03-17 17:54:46', NULL),
 (4, 1, 'hebert@trueduplora.com', 'Hebert', 'Montecinos', NULL, 'admin', 'active', 0, '2026-03-18 16:09:22', NULL, '[\"Investment Properties\", \"Refinancing\"]', '9b99c1b4-11e1-11f1-83cc-525400bd6b5d', '2026-01-21 00:08:54', '2026-03-18 16:09:22', NULL),
 (6, 2, 'axgoomez@gmail.com', 'Alex', 'Gomez', NULL, 'admin', 'active', 1, '2026-03-16 17:00:59', NULL, NULL, '9b99c454-11e1-11f1-83cc-525400bd6b5d', '2026-01-20 18:56:12', '2026-03-16 17:00:59', NULL),
@@ -364,7 +366,7 @@ INSERT INTO `brokers` (`id`, `tenant_id`, `email`, `first_name`, `last_name`, `p
 --
 
 CREATE TABLE `broker_monthly_metrics` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `broker_id` int(11) DEFAULT NULL COMMENT 'NULL = admin/global goals row; set for partner-scoped manual actuals',
   `year` int(4) NOT NULL,
@@ -389,7 +391,7 @@ CREATE TABLE `broker_monthly_metrics` (
 --
 
 CREATE TABLE `broker_profiles` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `broker_id` int(11) NOT NULL,
   `bio` text COLLATE utf8mb4_unicode_ci,
   `office_address` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -427,7 +429,7 @@ INSERT INTO `broker_profiles` (`id`, `broker_id`, `bio`, `office_address`, `offi
 --
 
 CREATE TABLE `broker_sessions` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `broker_id` int(11) NOT NULL,
   `session_code` int(6) NOT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
@@ -443,8 +445,7 @@ CREATE TABLE `broker_sessions` (
 
 INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `ip_address`, `user_agent`, `expires_at`, `created_at`) VALUES
 (131, 6, 744871, 1, NULL, NULL, '2026-03-16 23:15:36', '2026-03-16 23:00:36'),
-(135, 3, 599254, 1, NULL, NULL, '2026-03-18 00:09:24', '2026-03-17 23:54:24'),
-(151, 1, 586666, 1, NULL, NULL, '2026-03-23 21:28:53', '2026-03-23 21:13:53');
+(135, 3, 599254, 1, NULL, NULL, '2026-03-18 00:09:24', '2026-03-17 23:54:24');
 
 -- --------------------------------------------------------
 
@@ -453,7 +454,7 @@ INSERT INTO `broker_sessions` (`id`, `broker_id`, `session_code`, `is_active`, `
 --
 
 CREATE TABLE `campaigns` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
@@ -475,7 +476,7 @@ CREATE TABLE `campaigns` (
 --
 
 CREATE TABLE `campaign_recipients` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `campaign_id` int(11) NOT NULL,
   `user_id` int(11) DEFAULT NULL,
   `lead_id` int(11) DEFAULT NULL,
@@ -495,10 +496,10 @@ CREATE TABLE `campaign_recipients` (
 --
 
 CREATE TABLE `clients` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `first_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `last_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -531,8 +532,7 @@ CREATE TABLE `clients` (
 
 INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `alternate_phone`, `date_of_birth`, `ssn_encrypted`, `address_street`, `address_city`, `address_state`, `address_zip`, `employment_status`, `income_type`, `annual_income`, `credit_score`, `citizenship_status`, `status`, `email_verified`, `phone_verified`, `last_login`, `assigned_broker_id`, `source`, `referral_code`, `created_at`, `updated_at`) VALUES
 (14, 2, 'tonatiuh.gom@gmail.com', '', 'Tonatiuh', 'Gomez', '+524741400363', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, 6, 'broker_created', NULL, '2026-02-11 21:03:41', '2026-03-22 19:01:57'),
-(22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-03-05 22:08:57', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-03-05 22:08:57'),
-(30, 1, 'tonatiuh.gom@gmail.com', '', 'Jane', 'Doe', '(555) 123-4567', NULL, NULL, NULL, '789 Elm Street', 'Los Angeles', 'CA', '90001', NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, NULL, NULL, 'public_wizard', NULL, '2026-03-23 12:46:21', '2026-03-23 12:46:21');
+(22, 1, 'Carrillodaniel@me.com', '', 'Daniel', 'Carrillo', '3237180001', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'W-2', NULL, NULL, NULL, 'active', 0, 0, '2026-03-05 22:08:57', 3, 'broker_created', NULL, '2026-02-24 16:53:10', '2026-03-05 22:08:57');
 
 -- --------------------------------------------------------
 
@@ -541,7 +541,7 @@ INSERT INTO `clients` (`id`, `tenant_id`, `email`, `password_hash`, `first_name`
 --
 
 CREATE TABLE `communications` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `application_id` int(11) DEFAULT NULL,
   `lead_id` int(11) DEFAULT NULL,
@@ -556,6 +556,7 @@ CREATE TABLE `communications` (
   `status` enum('pending','sent','delivered','failed','read') COLLATE utf8mb4_unicode_ci DEFAULT 'pending',
   `external_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `source_execution_id` int(11) DEFAULT NULL COMMENT 'reminder_flow_executions.id that produced this message (NULL = manual send)',
   `thread_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `reply_to_id` int(11) DEFAULT NULL,
   `message_type` enum('text','image','document','audio','video','template') COLLATE utf8mb4_unicode_ci DEFAULT 'text',
@@ -574,55 +575,21 @@ CREATE TABLE `communications` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
--- Triggers `communications`
+-- Dumping data for table `communications`
 --
-DELIMITER $$
-CREATE TRIGGER `update_conversation_thread` AFTER INSERT ON `communications` FOR EACH ROW BEGIN
-    DECLARE client_name_var VARCHAR(255) DEFAULT NULL;
-    DECLARE client_phone_var VARCHAR(20) DEFAULT NULL;
-    DECLARE client_email_var VARCHAR(255) DEFAULT NULL;
-    
-    -- Get client information
-    IF NEW.to_user_id IS NOT NULL THEN
-        SELECT CONCAT(first_name, ' ', last_name), phone_number, email
-        INTO client_name_var, client_phone_var, client_email_var
-        FROM clients WHERE id = NEW.to_user_id;
-    ELSEIF NEW.from_user_id IS NOT NULL THEN
-        SELECT CONCAT(first_name, ' ', last_name), phone_number, email
-        INTO client_name_var, client_phone_var, client_email_var
-        FROM clients WHERE id = NEW.from_user_id;
-    END IF;
-    
-    -- Upsert conversation thread
-    INSERT INTO conversation_threads (
-        tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
-        client_name, client_phone, client_email, last_message_at, 
-        last_message_preview, last_message_type, message_count, unread_count
-    ) VALUES (
-        NEW.tenant_id,
-        COALESCE(NEW.conversation_id, CONCAT('conv_', NEW.id)),
-        NEW.application_id,
-        NEW.lead_id,
-        COALESCE(NEW.to_user_id, NEW.from_user_id),
-        COALESCE(NEW.from_broker_id, NEW.to_broker_id),
-        client_name_var,
-        client_phone_var,
-        client_email_var,
-        NEW.created_at,
-        LEFT(NEW.body, 200),
-        NEW.communication_type,
-        1,
-        CASE WHEN NEW.direction = 'inbound' THEN 1 ELSE 0 END
-    ) ON DUPLICATE KEY UPDATE
-        last_message_at = NEW.created_at,
-        last_message_preview = LEFT(NEW.body, 200),
-        last_message_type = NEW.communication_type,
-        message_count = message_count + 1,
-        unread_count = unread_count + CASE WHEN NEW.direction = 'inbound' THEN 1 ELSE 0 END,
-        updated_at = NOW();
-END
-$$
-DELIMITER ;
+
+INSERT INTO `communications` (`id`, `tenant_id`, `application_id`, `lead_id`, `from_user_id`, `from_broker_id`, `to_user_id`, `to_broker_id`, `communication_type`, `direction`, `subject`, `body`, `status`, `external_id`, `conversation_id`, `source_execution_id`, `thread_id`, `reply_to_id`, `message_type`, `template_id`, `delivery_status`, `delivery_timestamp`, `read_timestamp`, `error_code`, `error_message`, `cost`, `provider_response`, `metadata`, `scheduled_at`, `sent_at`, `created_at`) VALUES
+(4, 1, NULL, NULL, NULL, NULL, NULL, NULL, 'sms', 'outbound', NULL, 'Hi Lionel! 🏠 Great news — we received your home purchase application (#LA11598165) and our team is already reviewing it. Questions? Just reply! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', 'sent', 'SMe37137390f0127de7017d163b87a9304', 'conv_client_32_loan_37_flow_3', 7, NULL, NULL, 'text', 23, 'sent', NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, '2026-03-24 22:10:02', '2026-03-24 22:10:02'),
+(5, 1, NULL, NULL, NULL, NULL, NULL, NULL, 'email', 'outbound', '🏠 We\'ve Received Your Purchase Loan Application!', 'Hi Lionel,\n\nExciting news! Your home purchase loan application has been officially received and is now in our system.\n\nApplication #: LA11598165\n\nOur team will begin a thorough review right away. Here\'s what to expect:\n\n• We\'ll contact you within 1 business day with next steps.\n• You may be asked to provide supporting documents through your client portal.\n• We\'ll keep you updated every step of the way.\n\nWe\'re thrilled to be part of your homeownership journey. Don\'t hesitate to reach out with any questions!\n\n{{broker_name}}\nEncore Mortgage', 'sent', '<enc-conv_client_32_loan_37_flow_3-1774411802650@disruptinglabs.com>', 'conv_client_32_loan_37_flow_3', 7, NULL, NULL, 'text', 24, 'sent', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-03-24 22:10:03', '2026-03-24 22:10:03'),
+(6, 1, NULL, NULL, NULL, NULL, NULL, 1, 'sms', 'inbound', NULL, 'Thanks for sharing that update. If you have any questions about your credit or need info on next steps, just let me know how I can help.', 'delivered', 'SM1488b08f8dd63d0fa747ce2c55cfbcf7', 'conv_client_32_loan_37_flow_3', NULL, NULL, NULL, 'text', NULL, 'delivered', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-03-24 22:10:16', '2026-03-24 22:10:16'),
+(7, 1, NULL, NULL, NULL, NULL, NULL, NULL, 'email', 'outbound', 'What Happens Next with Your Purchase Loan (#LA11598165)', 'Hi Lionel,\n\nJust following up! Now that we have your application (#LA11598165), here\'s a quick checklist of documents you\'ll want to have ready:\n\n✅ Government-issued photo ID (driver\'s license or passport)\n✅ Last 2 months of pay stubs\n✅ Last 2 years of W-2s or tax returns\n✅ Last 2–3 months of bank statements\n✅ Any gift letters (if applicable)\n\nYou can upload everything securely through your client portal. Getting these in early will help us move faster!\n\nReady to chat? Reply to this email or give us a call — we\'re here.\n\n{{broker_name}}\nEncore Mortgage', 'sent', '<enc-conv_client_32_loan_37_flow_3-1774412102113@disruptinglabs.com>', 'conv_client_32_loan_37_flow_3', 7, NULL, NULL, 'text', 25, 'sent', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-03-24 22:15:02', '2026-03-24 22:15:02'),
+(8, 1, NULL, NULL, NULL, NULL, NULL, NULL, 'sms', 'outbound', NULL, 'Hi Lionel! 🏠 Great news — we received your home purchase application (#LA54906010) and our team is already reviewing it. Questions? Just reply! – Alex Gomez, Encore Mortgage.', 'sent', 'SMe88b27eaa21a8217c988b34a4528bf24', 'conv_client_33_loan_39_flow_3', 8, NULL, NULL, 'text', 23, 'sent', NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, '2026-03-25 10:19:04', '2026-03-25 10:19:04'),
+(9, 1, NULL, NULL, NULL, NULL, NULL, NULL, 'email', 'outbound', '🏠 We\'ve Received Your Purchase Loan Application!', 'Hi Lionel,\n\nExciting news! Your home purchase loan application has been officially received and is now in our system.\n\nApplication #: LA54906010\n\nOur team will begin a thorough review right away. Here\'s what to expect:\n\n• We\'ll contact you within 1 business day with next steps.\n• You may be asked to provide supporting documents through your client portal.\n• We\'ll keep you updated every step of the way.\n\nWe\'re thrilled to be part of your homeownership journey. Don\'t hesitate to reach out with any questions!\n\nAlex Gomez\nEncore Mortgage', 'sent', '<enc-conv_client_33_loan_39_flow_3-1774455545421@disruptinglabs.com>', 'conv_client_33_loan_39_flow_3', 8, NULL, NULL, 'text', 24, 'sent', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-03-25 10:19:05', '2026-03-25 10:19:05'),
+(10, 1, NULL, NULL, NULL, NULL, NULL, 1, 'sms', 'inbound', NULL, 'Thanks for letting me know about your application update. If you have any questions about your credit or need guidance, just let me know how I can help.', 'delivered', 'SM1f6bae394714c5fdaf7b4b4313af07b8', 'conv_client_33_loan_39_flow_3', NULL, NULL, NULL, 'text', NULL, 'delivered', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-03-25 10:19:22', '2026-03-25 10:19:22'),
+(11, 1, NULL, NULL, NULL, NULL, NULL, NULL, 'email', 'outbound', 'What Happens Next with Your Purchase Loan (#LA54906010)', 'Hi Lionel,\n\nJust following up! Now that we have your application (#LA54906010), here\'s a quick checklist of documents you\'ll want to have ready:\n\n✅ Government-issued photo ID (driver\'s license or passport)\n✅ Last 2 months of pay stubs\n✅ Last 2 years of W-2s or tax returns\n✅ Last 2–3 months of bank statements\n✅ Any gift letters (if applicable)\n\nYou can upload everything securely through your client portal. Getting these in early will help us move faster!\n\nReady to chat? Reply to this email or give us a call — we\'re here.\n\nAlex Gomez\nEncore Mortgage', 'sent', '<enc-conv_client_33_loan_39_flow_3-1774456684172@disruptinglabs.com>', 'conv_client_33_loan_39_flow_3', 8, NULL, NULL, 'text', 25, 'sent', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-03-25 10:38:04', '2026-03-25 10:38:04');
+
+-- NOTE: update_conversation_thread trigger removed for TiDB Serverless compatibility.
+-- This logic is handled in application code (api/index.ts upsertConversationThread).
 
 -- --------------------------------------------------------
 
@@ -631,7 +598,7 @@ DELIMITER ;
 --
 
 CREATE TABLE `compliance_checklists` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `application_id` int(11) NOT NULL,
   `checklist_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -649,7 +616,7 @@ CREATE TABLE `compliance_checklists` (
 --
 
 CREATE TABLE `compliance_checklist_items` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `checklist_id` int(11) NOT NULL,
   `item_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `item_description` text COLLATE utf8mb4_unicode_ci,
@@ -667,7 +634,7 @@ CREATE TABLE `compliance_checklist_items` (
 --
 
 CREATE TABLE `contact_submissions` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -687,7 +654,7 @@ CREATE TABLE `contact_submissions` (
 --
 
 CREATE TABLE `conversation_threads` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `application_id` int(11) DEFAULT NULL,
@@ -709,6 +676,12 @@ CREATE TABLE `conversation_threads` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `conversation_threads`
+--
+
+-- (no seed data)
+
 -- --------------------------------------------------------
 
 --
@@ -716,7 +689,7 @@ CREATE TABLE `conversation_threads` (
 --
 
 CREATE TABLE `documents` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `application_id` int(11) DEFAULT NULL,
   `uploaded_by_user_id` int(11) DEFAULT NULL,
@@ -743,7 +716,7 @@ CREATE TABLE `documents` (
 --
 
 CREATE TABLE `environment_keys` (
-  `id` int(10) UNSIGNED NOT NULL,
+  `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
   `title` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Service name, e.g. stripe',
   `type` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Key type: publishable | secret | webhook',
   `key_string` text COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'The actual key value',
@@ -769,7 +742,7 @@ INSERT INTO `environment_keys` (`id`, `title`, `type`, `key_string`, `is_test`, 
 --
 
 CREATE TABLE `leads` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `source` enum('website','referral','social_media','cold_call','event','other') COLLATE utf8mb4_unicode_ci NOT NULL,
   `source_details` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -796,7 +769,7 @@ CREATE TABLE `leads` (
 --
 
 CREATE TABLE `lead_activities` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `lead_id` int(11) NOT NULL,
   `activity_type` enum('call','email','sms','meeting','note','status_change') COLLATE utf8mb4_unicode_ci NOT NULL,
   `subject` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -814,7 +787,7 @@ CREATE TABLE `lead_activities` (
 --
 
 CREATE TABLE `loan_applications` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `application_number` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
   `client_user_id` int(11) NOT NULL,
@@ -844,6 +817,9 @@ CREATE TABLE `loan_applications` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `submitted_at` datetime DEFAULT NULL,
   `citizenship_status` enum('us_citizen','permanent_resident','non_resident','other') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Applicant citizenship/immigration status at time of application',
+  `employment_status` enum('employed','self_employed','unemployed','retired','retired_with_pension') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Applicant employment status at time of application',
+  `employer_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Employer or business name at time of application',
+  `years_employed` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Years at current employer/business at time of application',
   `source_category` enum('current_client_referral','past_client','past_client_referral','personal_friend','realtor','advertisement','business_partner','builder','other') COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Lead source category for this loan application — used in Lead Source Analysis metrics'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -853,8 +829,7 @@ CREATE TABLE `loan_applications` (
 
 INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `client_user_id`, `broker_user_id`, `partner_broker_id`, `loan_type`, `loan_amount`, `property_value`, `property_address`, `property_city`, `property_state`, `property_zip`, `property_type`, `down_payment`, `loan_purpose`, `status`, `current_step`, `total_steps`, `priority`, `estimated_close_date`, `actual_close_date`, `interest_rate`, `loan_term_months`, `notes`, `broker_token`, `created_at`, `updated_at`, `submitted_at`, `citizenship_status`, `source_category`) VALUES
 (15, 2, 'LA65421662', 14, 6, NULL, 'purchase', 350000.00, 450000.00, '123 Main Street', 'San Francisco', 'CA', '94102', 'single_family', 100000.00, 'Primary residence purchase', 'application_received', 1, 8, 'medium', '2026-03-15', NULL, NULL, NULL, 'Test loan application for development', NULL, '2026-02-11 21:03:41', '2026-03-10 22:55:05', '2026-02-11 21:03:41', NULL, NULL),
-(23, 1, 'LA73590546', 22, 3, NULL, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, 'application_received', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-03-23 15:10:25', '2026-02-24 16:53:10', NULL, 'past_client_referral'),
-(33, 1, 'LA91581821', 30, 1, NULL, 'purchase', 440000.00, 550000.00, '123 Oak Avenue', 'San Francisco', 'CA', '94102', 'single_family', 110000.00, 'Primary residence purchase for development testing', 'draft', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, '9b99af09-11e1-11f1-83cc-525400bd6b5d', '2026-03-23 12:46:21', '2026-03-23 12:46:21', NULL, 'us_citizen', NULL);
+(23, 1, 'LA73590546', 22, 3, NULL, 'purchase', 800000.00, 1000000.00, 'TBD', 'Whittier', 'CA', '90603', 'single_family', 3.50, NULL, 'application_received', 1, 8, 'medium', NULL, NULL, NULL, NULL, NULL, NULL, '2026-02-24 16:53:10', '2026-03-23 15:10:25', '2026-02-24 16:53:10', NULL, 'past_client_referral');
 
 -- --------------------------------------------------------
 
@@ -863,7 +838,7 @@ INSERT INTO `loan_applications` (`id`, `tenant_id`, `application_number`, `clien
 --
 
 CREATE TABLE `notifications` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `user_id` int(11) NOT NULL,
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -890,7 +865,7 @@ INSERT INTO `notifications` (`id`, `tenant_id`, `user_id`, `title`, `message`, `
 --
 
 CREATE TABLE `pipeline_step_templates` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `pipeline_step` enum('app_sent','application_received','prequalified','preapproved','under_contract_loan_setup','submitted_to_underwriting','approved_with_conditions','clear_to_close','docs_out','loan_funded') COLLATE utf8mb4_unicode_ci NOT NULL,
   `communication_type` enum('email','sms','whatsapp') COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -908,7 +883,7 @@ CREATE TABLE `pipeline_step_templates` (
 --
 
 CREATE TABLE `pre_approval_letters` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `application_id` int(11) NOT NULL COMMENT 'FK to loan_applications.id',
   `approved_amount` decimal(12,2) NOT NULL COMMENT 'Current pre-approved amount shown on letter (can be edited up to max_approved_amount)',
@@ -943,7 +918,7 @@ INSERT INTO `pre_approval_letters` (`id`, `tenant_id`, `application_id`, `approv
 --
 
 CREATE TABLE `reminder_flows` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
@@ -962,9 +937,7 @@ CREATE TABLE `reminder_flows` (
 --
 
 INSERT INTO `reminder_flows` (`id`, `tenant_id`, `name`, `description`, `trigger_event`, `trigger_delay_days`, `is_active`, `apply_to_all_loans`, `loan_type_filter`, `created_by_broker_id`, `created_at`, `updated_at`) VALUES
-(2, 1, 'App Sent — Full Reminder Sequence', 'Triggered when a loan application is sent (app_sent). Branches by loan type: Purchase and Refi get an immediate welcome email + SMS cadence; Default (unclassified) gets a longer nurture sequence ending with a partner notification.', 'app_sent', 0, 1, 1, 'all', 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
 (3, 1, 'Application Received — Nurture Sequence', 'Triggered when a loan application status moves to application_received. Checks the application is not in an adverse state, then branches by loan type (Purchase / Refi). Default (unclassified) follows the Purchase sequence. Cadence: SMS → Email → 10-min wait → Email → 2-day wait → SMS.', 'application_received', 0, 1, 1, 'all', 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
-(4, 1, 'Prequalified — Full Nurture Sequence', 'Triggered when loan status becomes prequalified. Branches by loan type (Purchase/Refi/Default→Purchase). Each branch runs 8 rounds of SMS/Email with wait_for_response(3h) gates. Responded → exit. No response → escalate with longer waits. Final round ends with an internal all-user notification.', 'prequalified', 0, 1, 1, 'all', 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
 (5, 1, 'Preapproved — Nurture Drip Sequence', 'Triggered when loan status becomes preapproved. Branches by loan type (Purchase/Refi/Default→Purchase). Pure time-based drip — no response gates. 12 SMS + 11 Email over ~88 days. Both branches start with immediate SMS+Email, then share an escalating sequence.', 'preapproved', 0, 1, 1, 'all', 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (6, 1, 'Under Contract/Loan Set Up — Welcome Sequence', 'Triggered immediately when loan status becomes under_contract_loan_setup. Sends an SMS followed by an Email with details on next steps. No branching.', 'under_contract_loan_setup', 0, 1, 1, 'all', 1, '2026-03-12 22:50:22', '2026-03-12 22:50:22'),
 (7, 1, 'Submitted to Underwriting — Notification Sequence', 'Triggered immediately when loan status becomes submitted_to_underwriting. Sends an SMS and an Email explaining the underwriting process and what the client should expect. No branching.', 'submitted_to_underwriting', 0, 1, 1, 'all', 1, '2026-03-12 22:51:53', '2026-03-12 22:51:53'),
@@ -979,7 +952,7 @@ INSERT INTO `reminder_flows` (`id`, `tenant_id`, `name`, `description`, `trigger
 --
 
 CREATE TABLE `reminder_flow_connections` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `flow_id` int(11) NOT NULL,
   `edge_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Unique key within flow for React Flow edge id',
   `source_step_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -994,35 +967,6 @@ CREATE TABLE `reminder_flow_connections` (
 --
 
 INSERT INTO `reminder_flow_connections` (`id`, `flow_id`, `edge_key`, `source_step_key`, `target_step_key`, `label`, `edge_type`, `created_at`) VALUES
-(1, 2, 'e_trigger_branch', 'trigger', 'branch_loan_type', NULL, 'default', '2026-03-12 21:56:35'),
-(2, 2, 'e_branch_purchase', 'branch_loan_type', 'purchase_email_1', 'Purchase', 'loan_type_purchase', '2026-03-12 21:56:35'),
-(3, 2, 'e_branch_refi', 'branch_loan_type', 'refi_email_1', 'Refi', 'loan_type_refinance', '2026-03-12 21:56:35'),
-(4, 2, 'e_branch_default', 'branch_loan_type', 'default_email_1', 'Other', 'default', '2026-03-12 21:56:35'),
-(5, 2, 'e_pe1_pw1', 'purchase_email_1', 'purchase_wait_1min', NULL, 'default', '2026-03-12 21:56:35'),
-(6, 2, 'e_pw1_ps1', 'purchase_wait_1min', 'purchase_sms_1', NULL, 'default', '2026-03-12 21:56:35'),
-(7, 2, 'e_ps1_pe2', 'purchase_sms_1', 'purchase_email_2', NULL, 'default', '2026-03-12 21:56:35'),
-(8, 2, 'e_pe2_pw3d1', 'purchase_email_2', 'purchase_wait_3d_1', NULL, 'default', '2026-03-12 21:56:35'),
-(9, 2, 'e_pw3d1_ps2', 'purchase_wait_3d_1', 'purchase_sms_2', NULL, 'default', '2026-03-12 21:56:35'),
-(10, 2, 'e_ps2_pw3d2', 'purchase_sms_2', 'purchase_wait_3d_2', NULL, 'default', '2026-03-12 21:56:35'),
-(11, 2, 'e_pw3d2_ps3', 'purchase_wait_3d_2', 'purchase_sms_3', NULL, 'default', '2026-03-12 21:56:35'),
-(12, 2, 'e_ps3_end_purchase', 'purchase_sms_3', 'end_purchase', NULL, 'default', '2026-03-12 21:56:35'),
-(13, 2, 'e_re1_rw1', 'refi_email_1', 'refi_wait_1min', NULL, 'default', '2026-03-12 21:56:35'),
-(14, 2, 'e_rw1_rs1', 'refi_wait_1min', 'refi_sms_1', NULL, 'default', '2026-03-12 21:56:35'),
-(15, 2, 'e_rs1_re2', 'refi_sms_1', 'refi_email_2', NULL, 'default', '2026-03-12 21:56:35'),
-(16, 2, 'e_re2_rw3d1', 'refi_email_2', 'refi_wait_3d_1', NULL, 'default', '2026-03-12 21:56:35'),
-(17, 2, 'e_rw3d1_rs2', 'refi_wait_3d_1', 'refi_sms_2', NULL, 'default', '2026-03-12 21:56:35'),
-(18, 2, 'e_rs2_rw3d2', 'refi_sms_2', 'refi_wait_3d_2', NULL, 'default', '2026-03-12 21:56:35'),
-(19, 2, 'e_rw3d2_rs3', 'refi_wait_3d_2', 'refi_sms_3', NULL, 'default', '2026-03-12 21:56:35'),
-(20, 2, 'e_rs3_end_refi', 'refi_sms_3', 'end_refi', NULL, 'default', '2026-03-12 21:56:35'),
-(21, 2, 'e_de1_dw3d1', 'default_email_1', 'default_wait_3d_1', NULL, 'default', '2026-03-12 21:56:35'),
-(22, 2, 'e_dw3d1_ds1', 'default_wait_3d_1', 'default_sms_1', NULL, 'default', '2026-03-12 21:56:35'),
-(23, 2, 'e_ds1_dw7d1', 'default_sms_1', 'default_wait_7d_1', NULL, 'default', '2026-03-12 21:56:35'),
-(24, 2, 'e_dw7d1_ds2', 'default_wait_7d_1', 'default_sms_2', NULL, 'default', '2026-03-12 21:56:35'),
-(25, 2, 'e_ds2_de2', 'default_sms_2', 'default_email_2', NULL, 'default', '2026-03-12 21:56:35'),
-(26, 2, 'e_de2_dw7d2', 'default_email_2', 'default_wait_7d_2', NULL, 'default', '2026-03-12 21:56:35'),
-(27, 2, 'e_dw7d2_ds3', 'default_wait_7d_2', 'default_sms_3', NULL, 'default', '2026-03-12 21:56:35'),
-(28, 2, 'e_ds3_notify', 'default_sms_3', 'default_notify_partner', NULL, 'default', '2026-03-12 21:56:35'),
-(29, 2, 'e_notify_end_default', 'default_notify_partner', 'end_default', NULL, 'default', '2026-03-12 21:56:35'),
 (30, 3, 'e_trigger_adverse', 'trigger', 'cond_not_adverse', NULL, 'default', '2026-03-12 22:05:46'),
 (31, 3, 'e_adverse_yes', 'cond_not_adverse', 'branch_loan_type', 'Not Adverse', 'condition_yes', '2026-03-12 22:05:46'),
 (32, 3, 'e_adverse_no', 'cond_not_adverse', 'end_adverse', 'Adverse', 'condition_no', '2026-03-12 22:05:46'),
@@ -1041,92 +985,6 @@ INSERT INTO `reminder_flow_connections` (`id`, `flow_id`, `edge_key`, `source_st
 (45, 3, 'e_re2_rw2d', 'refi_email_2', 'refi_wait_2d', NULL, 'default', '2026-03-12 22:05:46'),
 (46, 3, 'e_rw2d_rs2', 'refi_wait_2d', 'refi_sms_2', NULL, 'default', '2026-03-12 22:05:46'),
 (47, 3, 'e_rs2_end_refi', 'refi_sms_2', 'end_refi', NULL, 'default', '2026-03-12 22:05:46'),
-(48, 4, 'e_trigger_branch', 'trigger', 'branch', NULL, 'default', '2026-03-12 22:34:43'),
-(49, 4, 'e_branch_p', 'branch', 'p_s1', 'Purchase', 'loan_type_purchase', '2026-03-12 22:34:43'),
-(50, 4, 'e_branch_r', 'branch', 'r_s1', 'Refi', 'loan_type_refinance', '2026-03-12 22:34:43'),
-(51, 4, 'e_branch_def', 'branch', 'p_s1', 'Other', 'default', '2026-03-12 22:34:43'),
-(52, 4, 'e_p_s1_s2', 'p_s1', 'p_s2', NULL, 'default', '2026-03-12 22:34:43'),
-(53, 4, 'e_p_s2_w1', 'p_s2', 'p_w1', NULL, 'default', '2026-03-12 22:34:43'),
-(54, 4, 'e_p_w1_wfr1', 'p_w1', 'p_wfr1', NULL, 'default', '2026-03-12 22:34:43'),
-(55, 4, 'e_p_wfr1_end1', 'p_wfr1', 'p_end1', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(56, 4, 'e_p_wfr1_w2d1', 'p_wfr1', 'p_w2d1', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(57, 4, 'e_p_w2d1_s3', 'p_w2d1', 'p_s3', NULL, 'default', '2026-03-12 22:34:43'),
-(58, 4, 'e_p_s3_w2', 'p_s3', 'p_w2', NULL, 'default', '2026-03-12 22:34:43'),
-(59, 4, 'e_p_w2_wfr2', 'p_w2', 'p_wfr2', NULL, 'default', '2026-03-12 22:34:43'),
-(60, 4, 'e_p_wfr2_end2', 'p_wfr2', 'p_end2', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(61, 4, 'e_p_wfr2_w2d2', 'p_wfr2', 'p_w2d2', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(62, 4, 'e_p_w2d2_s4', 'p_w2d2', 'p_s4', NULL, 'default', '2026-03-12 22:34:43'),
-(63, 4, 'e_p_s4_s5', 'p_s4', 'p_s5', NULL, 'default', '2026-03-12 22:34:43'),
-(64, 4, 'e_p_s5_w3', 'p_s5', 'p_w3', NULL, 'default', '2026-03-12 22:34:43'),
-(65, 4, 'e_p_w3_wfr3', 'p_w3', 'p_wfr3', NULL, 'default', '2026-03-12 22:34:43'),
-(66, 4, 'e_p_wfr3_end3', 'p_wfr3', 'p_end3', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(67, 4, 'e_p_wfr3_w3d1', 'p_wfr3', 'p_w3d1', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(68, 4, 'e_p_w3d1_s6', 'p_w3d1', 'p_s6', NULL, 'default', '2026-03-12 22:34:43'),
-(69, 4, 'e_p_s6_w4', 'p_s6', 'p_w4', NULL, 'default', '2026-03-12 22:34:43'),
-(70, 4, 'e_p_w4_wfr4', 'p_w4', 'p_wfr4', NULL, 'default', '2026-03-12 22:34:43'),
-(71, 4, 'e_p_wfr4_end4', 'p_wfr4', 'p_end4', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(72, 4, 'e_p_wfr4_w4d1', 'p_wfr4', 'p_w4d1', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(73, 4, 'e_p_w4d1_s7', 'p_w4d1', 'p_s7', NULL, 'default', '2026-03-12 22:34:43'),
-(74, 4, 'e_p_s7_w5', 'p_s7', 'p_w5', NULL, 'default', '2026-03-12 22:34:43'),
-(75, 4, 'e_p_w5_wfr5', 'p_w5', 'p_wfr5', NULL, 'default', '2026-03-12 22:34:43'),
-(76, 4, 'e_p_wfr5_end5', 'p_wfr5', 'p_end5', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(77, 4, 'e_p_wfr5_w3d2', 'p_wfr5', 'p_w3d2', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(78, 4, 'e_p_w3d2_s8', 'p_w3d2', 'p_s8', NULL, 'default', '2026-03-12 22:34:43'),
-(79, 4, 'e_p_s8_w6', 'p_s8', 'p_w6', NULL, 'default', '2026-03-12 22:34:43'),
-(80, 4, 'e_p_w6_wfr6', 'p_w6', 'p_wfr6', NULL, 'default', '2026-03-12 22:34:43'),
-(81, 4, 'e_p_wfr6_end6', 'p_wfr6', 'p_end6', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(82, 4, 'e_p_wfr6_w3d3', 'p_wfr6', 'p_w3d3', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(83, 4, 'e_p_w3d3_s9', 'p_w3d3', 'p_s9', NULL, 'default', '2026-03-12 22:34:43'),
-(84, 4, 'e_p_s9_w7', 'p_s9', 'p_w7', NULL, 'default', '2026-03-12 22:34:43'),
-(85, 4, 'e_p_w7_wfr7', 'p_w7', 'p_wfr7', NULL, 'default', '2026-03-12 22:34:43'),
-(86, 4, 'e_p_wfr7_end7', 'p_wfr7', 'p_end7', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(87, 4, 'e_p_wfr7_w3d4', 'p_wfr7', 'p_w3d4', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(88, 4, 'e_p_w3d4_s10', 'p_w3d4', 'p_s10', NULL, 'default', '2026-03-12 22:34:43'),
-(89, 4, 'e_p_s10_w5d1', 'p_s10', 'p_w5d1', NULL, 'default', '2026-03-12 22:34:43'),
-(90, 4, 'e_p_w5d1_s11', 'p_w5d1', 'p_s11', NULL, 'default', '2026-03-12 22:34:43'),
-(91, 4, 'e_p_s11_notify', 'p_s11', 'p_notify', NULL, 'default', '2026-03-12 22:34:43'),
-(92, 4, 'e_p_notify_end8', 'p_notify', 'p_end8', NULL, 'default', '2026-03-12 22:34:43'),
-(93, 4, 'e_r_s1_s2', 'r_s1', 'r_s2', NULL, 'default', '2026-03-12 22:34:43'),
-(94, 4, 'e_r_s2_w1', 'r_s2', 'r_w1', NULL, 'default', '2026-03-12 22:34:43'),
-(95, 4, 'e_r_w1_wfr1', 'r_w1', 'r_wfr1', NULL, 'default', '2026-03-12 22:34:43'),
-(96, 4, 'e_r_wfr1_end1', 'r_wfr1', 'r_end1', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(97, 4, 'e_r_wfr1_w2d1', 'r_wfr1', 'r_w2d1', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(98, 4, 'e_r_w2d1_s3', 'r_w2d1', 'r_s3', NULL, 'default', '2026-03-12 22:34:43'),
-(99, 4, 'e_r_s3_w2', 'r_s3', 'r_w2', NULL, 'default', '2026-03-12 22:34:43'),
-(100, 4, 'e_r_w2_wfr2', 'r_w2', 'r_wfr2', NULL, 'default', '2026-03-12 22:34:43'),
-(101, 4, 'e_r_wfr2_end2', 'r_wfr2', 'r_end2', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(102, 4, 'e_r_wfr2_w2d2', 'r_wfr2', 'r_w2d2', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(103, 4, 'e_r_w2d2_s4', 'r_w2d2', 'r_s4', NULL, 'default', '2026-03-12 22:34:43'),
-(104, 4, 'e_r_s4_s5', 'r_s4', 'r_s5', NULL, 'default', '2026-03-12 22:34:43'),
-(105, 4, 'e_r_s5_w3', 'r_s5', 'r_w3', NULL, 'default', '2026-03-12 22:34:43'),
-(106, 4, 'e_r_w3_wfr3', 'r_w3', 'r_wfr3', NULL, 'default', '2026-03-12 22:34:43'),
-(107, 4, 'e_r_wfr3_end3', 'r_wfr3', 'r_end3', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(108, 4, 'e_r_wfr3_w3d1', 'r_wfr3', 'r_w3d1', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(109, 4, 'e_r_w3d1_s6', 'r_w3d1', 'r_s6', NULL, 'default', '2026-03-12 22:34:43'),
-(110, 4, 'e_r_s6_w4', 'r_s6', 'r_w4', NULL, 'default', '2026-03-12 22:34:43'),
-(111, 4, 'e_r_w4_wfr4', 'r_w4', 'r_wfr4', NULL, 'default', '2026-03-12 22:34:43'),
-(112, 4, 'e_r_wfr4_end4', 'r_wfr4', 'r_end4', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(113, 4, 'e_r_wfr4_w4d1', 'r_wfr4', 'r_w4d1', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(114, 4, 'e_r_w4d1_s7', 'r_w4d1', 'r_s7', NULL, 'default', '2026-03-12 22:34:43'),
-(115, 4, 'e_r_s7_w5', 'r_s7', 'r_w5', NULL, 'default', '2026-03-12 22:34:43'),
-(116, 4, 'e_r_w5_wfr5', 'r_w5', 'r_wfr5', NULL, 'default', '2026-03-12 22:34:43'),
-(117, 4, 'e_r_wfr5_end5', 'r_wfr5', 'r_end5', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(118, 4, 'e_r_wfr5_w3d2', 'r_wfr5', 'r_w3d2', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(119, 4, 'e_r_w3d2_s8', 'r_w3d2', 'r_s8', NULL, 'default', '2026-03-12 22:34:43'),
-(120, 4, 'e_r_s8_w6', 'r_s8', 'r_w6', NULL, 'default', '2026-03-12 22:34:43'),
-(121, 4, 'e_r_w6_wfr6', 'r_w6', 'r_wfr6', NULL, 'default', '2026-03-12 22:34:43'),
-(122, 4, 'e_r_wfr6_end6', 'r_wfr6', 'r_end6', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(123, 4, 'e_r_wfr6_w3d3', 'r_wfr6', 'r_w3d3', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(124, 4, 'e_r_w3d3_s9', 'r_w3d3', 'r_s9', NULL, 'default', '2026-03-12 22:34:43'),
-(125, 4, 'e_r_s9_w7', 'r_s9', 'r_w7', NULL, 'default', '2026-03-12 22:34:43'),
-(126, 4, 'e_r_w7_wfr7', 'r_w7', 'r_wfr7', NULL, 'default', '2026-03-12 22:34:43'),
-(127, 4, 'e_r_wfr7_end7', 'r_wfr7', 'r_end7', 'Responded', 'responded', '2026-03-12 22:34:43'),
-(128, 4, 'e_r_wfr7_w3d4', 'r_wfr7', 'r_w3d4', 'No Response', 'no_response', '2026-03-12 22:34:43'),
-(129, 4, 'e_r_w3d4_s10', 'r_w3d4', 'r_s10', NULL, 'default', '2026-03-12 22:34:43'),
-(130, 4, 'e_r_s10_w5d1', 'r_s10', 'r_w5d1', NULL, 'default', '2026-03-12 22:34:43'),
-(131, 4, 'e_r_w5d1_s11', 'r_w5d1', 'r_s11', NULL, 'default', '2026-03-12 22:34:43'),
-(132, 4, 'e_r_s11_notify', 'r_s11', 'r_notify', NULL, 'default', '2026-03-12 22:34:43'),
-(133, 4, 'e_r_notify_end8', 'r_notify', 'r_end8', NULL, 'default', '2026-03-12 22:34:43'),
 (134, 5, 'e_trigger_branch', 'trigger', 'branch', NULL, 'default', '2026-03-12 22:47:43'),
 (135, 5, 'e_branch_p', 'branch', 'p_s1', 'Purchase', 'loan_type_purchase', '2026-03-12 22:47:43'),
 (136, 5, 'e_branch_r', 'branch', 'r_s1', 'Refi', 'loan_type_refinance', '2026-03-12 22:47:43'),
@@ -1243,11 +1101,12 @@ INSERT INTO `reminder_flow_connections` (`id`, `flow_id`, `edge_key`, `source_st
 --
 
 CREATE TABLE `reminder_flow_executions` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `flow_id` int(11) NOT NULL,
   `loan_application_id` int(11) DEFAULT NULL,
   `client_id` int(11) DEFAULT NULL,
+  `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Conversation thread tied to this execution — conv_client_{clientId}_loan_{loanId}_flow_{flowId}',
   `current_step_key` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `status` enum('active','paused','completed','cancelled','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
   `next_execution_at` datetime DEFAULT NULL COMMENT 'When the next step should execute',
@@ -1265,13 +1124,11 @@ CREATE TABLE `reminder_flow_executions` (
 -- Dumping data for table `reminder_flow_executions`
 --
 
-INSERT INTO `reminder_flow_executions` (`id`, `tenant_id`, `flow_id`, `loan_application_id`, `client_id`, `current_step_key`, `status`, `next_execution_at`, `completed_steps`, `context_data`, `last_step_started_at`, `responded_at`, `started_at`, `completed_at`, `created_at`, `updated_at`) VALUES
-(1, 1, 4, 32, 29, 'trigger', 'active', '2026-03-16 21:43:52', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"prequalified\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-16 21:43:51', NULL, '2026-03-16 21:43:51', NULL, '2026-03-16 21:43:51', '2026-03-16 21:43:51'),
-(2, 1, 2, 31, 29, 'trigger', 'active', '2026-03-17 21:38:15', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"app_sent\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', '2026-03-17 15:38:14'),
-(3, 1, 3, 31, 29, 'trigger', 'active', '2026-03-17 21:38:15', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"application_received\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', '2026-03-17 15:38:14'),
-(4, 1, 5, 32, 29, 'trigger', 'active', '2026-03-17 21:38:18', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"preapproved\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-17 15:38:17', NULL, '2026-03-17 15:38:17', NULL, '2026-03-17 15:38:17', '2026-03-17 15:38:17'),
-(5, 1, 4, 32, 29, 'trigger', 'active', '2026-03-17 21:38:22', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"prequalified\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-17 15:38:22', NULL, '2026-03-17 15:38:22', NULL, '2026-03-17 15:38:22', '2026-03-17 15:38:22'),
-(6, 1, 2, 31, 29, 'trigger', 'active', '2026-03-17 23:51:23', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"app_sent\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 17:51:22', NULL, '2026-03-17 17:51:22', NULL, '2026-03-17 17:51:22', '2026-03-17 17:51:22');
+INSERT INTO `reminder_flow_executions` (`id`, `tenant_id`, `flow_id`, `loan_application_id`, `client_id`, `conversation_id`, `current_step_key`, `status`, `next_execution_at`, `completed_steps`, `context_data`, `last_step_started_at`, `responded_at`, `started_at`, `completed_at`, `created_at`, `updated_at`) VALUES
+(3, 1, 3, 31, 29, 'conv_client_29_loan_31_flow_3', 'trigger', 'failed', '2026-03-17 21:38:15', '[]', '{\"loan_id\": 31, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"application_received\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA74994106\", \"estimated_close_date\": null}', '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', NULL, '2026-03-17 15:38:14', '2026-03-24 21:36:58'),
+(4, 1, 5, 32, 29, 'conv_client_29_loan_32_flow_5', 'trigger', 'failed', '2026-03-17 21:38:18', '[]', '{\"loan_id\": 32, \"client_id\": 29, \"loan_type\": \"purchase\", \"client_name\": \"Jane Doe\", \"loan_status\": \"preapproved\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"(555) 123-4567\", \"actual_close_date\": null, \"application_number\": \"LA10261192\", \"estimated_close_date\": null}', '2026-03-17 15:38:17', NULL, '2026-03-17 15:38:17', NULL, '2026-03-17 15:38:17', '2026-03-24 21:36:58'),
+(7, 1, 3, 37, 32, 'conv_client_32_loan_37_flow_3', 'end_purchase', 'completed', '2026-03-27 04:15:03', '[\"purchase_wait_2d\", \"purchase_sms_2\", \"end_purchase\"]', '{\"loan_id\": 37, \"client_id\": 32, \"loan_type\": \"purchase\", \"client_name\": \"Lionel Messi\", \"loan_status\": \"application_received\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"3234756240\", \"actual_close_date\": null, \"application_number\": \"LA11598165\", \"estimated_close_date\": null}', '2026-03-24 22:15:02', NULL, '2026-03-24 22:06:40', '2026-03-27 04:19:04', '2026-03-24 22:06:40', '2026-03-27 04:19:04'),
+(8, 1, 3, 39, 33, 'conv_client_33_loan_39_flow_3', 'end_purchase', 'completed', '2026-03-27 16:38:05', '[\"purchase_wait_2d\", \"purchase_sms_2\", \"end_purchase\"]', '{\"loan_id\": 39, \"client_id\": 33, \"loan_type\": \"purchase\", \"broker_name\": \"Alex Gomez\", \"client_name\": \"Lionel Messi\", \"loan_status\": \"application_received\", \"client_email\": \"tonatiuh.gom@gmail.com\", \"client_phone\": \"3234756240\", \"actual_close_date\": null, \"application_number\": \"LA54906010\", \"estimated_close_date\": null}', '2026-03-25 10:38:04', NULL, '2026-03-25 10:08:27', '2026-03-27 16:57:04', '2026-03-25 10:08:27', '2026-03-27 16:57:04');
 
 -- --------------------------------------------------------
 
@@ -1280,10 +1137,10 @@ INSERT INTO `reminder_flow_executions` (`id`, `tenant_id`, `flow_id`, `loan_appl
 --
 
 CREATE TABLE `reminder_flow_steps` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `flow_id` int(11) NOT NULL,
   `step_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Unique key within flow for React Flow node id',
-  `step_type` enum('trigger','wait','send_notification','send_email','send_sms','send_whatsapp','condition','branch','wait_for_response','end') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `step_type` enum('trigger','wait','send_notification','send_email','send_sms','send_whatsapp','condition','branch','wait_for_response','wait_until_date','end') COLLATE utf8mb4_unicode_ci NOT NULL,
   `label` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
   `config` json DEFAULT NULL COMMENT 'Step-specific configuration (message, delay hours/days, condition type, etc.)',
@@ -1298,36 +1155,6 @@ CREATE TABLE `reminder_flow_steps` (
 --
 
 INSERT INTO `reminder_flow_steps` (`id`, `flow_id`, `step_key`, `step_type`, `label`, `description`, `config`, `position_x`, `position_y`, `created_at`, `updated_at`) VALUES
-(1, 2, 'trigger', 'trigger', 'App Sent Trigger', 'Fires when loan status becomes app_sent', NULL, 400, 50, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(2, 2, 'branch_loan_type', 'branch', 'Loan Type Branch', 'Routes to Purchase, Refi, or Default sequence', '{\"condition_type\": \"loan_type\"}', 400, 220, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(3, 2, 'purchase_email_1', 'send_email', 'Welcome Email (Purchase)', 'Initial welcome email for purchase loans', '{\"template_id\": 7}', 150, 450, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(4, 2, 'purchase_wait_1min', 'wait', 'Wait 1 Minute', 'Short pause before SMS confirmation', '{\"delay_minutes\": 1}', 150, 600, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(5, 2, 'purchase_sms_1', 'send_sms', 'Confirmation SMS (Purchase)', 'Quick SMS confirmation', '{\"template_id\": 8}', 150, 750, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(6, 2, 'purchase_email_2', 'send_email', 'Follow-Up Email (Purchase)', 'Same-day follow-up with document checklist', '{\"template_id\": 9}', 150, 900, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(7, 2, 'purchase_wait_3d_1', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 150, 1050, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(8, 2, 'purchase_sms_2', 'send_sms', 'Day-3 Reminder SMS (Purchase)', 'Reminder to upload documents', '{\"template_id\": 10}', 150, 1200, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(9, 2, 'purchase_wait_3d_2', 'wait', 'Wait 3 More Days', NULL, '{\"delay_days\": 3}', 150, 1350, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(10, 2, 'purchase_sms_3', 'send_sms', 'Day-6 Final SMS (Purchase)', 'Final nudge SMS', '{\"template_id\": 11}', 150, 1500, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(11, 2, 'end_purchase', 'end', 'End (Purchase)', 'Purchase sequence complete', NULL, 150, 1650, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(12, 2, 'refi_email_1', 'send_email', 'Welcome Email (Refi)', 'Initial welcome email for refi loans', '{\"template_id\": 12}', 430, 450, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(13, 2, 'refi_wait_1min', 'wait', 'Wait 1 Minute', 'Short pause before SMS confirmation', '{\"delay_minutes\": 1}', 430, 600, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(14, 2, 'refi_sms_1', 'send_sms', 'Confirmation SMS (Refi)', 'Quick SMS confirmation', '{\"template_id\": 13}', 430, 750, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(15, 2, 'refi_email_2', 'send_email', 'Follow-Up Email (Refi)', 'Same-day follow-up with document checklist', '{\"template_id\": 14}', 430, 900, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(16, 2, 'refi_wait_3d_1', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 430, 1050, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(17, 2, 'refi_sms_2', 'send_sms', 'Day-3 Reminder SMS (Refi)', 'Reminder to upload documents', '{\"template_id\": 15}', 430, 1200, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(18, 2, 'refi_wait_3d_2', 'wait', 'Wait 3 More Days', NULL, '{\"delay_days\": 3}', 430, 1350, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(19, 2, 'refi_sms_3', 'send_sms', 'Day-6 Final SMS (Refi)', 'Final nudge SMS', '{\"template_id\": 16}', 430, 1500, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(20, 2, 'end_refi', 'end', 'End (Refi)', 'Refi sequence complete', NULL, 430, 1650, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(21, 2, 'default_email_1', 'send_email', 'Welcome Email (Default)', 'General welcome email', '{\"template_id\": 17}', 720, 450, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(22, 2, 'default_wait_3d_1', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 720, 600, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(23, 2, 'default_sms_1', 'send_sms', 'Day-3 SMS (Default)', 'First SMS check-in', '{\"template_id\": 18}', 720, 750, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(24, 2, 'default_wait_7d_1', 'wait', 'Wait 7 Days', NULL, '{\"delay_days\": 7}', 720, 900, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(25, 2, 'default_sms_2', 'send_sms', 'Day-10 SMS (Default)', 'Second SMS nudge', '{\"template_id\": 19}', 720, 1050, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(26, 2, 'default_email_2', 'send_email', 'Follow-Up Email (Default)', 'Mid-sequence follow-up email', '{\"template_id\": 20}', 720, 1200, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(27, 2, 'default_wait_7d_2', 'wait', 'Wait 7 More Days', NULL, '{\"delay_days\": 7}', 720, 1350, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(28, 2, 'default_sms_3', 'send_sms', 'Day-17 Final SMS (Default)', 'Final SMS in default sequence', '{\"template_id\": 21}', 720, 1500, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(29, 2, 'default_notify_partner', 'send_notification', 'Notify Partner', 'Internal alert to assigned partner after full sequence without response', '{\"subject\": \"[ACTION NEEDED] Client Needs Partner Follow-Up\", \"template_id\": 22}', 720, 1650, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(30, 2, 'end_default', 'end', 'End (Default)', 'Default sequence complete', NULL, 720, 1800, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
 (31, 3, 'trigger', 'trigger', 'Application Received Trigger', NULL, NULL, 400, 50, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
 (32, 3, 'cond_not_adverse', 'condition', 'Loan Status Check (Not Adverse)', 'Verifies the loan is not in an adverse/blocked state before sending communications', '{\"condition_type\": \"loan_status_ne\", \"condition_value\": \"adverse\"}', 400, 220, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
 (33, 3, 'end_adverse', 'end', 'End (Adverse — No Action)', 'Application is in adverse state; skip all automations', NULL, 680, 380, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
@@ -1346,92 +1173,6 @@ INSERT INTO `reminder_flow_steps` (`id`, `flow_id`, `step_key`, `step_type`, `la
 (46, 3, 'refi_wait_2d', 'wait', 'Wait 2 Days', NULL, '{\"delay_days\": 2}', 580, 1160, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
 (47, 3, 'refi_sms_2', 'send_sms', 'Day-2 Follow-Up SMS (Refi)', 'Check-in SMS after 2 days', '{\"template_id\": 30}', 580, 1310, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
 (48, 3, 'end_refi', 'end', 'End (Refi)', 'Refi nurture sequence complete', NULL, 580, 1460, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
-(49, 4, 'trigger', 'trigger', 'Prequalified Trigger', NULL, NULL, 500, 50, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(50, 4, 'branch', 'branch', 'Loan Type Branch', 'Routes to Purchase or Refi sequence', '{\"condition_type\": \"loan_type\"}', 500, 200, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(51, 4, 'p_s1', 'send_sms', 'SMS 1 (Purchase)', NULL, '{\"template_id\": 31}', 200, 380, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(52, 4, 'p_s2', 'send_email', 'Email 1 (Purchase)', NULL, '{\"template_id\": 32}', 200, 510, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(53, 4, 'p_w1', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 640, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(54, 4, 'p_wfr1', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 770, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(55, 4, 'p_end1', 'end', 'End – Responded R1 (Purchase)', NULL, NULL, 50, 900, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(56, 4, 'p_w2d1', 'wait', 'Wait 2 Days', NULL, '{\"delay_days\": 2}', 200, 900, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(57, 4, 'p_s3', 'send_sms', 'SMS 2 (Purchase)', NULL, '{\"template_id\": 33}', 200, 1030, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(58, 4, 'p_w2', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 1160, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(59, 4, 'p_wfr2', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 1290, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(60, 4, 'p_end2', 'end', 'End – Responded R2 (Purchase)', NULL, NULL, 50, 1420, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(61, 4, 'p_w2d2', 'wait', 'Wait 2 Days', NULL, '{\"delay_days\": 2}', 200, 1420, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(62, 4, 'p_s4', 'send_sms', 'SMS 3 (Purchase)', NULL, '{\"template_id\": 34}', 200, 1550, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(63, 4, 'p_s5', 'send_email', 'Email 2 (Purchase)', NULL, '{\"template_id\": 35}', 200, 1680, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(64, 4, 'p_w3', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 1810, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(65, 4, 'p_wfr3', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 1940, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(66, 4, 'p_end3', 'end', 'End – Responded R3 (Purchase)', NULL, NULL, 50, 2070, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(67, 4, 'p_w3d1', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 200, 2070, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(68, 4, 'p_s6', 'send_sms', 'SMS 4 (Purchase)', NULL, '{\"template_id\": 36}', 200, 2200, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(69, 4, 'p_w4', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 2330, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(70, 4, 'p_wfr4', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 2460, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(71, 4, 'p_end4', 'end', 'End – Responded R4 (Purchase)', NULL, NULL, 50, 2590, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(72, 4, 'p_w4d1', 'wait', 'Wait 4 Days', NULL, '{\"delay_days\": 4}', 200, 2590, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(73, 4, 'p_s7', 'send_sms', 'SMS 5 (Purchase)', NULL, '{\"template_id\": 37}', 200, 2720, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(74, 4, 'p_w5', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 2850, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(75, 4, 'p_wfr5', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 2980, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(76, 4, 'p_end5', 'end', 'End – Responded R5 (Purchase)', NULL, NULL, 50, 3110, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(77, 4, 'p_w3d2', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 200, 3110, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(78, 4, 'p_s8', 'send_email', 'Email 3 (Purchase)', NULL, '{\"template_id\": 38}', 200, 3240, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(79, 4, 'p_w6', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 3370, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(80, 4, 'p_wfr6', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 3500, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(81, 4, 'p_end6', 'end', 'End – Responded R6 (Purchase)', NULL, NULL, 50, 3630, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(82, 4, 'p_w3d3', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 200, 3630, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(83, 4, 'p_s9', 'send_sms', 'SMS 6 (Purchase)', NULL, '{\"template_id\": 39}', 200, 3760, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(84, 4, 'p_w7', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 200, 3890, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(85, 4, 'p_wfr7', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 200, 4020, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(86, 4, 'p_end7', 'end', 'End – Responded R7 (Purchase)', NULL, NULL, 50, 4150, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(87, 4, 'p_w3d4', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 200, 4150, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(88, 4, 'p_s10', 'send_sms', 'SMS 7 (Purchase)', NULL, '{\"template_id\": 40}', 200, 4280, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(89, 4, 'p_w5d1', 'wait', 'Wait 5 Days', NULL, '{\"delay_days\": 5}', 200, 4410, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(90, 4, 'p_s11', 'send_email', 'Email 4 (Purchase)', NULL, '{\"template_id\": 41}', 200, 4540, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(91, 4, 'p_notify', 'send_notification', 'Notify All Users (Purchase)', NULL, '{\"subject\": \"[ACTION NEEDED] Prequalified Client Needs Follow-Up\", \"template_id\": 53}', 200, 4670, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(92, 4, 'p_end8', 'end', 'End – Full Sequence Complete (Purchase)', NULL, NULL, 200, 4800, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(93, 4, 'r_s1', 'send_sms', 'SMS 1 (Refi)', NULL, '{\"template_id\": 42}', 800, 380, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(94, 4, 'r_s2', 'send_email', 'Email 1 (Refi)', NULL, '{\"template_id\": 43}', 800, 510, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(95, 4, 'r_w1', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 640, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(96, 4, 'r_wfr1', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 770, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(97, 4, 'r_end1', 'end', 'End – Responded R1 (Refi)', NULL, NULL, 950, 900, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(98, 4, 'r_w2d1', 'wait', 'Wait 2 Days', NULL, '{\"delay_days\": 2}', 800, 900, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(99, 4, 'r_s3', 'send_sms', 'SMS 2 (Refi)', NULL, '{\"template_id\": 44}', 800, 1030, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(100, 4, 'r_w2', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 1160, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(101, 4, 'r_wfr2', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 1290, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(102, 4, 'r_end2', 'end', 'End – Responded R2 (Refi)', NULL, NULL, 950, 1420, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(103, 4, 'r_w2d2', 'wait', 'Wait 2 Days', NULL, '{\"delay_days\": 2}', 800, 1420, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(104, 4, 'r_s4', 'send_sms', 'SMS 3 (Refi)', NULL, '{\"template_id\": 45}', 800, 1550, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(105, 4, 'r_s5', 'send_email', 'Email 2 (Refi)', NULL, '{\"template_id\": 46}', 800, 1680, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(106, 4, 'r_w3', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 1810, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(107, 4, 'r_wfr3', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 1940, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(108, 4, 'r_end3', 'end', 'End – Responded R3 (Refi)', NULL, NULL, 950, 2070, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(109, 4, 'r_w3d1', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 800, 2070, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(110, 4, 'r_s6', 'send_sms', 'SMS 4 (Refi)', NULL, '{\"template_id\": 47}', 800, 2200, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(111, 4, 'r_w4', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 2330, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(112, 4, 'r_wfr4', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 2460, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(113, 4, 'r_end4', 'end', 'End – Responded R4 (Refi)', NULL, NULL, 950, 2590, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(114, 4, 'r_w4d1', 'wait', 'Wait 4 Days', NULL, '{\"delay_days\": 4}', 800, 2590, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(115, 4, 'r_s7', 'send_sms', 'SMS 5 (Refi)', NULL, '{\"template_id\": 48}', 800, 2720, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(116, 4, 'r_w5', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 2850, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(117, 4, 'r_wfr5', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 2980, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(118, 4, 'r_end5', 'end', 'End – Responded R5 (Refi)', NULL, NULL, 950, 3110, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(119, 4, 'r_w3d2', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 800, 3110, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(120, 4, 'r_s8', 'send_email', 'Email 3 (Refi)', NULL, '{\"template_id\": 49}', 800, 3240, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(121, 4, 'r_w6', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 3370, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(122, 4, 'r_wfr6', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 3500, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(123, 4, 'r_end6', 'end', 'End – Responded R6 (Refi)', NULL, NULL, 950, 3630, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(124, 4, 'r_w3d3', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 800, 3630, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(125, 4, 'r_s9', 'send_sms', 'SMS 6 (Refi)', NULL, '{\"template_id\": 50}', 800, 3760, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(126, 4, 'r_w7', 'wait', 'Wait 10 min', NULL, '{\"delay_minutes\": 10}', 800, 3890, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(127, 4, 'r_wfr7', 'wait_for_response', 'Wait 3h or Response', NULL, '{\"response_timeout_hours\": 3}', 800, 4020, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(128, 4, 'r_end7', 'end', 'End – Responded R7 (Refi)', NULL, NULL, 950, 4150, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(129, 4, 'r_w3d4', 'wait', 'Wait 3 Days', NULL, '{\"delay_days\": 3}', 800, 4150, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(130, 4, 'r_s10', 'send_sms', 'SMS 7 (Refi)', NULL, '{\"template_id\": 51}', 800, 4280, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(131, 4, 'r_w5d1', 'wait', 'Wait 5 Days', NULL, '{\"delay_days\": 5}', 800, 4410, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(132, 4, 'r_s11', 'send_email', 'Email 4 (Refi)', NULL, '{\"template_id\": 52}', 800, 4540, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(133, 4, 'r_notify', 'send_notification', 'Notify All Users (Refi)', NULL, '{\"subject\": \"[ACTION NEEDED] Prequalified Client Needs Follow-Up\", \"template_id\": 53}', 800, 4670, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(134, 4, 'r_end8', 'end', 'End – Full Sequence Complete (Refi)', NULL, NULL, 800, 4800, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
 (135, 5, 'trigger', 'trigger', 'Preapproved Trigger', NULL, NULL, 500, 50, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (136, 5, 'branch', 'branch', 'Loan Type Branch', 'Routes to Purchase or Refi sequence', '{\"condition_type\": \"loan_type\"}', 500, 200, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (137, 5, 'p_s1', 'send_sms', 'SMS 1 (Purchase)', NULL, '{\"template_id\": 54}', 200, 380, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
@@ -1538,7 +1279,7 @@ INSERT INTO `reminder_flow_steps` (`id`, `flow_id`, `step_key`, `step_type`, `la
 (238, 9, 'r_end', 'end', 'End (Refi)', NULL, NULL, 750, 630, '2026-03-12 22:57:51', '2026-03-12 22:57:51'),
 (239, 10, 'trigger', 'trigger', 'Loan Funded Trigger', NULL, NULL, 500, 50, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
 (240, 10, 'branch', 'condition', 'Has Close Date?', 'Check if actual_close_date is set on the loan', '{\"field_name\": \"actual_close_date\", \"condition_type\": \"field_not_empty\"}', 500, 200, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
-(241, 10, 'wait_close_date', '', 'Wait Until Close Date', 'Waits until actual_close_date, then continues', '{\"date_field\": \"actual_close_date\"}', 250, 370, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
+(241, 10, 'wait_close_date', 'wait_until_date', 'Wait Until Close Date', 'Waits until actual_close_date, then continues', '{\"date_field\": \"actual_close_date\"}', 250, 370, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
 (242, 10, 'sms', 'send_sms', 'Funded Congratulations SMS', NULL, '{\"template_id\": 91}', 250, 500, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
 (243, 10, 'email', 'send_email', 'Funded Congratulations Email', NULL, '{\"template_id\": 92}', 250, 630, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
 (244, 10, 'end', 'end', 'End', NULL, NULL, 250, 760, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
@@ -1551,7 +1292,7 @@ INSERT INTO `reminder_flow_steps` (`id`, `flow_id`, `step_key`, `step_type`, `la
 --
 
 CREATE TABLE `scheduled_meetings` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `broker_id` int(11) DEFAULT NULL,
   `client_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -1583,7 +1324,7 @@ CREATE TABLE `scheduled_meetings` (
 --
 
 CREATE TABLE `scheduler_availability` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `broker_id` int(11) NOT NULL,
   `day_of_week` tinyint(4) NOT NULL COMMENT '0=Sunday,1=Monday,...,6=Saturday',
@@ -1642,7 +1383,7 @@ INSERT INTO `scheduler_availability` (`id`, `tenant_id`, `broker_id`, `day_of_we
 --
 
 CREATE TABLE `scheduler_settings` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `broker_id` int(11) NOT NULL,
   `is_enabled` tinyint(1) NOT NULL DEFAULT '1',
@@ -1679,7 +1420,7 @@ INSERT INTO `scheduler_settings` (`id`, `tenant_id`, `broker_id`, `is_enabled`, 
 --
 
 CREATE TABLE `system_settings` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) DEFAULT NULL,
   `setting_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `setting_value` text COLLATE utf8mb4_unicode_ci,
@@ -1712,7 +1453,7 @@ INSERT INTO `system_settings` (`id`, `tenant_id`, `setting_key`, `setting_value`
 --
 
 CREATE TABLE `tasks` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `template_id` int(11) DEFAULT NULL COMMENT 'References task_template if created from template',
   `order_index` int(11) DEFAULT '0' COMMENT 'Order in loan workflow (copied from template)',
@@ -1758,7 +1499,7 @@ INSERT INTO `tasks` (`id`, `tenant_id`, `template_id`, `order_index`, `applicati
 --
 
 CREATE TABLE `task_documents` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `task_id` int(11) NOT NULL,
   `field_id` int(11) DEFAULT NULL COMMENT 'Associated form field if uploaded via form',
   `document_type` enum('pdf','image') COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -1779,7 +1520,7 @@ CREATE TABLE `task_documents` (
 --
 
 CREATE TABLE `task_form_fields` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `task_template_id` int(11) NOT NULL,
   `field_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Field name (e.g., license_number)',
   `field_label` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Display label',
@@ -1836,7 +1577,7 @@ INSERT INTO `task_form_fields` (`id`, `task_template_id`, `field_name`, `field_l
 --
 
 CREATE TABLE `task_form_responses` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `task_id` int(11) NOT NULL,
   `field_id` int(11) NOT NULL,
   `field_value` text COLLATE utf8mb4_unicode_ci COMMENT 'Text value for non-file fields',
@@ -1853,7 +1594,7 @@ CREATE TABLE `task_form_responses` (
 --
 
 CREATE TABLE `task_signatures` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `task_id` int(11) NOT NULL COMMENT 'References tasks.id (task instance)',
   `sign_document_id` int(11) NOT NULL COMMENT 'References task_sign_documents.id',
@@ -1879,7 +1620,7 @@ INSERT INTO `task_signatures` (`id`, `tenant_id`, `task_id`, `sign_document_id`,
 --
 
 CREATE TABLE `task_sign_documents` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `task_template_id` int(11) NOT NULL COMMENT 'References task_templates.id',
   `file_path` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Full URL or path on external server (disruptinglabs)',
@@ -1906,7 +1647,7 @@ INSERT INTO `task_sign_documents` (`id`, `tenant_id`, `task_template_id`, `file_
 --
 
 CREATE TABLE `task_templates` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
@@ -1967,7 +1708,7 @@ INSERT INTO `task_templates` (`id`, `tenant_id`, `title`, `description`, `task_t
 --
 
 CREATE TABLE `templates` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `tenant_id` int(11) NOT NULL DEFAULT '1',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
@@ -1989,97 +1730,97 @@ CREATE TABLE `templates` (
 
 INSERT INTO `templates` (`id`, `tenant_id`, `name`, `description`, `template_type`, `category`, `subject`, `body`, `variables`, `is_active`, `usage_count`, `created_by_broker_id`, `created_at`, `updated_at`) VALUES
 (1, 1, 'Welcome Email', 'Welcome new clients to the loan process', 'email', 'welcome', 'Welcome to Encore Mortgage - Your Loan Application', 'Dear {{client_name}},\n\nWelcome to Encore Mortgage! We\'re excited to help you with your loan application.\n\nYour application ID is: {{application_id}}\n\nNext steps:\n1. Complete all required documents\n2. Schedule your initial consultation\n3. We\'ll review your application within 24-48 hours\n\nIf you have any questions, please don\'t hesitate to contact us.\n\nBest regards,\n{{broker_name}}\nEncore Mortgage', '[\"client_name\", \"application_id\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
-(2, 1, 'Document Reminder SMS', 'Remind clients about pending documents', 'sms', 'reminder', NULL, 'Hi {{client_name}}, this is {{broker_name}} from Encore Mortgage. You have {{document_count}} pending documents for your loan application. Please upload them at your earliest convenience. Reply STOP to opt out.', '[\"client_name\", \"broker_name\", \"document_count\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
+(2, 1, 'Document Reminder SMS', 'Remind clients about pending documents', 'sms', 'reminder', NULL, 'Hi {{client_name}}, this is {{broker_name}} from Encore Mortgage. You have {{document_count}} pending documents for your loan application. Please upload them at your earliest convenience.', '[\"client_name\", \"broker_name\", \"document_count\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-03-24 22:36:04'),
 (3, 1, 'Application Update WhatsApp', 'Update clients on application status via WhatsApp', 'whatsapp', 'update', NULL, 'Hi {{client_name}} 👋\n\nGreat news! Your loan application status has been updated to: *{{status}}*\n\n{{additional_notes}}\n\nNext steps: {{next_steps}}\n\nFeel free to reply with any questions!\n\n- {{broker_name}} at Encore Mortgage', '[\"client_name\", \"status\", \"additional_notes\", \"next_steps\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
 (4, 1, 'Loan Approved Email', 'Congratulate clients on loan approval', 'email', 'update', 'Congratulations! Your Loan Has Been Approved', 'Dear {{client_name}},\n\nCongratulations! 🎉\n\nWe\'re thrilled to inform you that your loan application #{{application_id}} has been APPROVED!\n\nLoan Details:\n- Loan Amount: ${{loan_amount}}\n- Interest Rate: {{interest_rate}}%\n- Closing Date: {{closing_date}}\n\nNext Steps:\n1. Review the loan documents we\'ll send shortly\n2. Schedule your closing appointment\n3. Prepare for your new home!\n\nThank you for choosing Encore Mortgage. We\'re excited to be part of your homeownership journey!\n\nBest regards,\n{{broker_name}}\nEncore Mortgage', '[\"client_name\", \"application_id\", \"loan_amount\", \"interest_rate\", \"closing_date\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
 (5, 1, 'Quick Update SMS', 'Send quick status updates via SMS', 'sms', 'update', NULL, 'Hi {{client_name}}! Quick update on your loan app #{{application_id}}: {{status_message}}. Questions? Call us! - {{broker_name}} at Encore Mortgage', '[\"client_name\", \"application_id\", \"status_message\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
 (6, 1, 'Document Upload Reminder WhatsApp', 'Friendly WhatsApp reminder for documents', 'whatsapp', 'reminder', NULL, 'Hi {{client_name}} 👋\n\nFriendly reminder: We\'re still waiting for {{missing_documents}} for your loan application.\n\nYou can upload them easily through your client portal: {{portal_link}}\n\nNeed help? Just reply here and I\'ll assist you right away!\n\n📋 Missing: {{missing_documents}}\n⏰ Needed by: {{due_date}}\n\nThanks!\n{{broker_name}} 🏠', '[\"client_name\", \"missing_documents\", \"portal_link\", \"due_date\", \"broker_name\"]', 1, 0, 1, '2026-02-04 15:11:33', '2026-02-04 15:11:33'),
 (7, 1, 'App Sent – Purchase Welcome Email', 'First email sent when a purchase loan application is received', 'email', 'follow_up', '🏠 Your Home Purchase Loan Application Has Been Received!', 'Hi {{first_name}},\n\nWe\'re excited to let you know that your home *purchase* loan application has been received and is now under review.\n\nApplication #: {{application_number}}\n\nHere\'s what happens next:\n1. Our team will review your information within 1 business day.\n2. We\'ll reach out if we need any additional documents.\n3. You\'ll receive updates at every step of the process.\n\nIf you have any questions or need assistance, reply to this email or call us anytime.\n\nLooking forward to helping you get those keys! 🔑\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(8, 1, 'App Sent – Purchase Confirmation SMS', 'Quick SMS confirmation after purchase application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! ✅ We received your home purchase application (#{{application_number}}). Our team is already on it! Questions? Just reply. – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(8, 1, 'App Sent – Purchase Confirmation SMS', 'Quick SMS confirmation after purchase application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! ✅ We received your home purchase application (#{{application_number}}). Our team is already on it! Questions? Just reply. – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
 (9, 1, 'App Sent – Purchase Follow-Up Email', 'Follow-up email for purchase loan, same day', 'email', 'follow_up', 'Next Steps for Your Home Purchase Loan', 'Hi {{first_name}},\n\nJust following up on your home purchase loan application (#{{application_number}}).\n\nTo keep things moving smoothly, please make sure the following are ready:\n• Government-issued photo ID\n• Last 2 months of pay stubs\n• Last 2 years of W-2s or tax returns\n• Last 2 months of bank statements\n\nYou can upload documents directly through your client portal. If you haven\'t logged in yet, check the link in your welcome email.\n\nWe\'re with you every step of the way. Don\'t hesitate to reach out!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(10, 1, 'App Sent – Purchase Day-3 Reminder SMS', 'SMS reminder 3 days after purchase application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Checking in on your purchase loan app (#{{application_number}}). Have you had a chance to upload your documents? We\'re here to help – just reply! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(11, 1, 'App Sent – Purchase Day-6 Final SMS', 'Final SMS nudge 6 days after purchase application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 Still here to help with your home purchase loan (#{{application_number}}). A quick call could get you one step closer to those keys! Call or reply anytime. – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(10, 1, 'App Sent – Purchase Day-3 Reminder SMS', 'SMS reminder 3 days after purchase application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Checking in on your purchase loan app (#{{application_number}}). Have you had a chance to upload your documents? We\'re here to help – just reply!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
+(11, 1, 'App Sent – Purchase Day-6 Final SMS', 'Final SMS nudge 6 days after purchase application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 Still here to help with your home purchase loan (#{{application_number}}). A quick call could get you one step closer to those keys! Call or reply anytime. – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
 (12, 1, 'App Sent – Refi Welcome Email', 'First email sent when a refinance loan application is received', 'email', 'follow_up', '🔄 Your Refinance Application Has Been Received!', 'Hi {{first_name}},\n\nGreat news — your refinance loan application has been received and is now under review.\n\nApplication #: {{application_number}}\n\nRefinancing can save you money, lower your payment, or help you access equity. We\'re here to make the process as smooth as possible.\n\nWhat to expect next:\n1. We\'ll review your application within 1 business day.\n2. We may reach out for additional documents.\n3. We\'ll keep you updated every step of the way.\n\nQuestions? Just reply to this email!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(13, 1, 'App Sent – Refi Confirmation SMS', 'Quick SMS confirmation after refinance application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! ✅ We received your refinance application (#{{application_number}}). We\'re reviewing it now! Questions? Just reply. – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(13, 1, 'App Sent – Refi Confirmation SMS', 'Quick SMS confirmation after refinance application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! ✅ We received your refinance application (#{{application_number}}). We\'re reviewing it now! Questions? Just reply. – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
 (14, 1, 'App Sent – Refi Follow-Up Email', 'Follow-up email for refi loan, same day', 'email', 'follow_up', 'Next Steps for Your Refinance', 'Hi {{first_name}},\n\nFollowing up on your refinance application (#{{application_number}}).\n\nTo keep things moving, please have these documents ready:\n• Government-issued photo ID\n• Last 2 months of pay stubs\n• Last 2 years of W-2s or tax returns\n• Last 2 months of bank statements\n• Most recent mortgage statement\n\nYou can upload everything securely through your client portal.\n\nWe\'re committed to making your refinance as fast and painless as possible.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(15, 1, 'App Sent – Refi Day-3 Reminder SMS', 'SMS reminder 3 days after refinance application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Just checking in on your refinance app (#{{application_number}}). Have questions or need help with documents? Reply anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(16, 1, 'App Sent – Refi Day-6 Final SMS', 'Final SMS nudge 6 days after refinance application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 Your refinance application (#{{application_number}}) is still open. Lock in your rate now — give us a call or reply here. We\'re ready when you are! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(15, 1, 'App Sent – Refi Day-3 Reminder SMS', 'SMS reminder 3 days after refinance application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Just checking in on your refinance app (#{{application_number}}). Have questions or need help with documents? Reply anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
+(16, 1, 'App Sent – Refi Day-6 Final SMS', 'Final SMS nudge 6 days after refinance application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 Your refinance application (#{{application_number}}) is still open. Lock in your rate now — give us a call or reply here. We\'re ready when you are! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
 (17, 1, 'App Sent – Default Welcome Email', 'First email when loan type is not yet classified', 'email', 'follow_up', '📋 Your Loan Application Has Been Received!', 'Hi {{first_name}},\n\nWe\'ve received your loan application and our team is reviewing it now.\n\nApplication #: {{application_number}}\n\nNext steps:\n1. Our team will review your details within 1 business day.\n2. We\'ll reach out if we need anything else from you.\n3. You\'ll receive updates throughout the process.\n\nIf you have any questions, just reply to this email or give us a call.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(18, 1, 'App Sent – Default Day-3 SMS', 'First SMS reminder 3 days after application received (no loan type)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Checking in on your loan application (#{{application_number}}). Any questions or documents you need help with? Reply anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(19, 1, 'App Sent – Default Day-10 SMS', 'Second SMS reminder 10 days after application received (no loan type)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, we want to make sure your loan application (#{{application_number}}) keeps moving forward. Give us a call or reply here — we\'d love to help! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(18, 1, 'App Sent – Default Day-3 SMS', 'First SMS reminder 3 days after application received (no loan type)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Checking in on your loan application (#{{application_number}}). Any questions or documents you need help with? Reply anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
+(19, 1, 'App Sent – Default Day-10 SMS', 'Second SMS reminder 10 days after application received (no loan type)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, we want to make sure your loan application (#{{application_number}}) keeps moving forward. Give us a call or reply here — we\'d love to help! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
 (20, 1, 'App Sent – Default Follow-Up Email', 'Follow-up email 10 days after application (no loan type)', 'email', 'follow_up', 'We\'re Still Here to Help with Your Loan', 'Hi {{first_name}},\n\nWe noticed your loan application (#{{application_number}}) still has some pending items. We want to make sure you get the best possible outcome.\n\nOur team is ready to walk you through every step — documents, questions, timelines — whatever you need.\n\nWould you be available for a quick call this week? Just reply and we\'ll set it up.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(21, 1, 'App Sent – Default Day-17 Final SMS', 'Final SMS reminder 17 days after application (no loan type)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, last check-in on your loan application (#{{application_number}}). We\'re still here and ready to help. Don\'t let this opportunity pass — reply or call us today! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
+(21, 1, 'App Sent – Default Day-17 Final SMS', 'Final SMS reminder 17 days after application (no loan type)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, last check-in on your loan application (#{{application_number}}). We\'re still here and ready to help. Don\'t let this opportunity pass — reply or call us today! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-24 22:36:04'),
 (22, 1, 'App Sent – Partner Internal Notification', 'Internal notification to the assigned partner after default follow-up sequence completes', 'email', 'system', '[ACTION NEEDED] Loan Application Requires Partner Follow-Up', 'Hello,\n\nThis is an automated internal alert.\n\nClient {{client_name}} has completed the automated App Sent reminder sequence without responding. Their loan application (#{{application_number}}) may need personal outreach from the assigned partner.\n\nApplication details:\n• Client: {{client_name}}\n• Application #: {{application_number}}\n• Loan Type: {{loan_type}}\n\nPlease follow up directly with the client at your earliest convenience.\n\n— Encore Mortgage Automation', '[\"client_name\", \"application_number\", \"loan_type\"]', 1, 0, 1, '2026-03-12 21:56:35', '2026-03-12 21:56:35'),
-(23, 1, 'App Received – Purchase Welcome SMS', 'Immediate SMS confirmation when a purchase loan application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🏠 Great news — we received your home purchase application (#{{application_number}}) and our team is already reviewing it. Questions? Just reply! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:45', '2026-03-12 22:05:45'),
+(23, 1, 'App Received – Purchase Welcome SMS', 'Immediate SMS confirmation when a purchase loan application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🏠 Great news — we received your home purchase application (#{{application_number}}) and our team is already reviewing it. Questions? Just reply! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:45', '2026-03-24 22:36:04'),
 (24, 1, 'App Received – Purchase Welcome Email', 'Immediate welcome email for purchase loan once application is fully received', 'email', 'follow_up', '🏠 We\'ve Received Your Purchase Loan Application!', 'Hi {{first_name}},\n\nExciting news! Your home purchase loan application has been officially received and is now in our system.\n\nApplication #: {{application_number}}\n\nOur team will begin a thorough review right away. Here\'s what to expect:\n\n• We\'ll contact you within 1 business day with next steps.\n• You may be asked to provide supporting documents through your client portal.\n• We\'ll keep you updated every step of the way.\n\nWe\'re thrilled to be part of your homeownership journey. Don\'t hesitate to reach out with any questions!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
 (25, 1, 'App Received – Purchase 10-Min Follow-Up Email', 'Follow-up email sent ~10 minutes after application received (purchase)', 'email', 'follow_up', 'What Happens Next with Your Purchase Loan (#{{application_number}})', 'Hi {{first_name}},\n\nJust following up! Now that we have your application (#{{application_number}}), here\'s a quick checklist of documents you\'ll want to have ready:\n\n✅ Government-issued photo ID (driver\'s license or passport)\n✅ Last 2 months of pay stubs\n✅ Last 2 years of W-2s or tax returns\n✅ Last 2–3 months of bank statements\n✅ Any gift letters (if applicable)\n\nYou can upload everything securely through your client portal. Getting these in early will help us move faster!\n\nReady to chat? Reply to this email or give us a call — we\'re here.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
-(26, 1, 'App Received – Purchase Day-2 Follow-Up SMS', 'SMS follow-up 2 days after purchase application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Checking in on your purchase loan app (#{{application_number}}) — have you had a chance to log in to your portal and review your checklist? We\'re here if you need anything! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
-(27, 1, 'App Received – Refi Welcome SMS', 'Immediate SMS confirmation when a refinance loan application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🔄 We received your refinance application (#{{application_number}}) and are reviewing it now. We\'ll follow up shortly — reply anytime with questions! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
+(26, 1, 'App Received – Purchase Day-2 Follow-Up SMS', 'SMS follow-up 2 days after purchase application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Checking in on your purchase loan app (#{{application_number}}) — have you had a chance to log in to your portal and review your checklist? We\'re here if you need anything!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-24 22:36:04'),
+(27, 1, 'App Received – Refi Welcome SMS', 'Immediate SMS confirmation when a refinance loan application is received', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🔄 We received your refinance application (#{{application_number}}) and are reviewing it now. We\'ll follow up shortly — reply anytime with questions! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-24 22:36:04'),
 (28, 1, 'App Received – Refi Welcome Email', 'Immediate welcome email for refinance loan once application is fully received', 'email', 'follow_up', '🔄 Your Refinance Application Has Been Received!', 'Hi {{first_name}},\n\nYour refinance application is officially in — and our team has already started the review process.\n\nApplication #: {{application_number}}\n\nRefinancing is one of the smartest financial moves you can make, and we\'re here to make it seamless.\n\nWhat to expect:\n• We\'ll review your application and reach out within 1 business day.\n• We may request supporting documents through your secure client portal.\n• You\'ll receive updates at key milestones.\n\nHave questions? Just reply to this email — we\'re happy to help.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
 (29, 1, 'App Received – Refi 10-Min Follow-Up Email', 'Follow-up email sent ~10 minutes after refinance application received', 'email', 'follow_up', 'Quick Checklist for Your Refinance (#{{application_number}})', 'Hi {{first_name}},\n\nGreat start! To keep your refinance moving as quickly as possible, here are the documents we\'ll need:\n\n✅ Government-issued photo ID\n✅ Last 2 months of pay stubs\n✅ Last 2 years of W-2s or tax returns\n✅ Last 2–3 months of bank statements\n✅ Most recent mortgage statement\n✅ Homeowners insurance declaration page\n\nUpload them securely through your client portal whenever you\'re ready. Getting ahead on documents can save days in processing.\n\nQuestions? We\'re a reply or call away.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
-(30, 1, 'App Received – Refi Day-2 Follow-Up SMS', 'SMS follow-up 2 days after refinance application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here from Encore Mortgage. Just checking in on your refinance app (#{{application_number}}). Have you had a chance to review your document checklist in the portal? We\'re here to help make this easy! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-12 22:05:46'),
-(31, 1, 'Prequalified – Purchase SMS 1', 'Initial SMS on prequalification (purchase)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉 Great news — you\'ve been prequalified for your home purchase loan (#{{application_number}})! Our team is ready to guide you through the next steps. Questions? Just reply! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(30, 1, 'App Received – Refi Day-2 Follow-Up SMS', 'SMS follow-up 2 days after refinance application received', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here from Encore Mortgage. Just checking in on your refinance app (#{{application_number}}). Have you had a chance to review your document checklist in the portal? We\'re here to help make this easy!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:05:46', '2026-03-24 22:36:04'),
+(31, 1, 'Prequalified – Purchase SMS 1', 'Initial SMS on prequalification (purchase)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉 Great news — you\'ve been prequalified for your home purchase loan (#{{application_number}})! Our team is ready to guide you through the next steps. Questions? Just reply! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (32, 1, 'Prequalified – Purchase Email 1', 'Initial welcome email on prequalification (purchase)', 'email', 'follow_up', '🏠 You\'re Prequalified! Here\'s What\'s Next', 'Hi {{first_name}},\n\nFantastic news — you\'ve been *prequalified* for your home purchase loan!\n\nApplication #: {{application_number}}\n\nBeing prequalified is a major milestone. Here\'s what comes next:\n\n1. We\'ll review your full application and documents.\n2. A formal pre-approval letter will follow once we confirm your details.\n3. You\'ll be in a strong position to make offers on homes!\n\nIf you have any questions or want to discuss your options, just reply to this email — we\'re here every step of the way.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(33, 1, 'Prequalified – Purchase SMS 2', 'Day-2 follow-up SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. You\'re prequalified for your home purchase (#{{application_number}}) — don\'t let this momentum slow down! Ready to talk next steps? Reply here or give us a call. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(34, 1, 'Prequalified – Purchase SMS 3', 'Day-4 check-in SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 Quick check-in from {{broker_name}} at Encore Mortgage. Your prequalification for loan #{{application_number}} is still active. Are you actively looking for homes? We can help you move fast when you find the one. Reply anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(33, 1, 'Prequalified – Purchase SMS 2', 'Day-2 follow-up SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. You\'re prequalified for your home purchase (#{{application_number}}) — don\'t let this momentum slow down! Ready to talk next steps? Reply here or give us a call.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
+(34, 1, 'Prequalified – Purchase SMS 3', 'Day-4 check-in SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 Quick check-in from {{broker_name}} at Encore Mortgage. Your prequalification for loan #{{application_number}} is still active. Are you actively looking for homes? We can help you move fast when you find the one. Reply anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (35, 1, 'Prequalified – Purchase Email 2', 'Day-4 follow-up email with resources (purchase)', 'email', 'follow_up', 'Still Looking for the Right Home? We\'re Here When You\'re Ready', 'Hi {{first_name}},\n\nJust circling back on your prequalification (#{{application_number}}).\n\nWe know home shopping takes time — and we want you to know we\'re here whenever you\'re ready to move forward. Whether you have questions about the process, want to understand your buying power, or are ready to lock in your rate, we\'re just a reply away.\n\nA few things to keep in mind:\n• Your prequalification is still active.\n• Interest rates can change — locking in sooner can save you money.\n• We can issue a pre-approval letter the moment you find the right home.\n\nLet\'s keep this moving!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(36, 1, 'Prequalified – Purchase SMS 4', 'Day-7 nudge SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here. Your home purchase prequalification (#{{application_number}}) is ready and waiting! Once you find a home you love, we can move quickly. Have questions about your max purchase price or next steps? Reply and I\'ll help! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(37, 1, 'Prequalified – Purchase SMS 5', 'Day-11 re-engagement SMS (purchase)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! 🏡 Still thinking about buying a home? Your prequalification (#{{application_number}}) is still active. I\'d love to help you get to the finish line. Let\'s connect — reply or call me today! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(36, 1, 'Prequalified – Purchase SMS 4', 'Day-7 nudge SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here. Your home purchase prequalification (#{{application_number}}) is ready and waiting! Once you find a home you love, we can move quickly. Have questions about your max purchase price or next steps? Reply and I\'ll help!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
+(37, 1, 'Prequalified – Purchase SMS 5', 'Day-11 re-engagement SMS (purchase)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! 🏡 Still thinking about buying a home? Your prequalification (#{{application_number}}) is still active. I\'d love to help you get to the finish line. Let\'s connect — reply or call me today! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (38, 1, 'Prequalified – Purchase Email 3', 'Day-14 re-engagement email (purchase)', 'email', 'follow_up', 'Your Home Purchase Prequalification Is Still Active — Let\'s Talk', 'Hi {{first_name}},\n\nI wanted to personally reach out regarding your prequalification (#{{application_number}}).\n\nBuying a home is one of the biggest decisions you\'ll make — and I want to make sure you feel fully supported. If anything has changed in your situation, or if you have concerns about the process, I\'m here to help.\n\nAre you:\n• Still searching for the right home?\n• Unsure about your budget or buying power?\n• Waiting on something specific before moving forward?\n\nJust reply to this email and let\'s have a quick conversation. No pressure — just here to help.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(39, 1, 'Prequalified – Purchase SMS 6', 'Day-17 final SMS before last sequence (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. I\'ve been trying to connect about your home purchase prequalification (#{{application_number}}). I\'d love to help make your homeownership dream a reality. This is my last automated check-in — reply anytime and I\'ll pick it right up! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(40, 1, 'Prequalified – Purchase SMS 7', 'Day-20 final attempt SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, one final note from {{broker_name}} at Encore Mortgage about your home purchase prequalification (#{{application_number}}). Rates are always moving — if you\'re ready to act, we\'re ready to move fast for you. Reply or call us today. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(39, 1, 'Prequalified – Purchase SMS 6', 'Day-17 final SMS before last sequence (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. I\'ve been trying to connect about your home purchase prequalification (#{{application_number}}). I\'d love to help make your homeownership dream a reality. This is my last automated check-in — reply anytime and I\'ll pick it right up!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
+(40, 1, 'Prequalified – Purchase SMS 7', 'Day-20 final attempt SMS (purchase)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, one final note from {{broker_name}} at Encore Mortgage about your home purchase prequalification (#{{application_number}}). Rates are always moving — if you\'re ready to act, we\'re ready to move fast for you. Reply or call us today.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (41, 1, 'Prequalified – Purchase Email 4', 'Day-25 final email before internal notification (purchase)', 'email', 'follow_up', 'A Final Note on Your Home Purchase Prequalification', 'Hi {{first_name}},\n\nThis is our final automated message regarding your home purchase prequalification (#{{application_number}}).\n\nWe\'ve reached out several times and want to make sure you know we\'re still here. If now isn\'t the right time, that\'s completely okay — just know that when you\'re ready, we\'ll be ready too.\n\nFeel free to reach out at any time. Your prequalification can be updated and a pre-approval can be issued quickly when the moment is right.\n\nWishing you all the best,\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(42, 1, 'Prequalified – Refi SMS 1', 'Initial SMS on prequalification (refi)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🔄 You\'ve been prequalified for your refinance (#{{application_number}})! We\'re ready to help you lock in a better rate or access your equity. Questions? Reply anytime! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(42, 1, 'Prequalified – Refi SMS 1', 'Initial SMS on prequalification (refi)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🔄 You\'ve been prequalified for your refinance (#{{application_number}})! We\'re ready to help you lock in a better rate or access your equity. Questions? Reply anytime! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (43, 1, 'Prequalified – Refi Email 1', 'Initial welcome email on prequalification (refi)', 'email', 'follow_up', '🔄 You\'re Prequalified to Refinance — Here\'s What\'s Next', 'Hi {{first_name}},\n\nExcellent news — you\'ve been *prequalified* for your refinance!\n\nApplication #: {{application_number}}\n\nYour prequalification means we\'ve reviewed your initial information and you\'re in a great position to move forward. Here\'s what to expect next:\n\n1. We\'ll complete a full review of your application.\n2. An appraisal may be required depending on your loan program.\n3. We\'ll guide you through locking in your rate at the right moment.\n\nRefinancing now could mean significant monthly savings. Let\'s get this done!\n\nReply to this email with any questions — we\'re ready to move quickly.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(44, 1, 'Prequalified – Refi SMS 2', 'Day-2 follow-up SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage here. Your refinance prequalification (#{{application_number}}) is ready to move forward. Rates are shifting — locking in now could save you thousands. Ready to take the next step? Reply here! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(45, 1, 'Prequalified – Refi SMS 3', 'Day-4 check-in SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! Quick check-in from {{broker_name}} at Encore Mortgage. Your refinance prequalification (#{{application_number}}) is active and your potential savings are waiting. Have questions about the process or your rate options? Just reply! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(44, 1, 'Prequalified – Refi SMS 2', 'Day-2 follow-up SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage here. Your refinance prequalification (#{{application_number}}) is ready to move forward. Rates are shifting — locking in now could save you thousands. Ready to take the next step? Reply here!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
+(45, 1, 'Prequalified – Refi SMS 3', 'Day-4 check-in SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! Quick check-in from {{broker_name}} at Encore Mortgage. Your refinance prequalification (#{{application_number}}) is active and your potential savings are waiting. Have questions about the process or your rate options? Just reply!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (46, 1, 'Prequalified – Refi Email 2', 'Day-4 follow-up email (refi)', 'email', 'follow_up', 'Your Refinance Prequalification Is Active — Don\'t Miss This Window', 'Hi {{first_name}},\n\nFollowing up on your refinance prequalification (#{{application_number}}).\n\nWith rates constantly changing, acting sooner rather than later can make a real difference in your monthly payment and total interest paid. Here\'s a quick snapshot of how refinancing can help:\n\n💰 Lower your monthly payment\n🔒 Lock in a fixed rate for stability\n💵 Access home equity for renovations or debt consolidation\n📅 Shorten your loan term\n\nWe can run the numbers with you at no cost. Just reply and we\'ll set up a quick call.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(47, 1, 'Prequalified – Refi SMS 4', 'Day-7 nudge SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here from Encore Mortgage. Still thinking about your refinance (#{{application_number}})? No pressure — but I want to make sure you don\'t miss out on a favorable rate. I\'m here whenever you\'re ready. Reply anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(48, 1, 'Prequalified – Refi SMS 5', 'Day-11 re-engagement SMS (refi)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! 💰 Your refinance prequalification (#{{application_number}}) is still open. Homeowners who refinance at the right time can save hundreds per month. Let\'s find out what\'s possible for you — reply or call me today! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(47, 1, 'Prequalified – Refi SMS 4', 'Day-7 nudge SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here from Encore Mortgage. Still thinking about your refinance (#{{application_number}})? No pressure — but I want to make sure you don\'t miss out on a favorable rate. I\'m here whenever you\'re ready. Reply anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
+(48, 1, 'Prequalified – Refi SMS 5', 'Day-11 re-engagement SMS (refi)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! 💰 Your refinance prequalification (#{{application_number}}) is still open. Homeowners who refinance at the right time can save hundreds per month. Let\'s find out what\'s possible for you — reply or call me today! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (49, 1, 'Prequalified – Refi Email 3', 'Day-14 re-engagement email (refi)', 'email', 'follow_up', 'Still Thinking About Refinancing? Let\'s Talk', 'Hi {{first_name}},\n\nI wanted to personally reach out about your refinance prequalification (#{{application_number}}).\n\nI understand refinancing can feel like a big decision. I\'m here to simplify it for you and make sure you\'re making the best move for your financial situation.\n\nSome questions I can help answer:\n• How much could I save monthly by refinancing?\n• Is now a good time to lock in a rate?\n• What documents will I need?\n• How long does the process take?\n\nJust reply to this email and let\'s get on a quick 10-minute call. There\'s no obligation — just clarity.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(50, 1, 'Prequalified – Refi SMS 6', 'Day-17 final SMS before last sequence (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. I\'ve been following up on your refinance prequalification (#{{application_number}}) and I really want to help. This is my last automated message — reply anytime and I\'ll be happy to pick up right where we left off. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(51, 1, 'Prequalified – Refi SMS 7', 'Day-20 final attempt SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, one final note from {{broker_name}} at Encore Mortgage on your refinance prequalification (#{{application_number}}). Whether you want to lower your rate, reduce your term, or tap equity — we\'re ready when you are. Call or reply today. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
+(50, 1, 'Prequalified – Refi SMS 6', 'Day-17 final SMS before last sequence (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. I\'ve been following up on your refinance prequalification (#{{application_number}}) and I really want to help. This is my last automated message — reply anytime and I\'ll be happy to pick up right where we left off.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
+(51, 1, 'Prequalified – Refi SMS 7', 'Day-20 final attempt SMS (refi)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, one final note from {{broker_name}} at Encore Mortgage on your refinance prequalification (#{{application_number}}). Whether you want to lower your rate, reduce your term, or tap equity — we\'re ready when you are. Call or reply today.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-24 22:36:04'),
 (52, 1, 'Prequalified – Refi Email 4', 'Day-25 final email before internal notification (refi)', 'email', 'follow_up', 'A Final Note on Your Refinance Prequalification', 'Hi {{first_name}},\n\nThis is our final automated message about your refinance prequalification (#{{application_number}}).\n\nWe\'ve genuinely enjoyed the opportunity to work with you and hope we\'ll hear from you when the time is right. Refinancing is always on the table — rates and programs change, and we\'ll be here.\n\nIf you ever want a fresh look at your options, don\'t hesitate to reach out.\n\nWishing you all the best,\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
 (53, 1, 'Prequalified – Internal All-User Notification', 'Internal notification to all users after full prequalified sequence without response', 'email', 'system', '[ACTION NEEDED] Prequalified Client Has Not Responded — Full Sequence Completed', 'Hello Team,\n\nThis is an automated internal alert.\n\nClient {{client_name}} completed the full Prequalified automated reminder sequence without responding. Personal outreach is now recommended.\n\nApplication Details:\n• Client: {{client_name}}\n• Application #: {{application_number}}\n• Loan Type: {{loan_type}}\n• Status: Prequalified\n\nPlease coordinate internally and assign a team member to follow up directly.\n\n— Encore Mortgage Automation', '[\"client_name\", \"application_number\", \"loan_type\"]', 1, 0, 1, '2026-03-12 22:34:43', '2026-03-12 22:34:43'),
-(54, 1, 'Preapproved – Purchase SMS 1', 'Initial SMS on pre-approval (purchase)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🏡 Big news — you\'ve been *pre-approved* for your home purchase loan (#{{application_number}})! This is a major step. Your pre-approval letter is ready and you can start making offers confidently. Questions? Reply anytime! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(54, 1, 'Preapproved – Purchase SMS 1', 'Initial SMS on pre-approval (purchase)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🏡 Big news — you\'ve been *pre-approved* for your home purchase loan (#{{application_number}})! This is a major step. Your pre-approval letter is ready and you can start making offers confidently. Questions? Reply anytime! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
 (55, 1, 'Preapproved – Purchase Email 1', 'Initial welcome email on pre-approval (purchase)', 'email', 'follow_up', '🎉 Congratulations — You\'re Pre-Approved to Buy a Home!', 'Hi {{first_name}},\n\nExciting news — you have been officially *pre-approved* for your home purchase loan!\n\nApplication #: {{application_number}}\n\nThis is a significant milestone. Here\'s what your pre-approval means for you:\n\n✅ You know exactly how much you can borrow\n✅ Sellers will take your offers seriously\n✅ We can issue your pre-approval letter the moment you need it\n✅ You\'re one step closer to the keys!\n\nHere\'s what comes next:\n1. Start touring homes confidently within your budget.\n2. When you find the one, notify us immediately — we move fast.\n3. We\'ll guide you through the offer, appraisal, and closing process.\n\nHave questions about your pre-approval or the buying process? Reply to this email — we\'re here for you.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(56, 1, 'Preapproved – Refi SMS 1', 'Initial SMS on pre-approval (refi)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🔄 Great news — you\'ve been *pre-approved* for your refinance (#{{application_number}})! We\'re ready to lock in your rate and move forward. Want to schedule a quick call to review your options? Reply here! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(56, 1, 'Preapproved – Refi SMS 1', 'Initial SMS on pre-approval (refi)', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🔄 Great news — you\'ve been *pre-approved* for your refinance (#{{application_number}})! We\'re ready to lock in your rate and move forward. Want to schedule a quick call to review your options? Reply here! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
 (57, 1, 'Preapproved – Refi Email 1', 'Initial welcome email on pre-approval (refi)', 'email', 'follow_up', '🎉 Congratulations — You\'re Pre-Approved to Refinance!', 'Hi {{first_name}},\n\nGreat news — you\'ve been officially *pre-approved* for your refinance!\n\nApplication #: {{application_number}}\n\nHere\'s what this means for you:\n\n💰 Your new rate and payment have been estimated\n🔒 You\'re ready to lock in your rate at any time\n📋 We\'ve reviewed your financials and documents look good\n⚡ We can move quickly once you give the go-ahead\n\nNext steps:\n1. Review your pre-approval terms (we\'ll walk you through them).\n2. Decide when you\'d like to lock in your rate.\n3. Authorize us to order the appraisal if applicable.\n\nRefinancing now could reduce your monthly payment, shorten your loan term, or give you access to cash equity. Let\'s get this done!\n\nReply to this email with any questions.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(58, 1, 'Preapproved – SMS Follow-Up 02', 'Day-2 check-in SMS', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here from Encore Mortgage. Just checking in on your pre-approval (#{{application_number}}). Do you have any questions or need help with the next steps? We\'re ready to move fast when you are. Reply anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(59, 1, 'Preapproved – SMS Follow-Up 03', 'Day-4 SMS (before email)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! Quick reminder from {{broker_name}} at Encore Mortgage — your pre-approval (#{{application_number}}) is active and ready. Are you actively working with a realtor? I can recommend one if needed or help coordinate the offer process. Just reply! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(58, 1, 'Preapproved – SMS Follow-Up 02', 'Day-2 check-in SMS', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here from Encore Mortgage. Just checking in on your pre-approval (#{{application_number}}). Do you have any questions or need help with the next steps? We\'re ready to move fast when you are. Reply anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(59, 1, 'Preapproved – SMS Follow-Up 03', 'Day-4 SMS (before email)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! Quick reminder from {{broker_name}} at Encore Mortgage — your pre-approval (#{{application_number}}) is active and ready. Are you actively working with a realtor? I can recommend one if needed or help coordinate the offer process. Just reply!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
 (60, 1, 'Preapproved – Email Follow-Up 02', 'Day-4 email follow-up', 'email', 'follow_up', 'Your Pre-Approval Is Active — Here\'s How We Can Help You Move Faster', 'Hi {{first_name}},\n\nJust following up on your pre-approval (#{{application_number}}).\n\nWe know the home search can take time — and we\'re here to support you through every step.\n\nHere\'s how Encore Mortgage can help you move faster:\n\n🏡 We can issue pre-approval letters on demand (even on weekends)\n📞 We\'re available to speak with listing agents to strengthen your offer\n⚡ We offer fast closings that sellers love\n📊 We can run updated rate scenarios based on your target price range\n\nJust reply or call us whenever you\'re ready. We move at your pace!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(61, 1, 'Preapproved – SMS Follow-Up 04', 'Day-6 SMS (before wait3d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. Your pre-approval (#{{application_number}}) is still fully active. Remember — sellers love buyers who already have pre-approval in hand! Let us know if you need a letter for a specific property. Reply anytime. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(62, 1, 'Preapproved – SMS Follow-Up 05', 'Day-9 SMS (after wait3d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 {{broker_name}} here. Checking in again on your pre-approval (#{{application_number}}). Have you found any properties you\'re interested in? Even if you\'re just starting to look, I can help you understand what fits your budget. Reply and let\'s chat! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(61, 1, 'Preapproved – SMS Follow-Up 04', 'Day-6 SMS (before wait3d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. Your pre-approval (#{{application_number}}) is still fully active. Remember — sellers love buyers who already have pre-approval in hand! Let us know if you need a letter for a specific property. Reply anytime.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(62, 1, 'Preapproved – SMS Follow-Up 05', 'Day-9 SMS (after wait3d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! 👋 {{broker_name}} here. Checking in again on your pre-approval (#{{application_number}}). Have you found any properties you\'re interested in? Even if you\'re just starting to look, I can help you understand what fits your budget. Reply and let\'s chat!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
 (63, 1, 'Preapproved – Email Follow-Up 03', 'Day-9 email follow-up', 'email', 'follow_up', 'Tips for Making the Most of Your Pre-Approval', 'Hi {{first_name}},\n\nI wanted to share a few tips to help you make the most of your pre-approval (#{{application_number}}) while you search for the right home.\n\n**Do\'s while your pre-approval is active:**\n✅ Continue monitoring listings in your target area\n✅ Keep your finances stable (avoid large purchases or new credit)\n✅ Stay in touch with your realtor on new inventory\n✅ Contact us immediately when you find a home you want to offer on\n\n**Don\'ts:**\n❌ Don\'t open new credit cards or take on new debt\n❌ Don\'t change jobs without letting us know\n❌ Don\'t make large cash deposits without documentation\n\nKeeping these in mind will help ensure a smooth closing when the time comes. Any questions? I\'m always here.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(64, 1, 'Preapproved – SMS Follow-Up 06', 'Day-12 SMS (after wait3d, before email)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Still thinking about your loan (#{{application_number}})? Rates can change week to week — if you\'re close to making an offer, now might be a great time to discuss locking in your rate. Reply or call me today! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(64, 1, 'Preapproved – SMS Follow-Up 06', 'Day-12 SMS (after wait3d, before email)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, it\'s {{broker_name}} from Encore Mortgage. Still thinking about your loan (#{{application_number}})? Rates can change week to week — if you\'re close to making an offer, now might be a great time to discuss locking in your rate. Reply or call me today!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
 (65, 1, 'Preapproved – Email Follow-Up 04', 'Day-12 email follow-up', 'email', 'follow_up', 'Have You Considered Locking In Your Rate?', 'Hi {{first_name}},\n\nFollowing up on your pre-approval (#{{application_number}}).\n\nOne of the most important decisions in your mortgage journey is *when* to lock in your rate. A rate lock protects you from increases while you finalize your home purchase or refinance.\n\nHere\'s what you should know:\n\n📌 Rate locks are typically 30–60 days\n📌 Locking in now could protect you from rising rates\n📌 We monitor the market daily to advise the best timing\n\nWould you like to discuss your rate lock options? Just reply to this email or give me a call and we\'ll walk through the numbers together.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(66, 1, 'Preapproved – SMS Follow-Up 07', 'Day-15 SMS (after wait3d)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! 📲 {{broker_name}} from Encore Mortgage. Two weeks since your pre-approval (#{{application_number}}) — just wanted to check in. Is there anything we can do to help your home search move forward? We\'re here to support you however we can. Reply! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(67, 1, 'Preapproved – SMS Follow-Up 08', 'Day-17 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here. Just a quick note — your pre-approval (#{{application_number}}) is still ready for action. The market moves fast; when you\'re ready to make an offer, we can provide a same-day pre-approval letter. Don\'t hesitate to reach out! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(68, 1, 'Preapproved – SMS Follow-Up 09', 'Day-19 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! {{broker_name}} from Encore Mortgage checking in. It\'s been a couple of weeks since your pre-approval (#{{application_number}}). How\'s the home search going? Whether you\'re close to an offer or still browsing, I\'m here to help. Reply anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(69, 1, 'Preapproved – SMS Follow-Up 10', 'Day-21 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hello {{first_name}}! Quick check from {{broker_name}} at Encore Mortgage. Your pre-approval (#{{application_number}}) is still active. If you\'ve been hesitant about the process or costs, let\'s talk — I can walk you through everything with no pressure. Reply here! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(70, 1, 'Preapproved – SMS Follow-Up 11', 'Day-23 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. I know life gets busy — just a friendly reminder that your pre-approval (#{{application_number}}) is still here and ready. When you find the right home, we\'ll be ready to move instantly. Reply or call anytime! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(71, 1, 'Preapproved – SMS Follow-Up 12', 'Day-28 SMS (after wait5d, before email)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! It\'s been about 4 weeks since your pre-approval (#{{application_number}}). {{broker_name}} here from Encore Mortgage — I just wanted to personally check in. Have your needs or circumstances changed? I can update your pre-approval at any time. Reply here or call me! Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(66, 1, 'Preapproved – SMS Follow-Up 07', 'Day-15 SMS (after wait3d)', 'sms', 'reminder', NULL, 'Hey {{first_name}}! 📲 {{broker_name}} from Encore Mortgage. Two weeks since your pre-approval (#{{application_number}}) — just wanted to check in. Is there anything we can do to help your home search move forward? We\'re here to support you however we can. Reply!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(67, 1, 'Preapproved – SMS Follow-Up 08', 'Day-17 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} here. Just a quick note — your pre-approval (#{{application_number}}) is still ready for action. The market moves fast; when you\'re ready to make an offer, we can provide a same-day pre-approval letter. Don\'t hesitate to reach out!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(68, 1, 'Preapproved – SMS Follow-Up 09', 'Day-19 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! {{broker_name}} from Encore Mortgage checking in. It\'s been a couple of weeks since your pre-approval (#{{application_number}}). How\'s the home search going? Whether you\'re close to an offer or still browsing, I\'m here to help. Reply anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(69, 1, 'Preapproved – SMS Follow-Up 10', 'Day-21 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hello {{first_name}}! Quick check from {{broker_name}} at Encore Mortgage. Your pre-approval (#{{application_number}}) is still active. If you\'ve been hesitant about the process or costs, let\'s talk — I can walk you through everything with no pressure. Reply here!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(70, 1, 'Preapproved – SMS Follow-Up 11', 'Day-23 SMS (after wait2d)', 'sms', 'reminder', NULL, 'Hi {{first_name}}, {{broker_name}} from Encore Mortgage. I know life gets busy — just a friendly reminder that your pre-approval (#{{application_number}}) is still here and ready. When you find the right home, we\'ll be ready to move instantly. Reply or call anytime!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
+(71, 1, 'Preapproved – SMS Follow-Up 12', 'Day-28 SMS (after wait5d, before email)', 'sms', 'reminder', NULL, 'Hi {{first_name}}! It\'s been about 4 weeks since your pre-approval (#{{application_number}}). {{broker_name}} here from Encore Mortgage — I just wanted to personally check in. Have your needs or circumstances changed? I can update your pre-approval at any time. Reply here or call me!', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-24 22:36:04'),
 (72, 1, 'Preapproved – Email Follow-Up 05', 'Day-28 email (after wait5d)', 'email', 'follow_up', 'One Month In — Your Pre-Approval Remains Ready', 'Hi {{first_name}},\n\nA month has passed since your pre-approval (#{{application_number}}), and we\'re still here cheering you on!\n\nWe understand that finding the right home takes time, and we never want to rush a decision this important. But we do want to make sure you have all the support you need.\n\nA few things worth knowing at this stage:\n\n📅 Pre-approvals are typically valid for 60–90 days from the credit check date. If yours is approaching expiration, we can refresh it quickly with a soft update.\n\n📊 Have your income, employment, or finances changed? Let us know and we\'ll update your file accordingly.\n\n🏠 If you\'ve been looking at properties outside your current pre-approved range, we can explore options.\n\nJust reply to this email and let\'s review where things stand.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (73, 1, 'Preapproved – Email Follow-Up 06', 'Day-38 email (after wait10d)', 'email', 'follow_up', 'Week 5 Check-In: Your Mortgage Questions Answered', 'Hi {{first_name}},\n\nHope you\'re well! We\'re still here to support your loan process (#{{application_number}}).\n\nWe thought we\'d take a moment to answer some of the most common questions we hear at this stage:\n\n**Q: Is my pre-approval letter still valid?**\nA: Pre-approvals are typically good for 60–90 days. Let us know if you\'re approaching that window.\n\n**Q: What if I find a home over my pre-approved amount?**\nA: We can review your financials and potentially increase your pre-approval. Just reach out.\n\n**Q: How quickly can we close once I have a signed contract?**\nA: We strive for 21–30 day closings for our prepared clients like you.\n\n**Q: What if interest rates have changed since my pre-approval?**\nA: We\'ll run updated numbers before you make an offer — no surprises.\n\nHave a question not listed here? Just reply — we\'re happy to help.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (74, 1, 'Preapproved – Email Follow-Up 07', 'Day-48 email (after wait10d)', 'email', 'follow_up', 'Week 7 — Still Here, Still Ready to Help You Close', 'Hi {{first_name}},\n\nJust checking in on your loan file #{{application_number}}.\n\nWe know life happens — whether it\'s been a competitive market, shifting personal priorities, or simply taking the time to find the right fit, we\'re here without judgment.\n\nAt Encore Mortgage, our goal is simple: to be your trusted partner when you\'re ready to move. There\'s no pressure and no deadline from our side.\n\nThat said, if there\'s anything slowing you down — financing questions, budget concerns, or uncertainty about the process — we\'d love to help clear it up.\n\nJust hit reply and let\'s talk.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(75, 1, 'Preapproved – Email Follow-Up 08', 'Day-63 email (after wait15d)', 'email', 'follow_up', 'Two Months Since Your Pre-Approval — Let\'s Reconnect', 'Hi {{first_name}},\n\nIt\'s been about two months since your pre-approval for loan #{{application_number}}.\n\nWe want to be straightforward with you: pre-approvals have an expiration date, and if yours is close to expiring, we\'d recommend we reconnect to refresh your file. This is typically a quick and painless process.\n\nHere\'s what a refreshed pre-approval means:\n✅ Updated rate quotes based on current market conditions\n✅ Confirms your financial picture is still on track\n✅ Gives you renewed confidence heading into offers\n\nAlternatively, if your plans have changed or if this simply isn\'t the right time, we understand completely — just let us know so we can properly update your file.\n\nReply to this email to reconnect. We\'d love to hear from you.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43');
+(75, 1, 'Preapproved – Email Follow-Up 08', 'Day-63 email (after wait15d)', 'email', 'follow_up', 'Two Months Since Your Pre-Approval — Let\'s Reconnect', 'Hi {{first_name}},\n\nIt\'s been about two months since your pre-approval for loan #{{application_number}}.\n\nWe want to be straightforward with you: pre-approvals have an expiration date, and if yours is close to expiring, we\'d recommend we reconnect to refresh your file. This is typically a quick and painless process.\n\nHere\'s what a refreshed pre-approval means:\n✅ Updated rate quotes based on current market conditions\n✅ Confirms your financial picture is still on track\n✅ Gives you renewed confidence heading into offers\n\nAlternatively, if your plans have changed or if this simply isn\'t the right time, we understand completely — just let us know so we can properly update your file.\n\nReply to this email to reconnect. We\'d love to hear from you.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
+(76, 1, 'Preapproved – Email Follow-Up 09', 'Day-73 email (after wait10d)', 'email', 'follow_up', 'Week 10 — A Personal Note From Your Loan Officer', 'Hi {{first_name}},\n\nI wanted to reach out personally about your loan file #{{application_number}}.\n\nYour pre-approval was an important step and I\'ve been following your file closely. I know the home buying (or refinancing) journey can be full of unexpected twists, and I want you to know I\'m in your corner.\n\nIf there\'s anything — questions, concerns, change in plans, or if you\'re finally ready to move — please don\'t hesitate to reply or call me directly.\n\nYour goals matter to us. We\'re not just processing loans — we\'re helping families achieve something meaningful. I\'d be honored to help you get to the finish line.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43');
 INSERT INTO `templates` (`id`, `tenant_id`, `name`, `description`, `template_type`, `category`, `subject`, `body`, `variables`, `is_active`, `usage_count`, `created_by_broker_id`, `created_at`, `updated_at`) VALUES
-(76, 1, 'Preapproved – Email Follow-Up 09', 'Day-73 email (after wait10d)', 'email', 'follow_up', 'Week 10 — A Personal Note From Your Loan Officer', 'Hi {{first_name}},\n\nI wanted to reach out personally about your loan file #{{application_number}}.\n\nYour pre-approval was an important step and I\'ve been following your file closely. I know the home buying (or refinancing) journey can be full of unexpected twists, and I want you to know I\'m in your corner.\n\nIf there\'s anything — questions, concerns, change in plans, or if you\'re finally ready to move — please don\'t hesitate to reply or call me directly.\n\nYour goals matter to us. We\'re not just processing loans — we\'re helping families achieve something meaningful. I\'d be honored to help you get to the finish line.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (77, 1, 'Preapproved – Email Follow-Up 10', 'Day-88 email (after wait15d)', 'email', 'follow_up', 'Final Reminder: Your Pre-Approval May Be Expiring Soon', 'Hi {{first_name}},\n\nThis is an important update regarding your pre-approval for loan #{{application_number}}.\n\nMost pre-approvals are valid for 60–90 days from the initial credit check. If we haven\'t reconnected recently, your pre-approval may be approaching or have passed its expiration date.\n\nThis doesn\'t mean you\'re out of options — it simply means we\'ll need to do a quick refresh of your file to issue a current pre-approval letter.\n\nOptions moving forward:\n1. **Renew your pre-approval** — quick process, usually same-day\n2. **Update your file** if circumstances have changed\n3. **Let us know if you\'d like to pause** — we\'ll note your file accordingly\n\nPlease reply to this email so we can best support you from here.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
 (78, 1, 'Preapproved – Email Final', 'Final email after full sequence (no wait before this)', 'email', 'follow_up', 'We\'re Here Whenever You\'re Ready — No Pressure', 'Hi {{first_name}},\n\nThis is our final automated message regarding your pre-approval for loan #{{application_number}}.\n\nWe\'ve reached out multiple times over the past few months because we genuinely believe in helping you achieve your goals. But we also respect your timeline and understand that life has its own pace.\n\nWhenever you\'re ready — whether it\'s tomorrow or six months from now — we will be here. Just reach out and we\'ll pick up right where we left off.\n\nThank you for giving Encore Mortgage the opportunity to serve you. We look forward to celebrating your success when the time is right.\n\nWarm regards,\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:47:43', '2026-03-12 22:47:43'),
-(79, 1, 'Under Contract/Loan Set Up – SMS', 'Immediate SMS when loan enters Under Contract / Loan Set Up status', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉 Congratulations — you\'re officially under contract! Your loan (#{{application_number}}) is now in the setup phase and we\'re working hard to keep things moving. We\'ll keep you updated every step of the way. Questions? Reply anytime! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:50:22', '2026-03-12 22:50:22'),
+(79, 1, 'Under Contract/Loan Set Up – SMS', 'Immediate SMS when loan enters Under Contract / Loan Set Up status', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉 Congratulations — you\'re officially under contract! Your loan (#{{application_number}}) is now in the setup phase and we\'re working hard to keep things moving. We\'ll keep you updated every step of the way. Questions? Reply anytime! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:50:22', '2026-03-24 22:36:04'),
 (80, 1, 'Under Contract/Loan Set Up – Email', 'Immediate email when loan enters Under Contract / Loan Set Up status', 'email', 'follow_up', '🏡 You\'re Under Contract — Here\'s What Happens Next', 'Hi {{first_name}},\n\nCongratulations — you\'re officially under contract! This is an exciting milestone, and our team at Encore Mortgage is fully focused on making your closing as smooth as possible.\n\nApplication #: {{application_number}}\n\nHere\'s what we\'re working on during the Loan Set Up phase:\n\n📋 **Loan File Review** — We\'re organizing and verifying all your documentation.\n🏠 **Appraisal Coordination** — We\'ll be ordering or scheduling your home appraisal shortly.\n🔒 **Rate Lock** — If you haven\'t locked your rate yet, now is the time. Let\'s discuss!\n📑 **Title & Escrow** — We\'re coordinating with title and escrow to ensure a clean transaction.\n\n**What you need to do right now:**\n1. Avoid opening new lines of credit or making large purchases.\n2. Keep your employment and income situation stable.\n3. Respond quickly to any document requests from our team — speed matters!\n4. Keep your phone and email accessible; we may need to reach you quickly.\n\n**Your estimated closing timeline** starts from today. We\'ll provide regular updates as we move through underwriting and approvals.\n\nIf you have any questions at any point, please don\'t hesitate to reach out. We\'re here for you through every step.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:50:22', '2026-03-12 22:50:22'),
-(81, 1, 'Submitted to Underwriting – SMS', 'Immediate SMS when loan is submitted to underwriting', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 📋 Great news — your loan (#{{application_number}}) has been submitted to underwriting! This is a key milestone. Our underwriters will review your full file and we\'ll keep you posted on any updates. Hang tight — we\'re on it! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:51:53', '2026-03-12 22:51:53'),
+(81, 1, 'Submitted to Underwriting – SMS', 'Immediate SMS when loan is submitted to underwriting', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 📋 Great news — your loan (#{{application_number}}) has been submitted to underwriting! This is a key milestone. Our underwriters will review your full file and we\'ll keep you posted on any updates. Hang tight — we\'re on it! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:51:53', '2026-03-24 22:36:04'),
 (82, 1, 'Submitted to Underwriting – Email', 'Immediate email when loan is submitted to underwriting', 'email', 'follow_up', '📋 Your Loan Has Been Submitted to Underwriting', 'Hi {{first_name}},\n\nWe have an important update on your loan (#{{application_number}}) — your file has been officially submitted to underwriting!\n\nThis is one of the most critical stages of the mortgage process, and we want to make sure you know exactly what to expect.\n\n**What is underwriting?**\nAn underwriter is a specialist who thoroughly reviews your loan file — including your income, assets, credit, and the property details — to make a final lending decision.\n\n**What happens during underwriting:**\n🔍 **Document Review** — The underwriter will verify all submitted documents.\n🏡 **Appraisal Review** — The property appraisal will be evaluated against the loan amount.\n💳 **Credit & Income Analysis** — Employment, income, and credit history are assessed in detail.\n⚖️ **Risk Assessment** — The underwriter determines if the loan meets all program guidelines.\n\n**Typical underwriting timeline:** 3–7 business days (can vary based on file complexity and lender volume).\n\n**What you can do to help speed things up:**\n✅ Respond immediately to any requests for additional documents or explanations.\n✅ Do NOT make any major financial changes — no new credit, large purchases, or job changes.\n✅ Keep your phone and email accessible in case we need to reach you urgently.\n✅ If you receive a \"Conditions\" list, gather those items as fast as possible.\n\n**What comes after underwriting?**\nOnce the underwriter reviews your file, you\'ll receive one of three outcomes:\n- ✅ **Approved** — Congratulations! We move to closing.\n- ⚠️ **Approved with Conditions** — Minor items needed before final approval.\n- ❌ **Suspended/Denied** — We\'ll discuss options if this happens (it\'s rare for well-prepared files like yours).\n\nWe\'re working hard and will keep you updated. If you have any questions in the meantime, don\'t hesitate to reach out.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:51:53', '2026-03-12 22:51:53'),
-(83, 1, 'Approved with Conditions – SMS', 'Immediate SMS when loan is approved with conditions', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉 Your loan (#{{application_number}}) has been *approved with conditions*! This means the underwriter has approved your loan pending a few items we need to clear. We\'ll send you details by email shortly. Don\'t worry — this is very common and we\'ll guide you through every item. – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:55:02', '2026-03-12 22:55:02'),
+(83, 1, 'Approved with Conditions – SMS', 'Immediate SMS when loan is approved with conditions', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉 Your loan (#{{application_number}}) has been *approved with conditions*! This means the underwriter has approved your loan pending a few items we need to clear. We\'ll send you details by email shortly. Don\'t worry — this is very common and we\'ll guide you through every item. – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:55:02', '2026-03-24 22:36:04'),
 (84, 1, 'Approved with Conditions – Email', 'Immediate email when loan is approved with conditions', 'email', 'follow_up', '✅ Your Loan Is Approved — With Conditions', 'Hi {{first_name}},\n\nGreat news — your loan (#{{application_number}}) has been reviewed by underwriting and you have been issued an **Approval with Conditions**!\n\nThis is a very common and positive outcome. It means the underwriter has approved your loan in principle, but requires a few additional items before issuing a final clear-to-close.\n\n**What \"Approved with Conditions\" means:**\n✅ The core of your loan file has passed underwriting review.\n⚠️ There are specific conditions (items) that must be satisfied before final approval.\n📋 Once all conditions are cleared, you\'ll receive a \"Clear to Close\" — the final milestone before signing!\n\n**Common conditions may include:**\n• Additional income documentation (pay stubs, tax returns, letters of explanation)\n• Updated bank statements\n• Clarification letters on large deposits or inquiries\n• Homeowner\'s insurance confirmation\n• Title commitments or HOA documents\n• Property repair requirements from the appraisal\n\n**What you need to do RIGHT NOW:**\n1. Watch for a follow-up message or call from our team with your specific conditions list.\n2. Gather and submit the required documents as quickly as possible — speed is critical at this stage.\n3. Do NOT make any financial changes — no new credit, large purchases, or job changes.\n4. Contact your homeowner\'s insurance agent immediately if not already done.\n\n**Timeline:** Once all conditions are submitted and reviewed, final approval typically happens within 1–3 business days.\n\nWe\'re so close to the finish line! Our team is working hard on your behalf. If you have any questions about your specific conditions, please reply or call us right away.\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:55:02', '2026-03-12 22:55:02'),
 (85, 1, 'Approved with Conditions – Notify Buyer Agent (Internal)', 'Internal notification to contact the buyer\'s agent about the approval with conditions', 'email', 'system', '[ACTION] Notify Buyer Agent — Loan Approved with Conditions', 'Hello Team,\n\nThis is an automated internal alert.\n\nLoan #{{application_number}} for client {{client_name}} has been **Approved with Conditions** by underwriting.\n\nAction Required: Please contact the **Buyer\'s Agent** immediately to inform them of the conditional approval and update them on the conditions that need to be cleared before a Clear to Close can be issued.\n\nKey points to communicate to the Buyer\'s Agent:\n• The loan has passed underwriting review with conditions\n• Conditions must be cleared promptly to meet the closing timeline\n• Any cooperation needed (e.g. addenda, HOA docs) should be addressed immediately\n• Keep the seller\'s agent informed as needed to avoid closing delays\n\nLoan Details:\n• Client: {{client_name}}\n• Application #: {{application_number}}\n• Loan Type: {{loan_type}}\n• Status: Approved with Conditions\n\nPlease log your outreach in the system once completed.\n\n— Encore Mortgage Automation', '[\"client_name\", \"application_number\", \"loan_type\"]', 1, 0, 1, '2026-03-12 22:55:02', '2026-03-12 22:55:02'),
 (86, 1, 'Approved with Conditions – Notify Listing Agent (Internal)', 'Internal notification to contact the listing agent about the approval with conditions', 'email', 'system', '[ACTION] Notify Listing Agent — Loan Approved with Conditions', 'Hello Team,\n\nThis is an automated internal alert.\n\nLoan #{{application_number}} for client {{client_name}} has been **Approved with Conditions** by underwriting.\n\nAction Required: Please contact the **Listing Agent** to inform them of the current loan status and manage expectations around the closing timeline.\n\nKey points to communicate to the Listing Agent:\n• The loan is progressing and has received a conditional approval\n• Conditions are being worked on and we expect to clear them promptly\n• We are committed to meeting the agreed closing date\n• If any contract extensions or accommodations are needed, they should be discussed now\n\nLoan Details:\n• Client: {{client_name}}\n• Application #: {{application_number}}\n• Loan Type: {{loan_type}}\n• Status: Approved with Conditions\n\nPlease log your outreach in the system once completed.\n\n— Encore Mortgage Automation', '[\"client_name\", \"application_number\", \"loan_type\"]', 1, 0, 1, '2026-03-12 22:55:02', '2026-03-12 22:55:02'),
 (87, 1, 'Approved with Conditions – Notify Title Agent (Internal)', 'Internal notification to contact the title agent about the approval with conditions', 'email', 'system', '[ACTION] Notify Title Agent — Loan Approved with Conditions', 'Hello Team,\n\nThis is an automated internal alert.\n\nLoan #{{application_number}} for client {{client_name}} has been **Approved with Conditions** by underwriting.\n\nAction Required: Please contact the **Title Agent / Title Company** to ensure all title-related conditions are on their radar and to coordinate any outstanding title requirements.\n\nKey points to communicate to the Title Agent:\n• Loan is in conditional approval status — a Clear to Close is pending\n• Confirm the title commitment is current and all requirements have been submitted to underwriting\n• Verify any lien releases, HOA certifications, or survey items have been addressed\n• Confirm the title company is ready to schedule closing upon CTC issuance\n• Request a preliminary Closing Disclosure (CD) if not yet prepared\n\nLoan Details:\n• Client: {{client_name}}\n• Application #: {{application_number}}\n• Loan Type: {{loan_type}}\n• Status: Approved with Conditions\n\nPlease log your outreach in the system once completed.\n\n— Encore Mortgage Automation', '[\"client_name\", \"application_number\", \"loan_type\"]', 1, 0, 1, '2026-03-12 22:55:03', '2026-03-12 22:55:03'),
-(88, 1, 'Clear to Close – SMS', 'Immediate SMS when loan reaches Clear to Close status', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉🏡 YOU ARE CLEAR TO CLOSE! Your loan (#{{application_number}}) has officially been cleared by underwriting — this is the final green light! We\'re scheduling your closing now and will send you all the details. Get ready to sign and celebrate! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:57:51', '2026-03-12 22:57:51'),
+(88, 1, 'Clear to Close – SMS', 'Immediate SMS when loan reaches Clear to Close status', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉🏡 YOU ARE CLEAR TO CLOSE! Your loan (#{{application_number}}) has officially been cleared by underwriting — this is the final green light! We\'re scheduling your closing now and will send you all the details. Get ready to sign and celebrate! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:57:51', '2026-03-24 22:36:04'),
 (89, 1, 'Clear to Close – Purchase Email', 'Clear to Close email for home purchase loans', 'email', 'follow_up', '🎉 Clear to Close — You\'re Almost a Homeowner!', 'Hi {{first_name}},\n\nThis is the message you\'ve been waiting for — your loan (#{{application_number}}) is officially **Clear to Close**!\n\nUnderwriting has completed its review, all conditions have been satisfied, and you are cleared to sign your closing documents. You are about to become a homeowner — congratulations!\n\n**What \"Clear to Close\" means:**\n✅ All loan conditions have been fully satisfied\n✅ The lender has given final approval\n✅ Your loan is ready to fund at closing\n✅ You\'re one signing appointment away from getting your keys!\n\n**What happens next — your closing checklist:**\n\n📋 **Review your Closing Disclosure (CD)**\nYou should have received (or will receive soon) a Closing Disclosure with the final loan terms, monthly payment, and all closing costs. Review it carefully. You have the right to review this document at least 3 business days before closing.\n\n💰 **Prepare your closing funds**\nYour CD will show the exact amount you need to bring to closing. This must typically be wired or brought as a cashier\'s check — personal checks are usually NOT accepted. Contact us right away if you have questions about this amount.\n\n🪪 **Bring a valid government-issued photo ID**\nYou\'ll need this to sign your closing documents. Make sure your name matches exactly what\'s on the loan documents.\n\n🏠 **Final walkthrough**\nCoordinate with your realtor to do a final walkthrough of the property before your closing appointment — ideally the day before or morning of closing.\n\n📞 **Do NOT make any financial changes**\nUntil the loan has funded and recorded, please avoid any new credit, large purchases, job changes, or large bank transfers. Even at this stage, these can delay or jeopardize your closing.\n\n**Your closing appointment details** will be confirmed by our team shortly. Please keep your schedule flexible and respond promptly to any final requests.\n\nThank you for trusting Encore Mortgage with your home purchase. We\'re so excited to hand you the keys!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:57:51', '2026-03-12 22:57:51'),
 (90, 1, 'Clear to Close – Refi Email', 'Clear to Close email for refinance loans', 'email', 'follow_up', '🎉 Clear to Close — Your Refinance Is Almost Done!', 'Hi {{first_name}},\n\nFantastic news — your refinance loan (#{{application_number}}) is officially **Clear to Close**!\n\nUnderwriting has given the final approval and all conditions have been satisfied. We\'re now in the home stretch — just a signing appointment stands between you and your new loan!\n\n**What \"Clear to Close\" means for your refinance:**\n✅ All conditions have been cleared\n✅ Your new interest rate and loan terms are locked and confirmed\n✅ The lender is ready to fund\n✅ You\'re about to start saving on your mortgage!\n\n**What happens next — your refinance closing checklist:**\n\n📋 **Review your Closing Disclosure (CD)**\nYou should receive a final Closing Disclosure with your new loan terms, closing costs, and any cash out or cash in required at closing. Review it carefully — you have 3 business days to review before we can close.\n\n💰 **Closing costs / cash to close**\nFor most refinances, closing costs are either rolled into the loan or deducted from proceeds. Your CD will show exactly what (if anything) you need to bring or will receive. Let us know if you have questions.\n\n📅 **Right of Rescission (if applicable)**\nFor owner-occupied refinances (non-purchase), federal law gives you 3 business days after signing to cancel the transaction if you change your mind. Your loan will not fund until this period has passed.\n\n🪪 **Bring a valid government-issued photo ID**\nTo sign your closing documents, you\'ll need a current, valid photo ID matching your name on the loan.\n\n📞 **Do NOT make any financial changes**\nUntil your loan has funded and recorded, avoid any changes to your finances — no new credit, large purchases, or job changes.\n\n**Your signing appointment details** will be confirmed shortly. A notary or title agent will coordinate with you directly.\n\nThank you for choosing Encore Mortgage for your refinance. We look forward to completing this transaction and delivering your savings!\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 22:57:51', '2026-03-12 22:57:51'),
-(91, 1, 'Loan Funded – SMS', 'SMS sent on the close date when the loan funds', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉🔑 YOUR LOAN HAS FUNDED! Congratulations — your loan (#{{application_number}}) is officially closed and the keys are yours! It has been a pleasure working with you. Wishing you many happy years in your new home! – {{broker_name}}, Encore Mortgage. Reply STOP to opt out.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 23:02:15', '2026-03-12 23:02:15'),
+(91, 1, 'Loan Funded – SMS', 'SMS sent on the close date when the loan funds', 'sms', 'follow_up', NULL, 'Hi {{first_name}}! 🎉🔑 YOUR LOAN HAS FUNDED! Congratulations — your loan (#{{application_number}}) is officially closed and the keys are yours! It has been a pleasure working with you. Wishing you many happy years in your new home! – {{broker_name}}, Encore Mortgage.', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 23:02:15', '2026-03-24 22:36:04'),
 (92, 1, 'Loan Funded – Email', 'Email sent on the close date when the loan funds', 'email', 'follow_up', '🎉 Your Loan Has Funded — Congratulations!', 'Hi {{first_name}},\n\nThis is the moment you\'ve been working toward — **your loan has officially funded and closed!** 🎊\n\nApplication #: {{application_number}}\n\nOn behalf of the entire team at Encore Mortgage, we want to say **congratulations** and thank you for trusting us with such an important milestone in your life.\n\n**Here\'s a summary of what just happened:**\n✅ Your loan documents were signed and notarized\n✅ The lender wired the funds to the title company\n✅ The title company recorded the transaction with the county\n✅ Ownership has been officially transferred — the property is YOURS\n\n**What to expect next:**\n\n📬 **Loan documents** — You\'ll receive your complete closing package by mail within 1–2 weeks. Keep these documents in a safe place — you\'ll need them for tax purposes.\n\n💳 **Your first mortgage payment** — Your first payment is typically due on the 1st of the month following 30 days after closing. Watch for your welcome letter from your loan servicer with payment instructions.\n\n🏠 **Loan servicer** — Your loan may be transferred to a loan servicer (which may differ from the lender). You\'ll receive a notification if this happens — it doesn\'t affect your loan terms.\n\n🧾 **Tax benefits** — Mortgage interest and property taxes may be deductible. Consult your tax advisor for details.\n\n📞 **We\'re still here** — If you ever need a refinance, have questions, or want to refer a friend or family member who needs a mortgage, we\'re always here for you.\n\nThank you again for choosing Encore Mortgage. We\'re so proud to have been part of your journey.\n\nWith warm congratulations,\n\n{{broker_name}}\nEncore Mortgage', '[\"first_name\", \"application_number\", \"broker_name\"]', 1, 0, 1, '2026-03-12 23:02:15', '2026-03-12 23:02:15');
 
 -- --------------------------------------------------------
@@ -2089,7 +1830,7 @@ INSERT INTO `templates` (`id`, `tenant_id`, `name`, `description`, `template_typ
 --
 
 CREATE TABLE `tenants` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `slug` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'URL-friendly identifier (e.g., encore, acme)',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Display name of tenant',
   `domain` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Custom domain (optional)',
@@ -2137,7 +1878,7 @@ INSERT INTO `tenants` (`id`, `slug`, `name`, `domain`, `status`, `is_default`, `
 --
 
 CREATE TABLE `user_profiles` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `user_id` int(11) NOT NULL,
   `date_of_birth` date DEFAULT NULL,
   `ssn_last_four` varchar(4) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -2163,7 +1904,7 @@ CREATE TABLE `user_profiles` (
 --
 
 CREATE TABLE `user_sessions` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `user_id` int(11) NOT NULL,
   `session_code` int(6) NOT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
@@ -2306,7 +2047,8 @@ ALTER TABLE `communications`
   ADD KEY `idx_communications_conversation` (`conversation_id`,`tenant_id`),
   ADD KEY `idx_communications_type` (`communication_type`,`tenant_id`),
   ADD KEY `idx_communications_status` (`status`,`delivery_status`),
-  ADD KEY `idx_communications_created` (`created_at`);
+  ADD KEY `idx_communications_created` (`created_at`),
+  ADD KEY `idx_comm_source_exec` (`source_execution_id`);
 
 --
 -- Indexes for table `compliance_checklists`
@@ -2467,7 +2209,8 @@ ALTER TABLE `reminder_flow_executions`
   ADD KEY `idx_executions_client` (`client_id`),
   ADD KEY `idx_executions_status` (`status`),
   ADD KEY `idx_executions_next_exec` (`next_execution_at`),
-  ADD KEY `idx_executions_responded` (`responded_at`);
+  ADD KEY `idx_executions_responded` (`responded_at`),
+  ADD KEY `idx_rfe_conv_id` (`tenant_id`,`conversation_id`);
 
 --
 -- Indexes for table `reminder_flow_steps`
@@ -2632,254 +2375,200 @@ ALTER TABLE `user_sessions`
 --
 -- AUTO_INCREMENT for table `admin_section_controls`
 --
-ALTER TABLE `admin_section_controls`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+ALTER TABLE `admin_section_controls` AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `application_status_history`
 --
-ALTER TABLE `application_status_history`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=134;
+ALTER TABLE `application_status_history` AUTO_INCREMENT=134;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
-ALTER TABLE `audit_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=216;
+ALTER TABLE `audit_logs` AUTO_INCREMENT=218;
 
 --
 -- AUTO_INCREMENT for table `brokers`
 --
-ALTER TABLE `brokers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+ALTER TABLE `brokers` AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `broker_monthly_metrics`
 --
-ALTER TABLE `broker_monthly_metrics`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `broker_profiles`
 --
-ALTER TABLE `broker_profiles`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+ALTER TABLE `broker_profiles` AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `broker_sessions`
 --
-ALTER TABLE `broker_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=152;
+ALTER TABLE `broker_sessions` AUTO_INCREMENT=159;
 
 --
 -- AUTO_INCREMENT for table `campaigns`
 --
-ALTER TABLE `campaigns`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `campaign_recipients`
 --
-ALTER TABLE `campaign_recipients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `clients`
 --
-ALTER TABLE `clients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
+ALTER TABLE `clients` AUTO_INCREMENT=34;
 
 --
 -- AUTO_INCREMENT for table `communications`
 --
-ALTER TABLE `communications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+ALTER TABLE `communications` AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `compliance_checklists`
 --
-ALTER TABLE `compliance_checklists`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `compliance_checklist_items`
 --
-ALTER TABLE `compliance_checklist_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `contact_submissions`
 --
-ALTER TABLE `contact_submissions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `conversation_threads`
 --
-ALTER TABLE `conversation_threads`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+ALTER TABLE `conversation_threads` AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `documents`
 --
-ALTER TABLE `documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+ALTER TABLE `documents` AUTO_INCREMENT=22;
 
 --
 -- AUTO_INCREMENT for table `environment_keys`
 --
-ALTER TABLE `environment_keys`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+ALTER TABLE `environment_keys` AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `leads`
 --
-ALTER TABLE `leads`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `lead_activities`
 --
-ALTER TABLE `lead_activities`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `loan_applications`
 --
-ALTER TABLE `loan_applications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=34;
+ALTER TABLE `loan_applications` AUTO_INCREMENT=40;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
-ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=103;
+ALTER TABLE `notifications` AUTO_INCREMENT=106;
 
 --
 -- AUTO_INCREMENT for table `pipeline_step_templates`
 --
-ALTER TABLE `pipeline_step_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `pre_approval_letters`
 --
-ALTER TABLE `pre_approval_letters`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+ALTER TABLE `pre_approval_letters` AUTO_INCREMENT=22;
 
 --
 -- AUTO_INCREMENT for table `reminder_flows`
 --
-ALTER TABLE `reminder_flows`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+ALTER TABLE `reminder_flows` AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `reminder_flow_connections`
 --
-ALTER TABLE `reminder_flow_connections`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=242;
+ALTER TABLE `reminder_flow_connections` AUTO_INCREMENT=242;
 
 --
 -- AUTO_INCREMENT for table `reminder_flow_executions`
 --
-ALTER TABLE `reminder_flow_executions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+ALTER TABLE `reminder_flow_executions` AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `reminder_flow_steps`
 --
-ALTER TABLE `reminder_flow_steps`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=246;
+ALTER TABLE `reminder_flow_steps` AUTO_INCREMENT=246;
 
 --
 -- AUTO_INCREMENT for table `scheduled_meetings`
 --
-ALTER TABLE `scheduled_meetings`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `scheduler_availability`
 --
-ALTER TABLE `scheduler_availability`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=64;
+ALTER TABLE `scheduler_availability` AUTO_INCREMENT=64;
 
 --
 -- AUTO_INCREMENT for table `scheduler_settings`
 --
-ALTER TABLE `scheduler_settings`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+ALTER TABLE `scheduler_settings` AUTO_INCREMENT=16;
 
 --
 -- AUTO_INCREMENT for table `system_settings`
 --
-ALTER TABLE `system_settings`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+ALTER TABLE `system_settings` AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `tasks`
 --
-ALTER TABLE `tasks`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=106;
+ALTER TABLE `tasks` AUTO_INCREMENT=133;
 
 --
 -- AUTO_INCREMENT for table `task_documents`
 --
-ALTER TABLE `task_documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
+ALTER TABLE `task_documents` AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `task_form_fields`
 --
-ALTER TABLE `task_form_fields`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
+ALTER TABLE `task_form_fields` AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `task_form_responses`
 --
-ALTER TABLE `task_form_responses`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `task_signatures`
 --
-ALTER TABLE `task_signatures`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+ALTER TABLE `task_signatures` AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `task_sign_documents`
 --
-ALTER TABLE `task_sign_documents`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+ALTER TABLE `task_sign_documents` AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `task_templates`
 --
-ALTER TABLE `task_templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=64;
+ALTER TABLE `task_templates` AUTO_INCREMENT=64;
 
 --
 -- AUTO_INCREMENT for table `templates`
 --
-ALTER TABLE `templates`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=93;
+ALTER TABLE `templates` AUTO_INCREMENT=93;
 
 --
 -- AUTO_INCREMENT for table `tenants`
 --
-ALTER TABLE `tenants`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+ALTER TABLE `tenants` AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `user_profiles`
 --
-ALTER TABLE `user_profiles`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `user_sessions`
 --
-ALTER TABLE `user_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
+ALTER TABLE `user_sessions` AUTO_INCREMENT=23;
 
 --
 -- Constraints for dumped tables
@@ -2976,7 +2665,7 @@ ALTER TABLE `compliance_checklist_items`
 ALTER TABLE `conversation_threads`
   ADD CONSTRAINT `fk_conversation_threads_application` FOREIGN KEY (`application_id`) REFERENCES `loan_applications` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_conversation_threads_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `fk_conversation_threads_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_conversation_threads_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `fk_conversation_threads_lead` FOREIGN KEY (`lead_id`) REFERENCES `leads` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_conversation_threads_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE;
 
@@ -3036,7 +2725,9 @@ ALTER TABLE `reminder_flow_connections`
 -- Constraints for table `reminder_flow_executions`
 --
 ALTER TABLE `reminder_flow_executions`
-  ADD CONSTRAINT `fk_executions_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `fk_executions_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_executions_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_executions_loan` FOREIGN KEY (`loan_application_id`) REFERENCES `loan_applications` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `reminder_flow_steps`

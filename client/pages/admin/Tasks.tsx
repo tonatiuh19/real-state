@@ -81,7 +81,7 @@ const Tasks = () => {
   const [taskToDelete, setTaskToDelete] = useState<TaskTemplate | null>(null);
 
   useEffect(() => {
-    dispatch(fetchTasks());
+    dispatch(fetchTasks({}));
   }, [dispatch]);
 
   const handleUpdateStatus = async (taskId: number, newStatus: string) => {
@@ -91,7 +91,7 @@ const Tasks = () => {
   const handleTaskCreated = () => {
     setWizardOpen(false);
     setEditingTask(null);
-    dispatch(fetchTasks());
+    dispatch(fetchTasks({}));
   };
 
   const handleEditTask = (task: TaskTemplate) => {
@@ -190,7 +190,10 @@ const Tasks = () => {
     sortKey: taskSortKey,
     sortDir: taskSortDir,
     requestSort: sortTasks,
-  } = useSortableData(filteredTasks as Record<string, unknown>[], "title");
+  } = useSortableData(
+    filteredTasks as unknown as Record<string, unknown>[],
+    "title",
+  );
 
   const taskStats = {
     total: tasks.length,
@@ -284,7 +287,7 @@ const Tasks = () => {
               <CardContent>
                 {/* Mobile Card View */}
                 <div className="block lg:hidden space-y-3">
-                  {(sortedTasks as TaskTemplate[]).map((task) => (
+                  {(sortedTasks as unknown as TaskTemplate[]).map((task) => (
                     <Card key={task.id} className="p-4">
                       <div className="space-y-3">
                         <div className="flex items-start justify-between gap-2">
@@ -479,119 +482,123 @@ const Tasks = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {(sortedTasks as TaskTemplate[]).map((task) => (
-                        <TableRow key={task.id}>
-                          {/* <TableCell className="min-w-[50px] whitespace-nowrap">
+                      {(sortedTasks as unknown as TaskTemplate[]).map(
+                        (task) => (
+                          <TableRow key={task.id}>
+                            {/* <TableCell className="min-w-[50px] whitespace-nowrap">
                             <Badge variant="outline" className="text-xs">
                               {task.order_index}
                             </Badge>
                           </TableCell> */}
-                          <TableCell className="min-w-[200px] max-w-[300px]">
-                            <div className="flex items-center gap-2">
-                              <div className="min-w-0">
-                                <span className="font-medium block truncate">
-                                  {task.title}
-                                </span>
-                                {task.description && (
-                                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                                    {task.description}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="min-w-[120px] whitespace-nowrap">
-                            <span className="text-sm">
-                              {task.task_type?.replace(/_/g, " ")}
-                            </span>
-                          </TableCell>
-                          <TableCell className="min-w-[100px] whitespace-nowrap">
-                            <Badge
-                              className={cn(
-                                "text-xs whitespace-nowrap",
-                                getPriorityColor(task.priority),
-                              )}
-                            >
-                              {task.priority}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="min-w-[100px] whitespace-nowrap">
-                            <span className="text-sm">
-                              {task.default_due_days
-                                ? `${task.default_due_days} days`
-                                : "No due date"}
-                            </span>
-                          </TableCell>
-                          <TableCell className="min-w-[120px]">
-                            <div className="flex items-center gap-1 flex-wrap">
-                              {!!task.requires_documents && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-xs flex items-center gap-1"
-                                >
-                                  <File className="h-3 w-3" />
-                                  Docs
-                                </Badge>
-                              )}
-                              {!!task.has_custom_form && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-xs flex items-center gap-1"
-                                >
-                                  <FileText className="h-3 w-3" />
-                                  Form
-                                </Badge>
-                              )}
-                              {!!task.has_signing && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-xs flex items-center gap-1"
-                                >
-                                  <PenTool className="h-3 w-3" />
-                                  Signing
-                                </Badge>
-                              )}
-                              {!task.requires_documents &&
-                                !task.has_custom_form &&
-                                !task.has_signing && (
-                                  <span className="text-xs text-muted-foreground">
-                                    -
+                            <TableCell className="min-w-[200px] max-w-[300px]">
+                              <div className="flex items-center gap-2">
+                                <div className="min-w-0">
+                                  <span className="font-medium block truncate">
+                                    {task.title}
                                   </span>
+                                  {task.description && (
+                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                      {task.description}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="min-w-[120px] whitespace-nowrap">
+                              <span className="text-sm">
+                                {task.task_type?.replace(/_/g, " ")}
+                              </span>
+                            </TableCell>
+                            <TableCell className="min-w-[100px] whitespace-nowrap">
+                              <Badge
+                                className={cn(
+                                  "text-xs whitespace-nowrap",
+                                  getPriorityColor(task.priority),
                                 )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="min-w-[100px] whitespace-nowrap">
-                            <Badge
-                              variant={task.is_active ? "default" : "secondary"}
-                              className="text-xs"
-                            >
-                              {task.is_active ? "Active" : "Inactive"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="min-w-[120px] text-right whitespace-nowrap">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => handleEditTask(task)}
-                                title="Edit template"
                               >
-                                <Edit2 className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => handleDeleteClick(task)}
-                                title="Delete template"
+                                {task.priority}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="min-w-[100px] whitespace-nowrap">
+                              <span className="text-sm">
+                                {task.default_due_days
+                                  ? `${task.default_due_days} days`
+                                  : "No due date"}
+                              </span>
+                            </TableCell>
+                            <TableCell className="min-w-[120px]">
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {!!task.requires_documents && (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-xs flex items-center gap-1"
+                                  >
+                                    <File className="h-3 w-3" />
+                                    Docs
+                                  </Badge>
+                                )}
+                                {!!task.has_custom_form && (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-xs flex items-center gap-1"
+                                  >
+                                    <FileText className="h-3 w-3" />
+                                    Form
+                                  </Badge>
+                                )}
+                                {!!task.has_signing && (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-xs flex items-center gap-1"
+                                  >
+                                    <PenTool className="h-3 w-3" />
+                                    Signing
+                                  </Badge>
+                                )}
+                                {!task.requires_documents &&
+                                  !task.has_custom_form &&
+                                  !task.has_signing && (
+                                    <span className="text-xs text-muted-foreground">
+                                      -
+                                    </span>
+                                  )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="min-w-[100px] whitespace-nowrap">
+                              <Badge
+                                variant={
+                                  task.is_active ? "default" : "secondary"
+                                }
+                                className="text-xs"
                               >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                                {task.is_active ? "Active" : "Inactive"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="min-w-[120px] text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => handleEditTask(task)}
+                                  title="Edit template"
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => handleDeleteClick(task)}
+                                  title="Delete template"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ),
+                      )}
                     </TableBody>
                   </Table>
                 </div>

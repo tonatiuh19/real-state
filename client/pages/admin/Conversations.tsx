@@ -95,7 +95,12 @@ const Conversations = () => {
 
   // Auto-populate message when template is selected
   useEffect(() => {
-    if (selectedTemplate && templates && templates.length > 0) {
+    if (
+      selectedTemplate &&
+      selectedTemplate !== "none" &&
+      templates &&
+      templates.length > 0
+    ) {
       const template = templates.find(
         (t) => t.id.toString() === selectedTemplate,
       );
@@ -179,10 +184,14 @@ const Conversations = () => {
           recipient_email: currentThread?.client_email || undefined,
           subject: messageType === "email" ? messageSubject : undefined,
           body: messageText,
-          message_type: selectedTemplate ? "template" : "text",
-          template_id: selectedTemplate
-            ? parseInt(selectedTemplate)
-            : undefined,
+          message_type:
+            selectedTemplate && selectedTemplate !== "none"
+              ? "template"
+              : "text",
+          template_id:
+            selectedTemplate && selectedTemplate !== "none"
+              ? parseInt(selectedTemplate)
+              : undefined,
         }),
       ).unwrap();
 
@@ -737,7 +746,7 @@ const Conversations = () => {
                           <SelectValue placeholder="Use template..." />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">
+                          <SelectItem value="none">
                             <span className="text-gray-500">No template</span>
                           </SelectItem>
                           {templates &&

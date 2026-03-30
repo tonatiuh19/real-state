@@ -140,13 +140,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       path: "/admin/documents",
       hidden: isPartner,
     },
-    {
+    /*     {
       id: "communication-templates",
       label: "Communications",
       icon: <Mail className="h-4 w-4" />,
       path: "/admin/communication-templates",
       hidden: isPartner,
-    },
+    }, */
     {
       id: "reminder-flows",
       label: "Reminder Flows",

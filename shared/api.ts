@@ -122,6 +122,9 @@ export interface LoanDetails {
   updated_at: string;
   submitted_at: string | null;
   citizenship_status: string | null;
+  employment_status: string | null;
+  employer_name: string | null;
+  years_employed: string | null;
   source_category: LeadSourceCategory | null;
   tasks: LoanTask[];
 }
@@ -1049,6 +1052,8 @@ export interface Communication {
   status: "pending" | "sent" | "delivered" | "failed" | "read";
   external_id?: string | null;
   conversation_id?: string | null;
+  /** ID of the reminder_flow_execution that sent this message (null = manual send) */
+  source_execution_id?: number | null;
   thread_id?: string | null;
   reply_to_id?: number | null;
   message_type: "text" | "image" | "document" | "audio" | "video" | "template";
@@ -1615,6 +1620,8 @@ export interface ReminderFlowExecution {
   context_data: Record<string, unknown> | null;
   last_step_started_at: string | null;
   responded_at: string | null;
+  /** Conversation thread linked to this execution — conv_client_{id}_loan_{id}_flow_{id} */
+  conversation_id: string | null;
   started_at: string;
   completed_at: string | null;
 }

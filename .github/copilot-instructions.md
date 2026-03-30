@@ -26,7 +26,7 @@
 - Single port (8080) for both frontend/backend in development
 - **CRITICAL: Always reference `database/schema.sql` for database structure and table definitions**
 - **NEVER assume column names - check schema.sql first**
-- **If any database update is made based on schema.sql, generate a migration file** in `database/migrations/` with timestamp prefix (e.g., `YYYYMMDD_HHMMSS_description.sql`) for hostgator mysql database version 8.0
+- **If any database update is made based on schema.sql, generate a migration file** in `database/migrations/` with timestamp prefix (e.g., `YYYYMMDD_HHMMSS_description.sql`) for **TiDB Cloud Serverless** (MySQL 8.0 compatible)
 - **If a type issue is generated, fix it immediately** - ensure all TypeScript types are correct and consistent across client, api/index.ts, and shared
 
 ## Project Structure

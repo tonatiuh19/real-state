@@ -74,6 +74,7 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: true } : undefined,
 });
 
 // =====================================================
@@ -136,6 +137,132 @@ async function checkDeletionSafety(
 
 // =====================================================
 // COMMUNICATION HELPERS
+// =====================================================
+
+/**
+ * Replicates the removed MySQL trigger `update_conversation_thread`.
+ * Must be called after every INSERT INTO communications.
+ */
+async function upsertConversationThread(params: {
+  tenantId: number;
+  commId: number;
+  conversationId: string | null;
+  applicationId: number | null;
+  leadId: number | null;
+  fromUserId: number | null;
+  fromBrokerId: number | null;
+  toUserId: number | null;
+  toBrokerId: number | null;
+  communicationType: string;
+  direction: string;
+  body: string | null;
+}): Promise<void> {
+  try {
+    const {
+      tenantId,
+      commId,
+      conversationId,
+      applicationId,
+      leadId,
+      fromUserId,
+      fromBrokerId,
+      toUserId,
+      toBrokerId,
+      communicationType,
+      direction,
+      body,
+    } = params;
+
+    const resolvedClientId = toUserId ?? fromUserId ?? null;
+    const resolvedBrokerId = fromBrokerId ?? toBrokerId ?? null;
+    const convId = conversationId ?? `conv_auto_${commId}`;
+    const preview = body ? body.slice(0, 200) : null;
+    const unreadDelta = direction === "inbound" ? 1 : 0;
+
+    let clientName: string | null = null;
+    let clientPhone: string | null = null;
+    let clientEmail: string | null = null;
+
+    if (resolvedClientId !== null) {
+      const [rows] = await pool.query<RowDataPacket[]>(
+        "SELECT CONCAT(first_name, ' ', last_name) AS name, phone, email FROM clients WHERE id = ? LIMIT 1",
+        [resolvedClientId],
+      );
+      if (rows.length > 0) {
+        clientName = rows[0].name;
+        clientPhone = rows[0].phone;
+        clientEmail = rows[0].email;
+      }
+    }
+
+    if (resolvedBrokerId !== null) {
+      await pool.query(
+        `INSERT INTO conversation_threads
+           (tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
+            client_name, client_phone, client_email,
+            last_message_at, last_message_preview, last_message_type,
+            message_count, unread_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
+         ON DUPLICATE KEY UPDATE
+           last_message_at      = IF(NOW() > last_message_at, NOW(), last_message_at),
+           last_message_preview = IF(NOW() > last_message_at, ?, last_message_preview),
+           last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
+           message_count        = message_count + 1,
+           unread_count         = unread_count + ?,
+           client_name          = COALESCE(client_name, ?),
+           client_phone         = COALESCE(client_phone, ?),
+           client_email         = COALESCE(client_email, ?),
+           updated_at           = NOW()`,
+        [
+          tenantId,
+          convId,
+          applicationId,
+          leadId,
+          resolvedClientId,
+          resolvedBrokerId,
+          clientName,
+          clientPhone,
+          clientEmail,
+          preview,
+          communicationType,
+          unreadDelta,
+          // ON DUPLICATE KEY values
+          preview,
+          communicationType,
+          unreadDelta,
+          clientName,
+          clientPhone,
+          clientEmail,
+        ],
+      );
+    } else {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET last_message_at      = IF(NOW() > last_message_at, NOW(), last_message_at),
+             last_message_preview = IF(NOW() > last_message_at, ?, last_message_preview),
+             last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
+             message_count        = message_count + 1,
+             unread_count         = unread_count + ?,
+             client_name          = COALESCE(client_name, ?),
+             client_phone         = COALESCE(client_phone, ?),
+             updated_at           = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [
+          preview,
+          communicationType,
+          unreadDelta,
+          clientName,
+          clientPhone,
+          convId,
+          tenantId,
+        ],
+      );
+    }
+  } catch (err) {
+    console.error("upsertConversationThread error:", err);
+  }
+}
+
 // =====================================================
 
 /**
@@ -277,36 +404,63 @@ async function sendEmailMessage(
   body: string,
   isHTML: boolean = false,
   conversationId?: string,
+  options?: { channel?: "default" | "reminder_flow" },
 ): Promise<{
   success: boolean;
   external_id?: string;
   error?: string;
   provider_response?: any;
 }> {
+  const isReminderFlowChannel = options?.channel === "reminder_flow";
+  const smtpHost = isReminderFlowChannel
+    ? process.env.REMINDER_SMTP_HOST || process.env.SMTP_HOST
+    : process.env.SMTP_HOST;
+  const smtpPort = isReminderFlowChannel
+    ? parseInt(process.env.REMINDER_SMTP_PORT || process.env.SMTP_PORT || "587")
+    : parseInt(process.env.SMTP_PORT || "587");
+  const smtpSecure = isReminderFlowChannel
+    ? (process.env.REMINDER_SMTP_SECURE || process.env.SMTP_SECURE) === "true"
+    : process.env.SMTP_SECURE === "true";
+  const smtpUser = isReminderFlowChannel
+    ? process.env.REMINDER_SMTP_USER || process.env.SMTP_USER
+    : process.env.SMTP_USER;
+  const smtpPassword = isReminderFlowChannel
+    ? process.env.REMINDER_SMTP_PASSWORD || process.env.SMTP_PASSWORD
+    : process.env.SMTP_PASSWORD;
+  const smtpFrom = isReminderFlowChannel
+    ? process.env.REMINDER_SMTP_FROM || process.env.SMTP_FROM
+    : process.env.SMTP_FROM;
+
+  // Guard: check credentials before creating the transporter
+  if (!smtpUser || !smtpPassword) {
+    console.error(
+      `❌ sendEmailMessage: SMTP credentials not configured — channel=${isReminderFlowChannel ? "reminder_flow" : "default"} to=${to}`,
+    );
+    return {
+      success: false,
+      error: "SMTP credentials not configured",
+    };
+  }
+
+  console.log(
+    `📧 sendEmailMessage: to=${to} | subject="${subject}" | channel=${isReminderFlowChannel ? "reminder_flow" : "default"} | isHTML=${isHTML} | conv=${conversationId ?? "none"} | host=${smtpHost ?? "(not set)"} | from=${smtpFrom ?? "(not set)"}`,
+  );
+
   try {
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_SECURE === "true",
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
+        user: smtpUser,
+        pass: smtpPassword,
       },
     });
-
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
-      return {
-        success: false,
-        error: "SMTP credentials not configured",
-      };
-    }
 
     // Derive the domain from SMTP_FROM for threading headers.
     // This makes client replies carry In-Reply-To / References back to us.
     const smtpFromEmail =
-      process.env.SMTP_FROM?.match(/<([^>]+)>/)?.[1] ||
-      process.env.SMTP_FROM ||
-      "noreply@example.com";
+      smtpFrom?.match(/<([^>]+)>/)?.[1] || smtpFrom || "noreply@example.com";
     const emailDomain = smtpFromEmail.split("@")[1] || "example.com";
 
     // Encode conversationId into the Message-ID so every email client
@@ -325,14 +479,14 @@ async function sendEmailMessage(
       ? inboundMailbox
       : conversationId && inboundDomain
         ? `reply+${conversationId}@${inboundDomain}`
-        : process.env.SMTP_FROM;
+        : smtpFrom;
 
     const headers: Record<string, string> = {};
     if (conversationId) headers["X-Conversation-Id"] = conversationId;
     if (messageId) headers["Message-ID"] = messageId;
 
     const mailOptions: nodemailer.SendMailOptions = {
-      from: process.env.SMTP_FROM,
+      from: smtpFrom,
       to,
       subject,
       replyTo,
@@ -352,7 +506,10 @@ async function sendEmailMessage(
       },
     };
   } catch (error: any) {
-    console.error("❌ Email sending failed:", error);
+    console.error(
+      `❌ sendEmailMessage failed: to=${to} | subject="${subject}" | error=${error.message}`,
+      error,
+    );
     return {
       success: false,
       error: error.message || "Failed to send email",
@@ -2673,6 +2830,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       citizenship_status,
       // Optional broker association
       broker_token,
+      // Draft upgrade — if provided, promote the existing draft instead of inserting a new record
+      draft_id,
     } = req.body;
 
     if (!email || !first_name || !last_name) {
@@ -2767,7 +2926,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       clientId = clientResult.insertId;
     }
 
-    const applicationNumber = `LA${Date.now().toString().slice(-8)}`;
+    let applicationNumber = `LA${Date.now().toString().slice(-8)}`;
 
     const resolvedLoanType =
       loan_type && ["purchase", "refinance"].includes(loan_type)
@@ -2820,38 +2979,120 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       );
     }
 
-    const [loanResult] = await connection.query<any>(
-      `INSERT INTO loan_applications
-        (tenant_id, application_number, client_user_id, broker_user_id,
-         partner_broker_id,
-         loan_type, loan_amount, property_value, property_address,
-         property_city, property_state, property_zip, property_type,
-         down_payment, loan_purpose, status, current_step, total_steps,
-         priority, notes, broker_token, citizenship_status, submitted_at)
-       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,?,NOW())`,
-      [
-        MORTGAGE_TENANT_ID,
-        applicationNumber,
-        clientId,
-        resolvedBrokerUserId,
-        resolvedPartnerBrokerId,
-        resolvedLoanType,
-        loan_amount,
-        propVal || null,
-        property_address || null,
-        property_city || null,
-        property_state || null,
-        property_zip || null,
-        resolvedPropertyType,
-        dp || null,
-        loan_purpose || null,
-        `Public wizard submission. Employment: ${employment_status || "N/A"}, Employer: ${employer_name || "N/A"}, Years employed: ${years_employed || "N/A"}`,
-        broker_token || null,
-        resolvedCitizenshipStatus,
-      ],
-    );
+    // ── Upgrade existing draft OR create new application ──────────────────────
+    // If the client already has a draft (from wizard auto-save), promote it to
+    // 'application_received' instead of inserting a duplicate record.
+    let applicationId: number;
 
-    const applicationId = loanResult.insertId;
+    const resolvedEmploymentStatus =
+      employment_status &&
+      [
+        "employed",
+        "self_employed",
+        "unemployed",
+        "retired",
+        "retired_with_pension",
+      ].includes(employment_status)
+        ? employment_status
+        : null;
+
+    const draftIdNum = draft_id ? parseInt(draft_id, 10) : null;
+    let draftUpgraded = false;
+
+    if (draftIdNum) {
+      const [draftRows] = await connection.query<any[]>(
+        "SELECT id, application_number FROM loan_applications WHERE id = ? AND status = 'draft' AND client_user_id = ? AND tenant_id = ?",
+        [draftIdNum, clientId, MORTGAGE_TENANT_ID],
+      );
+      if (draftRows.length > 0) {
+        applicationId = draftRows[0].id;
+        applicationNumber = draftRows[0].application_number;
+        await connection.query(
+          `UPDATE loan_applications SET
+            broker_user_id = COALESCE(broker_user_id, ?),
+            partner_broker_id = COALESCE(partner_broker_id, ?),
+            loan_type = ?,
+            loan_amount = ?,
+            property_value = ?,
+            property_address = COALESCE(NULLIF(?, ''), property_address),
+            property_city = COALESCE(NULLIF(?, ''), property_city),
+            property_state = COALESCE(NULLIF(?, ''), property_state),
+            property_zip = COALESCE(NULLIF(?, ''), property_zip),
+            property_type = COALESCE(?, property_type),
+            down_payment = ?,
+            loan_purpose = COALESCE(NULLIF(?, ''), loan_purpose),
+            citizenship_status = COALESCE(?, citizenship_status),
+            employment_status = COALESCE(?, employment_status),
+            employer_name = COALESCE(NULLIF(?, ''), employer_name),
+            years_employed = COALESCE(NULLIF(?, ''), years_employed),
+            broker_token = COALESCE(broker_token, ?),
+            status = 'application_received',
+            current_step = 1,
+            submitted_at = NOW(),
+            updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            resolvedBrokerUserId,
+            resolvedPartnerBrokerId,
+            resolvedLoanType,
+            loan_amount,
+            propVal || null,
+            property_address || null,
+            property_city || null,
+            property_state || null,
+            property_zip || null,
+            resolvedPropertyType,
+            dp || null,
+            loan_purpose || null,
+            resolvedCitizenshipStatus,
+            resolvedEmploymentStatus,
+            employer_name || null,
+            years_employed || null,
+            broker_token || null,
+            applicationId,
+            MORTGAGE_TENANT_ID,
+          ],
+        );
+        draftUpgraded = true;
+      }
+    }
+
+    if (!draftUpgraded) {
+      const [loanResult] = await connection.query<any>(
+        `INSERT INTO loan_applications
+          (tenant_id, application_number, client_user_id, broker_user_id,
+           partner_broker_id,
+           loan_type, loan_amount, property_value, property_address,
+           property_city, property_state, property_zip, property_type,
+           down_payment, loan_purpose, employment_status, employer_name,
+           years_employed, status, current_step, total_steps,
+           priority, broker_token, citizenship_status, submitted_at)
+         VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,NOW())`,
+        [
+          MORTGAGE_TENANT_ID,
+          applicationNumber,
+          clientId,
+          resolvedBrokerUserId,
+          resolvedPartnerBrokerId,
+          resolvedLoanType,
+          loan_amount,
+          propVal || null,
+          property_address || null,
+          property_city || null,
+          property_state || null,
+          property_zip || null,
+          resolvedPropertyType,
+          dp || null,
+          loan_purpose || null,
+          resolvedEmploymentStatus,
+          employer_name || null,
+          years_employed || null,
+          broker_token || null,
+          resolvedCitizenshipStatus,
+        ],
+      );
+      applicationId = loanResult.insertId;
+    }
 
     // ── Auto-assign tasks from templates based on client profile ──────────────
     //
@@ -3016,40 +3257,14 @@ const handlePublicApply: RequestHandler = async (req, res) => {
 
     await connection.commit();
 
-    // Send confirmation email (non-fatal)
-    try {
-      const fmt = (v: number | null) =>
-        v != null
-          ? new Intl.NumberFormat("en-US", {
-              style: "currency",
-              currency: "USD",
-              maximumFractionDigits: 0,
-            }).format(v)
-          : "N/A";
-
-      const estimatedLoanAmt = propVal > dp ? propVal - dp : propVal;
-      const addressStr = [
-        property_address,
-        property_city,
-        property_state,
-        property_zip,
-      ]
-        .filter(Boolean)
-        .join(", ");
-
-      await sendPublicApplicationWelcomeEmail(
-        email,
-        first_name,
-        last_name,
-        applicationNumber,
-        resolvedLoanType,
-        fmt(propVal),
-        fmt(estimatedLoanAmt),
-        addressStr,
-      );
-    } catch (emailError) {
-      console.error("Welcome email failed (non-fatal):", emailError);
-    }
+    // Trigger reminder flows for application_received event (non-fatal)
+    triggerReminderFlows(
+      applicationId,
+      "application_received",
+      MORTGAGE_TENANT_ID,
+    ).catch((err) =>
+      console.error("Reminder flow trigger error (new application):", err),
+    );
 
     res.json({
       success: true,
@@ -3103,6 +3318,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
       property_zip,
       loan_purpose,
       citizenship_status,
+      employment_status,
+      employer_name,
+      years_employed,
       broker_token,
       wizard_step,
     } = req.body;
@@ -3152,8 +3370,8 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
         `INSERT INTO clients
           (tenant_id, email, first_name, last_name, phone,
            address_street, address_city, address_state, address_zip,
-           status, email_verified, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 'public_wizard')`,
+           status, email_verified, source, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 'public_wizard', NULL)`,
         [
           MORTGAGE_TENANT_ID,
           normalizedEmail,
@@ -3218,6 +3436,18 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
     const dp = parseFloat(down_payment) || 0;
     const loan_amount = propVal > dp ? propVal - dp : propVal || 0;
 
+    const resolvedEmploymentStatusDraft =
+      employment_status &&
+      [
+        "employed",
+        "self_employed",
+        "unemployed",
+        "retired",
+        "retired_with_pension",
+      ].includes(employment_status)
+        ? employment_status
+        : null;
+
     let applicationId: number | null = null;
     let applicationNumber: string = "";
 
@@ -3243,6 +3473,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
             property_type = COALESCE(?, property_type),
             loan_purpose = COALESCE(NULLIF(?, ''), loan_purpose),
             citizenship_status = COALESCE(?, citizenship_status),
+            employment_status = COALESCE(?, employment_status),
+            employer_name = COALESCE(NULLIF(?, ''), employer_name),
+            years_employed = COALESCE(NULLIF(?, ''), years_employed),
             current_step = ?,
             updated_at = NOW()
            WHERE id = ? AND tenant_id = ?`,
@@ -3261,6 +3494,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
             resolvedPropertyType,
             loan_purpose || null,
             resolvedCitizenshipStatus,
+            resolvedEmploymentStatusDraft,
+            employer_name || null,
+            years_employed || null,
             wizard_step || 1,
             applicationId,
             MORTGAGE_TENANT_ID,
@@ -3283,8 +3519,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
         (tenant_id, application_number, client_user_id, broker_user_id, partner_broker_id,
          loan_type, loan_amount, property_value, property_address, property_city,
          property_state, property_zip, property_type, down_payment, loan_purpose,
+         employment_status, employer_name, years_employed,
          status, current_step, total_steps, priority, broker_token, citizenship_status)
-       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, 'draft',?,8,'medium',?,?)`,
+       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft',?,8,'medium',?,?)`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
@@ -3301,6 +3538,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
         resolvedPropertyType,
         dp || null,
         loan_purpose || null,
+        resolvedEmploymentStatusDraft,
+        employer_name || null,
+        years_employed || null,
         wizard_step || 1,
         broker_token || null,
         resolvedCitizenshipStatus,
@@ -3669,6 +3909,20 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
             convId,
           ],
         );
+        await upsertConversationThread({
+          tenantId: MORTGAGE_TENANT_ID,
+          commId: 0,
+          conversationId: convId,
+          applicationId: null,
+          leadId: null,
+          fromUserId: null,
+          fromBrokerId: brokerId,
+          toUserId: foundClientId,
+          toBrokerId: null,
+          communicationType: "email",
+          direction: "outbound",
+          body: `${brokerFullName} has shared a mortgage application link with you`,
+        });
       }
     }
 
@@ -3924,8 +4178,8 @@ const handleGetLoans: RequestHandler = async (req, res) => {
       LEFT JOIN brokers mb ON pb.created_by_broker_id = mb.id
       ${whereClause}
       ${orderClause}
-      LIMIT ? OFFSET ?`,
-      [...subqueryParams, ...queryParams, limitNum, offset],
+      LIMIT ${limitNum} OFFSET ${offset}`,
+      [...subqueryParams, ...queryParams],
     );
 
     res.json({
@@ -5075,8 +5329,8 @@ const handleGetClients: RequestHandler = async (req, res) => {
       ${baseWhere}
       GROUP BY c.id
       ORDER BY ${safeSortBy} ${sortOrder}
-      LIMIT ? OFFSET ?`,
-      [...filterParams, limit, offset],
+      LIMIT ${limit} OFFSET ${offset}`,
+      [...filterParams],
     );
 
     res.json({
@@ -5280,7 +5534,7 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
     const total = Number((countRow as any)?.total || 0);
 
     // Fetch all active brokers
-    const [brokers] = (await connection.execute(
+    const [brokers] = (await connection.query(
       `SELECT
         id,
         email,
@@ -5294,8 +5548,8 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
       FROM brokers
       WHERE status = 'active' AND tenant_id = ?${searchWhere}
       ORDER BY ${safeSortBy} ${sortOrder}
-      LIMIT ? OFFSET ?`,
-      [MORTGAGE_TENANT_ID, ...searchParams, limit, offset],
+      LIMIT ${limit} OFFSET ${offset}`,
+      [MORTGAGE_TENANT_ID, ...searchParams],
     )) as [RowDataPacket[], any];
 
     res.json({
@@ -5978,8 +6232,8 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
       FROM task_templates
       WHERE created_by_broker_id = ? AND tenant_id = ?${searchWhere}
       ORDER BY ${safeSortBy} ${sortOrder}
-      LIMIT ? OFFSET ?`,
-      [brokerId, MORTGAGE_TENANT_ID, ...searchParams, limit, offset],
+      LIMIT ${limit} OFFSET ${offset}`,
+      [brokerId, MORTGAGE_TENANT_ID, ...searchParams],
     );
 
     res.json({
@@ -8157,8 +8411,8 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
         b.first_name as broker_first_name, b.last_name as broker_last_name
       ${baseJoin} ${whereClause}
       ORDER BY ${safeSortBy} ${sortOrder}
-      LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+      LIMIT ${limit} OFFSET ${offset}`,
+      [...params],
     );
 
     res.json({
@@ -9649,6 +9903,21 @@ async function triggerPipelineAutomation(
         ],
       );
 
+      await upsertConversationThread({
+        tenantId: MORTGAGE_TENANT_ID,
+        commId: 0,
+        conversationId: pipelineConversationId,
+        applicationId: loanId,
+        leadId: null,
+        fromUserId: null,
+        fromBrokerId: brokerId,
+        toUserId: loan.client_id,
+        toBrokerId: null,
+        communicationType: assignment.communication_type,
+        direction: "outbound",
+        body,
+      });
+
       // Increment template usage count
       await pool.query(
         "UPDATE templates SET usage_count = usage_count + 1 WHERE id = ?",
@@ -9680,9 +9949,11 @@ async function triggerReminderFlows(
     const [loanRows] = await pool.query<RowDataPacket[]>(
       `SELECT la.id, la.application_number, la.loan_type, la.status,
               la.actual_close_date, la.estimated_close_date,
-              c.id AS client_id, c.first_name, c.last_name, c.email, c.phone
+              c.id AS client_id, c.first_name, c.last_name, c.email, c.phone,
+              b.first_name AS broker_first_name, b.last_name AS broker_last_name
        FROM loan_applications la
        INNER JOIN clients c ON la.client_user_id = c.id
+       LEFT JOIN brokers b ON la.broker_user_id = b.id
        WHERE la.id = ? AND la.tenant_id = ?`,
       [loanId, tenantId],
     );
@@ -9704,6 +9975,10 @@ async function triggerReminderFlows(
 
     if (!flows.length) return;
 
+    const brokerName = loan.broker_first_name
+      ? `${loan.broker_first_name} ${loan.broker_last_name}`.trim()
+      : "Your Loan Officer";
+
     const contextData = JSON.stringify({
       loan_type: loanType,
       loan_status: loan.status,
@@ -9715,6 +9990,7 @@ async function triggerReminderFlows(
       loan_id: loanId,
       actual_close_date: loan.actual_close_date ?? null,
       estimated_close_date: loan.estimated_close_date ?? null,
+      broker_name: brokerName,
     });
 
     for (const flow of flows) {
@@ -9730,17 +10006,22 @@ async function triggerReminderFlows(
       const nextExecAt = new Date();
       nextExecAt.setDate(nextExecAt.getDate() + (flow.trigger_delay_days || 0));
 
+      // Pre-compute the deterministic conversation_id for this execution so
+      // inbound reply handlers can locate it without parsing JSON context.
+      const execConvId = `conv_client_${loan.client_id}_loan_${loanId}_flow_${flow.id}`;
+
       await pool.query(
         `INSERT INTO reminder_flow_executions
            (tenant_id, flow_id, loan_application_id, client_id,
-            current_step_key, status, next_execution_at, completed_steps,
-            context_data, last_step_started_at, started_at)
-         VALUES (?, ?, ?, ?, ?, 'active', ?, '[]', ?, NOW(), NOW())`,
+            conversation_id, current_step_key, status, next_execution_at,
+            completed_steps, context_data, last_step_started_at, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, '[]', ?, NOW(), NOW())`,
         [
           tenantId,
           flow.id,
           loanId,
           loan.client_id,
+          execConvId,
           triggerKey,
           nextExecAt,
           contextData,
@@ -9801,8 +10082,107 @@ function pickEdge(
 }
 
 /**
+ * After a client replies (inbound email or SMS), mark all active
+ * reminder_flow_executions that are waiting on this conversation as responded.
+ *
+ * The execution's `conversation_id` column stores the deterministic ID
+ * `conv_client_{clientId}_loan_{loanId}_flow_{flowId}` set when the
+ * execution is inserted (triggerReminderFlows) or when the first send step fires.
+ *
+ * Returns the number of executions updated.
+ */
+async function markExecutionsRespondedForConversation(
+  conversationId: string,
+  tenantId: number,
+): Promise<number> {
+  try {
+    const [result] = await pool.query<ResultSetHeader>(
+      `UPDATE reminder_flow_executions
+       SET responded_at = NOW(), next_execution_at = NOW(), updated_at = NOW()
+       WHERE tenant_id = ?
+         AND status = 'active'
+         AND responded_at IS NULL
+         AND conversation_id = ?`,
+      [tenantId, conversationId],
+    );
+    if (result.affectedRows > 0) {
+      console.log(
+        `🔔 Marked ${result.affectedRows} execution(s) as responded for conv=${conversationId}`,
+      );
+    }
+    return result.affectedRows;
+  } catch (err) {
+    console.error("❌ markExecutionsRespondedForConversation error:", err);
+    return 0;
+  }
+}
+
+/**
+ * Wraps a plain-text template body (with \n line breaks) in the branded
+ * Encore Mortgage HTML email shell, matching the style used by
+ * sendBrokerVerificationEmail / sendClientLoanWelcomeEmail etc.
+ */
+function wrapReminderEmailBody(plainText: string): string {
+  // Convert double newlines → paragraph breaks, single newlines → <br>
+  const htmlBody = plainText
+    .split(/\n\n+/)
+    .map(
+      (para) =>
+        `<p style="margin:0 0 14px 0;color:#475569;font-size:15px;line-height:1.7;">${para.replace(/\n/g, "<br />")}</p>`,
+    )
+    .join("");
+
+  const portalUrl =
+    process.env.CLIENT_URL || "https://portal.encoremortgage.org";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+        <!-- LOGO HEADER -->
+        <tr>
+          <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+            <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+          </td>
+        </tr>
+        <!-- BODY -->
+        <tr>
+          <td style="background-color:#ffffff;padding:40px 32px 32px;">
+            ${htmlBody}
+            <!-- CTA -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
+              <tr>
+                <td align="center">
+                  <a href="${portalUrl}/client-login" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Log In to Your Portal</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <!-- FOOTER -->
+        <tr>
+          <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+            <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+            <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+/**
  * Send a message for a send_email / send_sms / send_notification step.
- * Returns the send result without throwing.
+ * Never throws — all exceptions are caught and logged so the flow execution
+ * is not marked failed due to a transient send or DB error.
  */
 async function executeFlowSendStep(
   step: FlowStep,
@@ -9810,111 +10190,188 @@ async function executeFlowSendStep(
   execution: RowDataPacket,
 ): Promise<void> {
   const config = step.config ?? {};
-  if (!config.message && !config.template_id) return; // nothing to send
-
-  const variables: Record<string, string> = {
-    client_name: String(contextData.client_name ?? ""),
-    first_name: String((contextData.client_name ?? "").split(" ")[0] ?? ""),
-    application_number: String(contextData.application_number ?? ""),
-    loan_type: String(contextData.loan_type ?? ""),
-    status: String(contextData.loan_status ?? ""),
-  };
-
-  let body = config.message ?? "";
-  let subject = config.subject ?? "Loan Update";
-
-  if (config.template_id) {
-    const [tRows] = await pool.query<RowDataPacket[]>(
-      "SELECT subject, body FROM templates WHERE id = ? AND is_active = 1",
-      [config.template_id],
-    );
-    if (tRows.length) {
-      body = processTemplateVariables(tRows[0].body, variables);
-      subject = processTemplateVariables(
-        tRows[0].subject ?? subject,
-        variables,
-      );
-    }
-  } else {
-    body = processTemplateVariables(body, variables);
-    subject = processTemplateVariables(subject, variables);
-  }
-
-  const clientEmail: string = contextData.client_email as string;
-  const clientPhone: string = contextData.client_phone as string;
-  const loanId: number = contextData.loan_id as number;
-  const clientId: number = contextData.client_id as number;
-  const convId = `conv_client_${clientId}_loan_${loanId}_flow_${execution.flow_id}`;
-
-  let sendResult: {
-    success: boolean;
-    external_id?: string;
-    error?: string;
-    cost?: number;
-  } = { success: false, error: "Not configured" };
-
-  if (step.step_type === "send_email") {
-    if (!clientEmail) return;
-    sendResult = await sendEmailMessage(
-      clientEmail,
-      subject,
-      body,
-      true,
-      convId,
-    );
-  } else if (step.step_type === "send_sms") {
-    if (!clientPhone) return;
-    sendResult = await sendSMSMessage(clientPhone, body);
-  } else if (step.step_type === "send_whatsapp") {
-    if (!clientPhone) return;
-    sendResult = await sendWhatsAppMessage(clientPhone, body);
-  } else if (step.step_type === "send_notification") {
-    // Insert in-app notification for client
-    await pool.query(
-      `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, is_read, created_at)
-       VALUES (?, ?, ?, ?, 'info', 0, NOW())`,
-      [MORTGAGE_TENANT_ID, clientId, subject, body],
-    );
-    sendResult = { success: true };
-  }
-
-  if (step.step_type !== "send_notification") {
-    const commType =
-      step.step_type === "send_email"
-        ? "email"
-        : step.step_type === "send_sms"
-          ? "sms"
-          : step.step_type === "send_whatsapp"
-            ? "whatsapp"
-            : "email";
-    await pool.query(
-      `INSERT INTO communications
-         (tenant_id, application_id, from_broker_id, to_user_id,
-          communication_type, direction, subject, body, status,
-          external_id, conversation_id, template_id, delivery_status, cost, sent_at)
-       VALUES (?, ?, NULL, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        MORTGAGE_TENANT_ID,
-        loanId,
-        clientId,
-        commType,
-        commType === "email" ? subject : null,
-        body,
-        sendResult.success ? "sent" : "failed",
-        sendResult.external_id ?? null,
-        convId,
-        config.template_id ?? null,
-        sendResult.success ? "sent" : "failed",
-        sendResult.cost ?? null,
-      ],
-    );
-  }
 
   console.log(
-    `📤 Flow #${execution.flow_id} exec #${execution.id} step [${step.step_type}]: ${
-      sendResult.success ? "✅ sent" : `❌ failed — ${sendResult.error}`
-    }`,
+    `🔄 executeFlowSendStep: exec #${execution.id} flow #${execution.flow_id} step [${step.step_key}/${step.step_type}] template_id=${config.template_id ?? "(inline)"} client_id=${contextData.client_id ?? "?"}`,
   );
+
+  if (!config.message && !config.template_id) {
+    console.warn(
+      `⚠️  executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no message and no template_id; skipping send`,
+    );
+    return;
+  }
+
+  try {
+    const variables: Record<string, string> = {
+      client_name: String(contextData.client_name ?? ""),
+      first_name: String((contextData.client_name ?? "").split(" ")[0] ?? ""),
+      application_number: String(contextData.application_number ?? ""),
+      loan_type: String(contextData.loan_type ?? ""),
+      status: String(contextData.loan_status ?? ""),
+      broker_name: String(contextData.broker_name ?? "Your Loan Officer"),
+    };
+
+    let body = config.message ?? "";
+    let subject = config.subject ?? "Loan Update";
+
+    if (config.template_id) {
+      const [tRows] = await pool.query<RowDataPacket[]>(
+        "SELECT subject, body FROM templates WHERE id = ? AND is_active = 1",
+        [config.template_id],
+      );
+      if (tRows.length) {
+        body = processTemplateVariables(tRows[0].body, variables);
+        subject = processTemplateVariables(
+          tRows[0].subject ?? subject,
+          variables,
+        );
+        console.log(
+          `📄 executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — template #${config.template_id} resolved | subject="${subject}" | body_length=${body.length}`,
+        );
+      } else {
+        console.error(
+          `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — template #${config.template_id} not found or inactive; body will be empty`,
+        );
+      }
+    } else {
+      body = processTemplateVariables(body, variables);
+      subject = processTemplateVariables(subject, variables);
+    }
+
+    const clientEmail: string = contextData.client_email as string;
+    const clientPhone: string = contextData.client_phone as string;
+    const loanId: number = contextData.loan_id as number;
+    const clientId: number = contextData.client_id as number;
+    const convId = `conv_client_${clientId}_loan_${loanId}_flow_${execution.flow_id}`;
+
+    let sendResult: {
+      success: boolean;
+      external_id?: string;
+      error?: string;
+      cost?: number;
+    } = { success: false, error: "Not configured" };
+
+    if (step.step_type === "send_email") {
+      if (!clientEmail) {
+        console.error(
+          `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no client_email in contextData (client_id=${clientId}); skipping email send`,
+        );
+        return;
+      }
+      console.log(
+        `📧 executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — sending email to ${clientEmail}`,
+      );
+      sendResult = await sendEmailMessage(
+        clientEmail,
+        subject,
+        wrapReminderEmailBody(body),
+        true,
+        convId,
+        { channel: "reminder_flow" },
+      );
+    } else if (step.step_type === "send_sms") {
+      if (!clientPhone) {
+        console.error(
+          `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no client_phone in contextData (client_id=${clientId}); skipping SMS send`,
+        );
+        return;
+      }
+      sendResult = await sendSMSMessage(clientPhone, body);
+    } else if (step.step_type === "send_whatsapp") {
+      if (!clientPhone) {
+        console.error(
+          `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no client_phone in contextData (client_id=${clientId}); skipping WhatsApp send`,
+        );
+        return;
+      }
+      sendResult = await sendWhatsAppMessage(clientPhone, body);
+    } else if (step.step_type === "send_notification") {
+      // Insert in-app notification for client
+      await pool.query(
+        `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, is_read, created_at)
+         VALUES (?, ?, ?, ?, 'info', 0, NOW())`,
+        [MORTGAGE_TENANT_ID, clientId, subject, body],
+      );
+      sendResult = { success: true };
+    }
+
+    if (step.step_type !== "send_notification") {
+      const commType =
+        step.step_type === "send_email"
+          ? "email"
+          : step.step_type === "send_sms"
+            ? "sms"
+            : step.step_type === "send_whatsapp"
+              ? "whatsapp"
+              : "email";
+      await pool.query(
+        `INSERT INTO communications
+           (tenant_id, application_id, from_broker_id, to_user_id,
+            communication_type, direction, subject, body, status,
+            external_id, conversation_id, source_execution_id,
+            template_id, delivery_status, cost, sent_at)
+         VALUES (?, ?, NULL, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          MORTGAGE_TENANT_ID,
+          loanId,
+          clientId,
+          commType,
+          commType === "email" ? subject : null,
+          body,
+          sendResult.success ? "sent" : "failed",
+          sendResult.external_id ?? null,
+          convId,
+          execution.id,
+          config.template_id ?? null,
+          sendResult.success ? "sent" : "failed",
+          sendResult.cost ?? null,
+        ],
+      );
+
+      await upsertConversationThread({
+        tenantId: MORTGAGE_TENANT_ID,
+        commId: 0,
+        conversationId: convId,
+        applicationId: loanId,
+        leadId: null,
+        fromUserId: null,
+        fromBrokerId: null,
+        toUserId: clientId,
+        toBrokerId: null,
+        communicationType: commType,
+        direction: "outbound",
+        body,
+      });
+
+      // Ensure the execution record has its conversation_id set (idempotent upsert)
+      if (!execution.conversation_id || execution.conversation_id !== convId) {
+        await pool.query(
+          `UPDATE reminder_flow_executions SET conversation_id = ?, updated_at = NOW() WHERE id = ?`,
+          [convId, execution.id],
+        );
+        execution.conversation_id = convId; // keep in-memory consistent
+      }
+    }
+
+    if (sendResult.success) {
+      console.log(
+        `✅ executeFlowSendStep: exec #${execution.id} step [${step.step_key}/${step.step_type}] sent | ext_id=${sendResult.external_id ?? "n/a"}`,
+      );
+    } else {
+      console.error(
+        `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}/${step.step_type}] FAILED | error="${sendResult.error}"`,
+      );
+    }
+  } catch (err: any) {
+    // Catch all exceptions so a DB or send error never marks the whole execution as failed.
+    // The failed communication is still recorded when possible.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}/${step.step_type}] — UNHANDLED EXCEPTION: ${msg}`,
+      err,
+    );
+  }
 }
 
 /**
@@ -9957,11 +10414,18 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
   const MAX_STEPS = 30; // guard against infinite loops in mis-configured flows
   let iterations = 0;
 
+  console.log(
+    `\u25b6\ufe0f  processFlowExecution: exec #${execution.id} flow #${execution.flow_id} \u2014 starting at step [${currentKey}] | loan #${contextData.loan_id ?? "?"} | client_id=${contextData.client_id ?? "?"} | client_email=${contextData.client_email ?? "(none)"}`,
+  );
+
   while (iterations < MAX_STEPS) {
     iterations++;
     const step = stepMap.get(currentKey);
     if (!step) {
       // Invalid step key — fail this execution
+      console.error(
+        `\u274c processFlowExecution: exec #${execution.id} \u2014 step key [${currentKey}] not found in flow #${execution.flow_id}; marking failed`,
+      );
       await pool.query(
         `UPDATE reminder_flow_executions
          SET status = 'failed', updated_at = NOW(),
@@ -9971,6 +10435,10 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
       );
       return;
     }
+
+    console.log(
+      `\u27a1\ufe0f  processFlowExecution: exec #${execution.id} \u2014 iteration ${iterations} processing step [${currentKey}/${step.step_type}]`,
+    );
 
     completedSteps.push(currentKey);
 
@@ -10020,8 +10488,11 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
       let nextEdge: FlowConnection | undefined;
       if (execution.responded_at) {
         nextEdge = pickEdge(connections, currentKey, "responded", "default");
+        // Reset responded_at in-memory so any subsequent wait_for_response
+        // steps in this flow start waiting for a new reply.
+        execution.responded_at = null;
       } else {
-        // Timeout elapsed without response
+        // Timeout elapsed without response — take no_response branch
         nextEdge = pickEdge(connections, currentKey, "no_response", "default");
       }
       if (!nextEdge) {
@@ -10093,7 +10564,8 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
         await pool.query(
           `UPDATE reminder_flow_executions
            SET current_step_key = ?, next_execution_at = ?,
-               completed_steps = ?, last_step_started_at = NOW(), updated_at = NOW()
+               completed_steps = ?, last_step_started_at = NOW(),
+               responded_at = NULL, updated_at = NOW()
            WHERE id = ?`,
           [
             currentKey,
@@ -10181,6 +10653,9 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
   }
 
   // Max iterations guard — save whatever progress was made
+  console.warn(
+    `\u26a0\ufe0f  processFlowExecution: exec #${execution.id} flow #${execution.flow_id} \u2014 hit MAX_STEPS (${MAX_STEPS}) guard at step [${currentKey}]; saving partial progress`,
+  );
   await pool.query(
     `UPDATE reminder_flow_executions SET current_step_key = ?, completed_steps = ?, updated_at = NOW() WHERE id = ?`,
     [currentKey, JSON.stringify(completedSteps), execution.id],
@@ -10215,6 +10690,11 @@ const handleProcessReminderFlows: RequestHandler = async (req, res) => {
       }
     }
 
+    // Log SMTP configuration status (no secrets) for traceability
+    console.log(
+      `\ud83d\udd52 Reminder flows cron triggered | SMTP_HOST=${process.env.SMTP_HOST ?? "(not set)"} | SMTP_USER=${process.env.SMTP_USER ? "\u2713 set" : "\u274c NOT SET"} | SMTP_FROM=${process.env.SMTP_FROM ?? "(not set)"}`,
+    );
+
     // Load all due active executions (next_execution_at <= NOW())
     const [executions] = await pool.query<RowDataPacket[]>(
       `SELECT rfe.*, rf.name AS flow_name
@@ -10228,8 +10708,15 @@ const handleProcessReminderFlows: RequestHandler = async (req, res) => {
     );
 
     if (!executions.length) {
+      console.log(
+        `⏳ Reminder flows cron: no due executions found (all active executions are scheduled in the future or none exist)`,
+      );
       return res.json({ success: true, processed: 0, succeeded: 0, failed: 0 });
     }
+
+    console.log(
+      `📋 Reminder flows cron: ${executions.length} due execution(s) to process`,
+    );
 
     let succeeded = 0;
     let failed = 0;
@@ -10386,6 +10873,9 @@ const handlePollInboundEmail: RequestHandler = async (req, res) => {
 
     const port = parseInt(process.env.IMAP_PORT || "993");
     const tls = process.env.IMAP_TLS !== "false";
+    // IMAP_REJECT_UNAUTHORIZED=false disables strict TLS cert validation.
+    // Set to "false" when the mail server has a self-signed or expired certificate.
+    const rejectUnauthorized = process.env.IMAP_REJECT_UNAUTHORIZED !== "false";
 
     const client = new ImapFlow({
       host,
@@ -10393,6 +10883,7 @@ const handlePollInboundEmail: RequestHandler = async (req, res) => {
       secure: tls,
       auth: { user, pass },
       logger: false,
+      tls: { rejectUnauthorized },
     });
 
     await client.connect();
@@ -10536,8 +11027,32 @@ const handlePollInboundEmail: RequestHandler = async (req, res) => {
               ],
             );
 
+            await upsertConversationThread({
+              tenantId: MORTGAGE_TENANT_ID,
+              commId: 0,
+              conversationId,
+              applicationId: applicationId || null,
+              leadId: leadId || null,
+              fromUserId: clientId || null,
+              fromBrokerId: null,
+              toUserId: null,
+              toBrokerId: brokerId || null,
+              communicationType: "email",
+              direction: "inbound",
+              body: bodyText,
+            });
+
             // Mark email as seen so it won't be picked up next poll
             await client.messageFlagsAdd(msg.uid, ["\\Seen"], { uid: true });
+
+            // ── Sync to reminder flows ──────────────────────────────────────
+            // Mark any active flow executions waiting on this conversation as
+            // responded so the cron will advance them on the next run.
+            await markExecutionsRespondedForConversation(
+              conversationId,
+              MORTGAGE_TENANT_ID,
+            );
+
             processed++;
             console.log(
               `📥 Inbound reply stored: conv=${conversationId} from=${senderEmail}`,
@@ -10723,14 +11238,208 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
       ],
     );
 
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: 0,
+      conversationId,
+      applicationId: applicationId || null,
+      leadId: leadId || null,
+      fromUserId: clientId || null,
+      fromBrokerId: null,
+      toUserId: null,
+      toBrokerId: brokerId || null,
+      communicationType: "email",
+      direction: "inbound",
+      body,
+    });
+
     console.log(
       `📥 Inbound email stored: conv=${conversationId} from=${fromAddress}`,
     );
+
+    // ── Sync to reminder flows ──────────────────────────────────────────────
+    // Mark any active flow executions waiting on this conversation as responded
+    // so the cron will advance them to the 'responded' branch on the next run.
+    await markExecutionsRespondedForConversation(
+      conversationId,
+      MORTGAGE_TENANT_ID,
+    );
+
     res.json({ success: true });
   } catch (error) {
     console.error("❌ Inbound email webhook error:", error);
     // Always return 200 so the provider doesn't flood with retries
     res.status(200).json({ success: false, error: "Internal error" });
+  }
+};
+
+// =====================================================
+// INBOUND SMS WEBHOOK  (Twilio)
+// =====================================================
+
+/**
+ * POST /api/webhooks/inbound-sms
+ *
+ * Receives inbound SMS from Twilio's webhook.
+ * Configure Twilio to POST to:
+ *   https://yourdomain.com/api/webhooks/inbound-sms
+ *
+ * Twilio sends application/x-www-form-urlencoded with:
+ *   Body      — message text
+ *   From      — sender's E.164 phone  (+15550001111)
+ *   To        — your Twilio number    (+15559990000)
+ *   MessageSid — Twilio message SID
+ *   AccountSid — Twilio account SID
+ *
+ * Security: optionally validate the INBOUND_WEBHOOK_SECRET header
+ * OR the Twilio request signature (set TWILIO_AUTH_TOKEN + TWILIO_SMS_WEBHOOK_URL).
+ *
+ * On success the handler:
+ *  1. Looks up the client by From phone number.
+ *  2. Finds the latest active execution for that client to determine
+ *     which conversation_id to associate the message with.
+ *  3. Inserts an inbound `communications` record (triggers the DB trigger
+ *     to update / create the conversation_thread).
+ *  4. Marks all active executions waiting on that conversation as responded.
+ *  5. Returns an empty TwiML <Response> (stops Twilio from sending an auto-reply).
+ */
+const handleInboundSMS: RequestHandler = async (req, res) => {
+  try {
+    // Optional shared-secret auth (same as inbound email webhook)
+    const secret = process.env.INBOUND_WEBHOOK_SECRET;
+    if (secret) {
+      const provided =
+        req.headers["x-webhook-secret"] ?? (req.query.secret as string);
+      if (provided !== secret) {
+        // Return empty TwiML so Twilio doesn't retry, but log the rejection
+        console.warn("⚠️  Inbound SMS rejected — bad webhook secret");
+        res.set("Content-Type", "text/xml");
+        return res.status(200).send("<Response></Response>");
+      }
+    }
+
+    // Parse Twilio fields (sent as form-encoded or JSON depending on config)
+    const body: string = req.body?.Body ?? req.body?.body ?? "";
+    const fromRaw: string = req.body?.From ?? req.body?.from ?? "";
+    const messageSid: string =
+      req.body?.MessageSid ?? req.body?.messageSid ?? "";
+
+    if (!body || !fromRaw) {
+      res.set("Content-Type", "text/xml");
+      return res.status(200).send("<Response></Response>");
+    }
+
+    // Normalise phone: keep only digits and optional leading +
+    const fromPhone = fromRaw.replace(/[^\d+]/g, "");
+
+    // ── Find the client by phone number ──────────────────────────────────────
+    // We try an exact match first, then strip country code (+1 prefix) as fallback.
+    const [clientRows] = await pool.query<RowDataPacket[]>(
+      `SELECT c.id, c.assigned_broker_id, la.id AS loan_id
+       FROM clients c
+       LEFT JOIN loan_applications la ON la.client_user_id = c.id
+                                      AND la.tenant_id = c.tenant_id
+                                      AND la.status NOT IN ('loan_funded', 'declined')
+       WHERE c.tenant_id = ?
+         AND (c.phone = ? OR c.phone = ? OR REPLACE(REPLACE(REPLACE(c.phone, '-', ''), '(', ''), ')', '') = REPLACE(?, '+1', ''))
+       ORDER BY la.created_at DESC
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, fromPhone, fromRaw, fromPhone],
+    );
+
+    let clientId: number | null = null;
+    let brokerId: number | null = null;
+    let loanId: number | null = null;
+
+    if (clientRows.length > 0) {
+      clientId = clientRows[0].id;
+      brokerId = clientRows[0].assigned_broker_id ?? null;
+      loanId = clientRows[0].loan_id ?? null;
+    }
+
+    // ── Determine conversation_id ────────────────────────────────────────────
+    // Find the most recent active execution for this client so we can route
+    // the reply to the right conversation thread.
+    let conversationId: string | null = null;
+
+    if (clientId) {
+      const [execRows] = await pool.query<RowDataPacket[]>(
+        `SELECT conversation_id FROM reminder_flow_executions
+         WHERE tenant_id = ? AND client_id = ? AND status = 'active'
+           AND conversation_id IS NOT NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [MORTGAGE_TENANT_ID, clientId],
+      );
+      if (execRows.length > 0) {
+        conversationId = execRows[0].conversation_id;
+      }
+    }
+
+    // Fall back to a deterministic ID if no active execution found
+    if (!conversationId && clientId && loanId) {
+      conversationId = `conv_client_${clientId}_loan_${loanId}`;
+    } else if (!conversationId && clientId) {
+      conversationId = `conv_sms_client_${clientId}`;
+    }
+
+    // ── Insert inbound communications record ─────────────────────────────────
+    await pool.query(
+      `INSERT INTO communications (
+        tenant_id, application_id,
+        from_user_id, to_broker_id,
+        communication_type, direction,
+        body, status,
+        conversation_id, message_type,
+        delivery_status, external_id,
+        sent_at, created_at
+      ) VALUES (?, ?, ?, ?, 'sms', 'inbound', ?, 'delivered', ?, 'text', 'delivered', ?, NOW(), NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        loanId ?? null,
+        clientId ?? null,
+        brokerId ?? null,
+        body.slice(0, 5000),
+        conversationId,
+        messageSid || null,
+      ],
+    );
+
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: 0,
+      conversationId,
+      applicationId: loanId ?? null,
+      leadId: null,
+      fromUserId: clientId ?? null,
+      fromBrokerId: null,
+      toUserId: null,
+      toBrokerId: brokerId ?? null,
+      communicationType: "sms",
+      direction: "inbound",
+      body: body.slice(0, 5000),
+    });
+
+    console.log(
+      `📥 Inbound SMS stored: conv=${conversationId} from=${fromPhone}`,
+    );
+
+    // ── Sync to reminder flows ────────────────────────────────────────────────
+    if (conversationId) {
+      await markExecutionsRespondedForConversation(
+        conversationId,
+        MORTGAGE_TENANT_ID,
+      );
+    }
+
+    // Return empty TwiML so Twilio does not auto-reply
+    res.set("Content-Type", "text/xml");
+    return res.status(200).send("<Response></Response>");
+  } catch (error) {
+    console.error("❌ Inbound SMS webhook error:", error);
+    // Always return 200 with empty TwiML so Twilio doesn't retry
+    res.set("Content-Type", "text/xml");
+    return res.status(200).send("<Response></Response>");
   }
 };
 
@@ -10791,10 +11500,8 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       LEFT JOIN clients c ON ct.client_id = c.id
       WHERE ${whereClause}
       ORDER BY ct.last_message_at DESC
-      LIMIT ? OFFSET ?
+      LIMIT ${parseInt(limit as string)} OFFSET ${offset}
     `;
-
-    queryParams.push(parseInt(limit as string), offset);
 
     const [threads] = await pool.query<RowDataPacket[]>(
       threadsQuery,
@@ -10809,7 +11516,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     `;
     const [countResult] = await pool.query<RowDataPacket[]>(
       countQuery,
-      queryParams.slice(0, -2), // Remove limit and offset from params
+      queryParams,
     );
 
     const total = countResult[0]?.total || 0;
@@ -10876,8 +11583,8 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       LEFT JOIN clients cl ON c.to_user_id = cl.id
       WHERE c.conversation_id = ? AND c.tenant_id = ?
       ORDER BY c.created_at DESC
-      LIMIT ? OFFSET ?`,
-      [conversationId, MORTGAGE_TENANT_ID, parseInt(limit as string), offset],
+      LIMIT ${parseInt(limit as string)} OFFSET ${offset}`,
+      [conversationId, MORTGAGE_TENANT_ID],
     );
 
     // Get thread info
@@ -11093,6 +11800,21 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     )) as [ResultSetHeader, any];
 
     const communicationId = result.insertId;
+
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: communicationId,
+      conversationId: finalConversationId,
+      applicationId: application_id || null,
+      leadId: lead_id || null,
+      fromUserId: null,
+      fromBrokerId: brokerId,
+      toUserId: client_id || null,
+      toBrokerId: null,
+      communicationType: communication_type,
+      direction: "outbound",
+      body: processedBody,
+    });
 
     // Send the actual message
     let sendResult: any = { success: false, error: "Unknown error" };
@@ -11568,8 +12290,7 @@ const handleGetAuditLogs: RequestHandler = async (req, res) => {
       queryParams.push(to_date);
     }
 
-    query += ` ORDER BY al.created_at DESC LIMIT ? OFFSET ?`;
-    queryParams.push(parseInt(limit as string), parseInt(offset as string));
+    query += ` ORDER BY al.created_at DESC LIMIT ${parseInt(limit as string)} OFFSET ${parseInt(offset as string)}`;
 
     const [logs] = await pool.query<RowDataPacket[]>(query, queryParams);
 
@@ -13875,8 +14596,8 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
       LEFT JOIN loan_applications la ON la.id = rfe.loan_application_id
       ${whereClause}
       ORDER BY ${safeSortBy} ${sortOrder}
-      LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+      LIMIT ${limit} OFFSET ${offset}`,
+      [...params],
     );
 
     const parsed = executions.map((e) => ({
@@ -14336,6 +15057,10 @@ function createServer() {
 
   // Inbound email webhook — no broker auth, protected by INBOUND_WEBHOOK_SECRET
   expressApp.post("/api/webhooks/inbound-email", handleInboundEmail);
+
+  // Inbound SMS webhook (Twilio) — no broker auth, protected by INBOUND_WEBHOOK_SECRET
+  // Configure Twilio to POST to: https://yourdomain.com/api/webhooks/inbound-sms
+  expressApp.post("/api/webhooks/inbound-sms", handleInboundSMS);
 
   // Inbound IMAP poll cron — called by Vercel Cron or HostGator cPanel cron via curl
   expressApp.get("/api/cron/poll-inbound-email", handlePollInboundEmail);
@@ -16013,13 +16738,13 @@ function createServer() {
       )) as [RowDataPacket[], any];
       const total = Number((countRow as any)?.total || 0);
 
-      const [rows] = await pool.execute(
+      const [rows] = await pool.query(
         `SELECT id, name, email, phone, subject, message, is_read, read_by_broker_id, read_at, created_at
          FROM contact_submissions
          WHERE tenant_id = ?${searchWhere}
          ORDER BY ${safeSortBy} ${sortOrder}
-         LIMIT ? OFFSET ?`,
-        [MORTGAGE_TENANT_ID, ...searchParams, limit, offset],
+         LIMIT ${limit} OFFSET ${offset}`,
+        [MORTGAGE_TENANT_ID, ...searchParams],
       );
 
       return res.json({

@@ -12,6 +12,10 @@ info:
 
     ## Base URL
     All endpoints are prefixed with `/api`.
+
+    ## Email Delivery Notes
+    - General outbound email uses `SMTP_*` environment variables.
+    - Reminder flow email steps can use `REMINDER_SMTP_*` overrides when configured.
   version: "1.0.0"
   contact:
     name: Encore Mortgage Dev
@@ -1153,6 +1157,9 @@ paths:
                 broker_token:
                   type: string
                   description: Optional — pre-assigns a specific broker's share link token
+                draft_id:
+                  type: integer
+                  description: Optional — if provided, promotes the existing draft application instead of creating a new record (prevents duplicates)
       responses:
         "201":
           description: Application submitted
@@ -3495,9 +3502,14 @@ paths:
   /webhooks/inbound-email:
     post:
       tags: [Webhooks & Cron]
-      summary: Inbound email webhook (SendGrid / Mailgun)
+      summary: Inbound email webhook (Postmark / Mailgun / SendGrid)
       description: |
-        Receives inbound parsed emails and creates conversation messages.
+        Receives inbound parsed emails from an email service provider and:
+        1. Creates an inbound `communications` record.
+        2. Upserts the `conversation_thread` via DB trigger.
+        3. Marks any active `reminder_flow_executions` waiting on this
+           conversation as responded so the cron can advance the flow.
+
         Protected by `INBOUND_WEBHOOK_SECRET` header — do NOT expose to public callers.
       requestBody:
         required: true
@@ -3505,7 +3517,7 @@ paths:
           application/json:
             schema:
               type: object
-              description: Webhook payload (format varies by provider)
+              description: Webhook payload (format varies by provider — Postmark, Mailgun, or SendGrid)
       responses:
         "200":
           description: Processed
@@ -3513,13 +3525,66 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
 
+  /webhooks/inbound-sms:
+    post:
+      tags: [Webhooks & Cron]
+      summary: Inbound SMS webhook (Twilio)
+      description: |
+        Receives inbound SMS messages from Twilio and:
+        1. Looks up the client by sender phone number.
+        2. Finds the most recent active flow execution for that client
+           to determine the correct conversation_id.
+        3. Creates an inbound `communications` record.
+        4. Upserts the `conversation_thread` via DB trigger.
+        5. Marks any active `reminder_flow_executions` waiting on this
+           conversation as responded so the cron can advance the flow.
+
+        Configure in Twilio Console → Phone Numbers → Active Numbers → Messaging:
+          Webhook URL: `https://yourdomain.com/api/webhooks/inbound-sms`
+          HTTP Method: `POST`
+
+        Protected by optional `INBOUND_WEBHOOK_SECRET` header.
+        Returns an empty TwiML `<Response>` so Twilio does not auto-reply.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [Body, From, To, MessageSid]
+              properties:
+                Body:
+                  type: string
+                  description: SMS message text
+                From:
+                  type: string
+                  description: Sender E.164 phone number (e.g. +15550001111)
+                To:
+                  type: string
+                  description: Your Twilio number (e.g. +15559990000)
+                MessageSid:
+                  type: string
+                  description: Twilio message SID
+                AccountSid:
+                  type: string
+                  description: Twilio account SID
+      responses:
+        "200":
+          description: Empty TwiML response
+          content:
+            text/xml:
+              schema:
+                type: string
+                example: "<Response></Response>"
+
   /cron/poll-inbound-email:
     get:
       tags: [Webhooks & Cron]
       summary: Poll IMAP inbox for inbound emails (cron trigger)
       description: |
         Called by Vercel Cron or cPanel cron via curl.
-        Polls the configured IMAP inbox and ingests new emails as conversation messages.
+        Polls the configured IMAP inbox, ingests new emails as conversation messages,
+        and marks matching active reminder flow executions as responded.
       responses:
         "200":
           description: Poll complete
