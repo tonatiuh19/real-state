@@ -2706,6 +2706,22 @@ paths:
                     properties:
                       stats: { type: object }
 
+  /conversations/ably-token:
+    get:
+      tags: [Conversations]
+      summary: Issue a short-lived Ably token for real-time subscriptions
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Ably token request object
+          content:
+            application/json:
+              schema:
+                type: object
+        "503":
+          description: Real-time service not configured
+
   # ── Audit Logs ─────────────────────────────────────────────────────────────────
   /audit-logs:
     get:

@@ -60,6 +60,10 @@ interface ConversationsState {
     totalPages: number;
   };
 
+  // WhatsApp availability check
+  whatsappAvailability: Record<string, boolean | null>; // phone -> true/false/null (null = checking)
+  isCheckingWhatsApp: boolean;
+
   // Error handling
   error: string | null;
 }
@@ -104,10 +108,32 @@ const initialState: ConversationsState = {
     totalPages: 0,
   },
 
+  whatsappAvailability: {},
+  isCheckingWhatsApp: false,
+
   error: null,
 };
 
 // Async thunks
+export const checkWhatsAppAvailability = createAsyncThunk(
+  "conversations/checkWhatsApp",
+  async (phone: string, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<{
+        success: boolean;
+        registered: boolean;
+      }>("/api/conversations/check-whatsapp", {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+        params: { phone },
+      });
+      return { phone, registered: data.registered };
+    } catch {
+      return rejectWithValue(phone);
+    }
+  },
+);
+
 export const fetchConversationThreads = createAsyncThunk(
   "conversations/fetchThreads",
   async (
@@ -470,6 +496,25 @@ const conversationsSlice = createSlice({
       .addCase(fetchConversationTemplates.rejected, (state, action) => {
         state.isLoadingTemplates = false;
         state.error = action.payload as string;
+      });
+
+    // WhatsApp availability check
+    builder
+      .addCase(checkWhatsAppAvailability.pending, (state, action) => {
+        state.isCheckingWhatsApp = true;
+        // Mark as null (in-progress) for this phone
+        state.whatsappAvailability[action.meta.arg] = null;
+      })
+      .addCase(checkWhatsAppAvailability.fulfilled, (state, action) => {
+        state.isCheckingWhatsApp = false;
+        state.whatsappAvailability[action.payload.phone] =
+          action.payload.registered;
+      })
+      .addCase(checkWhatsAppAvailability.rejected, (state, action) => {
+        state.isCheckingWhatsApp = false;
+        // On error fallback to true so the option isn't permanently blocked
+        const phone = action.meta.arg;
+        state.whatsappAvailability[phone] = true;
       });
 
     // Fetch stats

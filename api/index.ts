@@ -11,6 +11,7 @@ import nodemailer from "nodemailer";
 import twilio from "twilio";
 import crypto from "crypto";
 import { ImapFlow } from "imapflow";
+import Ably from "ably";
 
 // Validate critical environment variables
 if (
@@ -54,6 +55,30 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   console.warn(
     "⚠️  Warning: Twilio credentials not found. SMS/WhatsApp functionality will be disabled.",
   );
+}
+
+// Initialize Ably REST client (for publishing messages from the server)
+let ablyClient: Ably.Rest | null = null;
+if (process.env.ABLY_API_KEY) {
+  try {
+    ablyClient = new Ably.Rest({ key: process.env.ABLY_API_KEY });
+    console.log("✅ Ably client initialized successfully");
+  } catch (error) {
+    console.warn("⚠️  Warning: Failed to initialize Ably client:", error);
+  }
+} else {
+  console.warn(
+    "⚠️  Warning: ABLY_API_KEY not set. Real-time updates disabled.",
+  );
+}
+
+async function publishToAbly(channel: string, event: string, data: unknown) {
+  if (!ablyClient) return;
+  try {
+    await ablyClient.channels.get(channel).publish(event, data);
+  } catch (err) {
+    console.error("❌ Ably publish error:", err);
+  }
 }
 
 // Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
@@ -9950,6 +9975,7 @@ async function triggerReminderFlows(
       `SELECT la.id, la.application_number, la.loan_type, la.status,
               la.actual_close_date, la.estimated_close_date,
               c.id AS client_id, c.first_name, c.last_name, c.email, c.phone,
+              la.broker_user_id AS broker_id,
               b.first_name AS broker_first_name, b.last_name AS broker_last_name
        FROM loan_applications la
        INNER JOIN clients c ON la.client_user_id = c.id
@@ -9991,6 +10017,7 @@ async function triggerReminderFlows(
       actual_close_date: loan.actual_close_date ?? null,
       estimated_close_date: loan.estimated_close_date ?? null,
       broker_name: brokerName,
+      broker_id: loan.broker_id ?? null,
     });
 
     for (const flow of flows) {
@@ -10243,6 +10270,7 @@ async function executeFlowSendStep(
     const clientPhone: string = contextData.client_phone as string;
     const loanId: number = contextData.loan_id as number;
     const clientId: number = contextData.client_id as number;
+    const brokerId: number | null = (contextData.broker_id as number) ?? null;
     const convId = `conv_client_${clientId}_loan_${loanId}_flow_${execution.flow_id}`;
 
     let sendResult: {
@@ -10311,10 +10339,11 @@ async function executeFlowSendStep(
             communication_type, direction, subject, body, status,
             external_id, conversation_id, source_execution_id,
             template_id, delivery_status, cost, sent_at)
-         VALUES (?, ?, NULL, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+         VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           MORTGAGE_TENANT_ID,
           loanId,
+          brokerId,
           clientId,
           commType,
           commType === "email" ? subject : null,
@@ -10336,7 +10365,7 @@ async function executeFlowSendStep(
         applicationId: loanId,
         leadId: null,
         fromUserId: null,
-        fromBrokerId: null,
+        fromBrokerId: brokerId,
         toUserId: clientId,
         toBrokerId: null,
         communicationType: commType,
@@ -11305,16 +11334,35 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
  */
 const handleInboundSMS: RequestHandler = async (req, res) => {
   try {
-    // Optional shared-secret auth (same as inbound email webhook)
-    const secret = process.env.INBOUND_WEBHOOK_SECRET;
-    if (secret) {
-      const provided =
-        req.headers["x-webhook-secret"] ?? (req.query.secret as string);
-      if (provided !== secret) {
-        // Return empty TwiML so Twilio doesn't retry, but log the rejection
-        console.warn("⚠️  Inbound SMS rejected — bad webhook secret");
+    // Security: validate using Twilio signature (preferred) OR fallback to shared secret
+    const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+    const webhookUrl = process.env.TWILIO_SMS_WEBHOOK_URL; // e.g. https://portal.encoremortgage.org/api/webhooks/inbound-sms
+
+    if (twilioAuthToken && webhookUrl) {
+      const twilioSignature =
+        (req.headers["x-twilio-signature"] as string) ?? "";
+      const isValid = twilio.validateRequest(
+        twilioAuthToken,
+        twilioSignature,
+        webhookUrl,
+        req.body as Record<string, any>,
+      );
+      if (!isValid) {
+        console.warn("⚠️  Inbound SMS rejected — invalid Twilio signature");
         res.set("Content-Type", "text/xml");
         return res.status(200).send("<Response></Response>");
+      }
+    } else {
+      // Fallback to shared secret in header or query param
+      const secret = process.env.INBOUND_WEBHOOK_SECRET;
+      if (secret) {
+        const provided =
+          req.headers["x-webhook-secret"] ?? (req.query.secret as string);
+        if (provided !== secret) {
+          console.warn("⚠️  Inbound SMS rejected — bad webhook secret");
+          res.set("Content-Type", "text/xml");
+          return res.status(200).send("<Response></Response>");
+        }
       }
     }
 
@@ -11358,11 +11406,28 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     }
 
     // ── Determine conversation_id ────────────────────────────────────────────
-    // Find the most recent active execution for this client so we can route
-    // the reply to the right conversation thread.
+    // Priority order:
+    // 1. Most recent conversation_thread for this client (covers broker-initiated threads)
+    // 2. Most recent active reminder_flow_execution
+    // 3. Deterministic fallback
     let conversationId: string | null = null;
 
     if (clientId) {
+      // First: find the most recent existing thread for this client
+      const [threadRows] = await pool.query<RowDataPacket[]>(
+        `SELECT conversation_id FROM conversation_threads
+         WHERE tenant_id = ? AND client_id = ?
+         ORDER BY last_message_at DESC, created_at DESC
+         LIMIT 1`,
+        [MORTGAGE_TENANT_ID, clientId],
+      );
+      if (threadRows.length > 0) {
+        conversationId = threadRows[0].conversation_id;
+      }
+    }
+
+    if (!conversationId && clientId) {
+      // Second: active reminder flow execution
       const [execRows] = await pool.query<RowDataPacket[]>(
         `SELECT conversation_id FROM reminder_flow_executions
          WHERE tenant_id = ? AND client_id = ? AND status = 'active'
@@ -11376,7 +11441,7 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       }
     }
 
-    // Fall back to a deterministic ID if no active execution found
+    // Fall back to a deterministic ID if no thread found at all
     if (!conversationId && clientId && loanId) {
       conversationId = `conv_client_${clientId}_loan_${loanId}`;
     } else if (!conversationId && clientId) {
@@ -11424,6 +11489,19 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       `📥 Inbound SMS stored: conv=${conversationId} from=${fromPhone}`,
     );
 
+    // ── Notify connected browsers via Ably ───────────────────────────────────
+    if (conversationId) {
+      await publishToAbly(`conversation:${conversationId}`, "new-message", {
+        conversationId,
+        direction: "inbound",
+        communicationType: "sms",
+        body: body.slice(0, 200),
+      });
+      await publishToAbly("conversations:all", "thread-updated", {
+        conversationId,
+      });
+    }
+
     // ── Sync to reminder flows ────────────────────────────────────────────────
     if (conversationId) {
       await markExecutionsRespondedForConversation(
@@ -11446,6 +11524,32 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
 // =====================================================
 // CONVERSATION HANDLERS
 // =====================================================
+
+/**
+ * GET /api/conversations/ably-token
+ * Issues a short-lived Ably token for the authenticated broker so the browser
+ * can subscribe to real-time channels without exposing the API key.
+ */
+const handleAblyToken: RequestHandler = async (req, res) => {
+  if (!ablyClient) {
+    return res.status(503).json({ error: "Real-time service not configured" });
+  }
+  try {
+    const brokerId = (req as any).brokerId;
+    const tokenRequest = await (ablyClient as any).auth.requestToken({
+      clientId: `broker-${brokerId}`,
+      capability: {
+        "conversation:*": ["subscribe"],
+        "conversations:all": ["subscribe"],
+      },
+      ttl: 3_600_000, // 1 hour in ms
+    });
+    return res.json(tokenRequest);
+  } catch (error) {
+    console.error("❌ Ably token error:", error);
+    return res.status(500).json({ error: "Failed to generate token" });
+  }
+};
 
 /**
  * GET /api/conversations/threads
@@ -11610,16 +11714,40 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
 
     res.json({
       success: true,
-      messages: messages.map((msg) => ({
-        ...msg,
-        metadata: msg.metadata ? JSON.parse(msg.metadata) : null,
-        provider_response: msg.provider_response
-          ? JSON.parse(msg.provider_response)
-          : null,
-      })),
+      messages: messages.map((msg) => {
+        let metadata = null;
+        let provider_response = null;
+        try {
+          metadata =
+            msg.metadata && typeof msg.metadata === "string"
+              ? JSON.parse(msg.metadata)
+              : (msg.metadata ?? null);
+        } catch {
+          metadata = null;
+        }
+        try {
+          provider_response =
+            msg.provider_response && typeof msg.provider_response === "string"
+              ? JSON.parse(msg.provider_response)
+              : (msg.provider_response ?? null);
+        } catch {
+          provider_response = null;
+        }
+        return { ...msg, metadata, provider_response };
+      }),
       thread: {
         ...threadInfo[0],
-        tags: threadInfo[0]?.tags ? JSON.parse(threadInfo[0].tags) : [],
+        tags: (() => {
+          try {
+            return threadInfo[0]?.tags
+              ? typeof threadInfo[0].tags === "string"
+                ? JSON.parse(threadInfo[0].tags)
+                : threadInfo[0].tags
+              : [];
+          } catch {
+            return [];
+          }
+        })(),
       },
       pagination: {
         page: parseInt(page as string),
@@ -12224,6 +12352,65 @@ const handleGetConversationStats: RequestHandler = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch conversation statistics",
+    });
+  }
+};
+
+/**
+ * GET /api/conversations/check-whatsapp?phone=+12345678900
+ * Check if a phone number is registered on WhatsApp via Twilio Lookup v2.
+ * Returns { registered: boolean } — cached in memory for 24 h to minimise Lookup costs.
+ */
+const whatsappCheckCache = new Map<
+  string,
+  { registered: boolean; ts: number }
+>();
+const WHATSAPP_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const handleCheckWhatsApp: RequestHandler = async (req, res) => {
+  const { phone } = req.query as { phone?: string };
+  if (!phone) {
+    return res
+      .status(400)
+      .json({ success: false, message: "phone is required" });
+  }
+
+  const normalised = phone.trim().replace(/\s+/g, "");
+
+  // Return from cache if fresh
+  const cached = whatsappCheckCache.get(normalised);
+  if (cached && Date.now() - cached.ts < WHATSAPP_CACHE_TTL_MS) {
+    return res.json({
+      success: true,
+      registered: cached.registered,
+      cached: true,
+    });
+  }
+
+  if (!twilioClient) {
+    // Twilio not configured – default to false
+    return res.json({
+      success: true,
+      registered: false,
+      reason: "twilio_not_configured",
+    });
+  }
+
+  try {
+    const lookup = await twilioClient.lookups.v2
+      .phoneNumbers(normalised)
+      .fetch({ fields: "whatsapp" });
+
+    const registered: boolean = lookup?.whatsapp?.registered ?? false;
+    whatsappCheckCache.set(normalised, { registered, ts: Date.now() });
+    return res.json({ success: true, registered });
+  } catch (err: any) {
+    console.error("WhatsApp Lookup error:", err?.message ?? err);
+    // On lookup failure fall back to optimistic true so UI doesn't block
+    return res.json({
+      success: true,
+      registered: true,
+      reason: "lookup_failed",
     });
   }
 };
@@ -15102,6 +15289,16 @@ function createServer() {
     "/api/conversations/stats",
     verifyBrokerSession,
     handleGetConversationStats,
+  );
+  expressApp.get(
+    "/api/conversations/check-whatsapp",
+    verifyBrokerSession,
+    handleCheckWhatsApp,
+  );
+  expressApp.get(
+    "/api/conversations/ably-token",
+    verifyBrokerSession,
+    handleAblyToken,
   );
 
   // Audit Logs routes
