@@ -821,6 +821,30 @@ export interface GetClientsResponse {
   pagination: PaginationInfo;
 }
 
+export interface CreateClientRequest {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone?: string;
+}
+
+export interface CreateClientResponse {
+  success: boolean;
+  client: {
+    id: number;
+    email: string;
+    first_name: string;
+    last_name: string;
+    phone: string | null;
+    date_of_birth: string | null;
+    status: string;
+    created_at: string;
+    total_applications: number;
+    active_applications: number;
+    total_conversations: number;
+  };
+}
+
 export interface GetTasksResponse {
   success: boolean;
   tasks: TaskTemplate[];

@@ -1,7 +1,12 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
-import type { GetClientsResponse, PaginationInfo } from "@shared/api";
+import type {
+  GetClientsResponse,
+  CreateClientRequest,
+  CreateClientResponse,
+  PaginationInfo,
+} from "@shared/api";
 import { logger } from "@/lib/logger";
 
 interface FetchClientsParams {
@@ -66,6 +71,25 @@ export const deleteClient = createAsyncThunk(
   },
 );
 
+export const createClient = createAsyncThunk(
+  "clients/createClient",
+  async (payload: CreateClientRequest, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<CreateClientResponse>(
+        "/api/clients",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data.client;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to create client",
+      );
+    }
+  },
+);
+
 const clientsSlice = createSlice({
   name: "clients",
   initialState,
@@ -94,6 +118,9 @@ const clientsSlice = createSlice({
         state.clients = state.clients.filter(
           (client) => client.id !== action.payload.clientId,
         );
+      })
+      .addCase(createClient.fulfilled, (state, action) => {
+        state.clients = [action.payload, ...state.clients];
       });
   },
 });

@@ -5373,6 +5373,77 @@ const handleGetClients: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Create a new client profile (broker-side, minimal data)
+ */
+const handleCreateClient: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { first_name, last_name, email, phone } = req.body as {
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+      phone?: string;
+    };
+
+    if (!first_name?.trim() || !last_name?.trim() || !email?.trim()) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "first_name, last_name and email are required",
+        });
+    }
+
+    // Check for duplicate email under this tenant
+    const [[existing]] = await pool.query<any[]>(
+      "SELECT id FROM clients WHERE tenant_id = ? AND email = ? LIMIT 1",
+      [MORTGAGE_TENANT_ID, email.trim().toLowerCase()],
+    );
+    if (existing) {
+      return res
+        .status(409)
+        .json({
+          success: false,
+          error: "A client with this email already exists",
+        });
+    }
+
+    const [result] = await pool.query<any>(
+      `INSERT INTO clients (tenant_id, first_name, last_name, email, phone, status, assigned_broker_id, income_type)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, 'W-2')`,
+      [
+        MORTGAGE_TENANT_ID,
+        first_name.trim(),
+        last_name.trim(),
+        email.trim().toLowerCase(),
+        phone?.trim() || null,
+        brokerId,
+      ],
+    );
+
+    const newClientId: number = result.insertId;
+
+    const [[client]] = await pool.query<any[]>(
+      `SELECT id, email, first_name, last_name, phone, date_of_birth, status, created_at,
+              0 as total_applications, 0 as active_applications, 0 as total_conversations
+       FROM clients WHERE id = ?`,
+      [newClientId],
+    );
+
+    return res.status(201).json({ success: true, client });
+  } catch (error) {
+    console.error("Error creating client:", error);
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error:
+          error instanceof Error ? error.message : "Failed to create client",
+      });
+  }
+};
+
+/**
  * Delete client with comprehensive safety guards
  */
 const handleDeleteClient: RequestHandler = async (req, res) => {
@@ -14945,6 +15016,7 @@ function createServer() {
     handleGenerateMISMO,
   );
   expressApp.get("/api/clients", verifyBrokerSession, handleGetClients);
+  expressApp.post("/api/clients", verifyBrokerSession, handleCreateClient);
   expressApp.delete(
     "/api/clients/:clientId",
     verifyBrokerSession,

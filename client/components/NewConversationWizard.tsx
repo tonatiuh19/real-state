@@ -8,6 +8,8 @@ import {
   FileText,
   Zap,
   User,
+  UserPlus,
+  Users,
   ChevronRight,
   Eye,
   Search,
@@ -15,9 +17,10 @@ import {
   CheckCircle2,
   ChevronsUpDown,
   Check,
+  Loader2,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { fetchClients } from "@/store/slices/clientsSlice";
+import { fetchClients, createClient } from "@/store/slices/clientsSlice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -122,10 +125,24 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [comboOpen, setComboOpen] = useState(false);
 
+  // Recipient mode: existing client or new client form
+  type RecipientMode = "existing" | "new_client";
+  const [recipientMode, setRecipientMode] = useState<RecipientMode>("existing");
+
+  // New client form fields
+  const [newClientFirstName, setNewClientFirstName] = useState("");
+  const [newClientLastName, setNewClientLastName] = useState("");
+  const [newClientEmail, setNewClientEmail] = useState("");
+  const [newClientPhone, setNewClientPhone] = useState("");
+  const [isCreatingClient, setIsCreatingClient] = useState(false);
+  const [createClientError, setCreateClientError] = useState<string | null>(
+    null,
+  );
+
   // Load clients when wizard opens
   useEffect(() => {
     if (isOpen) {
-      dispatch(fetchClients());
+      dispatch(fetchClients({}));
     }
   }, [isOpen, dispatch]);
 
@@ -144,6 +161,13 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
       setClientSearch("");
       setSelectedClientId(null);
       setComboOpen(false);
+      setRecipientMode("existing");
+      setNewClientFirstName("");
+      setNewClientLastName("");
+      setNewClientEmail("");
+      setNewClientPhone("");
+      setIsCreatingClient(false);
+      setCreateClientError(null);
     }
   }, [isOpen]);
 
@@ -161,7 +185,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     (t) => t.template_type === communicationType,
   );
 
-  const handleNext = () => {
+  const handleNext = async () => {
     switch (currentStep) {
       case "method":
         if (conversationMethod === "blank") {
@@ -174,7 +198,36 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
         setCurrentStep("recipient");
         break;
       case "recipient":
-        setCurrentStep("compose");
+        if (recipientMode === "new_client") {
+          // Create the client first, then proceed
+          setIsCreatingClient(true);
+          setCreateClientError(null);
+          try {
+            const result = await dispatch(
+              createClient({
+                first_name: newClientFirstName.trim(),
+                last_name: newClientLastName.trim(),
+                email: newClientEmail.trim(),
+                phone: newClientPhone.trim() || undefined,
+              }),
+            );
+            if (createClient.fulfilled.match(result)) {
+              const newClient = result.payload;
+              setSelectedClientId(newClient.id);
+              setRecipientEmail(newClient.email);
+              setRecipientPhone(newClient.phone ?? "");
+              setCurrentStep("compose");
+            } else {
+              setCreateClientError(
+                (result.payload as string) || "Failed to create client",
+              );
+            }
+          } finally {
+            setIsCreatingClient(false);
+          }
+        } else {
+          setCurrentStep("compose");
+        }
         break;
       case "compose":
         setCurrentStep("preview");
@@ -233,7 +286,15 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
       case "template":
         return conversationMethod === "blank" || selectedTemplate !== null;
       case "recipient":
-        return selectedClientId !== null;
+        if (recipientMode === "existing") return selectedClientId !== null;
+        if (recipientMode === "new_client") {
+          return (
+            newClientFirstName.trim().length > 0 &&
+            newClientLastName.trim().length > 0 &&
+            newClientEmail.trim().length > 0
+          );
+        }
+        return false;
       case "compose":
         return messageBody.trim().length > 0;
       case "preview":
@@ -502,119 +563,241 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
         };
 
         return (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-5">
             <h3 className="text-lg font-semibold flex items-center gap-2">
-              <User className="h-5 w-5" />
-              <span>Select a client</span>
+              <Users className="h-5 w-5" />
+              <span>Select Recipient</span>
             </h3>
 
-            {/* Combobox picker */}
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Client</Label>
-              <Popover open={comboOpen} onOpenChange={setComboOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    role="combobox"
-                    aria-expanded={comboOpen}
-                    className={cn(
-                      "w-full flex items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background transition-colors",
-                      "hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-                      !selectedClient && "text-muted-foreground",
-                    )}
-                  >
-                    {selectedClient ? (
-                      <span className="flex items-center gap-2 min-w-0">
-                        <span className="h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[10px] font-bold shrink-0">
-                          {selectedClient.first_name[0]}
-                          {selectedClient.last_name[0]}
-                        </span>
-                        <span className="font-medium truncate">
-                          {selectedClient.first_name} {selectedClient.last_name}
-                        </span>
-                        <span className="text-muted-foreground truncate text-xs">
-                          &mdash;{" "}
-                          {field === "email"
-                            ? selectedClient.email
-                            : (selectedClient.phone ?? "No phone")}
-                        </span>
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-2">
-                        <Search className="h-4 w-4" />
-                        Search client by name, email or phone…
-                      </span>
-                    )}
-                    <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="w-[--radix-popover-trigger-width] p-0"
-                  align="start"
-                  sideOffset={4}
+            {/* Mode selector */}
+            <div className="grid grid-cols-3 gap-3">
+              {(
+                [
+                  {
+                    key: "existing" as const,
+                    label: "Existing Client",
+                    icon: <User className="h-5 w-5" />,
+                    desc: "Pick from your client list",
+                    color: "blue",
+                  },
+                  {
+                    key: "new_client" as const,
+                    label: "New Client",
+                    icon: <UserPlus className="h-5 w-5" />,
+                    desc: "Create a client profile",
+                    color: "emerald",
+                  },
+                ] as const
+              ).map(({ key, label, icon, desc, color }) => (
+                <Card
+                  key={key}
+                  className={cn(
+                    "cursor-pointer transition-all duration-200 hover:shadow-md",
+                    recipientMode === key
+                      ? `ring-2 ring-${color}-500 bg-${color}-50`
+                      : "hover:bg-gray-50",
+                  )}
+                  onClick={() => {
+                    setRecipientMode(key);
+                    setCreateClientError(null);
+                  }}
                 >
-                  <Command shouldFilter={false}>
-                    <CommandInput
-                      placeholder="Search by name, email or phone…"
-                      value={clientSearch}
-                      onValueChange={setClientSearch}
-                    />
-                    <CommandList className="max-h-64">
-                      {clientsLoading ? (
-                        <div className="flex items-center justify-center py-6 gap-2 text-sm text-muted-foreground">
-                          <div className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-                          Loading…
-                        </div>
-                      ) : (
-                        <>
-                          <CommandEmpty>No clients found.</CommandEmpty>
-                          <CommandGroup>
-                            {clients
-                              .filter((c) => {
-                                const q = clientSearch.toLowerCase();
-                                if (!q) return true;
-                                return (
-                                  c.first_name.toLowerCase().includes(q) ||
-                                  c.last_name.toLowerCase().includes(q) ||
-                                  c.email.toLowerCase().includes(q) ||
-                                  (c.phone ?? "").includes(q)
-                                );
-                              })
-                              .slice(0, 50)
-                              .map((c) => (
-                                <CommandItem
-                                  key={c.id}
-                                  value={String(c.id)}
-                                  onSelect={() => handleSelectClient(c)}
-                                  className="flex items-center gap-2.5 cursor-pointer"
-                                >
-                                  <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center shrink-0 text-xs font-bold">
-                                    {c.first_name[0]}
-                                    {c.last_name[0]}
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium truncate">
-                                      {c.first_name} {c.last_name}
-                                    </p>
-                                    <p className="text-xs text-muted-foreground truncate">
-                                      {field === "email"
-                                        ? c.email
-                                        : (c.phone ?? "—")}
-                                    </p>
-                                  </div>
-                                  {c.id === selectedClientId && (
-                                    <Check className="h-4 w-4 text-primary shrink-0" />
-                                  )}
-                                </CommandItem>
-                              ))}
-                          </CommandGroup>
-                        </>
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+                  <CardContent className="p-4">
+                    <div className="flex flex-col items-center text-center gap-2">
+                      <div
+                        className={cn(
+                          "p-2 rounded-lg",
+                          recipientMode === key
+                            ? `bg-${color}-100 text-${color}-600`
+                            : "bg-gray-100 text-gray-500",
+                        )}
+                      >
+                        {icon}
+                      </div>
+                      <span className="text-sm font-semibold">{label}</span>
+                      <span className="text-xs text-muted-foreground leading-tight">
+                        {desc}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
+
+            <Separator />
+
+            {/* Existing client combobox */}
+            {recipientMode === "existing" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Client</Label>
+                <Popover open={comboOpen} onOpenChange={setComboOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      role="combobox"
+                      aria-expanded={comboOpen}
+                      className={cn(
+                        "w-full flex items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background transition-colors",
+                        "hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+                        !selectedClient && "text-muted-foreground",
+                      )}
+                    >
+                      {selectedClient ? (
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span className="h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[10px] font-bold shrink-0">
+                            {selectedClient.first_name[0]}
+                            {selectedClient.last_name[0]}
+                          </span>
+                          <span className="font-medium truncate">
+                            {selectedClient.first_name}{" "}
+                            {selectedClient.last_name}
+                          </span>
+                          <span className="text-muted-foreground truncate text-xs">
+                            &mdash;{" "}
+                            {field === "email"
+                              ? selectedClient.email
+                              : (selectedClient.phone ?? "No phone")}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-2">
+                          <Search className="h-4 w-4" />
+                          Search client by name, email or phone…
+                        </span>
+                      )}
+                      <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-[--radix-popover-trigger-width] p-0"
+                    align="start"
+                    sideOffset={4}
+                  >
+                    <Command shouldFilter={false}>
+                      <CommandInput
+                        placeholder="Search by name, email or phone…"
+                        value={clientSearch}
+                        onValueChange={setClientSearch}
+                      />
+                      <CommandList className="max-h-64">
+                        {clientsLoading ? (
+                          <div className="flex items-center justify-center py-6 gap-2 text-sm text-muted-foreground">
+                            <div className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                            Loading…
+                          </div>
+                        ) : (
+                          <>
+                            <CommandEmpty>No clients found.</CommandEmpty>
+                            <CommandGroup>
+                              {clients
+                                .filter((c) => {
+                                  const q = clientSearch.toLowerCase();
+                                  if (!q) return true;
+                                  return (
+                                    c.first_name.toLowerCase().includes(q) ||
+                                    c.last_name.toLowerCase().includes(q) ||
+                                    c.email.toLowerCase().includes(q) ||
+                                    (c.phone ?? "").includes(q)
+                                  );
+                                })
+                                .slice(0, 50)
+                                .map((c) => (
+                                  <CommandItem
+                                    key={c.id}
+                                    value={String(c.id)}
+                                    onSelect={() => handleSelectClient(c)}
+                                    className="flex items-center gap-2.5 cursor-pointer"
+                                  >
+                                    <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center shrink-0 text-xs font-bold">
+                                      {c.first_name[0]}
+                                      {c.last_name[0]}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-medium truncate">
+                                        {c.first_name} {c.last_name}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground truncate">
+                                        {field === "email"
+                                          ? c.email
+                                          : (c.phone ?? "—")}
+                                      </p>
+                                    </div>
+                                    {c.id === selectedClientId && (
+                                      <Check className="h-4 w-4 text-primary shrink-0" />
+                                    )}
+                                  </CommandItem>
+                                ))}
+                            </CommandGroup>
+                          </>
+                        )}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+
+            {/* New client form */}
+            {recipientMode === "new_client" && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ncFirst">
+                      First Name <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="ncFirst"
+                      placeholder="First name"
+                      value={newClientFirstName}
+                      onChange={(e) => setNewClientFirstName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ncLast">
+                      Last Name <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="ncLast"
+                      placeholder="Last name"
+                      value={newClientLastName}
+                      onChange={(e) => setNewClientLastName(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ncEmail">
+                      Email <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="ncEmail"
+                      type="email"
+                      placeholder="email@example.com"
+                      value={newClientEmail}
+                      onChange={(e) => setNewClientEmail(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ncPhone">Phone (optional)</Label>
+                    <Input
+                      id="ncPhone"
+                      type="tel"
+                      placeholder="+1 (555) 000-0000"
+                      value={newClientPhone}
+                      onChange={(e) => setNewClientPhone(e.target.value)}
+                    />
+                  </div>
+                </div>
+                {createClientError && (
+                  <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">
+                    {createClientError}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  A new client profile will be created and assigned to you.
+                </p>
+              </div>
+            )}
 
             {selectedTemplate && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center gap-2">
@@ -794,9 +977,21 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                   )}
                 </Button>
               ) : (
-                <Button onClick={handleNext} disabled={!canProceed()}>
-                  Continue
-                  <ChevronRight className="h-4 w-4 ml-2" />
+                <Button
+                  onClick={handleNext}
+                  disabled={!canProceed() || isCreatingClient}
+                >
+                  {isCreatingClient ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Creating client…
+                    </>
+                  ) : (
+                    <>
+                      Continue
+                      <ChevronRight className="h-4 w-4 ml-2" />
+                    </>
+                  )}
                 </Button>
               )}
             </div>
