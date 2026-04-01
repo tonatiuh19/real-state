@@ -25,6 +25,7 @@ import {
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import NewConversationWizard from "@/components/NewConversationWizard";
+import VoiceCallPanel from "@/components/VoiceCallPanel";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,6 +112,7 @@ const Conversations = () => {
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [messageSubject, setMessageSubject] = useState("");
   const [mobilePanel, setMobilePanel] = useState<"list" | "chat">("list");
+  const [isCallActive, setIsCallActive] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Client-side channel filtering
@@ -237,6 +239,7 @@ const Conversations = () => {
       fetchConversationMessages({ conversationId: thread.conversation_id }),
     );
     setMobilePanel("chat");
+    setIsCallActive(false);
 
     if (thread.unread_count > 0) {
       dispatch(markConversationAsRead(thread.conversation_id));
@@ -691,29 +694,61 @@ const Conversations = () => {
                       </div>
                     </div>
                   </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreVertical className="h-4 w-4" />
+                  <div className="flex items-center gap-1">
+                    {currentThread.client_phone && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "h-8 gap-1.5 text-xs",
+                          isCallActive
+                            ? "bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
+                            : "hover:bg-primary/10 hover:text-primary hover:border-primary/30",
+                        )}
+                        onClick={() => setIsCallActive((v) => !v)}
+                        title={isCallActive ? "Hide call panel" : "Call client"}
+                      >
+                        <Phone className="h-3.5 w-3.5" />
+                        {isCallActive ? "In call" : "Call"}
                       </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem>
-                        <Star className="h-4 w-4 mr-2" />
-                        Mark as Important
-                      </DropdownMenuItem>
-                      <DropdownMenuItem>
-                        <Archive className="h-4 w-4 mr-2" />
-                        Archive Thread
-                      </DropdownMenuItem>
-                      <DropdownMenuItem>
-                        <Tag className="h-4 w-4 mr-2" />
-                        Add Tags
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem>
+                          <Star className="h-4 w-4 mr-2" />
+                          Mark as Important
+                        </DropdownMenuItem>
+                        <DropdownMenuItem>
+                          <Archive className="h-4 w-4 mr-2" />
+                          Archive Thread
+                        </DropdownMenuItem>
+                        <DropdownMenuItem>
+                          <Tag className="h-4 w-4 mr-2" />
+                          Add Tags
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
               </div>
+
+              {/* Active call panel */}
+              {isCallActive && currentThread.client_phone && (
+                <div className="px-4 py-2 border-b border-border bg-card flex-shrink-0">
+                  <VoiceCallPanel
+                    phone={currentThread.client_phone}
+                    clientName={currentThread.client_name}
+                    clientId={currentThread.client_id ?? undefined}
+                    applicationId={currentThread.application_id ?? undefined}
+                    onClose={() => setIsCallActive(false)}
+                  />
+                </div>
+              )}
 
               {/* Messages */}
               <ScrollArea className="flex-1 px-4 py-4">
@@ -1020,17 +1055,27 @@ const Conversations = () => {
                       <div className="p-1.5 bg-primary/10 rounded-md flex-shrink-0">
                         <Phone className="h-3.5 w-3.5 text-primary" />
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-xs text-muted-foreground font-medium">
                           Phone
                         </p>
-                        <a
-                          href={`tel:${currentThread.client_phone}`}
-                          className="text-sm text-foreground hover:text-primary transition-colors flex items-center gap-1 group"
-                        >
+                        <p className="text-sm text-foreground">
                           {currentThread.client_phone}
-                          <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </a>
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className={cn(
+                            "mt-1.5 h-7 text-xs w-full gap-1.5",
+                            isCallActive
+                              ? "bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
+                              : "hover:bg-primary/10 hover:text-primary hover:border-primary/30",
+                          )}
+                          onClick={() => setIsCallActive((v) => !v)}
+                        >
+                          <Phone className="h-3 w-3" />
+                          {isCallActive ? "In call" : "Start Call"}
+                        </Button>
                       </div>
                     </div>
                   )}

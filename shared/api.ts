@@ -1224,6 +1224,23 @@ export interface GetConversationStatsResponse {
   stats: ConversationStats;
 }
 
+// ─── Voice / Calling ─────────────────────────────────────────────────────────
+
+export interface VoiceTokenResponse {
+  success: boolean;
+  token: string;
+}
+
+export interface VoiceLogRequest {
+  client_id?: number;
+  application_id?: number;
+  phone: string;
+  duration?: number;
+  call_status?: string;
+  call_sid?: string;
+  client_name?: string;
+}
+
 // ─── Broker Public Share Link ─────────────────────────────────────────────────
 
 /** Slim profile returned for the associated Mortgage Banker (admin) when viewed via a partner link */
@@ -1988,4 +2005,69 @@ export interface UpdateMeetingRequest {
   meeting_type?: MeetingType;
   cancelled_reason?: string;
   cancelled_by?: "client" | "broker";
+}
+
+// =====================================================
+// CALENDAR EVENT TYPES
+// =====================================================
+
+export type CalendarEventType =
+  | "birthday"
+  | "home_anniversary"
+  | "realtor_anniversary"
+  | "important_date"
+  | "reminder"
+  | "other";
+
+export type CalendarEventRecurrence = "none" | "yearly";
+
+export interface CalendarEvent {
+  id: number;
+  tenant_id: number;
+  broker_id: number | null;
+  event_type: CalendarEventType;
+  title: string;
+  description: string | null;
+  event_date: string; // "YYYY-MM-DD"
+  event_time: string | null; // "HH:MM:SS" or null for all-day
+  all_day: boolean;
+  recurrence: CalendarEventRecurrence;
+  color: string | null;
+  linked_client_id: number | null;
+  linked_client_name?: string | null; // joined from clients
+  linked_person_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetCalendarEventsResponse {
+  success: boolean;
+  events: CalendarEvent[];
+  total: number;
+}
+
+export interface CreateCalendarEventRequest {
+  event_type: CalendarEventType;
+  title: string;
+  description?: string;
+  event_date: string;
+  event_time?: string;
+  all_day?: boolean;
+  recurrence?: CalendarEventRecurrence;
+  color?: string;
+  linked_client_id?: number | null;
+  linked_person_name?: string;
+}
+
+export interface UpdateCalendarEventRequest {
+  event_type?: CalendarEventType;
+  title?: string;
+  description?: string | null;
+  event_date?: string;
+  event_time?: string | null;
+  all_day?: boolean;
+  recurrence?: CalendarEventRecurrence;
+  color?: string | null;
+  linked_client_id?: number | null;
+  linked_person_name?: string | null;
 }

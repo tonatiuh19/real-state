@@ -3918,7 +3918,7 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
       );
       if (existingClientRows.length > 0) {
         const foundClientId = existingClientRows[0].id;
-        const convId = `conv_client_${foundClientId}_general`;
+        const convId = `conv_client_${foundClientId}`;
         await pool.query(
           `INSERT INTO communications
              (tenant_id, from_broker_id, to_user_id,
@@ -5386,12 +5386,10 @@ const handleCreateClient: RequestHandler = async (req, res) => {
     };
 
     if (!first_name?.trim() || !last_name?.trim() || !email?.trim()) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          error: "first_name, last_name and email are required",
-        });
+      return res.status(400).json({
+        success: false,
+        error: "first_name, last_name and email are required",
+      });
     }
 
     // Check for duplicate email under this tenant
@@ -5400,12 +5398,10 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       [MORTGAGE_TENANT_ID, email.trim().toLowerCase()],
     );
     if (existing) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          error: "A client with this email already exists",
-        });
+      return res.status(409).json({
+        success: false,
+        error: "A client with this email already exists",
+      });
     }
 
     const [result] = await pool.query<any>(
@@ -5433,13 +5429,10 @@ const handleCreateClient: RequestHandler = async (req, res) => {
     return res.status(201).json({ success: true, client });
   } catch (error) {
     console.error("Error creating client:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        error:
-          error instanceof Error ? error.message : "Failed to create client",
-      });
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to create client",
+    });
   }
 };
 
@@ -5640,7 +5633,8 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
         role,
         status,
         email_verified,
-        last_login
+        last_login,
+        public_token
       FROM brokers
       WHERE status = 'active' AND tenant_id = ?${searchWhere}
       ORDER BY ${safeSortBy} ${sortOrder}
@@ -9935,8 +9929,8 @@ async function triggerPipelineAutomation(
         : "Your Loan Officer",
     };
 
-    // Stable conversation_id per client+loan so all automated messages land in the same thread
-    const pipelineConversationId = `conv_client_${loan.client_id}_loan_${loanId}`;
+    // Stable conversation_id per client so all channels land in the same thread
+    const pipelineConversationId = `conv_client_${loan.client_id}`;
 
     for (const assignment of assignments) {
       const body = processTemplateVariables(assignment.body, variables);
@@ -10106,7 +10100,7 @@ async function triggerReminderFlows(
 
       // Pre-compute the deterministic conversation_id for this execution so
       // inbound reply handlers can locate it without parsing JSON context.
-      const execConvId = `conv_client_${loan.client_id}_loan_${loanId}_flow_${flow.id}`;
+      const execConvId = `conv_client_${loan.client_id}`;
 
       await pool.query(
         `INSERT INTO reminder_flow_executions
@@ -10342,7 +10336,7 @@ async function executeFlowSendStep(
     const loanId: number = contextData.loan_id as number;
     const clientId: number = contextData.client_id as number;
     const brokerId: number | null = (contextData.broker_id as number) ?? null;
-    const convId = `conv_client_${clientId}_loan_${loanId}_flow_${execution.flow_id}`;
+    const convId = `conv_client_${clientId}`;
 
     let sendResult: {
       success: boolean;
@@ -11513,10 +11507,8 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     }
 
     // Fall back to a deterministic ID if no thread found at all
-    if (!conversationId && clientId && loanId) {
-      conversationId = `conv_client_${clientId}_loan_${loanId}`;
-    } else if (!conversationId && clientId) {
-      conversationId = `conv_sms_client_${clientId}`;
+    if (!conversationId && clientId) {
+      conversationId = `conv_client_${clientId}`;
     }
 
     // ── Insert inbound communications record ─────────────────────────────────
@@ -11933,10 +11925,14 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       }
     }
 
-    // Generate conversation_id if not provided
+    // Generate conversation_id if not provided — use canonical per-client ID when possible
     let finalConversationId = conversation_id;
     if (!finalConversationId) {
-      finalConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      if (client_id) {
+        finalConversationId = `conv_client_${client_id}`;
+      } else {
+        finalConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      }
     }
 
     // Process template if provided
@@ -12483,6 +12479,210 @@ const handleCheckWhatsApp: RequestHandler = async (req, res) => {
       registered: true,
       reason: "lookup_failed",
     });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOICE / CALLING  (Twilio Voice SDK + REST)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Cache the TwiML App SID so we only look it up / create it once per process */
+let cachedTwimlAppSid: string | null = process.env.TWILIO_TWIML_APP_SID || null;
+
+async function getOrCreateTwimlAppSid(): Promise<string | null> {
+  if (cachedTwimlAppSid) return cachedTwimlAppSid;
+  if (!twilioClient) return null;
+
+  const appName = "Mortgage Portal Voice App";
+  const baseUrl =
+    process.env.APP_URL ||
+    process.env.TWILIO_SMS_WEBHOOK_URL?.replace(
+      /\/api\/webhooks\/inbound-sms$/,
+      "",
+    ) ||
+    "https://portal.encoremortgage.org";
+  const voiceUrl = `${baseUrl}/api/voice/twiml`;
+
+  try {
+    const apps = await twilioClient.applications.list({
+      friendlyName: appName,
+      limit: 1,
+    });
+    if (apps.length > 0) {
+      cachedTwimlAppSid = apps[0].sid;
+      return cachedTwimlAppSid;
+    }
+    const app = await twilioClient.applications.create({
+      friendlyName: appName,
+      voiceUrl,
+      voiceMethod: "POST",
+    });
+    cachedTwimlAppSid = app.sid;
+    console.log(`✅ Created TwiML App ${cachedTwimlAppSid} → ${voiceUrl}`);
+    return cachedTwimlAppSid;
+  } catch (err) {
+    console.error("Failed to get/create TwiML App:", err);
+    return null;
+  }
+}
+
+/**
+ * POST /api/voice/token
+ * Returns a short-lived Twilio Access Token that enables the browser Voice SDK.
+ */
+const handleVoiceToken: RequestHandler = async (req, res) => {
+  try {
+    if (!twilioClient) {
+      return res
+        .status(503)
+        .json({ success: false, error: "Twilio not configured" });
+    }
+    const brokerId = (req as any).brokerId;
+
+    const twimlAppSid = await getOrCreateTwimlAppSid();
+    if (!twimlAppSid) {
+      return res
+        .status(503)
+        .json({ success: false, error: "TwiML App unavailable" });
+    }
+
+    const AccessToken = twilio.jwt.AccessToken;
+    const VoiceGrant = AccessToken.VoiceGrant;
+
+    const apiKey =
+      process.env.TWILIO_API_KEY || process.env.TWILIO_ACCOUNT_SID!;
+    const apiSecret =
+      process.env.TWILIO_API_SECRET || process.env.TWILIO_AUTH_TOKEN!;
+
+    const token = new AccessToken(
+      process.env.TWILIO_ACCOUNT_SID!,
+      apiKey,
+      apiSecret,
+      { identity: `broker_${brokerId}`, ttl: 3600 },
+    );
+
+    const voiceGrant = new VoiceGrant({
+      outgoingApplicationSid: twimlAppSid,
+      incomingAllow: false,
+    });
+    token.addGrant(voiceGrant);
+
+    return res.json({ success: true, token: token.toJwt() });
+  } catch (error) {
+    console.error("Error generating voice token:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to generate voice token" });
+  }
+};
+
+/**
+ * POST /api/voice/twiml
+ * TwiML webhook called by Twilio when the browser SDK places a call.
+ * No broker-session auth — this URL is called by Twilio servers.
+ */
+const handleVoiceTwiml: RequestHandler = (req, res) => {
+  const To = (req.body?.To || req.query?.To) as string | undefined;
+
+  res.setHeader("Content-Type", "text/xml");
+
+  if (!To) {
+    return res.send(
+      "<Response><Say>Missing destination number.</Say></Response>",
+    );
+  }
+
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  const dial = twiml.dial({
+    callerId: process.env.TWILIO_PHONE_NUMBER,
+    timeout: 30,
+    record: "do-not-record",
+  });
+  dial.number({}, To);
+
+  return res.send(twiml.toString());
+};
+
+/**
+ * POST /api/voice/log
+ * Called by the frontend after a call ends to record it in the DB.
+ */
+const handleVoiceLog: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      client_id,
+      application_id,
+      phone,
+      duration,
+      call_status,
+      call_sid,
+      client_name,
+    } = req.body as {
+      client_id?: number;
+      application_id?: number;
+      phone?: string;
+      duration?: number;
+      call_status?: string;
+      call_sid?: string;
+      client_name?: string;
+    };
+
+    if (!phone) {
+      return res
+        .status(400)
+        .json({ success: false, error: "phone is required" });
+    }
+
+    const normalizedPhone = phone.startsWith("+")
+      ? phone
+      : `+1${phone.replace(/\D/g, "")}`;
+
+    const durationSec = duration ?? 0;
+    const statusLabel = call_status ?? "completed";
+    const body = `📞 Voice call — ${durationSec}s (${statusLabel})`;
+
+    const conversationId = client_id
+      ? `conv_client_${client_id}`
+      : `conv_phone_${normalizedPhone.replace(/\D/g, "")}`;
+
+    const [commResult] = await pool.query<any>(
+      `INSERT INTO communications
+         (tenant_id, from_broker_id, to_user_id, communication_type, direction,
+          body, status, external_id, conversation_id, delivery_status, sent_at, created_at)
+       VALUES (?, ?, ?, 'call', 'outbound', ?, 'sent', ?, ?, 'sent', NOW(), NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        client_id ?? null,
+        body,
+        call_sid ?? null,
+        conversationId,
+      ],
+    );
+
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: commResult.insertId,
+      conversationId,
+      applicationId: application_id ?? null,
+      leadId: null,
+      fromUserId: null,
+      fromBrokerId: brokerId,
+      toUserId: client_id ?? null,
+      toBrokerId: null,
+      communicationType: "call",
+      direction: "outbound",
+      body,
+    });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Error logging voice call:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to log call" });
   }
 };
 
@@ -15373,6 +15573,11 @@ function createServer() {
     handleAblyToken,
   );
 
+  // Voice / Calling routes
+  expressApp.post("/api/voice/token", verifyBrokerSession, handleVoiceToken);
+  expressApp.post("/api/voice/twiml", handleVoiceTwiml); // no auth — called by Twilio
+  expressApp.post("/api/voice/log", verifyBrokerSession, handleVoiceLog);
+
   // Audit Logs routes
   expressApp.get("/api/audit-logs", verifyBrokerSession, handleGetAuditLogs);
   expressApp.get(
@@ -16913,6 +17118,281 @@ function createServer() {
     "/api/scheduler/meetings/:meetingId",
     verifyBrokerSession,
     handleUpdateScheduledMeeting,
+  );
+
+  // ─── Calendar Events ─────────────────────────────────────────────────────
+
+  const handleGetCalendarEvents: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as {
+        id: number;
+        tenant_id: number;
+        role: string;
+      };
+      const { from, to, event_type } = req.query as {
+        from?: string;
+        to?: string;
+        event_type?: string;
+      };
+
+      const conditions: string[] = ["ce.tenant_id = ?"];
+      const params: any[] = [broker.tenant_id];
+
+      // Non-admins only see their own events
+      if (broker.role !== "admin") {
+        conditions.push("(ce.broker_id = ? OR ce.broker_id IS NULL)");
+        params.push(broker.id);
+      }
+
+      if (from) {
+        conditions.push("ce.event_date >= ?");
+        params.push(from);
+      }
+      if (to) {
+        conditions.push("ce.event_date <= ?");
+        params.push(to);
+      }
+      if (event_type && event_type !== "all") {
+        conditions.push("ce.event_type = ?");
+        params.push(event_type);
+      }
+
+      const where = conditions.join(" AND ");
+      const [rows] = await pool.query(
+        `SELECT ce.*,
+                CONCAT(c.first_name, ' ', c.last_name) AS linked_client_name
+         FROM calendar_events ce
+         LEFT JOIN clients c ON c.id = ce.linked_client_id
+         WHERE ${where}
+         ORDER BY ce.event_date ASC, ce.event_time ASC`,
+        params,
+      );
+
+      const events = (rows as any[]).map((r) => ({
+        ...r,
+        all_day: r.all_day === 1 || r.all_day === true,
+      }));
+
+      res.json({ success: true, events, total: events.length });
+    } catch (err) {
+      console.error("handleGetCalendarEvents error:", err);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleCreateCalendarEvent: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as { id: number; tenant_id: number };
+      const {
+        event_type,
+        title,
+        description,
+        event_date,
+        event_time,
+        all_day,
+        recurrence,
+        color,
+        linked_client_id,
+        linked_person_name,
+      } = req.body as {
+        event_type?: string;
+        title?: string;
+        description?: string;
+        event_date?: string;
+        event_time?: string;
+        all_day?: boolean;
+        recurrence?: string;
+        color?: string;
+        linked_client_id?: number | null;
+        linked_person_name?: string;
+      };
+
+      if (!event_type || !title?.trim() || !event_date) {
+        return res.status(400).json({
+          success: false,
+          error: "event_type, title, and event_date are required",
+        });
+      }
+
+      const validTypes = [
+        "birthday",
+        "home_anniversary",
+        "realtor_anniversary",
+        "important_date",
+        "reminder",
+        "other",
+      ];
+      if (!validTypes.includes(event_type)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid event_type" });
+      }
+
+      const [result] = await pool.query(
+        `INSERT INTO calendar_events
+           (tenant_id, broker_id, event_type, title, description,
+            event_date, event_time, all_day, recurrence, color,
+            linked_client_id, linked_person_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          broker.tenant_id,
+          broker.id,
+          event_type,
+          title.trim(),
+          description?.trim() || null,
+          event_date,
+          event_time || null,
+          all_day !== false ? 1 : 0,
+          recurrence || "none",
+          color || null,
+          linked_client_id || null,
+          linked_person_name?.trim() || null,
+        ],
+      );
+
+      const insertId = (result as any).insertId;
+
+      const [[created]] = (await pool.query(
+        `SELECT ce.*,
+                CONCAT(c.first_name, ' ', c.last_name) AS linked_client_name
+         FROM calendar_events ce
+         LEFT JOIN clients c ON c.id = ce.linked_client_id
+         WHERE ce.id = ?`,
+        [insertId],
+      )) as any;
+
+      res.status(201).json({
+        success: true,
+        event: { ...created, all_day: created.all_day === 1 },
+      });
+    } catch (err) {
+      console.error("handleCreateCalendarEvent error:", err);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleUpdateCalendarEvent: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as {
+        id: number;
+        tenant_id: number;
+        role: string;
+      };
+      const eventId = parseInt(req.params.eventId, 10);
+
+      // Verify ownership
+      const [[existing]] = (await pool.query(
+        `SELECT * FROM calendar_events WHERE id = ? AND tenant_id = ?`,
+        [eventId, broker.tenant_id],
+      )) as any;
+
+      if (!existing) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Event not found" });
+      }
+
+      if (broker.role !== "admin" && existing.broker_id !== broker.id) {
+        return res.status(403).json({ success: false, error: "Forbidden" });
+      }
+
+      const {
+        event_type,
+        title,
+        description,
+        event_date,
+        event_time,
+        all_day,
+        recurrence,
+        color,
+        linked_client_id,
+        linked_person_name,
+      } = req.body;
+
+      const updates: Record<string, any> = {};
+      if (event_type !== undefined) updates.event_type = event_type;
+      if (title !== undefined) updates.title = title.trim();
+      if (description !== undefined) updates.description = description || null;
+      if (event_date !== undefined) updates.event_date = event_date;
+      if (event_time !== undefined) updates.event_time = event_time || null;
+      if (all_day !== undefined) updates.all_day = all_day ? 1 : 0;
+      if (recurrence !== undefined) updates.recurrence = recurrence;
+      if (color !== undefined) updates.color = color || null;
+      if (linked_client_id !== undefined)
+        updates.linked_client_id = linked_client_id || null;
+      if (linked_person_name !== undefined)
+        updates.linked_person_name = linked_person_name?.trim() || null;
+
+      if (Object.keys(updates).length === 0) {
+        return res.json({ success: true });
+      }
+
+      const setClauses = Object.keys(updates)
+        .map((k) => `${k} = ?`)
+        .join(", ");
+      await pool.query(
+        `UPDATE calendar_events SET ${setClauses} WHERE id = ?`,
+        [...Object.values(updates), eventId],
+      );
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("handleUpdateCalendarEvent error:", err);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleDeleteCalendarEvent: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as {
+        id: number;
+        tenant_id: number;
+        role: string;
+      };
+      const eventId = parseInt(req.params.eventId, 10);
+
+      const [[existing]] = (await pool.query(
+        `SELECT * FROM calendar_events WHERE id = ? AND tenant_id = ?`,
+        [eventId, broker.tenant_id],
+      )) as any;
+
+      if (!existing) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Event not found" });
+      }
+
+      if (broker.role !== "admin" && existing.broker_id !== broker.id) {
+        return res.status(403).json({ success: false, error: "Forbidden" });
+      }
+
+      await pool.query(`DELETE FROM calendar_events WHERE id = ?`, [eventId]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("handleDeleteCalendarEvent error:", err);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  expressApp.get(
+    "/api/calendar/events",
+    verifyBrokerSession,
+    handleGetCalendarEvents,
+  );
+  expressApp.post(
+    "/api/calendar/events",
+    verifyBrokerSession,
+    handleCreateCalendarEvent,
+  );
+  expressApp.put(
+    "/api/calendar/events/:eventId",
+    verifyBrokerSession,
+    handleUpdateCalendarEvent,
+  );
+  expressApp.delete(
+    "/api/calendar/events/:eventId",
+    verifyBrokerSession,
+    handleDeleteCalendarEvent,
   );
 
   // ─── Contact Form ────────────────────────────────────────────────────────

@@ -43,6 +43,8 @@ tags:
     description: Pre-approval letter generation and delivery
   - name: Clients
     description: Client directory (admin view)
+  - name: Voice
+    description: Browser-based calling via Twilio Voice SDK
   - name: Brokers
     description: Broker / team member management
   - name: Tasks
@@ -71,6 +73,8 @@ tags:
     description: Public-facing booking endpoints
   - name: Scheduler (Admin)
     description: Admin scheduler settings and meeting management
+  - name: Calendar
+    description: Calendar events — birthdays, home/realtor anniversaries, important dates and reminders
   - name: Contact
     description: Public contact form submissions
   - name: Public
@@ -235,6 +239,38 @@ components:
         notes: { type: string, nullable: true }
         broker_notes: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+
+    CalendarEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        tenant_id: { type: integer }
+        broker_id: { type: integer, nullable: true }
+        event_type:
+          type: string
+          enum:
+            [
+              birthday,
+              home_anniversary,
+              realtor_anniversary,
+              important_date,
+              reminder,
+              other,
+            ]
+        title: { type: string }
+        description: { type: string, nullable: true }
+        event_date: { type: string, format: date }
+        event_time: { type: string, nullable: true, example: "10:00" }
+        all_day: { type: boolean }
+        recurrence:
+          type: string
+          enum: [none, yearly]
+        color: { type: string, nullable: true }
+        linked_client_id: { type: integer, nullable: true }
+        linked_client_name: { type: string, nullable: true }
+        linked_person_name: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 paths:
@@ -1358,6 +1394,72 @@ paths:
       responses:
         "200":
           description: Deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  # ── Voice / Calling ──────────────────────────────────────────────────────────
+  /voice/token:
+    post:
+      tags: [Voice]
+      summary: Generate Twilio Access Token for browser Voice SDK
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  token: { type: string }
+
+  /voice/twiml:
+    post:
+      tags: [Voice]
+      summary: TwiML webhook called by Twilio to route outbound calls
+      description: No authentication required — called by Twilio servers
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                To: { type: string, description: Destination phone number }
+                CallSid: { type: string }
+      responses:
+        "200":
+          description: TwiML response
+          content:
+            text/xml:
+              schema: { type: string }
+
+  /voice/log:
+    post:
+      tags: [Voice]
+      summary: Log a completed call to the communications table
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone: { type: string }
+                client_id: { type: integer }
+                application_id: { type: integer }
+                duration: { type: integer, description: Duration in seconds }
+                call_status: { type: string }
+                call_sid: { type: string }
+                client_name: { type: string }
+      responses:
+        "200":
+          description: Call logged
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
@@ -3457,6 +3559,156 @@ paths:
       responses:
         "200":
           description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  # ── Calendar Events ──────────────────────────────────────────────────────────
+  /calendar/events:
+    get:
+      tags: [Calendar]
+      summary: List calendar events (birthdays, anniversaries, reminders, etc.)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+          description: Filter events on or after this date (YYYY-MM-DD)
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+          description: Filter events on or before this date (YYYY-MM-DD)
+        - in: query
+          name: event_type
+          schema:
+            type: string
+            enum:
+              [
+                birthday,
+                home_anniversary,
+                realtor_anniversary,
+                important_date,
+                reminder,
+                other,
+                all,
+              ]
+          description: Filter by event type (omit or "all" for all types)
+      responses:
+        "200":
+          description: List of calendar events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  events:
+                    type: array
+                    items: { $ref: "#/components/schemas/CalendarEvent" }
+                  total: { type: integer }
+    post:
+      tags: [Calendar]
+      summary: Create a new calendar event
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_type, title, event_date]
+              properties:
+                event_type:
+                  type: string
+                  enum:
+                    [
+                      birthday,
+                      home_anniversary,
+                      realtor_anniversary,
+                      important_date,
+                      reminder,
+                      other,
+                    ]
+                title: { type: string }
+                description: { type: string }
+                event_date: { type: string, format: date }
+                event_time: { type: string, example: "10:00" }
+                all_day: { type: boolean, default: true }
+                recurrence:
+                  { type: string, enum: [none, yearly], default: none }
+                color: { type: string, example: "#e81932" }
+                linked_client_id: { type: integer, nullable: true }
+                linked_person_name: { type: string }
+      responses:
+        "201":
+          description: Event created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event: { $ref: "#/components/schemas/CalendarEvent" }
+
+  /calendar/events/{eventId}:
+    put:
+      tags: [Calendar]
+      summary: Update a calendar event
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event_type:
+                  type: string
+                  enum:
+                    [
+                      birthday,
+                      home_anniversary,
+                      realtor_anniversary,
+                      important_date,
+                      reminder,
+                      other,
+                    ]
+                title: { type: string }
+                description: { type: string, nullable: true }
+                event_date: { type: string, format: date }
+                event_time: { type: string, nullable: true }
+                all_day: { type: boolean }
+                recurrence: { type: string, enum: [none, yearly] }
+                color: { type: string, nullable: true }
+                linked_client_id: { type: integer, nullable: true }
+                linked_person_name: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+    delete:
+      tags: [Calendar]
+      summary: Delete a calendar event
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }

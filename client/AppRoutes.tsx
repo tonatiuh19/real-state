@@ -35,6 +35,7 @@ import About from "./pages/About";
 import Contact from "./pages/Contact";
 import SchedulerPage from "./pages/Scheduler";
 import AdminScheduler from "./pages/admin/Scheduler";
+import AdminCalendar from "./pages/admin/Calendar";
 
 const AppRoutes = () => (
   <Routes>
@@ -302,12 +303,21 @@ const AppRoutes = () => (
       }
     />
 
-    {/* Admin Scheduler */}
+    {/* Admin Scheduler (legacy path kept for backward compat) */}
     <Route
       path="/admin/scheduler"
       element={
         <AdminLayout>
-          <AdminScheduler />
+          <AdminCalendar />
+        </AdminLayout>
+      }
+    />
+    {/* Admin Calendar */}
+    <Route
+      path="/admin/calendar"
+      element={
+        <AdminLayout>
+          <AdminCalendar />
         </AdminLayout>
       }
     />

@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.11.2",
+    "@twilio/voice-sdk": "^2.18.1",
     "@vercel/node": "^3.0.21",
     "@xyflow/react": "^12.10.1",
     "ably": "^2.21.0",

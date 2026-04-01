@@ -42,6 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { IS_DEV } from "@/lib/env";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
 import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
@@ -78,6 +79,8 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     (state) => state.brokerAuth,
   );
   const sectionControlsMap = useAppSelector(selectSectionControlsMap);
+  const { isLoading: isLoadingControls, isInitialized: controlsInitialized } =
+    useAppSelector((s) => s.adminSectionControls);
 
   // Redirect to login if not authenticated
   React.useEffect(() => {
@@ -104,7 +107,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   const menuItems = [
     {
       id: "dashboard",
-      label: "Overview",
+      label: "Home",
       icon: <LayoutDashboard className="h-4 w-4" />,
       path: "/admin",
     },
@@ -127,12 +130,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       path: "/admin/tasks",
       hidden: isPartner,
     },
-    // {
-    //   id: "marketing",
-    //   label: "Marketing & Campaigns",
-    //   icon: <Megaphone className="h-4 w-4" />,
-    //   path: "/admin/marketing",
-    // },
     {
       id: "documents",
       label: "Documents",
@@ -140,19 +137,11 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       path: "/admin/documents",
       hidden: isPartner,
     },
-    /*     {
-      id: "communication-templates",
-      label: "Communications",
-      icon: <Mail className="h-4 w-4" />,
-      path: "/admin/communication-templates",
-      hidden: isPartner,
-    }, */
     {
-      id: "reminder-flows",
-      label: "Reminder Flows",
-      icon: <AlarmClock className="h-4 w-4" />,
-      path: "/admin/reminder-flows",
-      hidden: isPartner,
+      id: "scheduler",
+      label: "Calendar",
+      icon: <CalendarDays className="h-4 w-4" />,
+      path: "/admin/calendar",
     },
     {
       id: "conversations",
@@ -162,24 +151,19 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       hidden: isPartner,
     },
     {
+      id: "reminder-flows",
+      label: "Reminder Flows",
+      icon: <AlarmClock className="h-4 w-4" />,
+      path: "/admin/reminder-flows",
+      hidden: isPartner,
+    },
+    {
       id: "reports",
       label: "Reports & Analytics",
       icon: <TrendingUp className="h-4 w-4" />,
       path: "/admin/reports",
       hidden: isPartner,
     },
-    // {
-    //   id: "compliance",
-    //   label: "Compliance",
-    //   icon: <Shield className="h-4 w-4" />,
-    //   path: "/admin/compliance",
-    // },
-    // {
-    //   id: "notifications",
-    //   label: "Notifications",
-    //   icon: <Bell className="h-4 w-4" />,
-    //   path: "/admin/notifications",
-    // },
     {
       id: "brokers",
       label: "People Management",
@@ -195,12 +179,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       hidden: isPartner,
     },
     {
-      id: "scheduler",
-      label: "Scheduler",
-      icon: <CalendarDays className="h-4 w-4" />,
-      path: "/admin/scheduler",
-    },
-    {
       id: "settings",
       label: "Settings",
       icon: <Settings className="h-4 w-4" />,
@@ -209,17 +187,41 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     },
   ];
 
+  const isDev = IS_DEV;
+
   // Build effective menu items with disabled state resolved from DB
+  // In development all sections are unlocked regardless of DB controls
   const effectiveMenuItems = menuItems
     .filter((item) => !(item as any).hidden)
     .map((item) => {
       const ctrl = sectionControlsMap[item.id];
       return {
         ...item,
-        disabled: ctrl ? ctrl.is_disabled : false,
+        disabled: isDev ? false : ctrl ? ctrl.is_disabled : false,
         tooltipMessage: ctrl?.tooltip_message ?? "Coming Soon",
       };
     });
+
+  // Route guard: redirect away from disabled sections once controls are loaded
+  React.useEffect(() => {
+    if (!controlsInitialized || isLoadingControls) return;
+    const isOnDisabledRoute = effectiveMenuItems.some(
+      (item) =>
+        item.disabled &&
+        item.path !== "/admin" &&
+        (location.pathname === item.path ||
+          location.pathname.startsWith(item.path + "/")),
+    );
+    if (isOnDisabledRoute) {
+      navigate("/admin", { replace: true });
+    }
+  }, [
+    location.pathname,
+    controlsInitialized,
+    isLoadingControls,
+    effectiveMenuItems,
+    navigate,
+  ]);
 
   // Shared menu renderer used by both desktop sidebar and mobile Sheet
   const renderMenuItems = (onItemClick?: () => void) =>
@@ -303,7 +305,14 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-1">
-            {renderMenuItems(() => setMobileMenuOpen(false))}
+            {!controlsInitialized
+              ? Array.from({ length: 9 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-9 rounded-md bg-muted animate-pulse"
+                  />
+                ))
+              : renderMenuItems(() => setMobileMenuOpen(false))}
           </div>
 
           {/* Mobile User Section */}
@@ -398,58 +407,94 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
 
         {/* Menu Items */}
         <div className="flex-1 space-y-1 p-4 overflow-y-auto scrollbar-thin scrollbar-thumb-muted scrollbar-track-transparent">
-          {effectiveMenuItems.map((item) => {
-            const menuButton = (
-              <Button
-                key={item.id}
-                variant={
-                  location.pathname === item.path ? "secondary" : "ghost"
-                }
-                className={cn(
-                  "w-full gap-3",
-                  sidebarCollapsed ? "justify-center px-2" : "justify-start",
-                  location.pathname === item.path
-                    ? "bg-primary/10 text-primary hover:bg-primary/20"
-                    : "",
-                  item.disabled
-                    ? "opacity-60 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground"
-                    : "",
-                )}
-                onClick={() => {
-                  if (!item.disabled) navigate(item.path);
-                }}
-                aria-disabled={item.disabled}
-                title={
-                  sidebarCollapsed && !item.disabled ? item.label : undefined
-                }
-              >
-                {item.icon}
-                {!sidebarCollapsed && (
-                  <>
-                    <span>{item.label}</span>
-                    {item.disabled && <Lock className="h-3.5 w-3.5 ml-auto" />}
-                  </>
-                )}
-                {sidebarCollapsed && item.disabled && (
-                  <Lock className="h-3.5 w-3.5 absolute top-1.5 right-1.5" />
-                )}
-              </Button>
-            );
+          {!controlsInitialized
+            ? Array.from({ length: 9 }).map((_, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "h-9 rounded-md bg-muted animate-pulse",
+                    sidebarCollapsed ? "w-8 mx-auto" : "w-full",
+                  )}
+                />
+              ))
+            : effectiveMenuItems.map((item) => {
+                const menuButton = (
+                  <Button
+                    key={item.id}
+                    variant={
+                      location.pathname === item.path ? "secondary" : "ghost"
+                    }
+                    className={cn(
+                      "w-full gap-3",
+                      sidebarCollapsed
+                        ? "justify-center px-2"
+                        : "justify-start",
+                      location.pathname === item.path
+                        ? "bg-primary/10 text-primary hover:bg-primary/20"
+                        : "",
+                      item.disabled
+                        ? "opacity-60 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground"
+                        : "",
+                    )}
+                    onClick={() => {
+                      if (!item.disabled) navigate(item.path);
+                    }}
+                    aria-disabled={item.disabled}
+                    title={
+                      sidebarCollapsed && !item.disabled
+                        ? item.label
+                        : undefined
+                    }
+                  >
+                    {item.icon}
+                    {!sidebarCollapsed && (
+                      <>
+                        <span>{item.label}</span>
+                        {item.disabled && (
+                          <Lock className="h-3.5 w-3.5 ml-auto" />
+                        )}
+                      </>
+                    )}
+                    {sidebarCollapsed && item.disabled && (
+                      <Lock className="h-3.5 w-3.5 absolute top-1.5 right-1.5" />
+                    )}
+                  </Button>
+                );
 
-            if (!item.disabled) {
-              return menuButton;
-            }
+                if (!item.disabled) {
+                  return menuButton;
+                }
 
-            return (
-              <Tooltip key={item.id} delayDuration={250}>
-                <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
-                <TooltipContent side={sidebarCollapsed ? "right" : "top"}>
-                  <p>{item.tooltipMessage}</p>
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
+                return (
+                  <Tooltip key={item.id} delayDuration={250}>
+                    <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
+                    <TooltipContent side={sidebarCollapsed ? "right" : "top"}>
+                      <p>{item.tooltipMessage}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
         </div>
+
+        {/* Dev mode badge */}
+        {isDev && (
+          <div
+            className={cn(
+              "mx-4 mb-2 rounded-md border border-yellow-400/40 bg-yellow-400/10 px-2 py-1 text-center",
+              sidebarCollapsed ? "px-0" : "",
+            )}
+          >
+            {sidebarCollapsed ? (
+              <span className="text-[9px] font-bold text-yellow-500 uppercase tracking-widest">
+                DEV
+              </span>
+            ) : (
+              <p className="text-[11px] font-semibold text-yellow-600 dark:text-yellow-400">
+                🛠 Dev mode — all sections unlocked
+              </p>
+            )}
+          </div>
+        )}
 
         {/* User Section */}
         <div className="border-t p-4">
@@ -564,7 +609,31 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto h-screen pt-14 md:pt-0">
-        {children}
+        {!controlsInitialized ? (
+          <div className="flex flex-col gap-4 p-6 h-full">
+            {/* Header skeleton */}
+            <div className="flex items-center justify-between">
+              <div className="h-8 w-48 rounded-lg bg-muted animate-pulse" />
+              <div className="h-9 w-32 rounded-lg bg-muted animate-pulse" />
+            </div>
+            {/* Card row skeleton */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-24 rounded-xl bg-muted animate-pulse"
+                />
+              ))}
+            </div>
+            {/* Content block skeletons */}
+            <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2 rounded-xl bg-muted animate-pulse" />
+              <div className="rounded-xl bg-muted animate-pulse" />
+            </div>
+          </div>
+        ) : (
+          children
+        )}
       </main>
 
       {/* Logout Confirmation Dialog */}

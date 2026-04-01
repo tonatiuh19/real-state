@@ -22,6 +22,7 @@ import reminderFlowsReducer from "./slices/reminderFlowsSlice";
 import adminSectionControlsReducer from "./slices/adminSectionControlsSlice";
 import contactSubmissionsReducer from "./slices/contactSubmissionsSlice";
 import schedulerReducer from "./slices/schedulerSlice";
+import calendarEventsReducer from "./slices/calendarEventsSlice";
 
 export const store = configureStore({
   reducer: {
@@ -48,6 +49,7 @@ export const store = configureStore({
     adminSectionControls: adminSectionControlsReducer,
     contactSubmissions: contactSubmissionsReducer,
     scheduler: schedulerReducer,
+    calendarEvents: calendarEventsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
