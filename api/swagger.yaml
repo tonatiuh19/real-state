@@ -1436,6 +1436,167 @@ paths:
             text/xml:
               schema: { type: string }
 
+  /voice/incoming:
+    post:
+      tags: [Voice]
+      summary: TwiML webhook for inbound calls (Twilio → server)
+      description: |
+        Called by Twilio when an external caller dials a configured number.
+        Routes simultaneously to all available (voice_available=1) brokers.
+        Falls back to the assigned broker or first active broker if none is available.
+        No authentication required — called by Twilio servers.
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                From: { type: string, description: Caller's phone number }
+                To:
+                  { type: string, description: Twilio number that was dialled }
+                CallSid: { type: string }
+      responses:
+        "200":
+          description: TwiML response
+          content:
+            text/xml:
+              schema: { type: string }
+
+  /voice/availability:
+    post:
+      tags: [Voice]
+      summary: Update broker voice availability (online/offline toggle)
+      description: |
+        Called by the CRM frontend when the banker toggles Available / Unavailable.
+        Updates voice_available on the brokers table so inbound call routing
+        can ring only the bankers who are currently online.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [available]
+              properties:
+                available:
+                  type: boolean
+                  description: true = broker is online and can receive inbound calls
+      responses:
+        "200":
+          description: Availability updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  available: { type: boolean }
+
+  /voice/phone-numbers:
+    get:
+      tags: [Voice]
+      summary: List Twilio phone numbers with webhook status and broker assignments
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Phone numbers list with assignment info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  incomingUrl: { type: string }
+                  numbers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sid: { type: string }
+                        phoneNumber: { type: string }
+                        friendlyName: { type: string }
+                        voiceUrl: { type: string }
+                        configured: { type: boolean }
+                        capabilities:
+                          type: object
+                          properties:
+                            voice: { type: boolean }
+                            sms: { type: boolean }
+                            mms: { type: boolean }
+                        assignedBrokerId: { type: integer, nullable: true }
+                        assignedBrokerName: { type: string, nullable: true }
+                  brokers:
+                    type: array
+                    description: Active brokers for the assign dropdown
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+
+  /voice/phone-numbers/{sid}/configure:
+    post:
+      tags: [Voice]
+      summary: Point a Twilio number's voice webhook to this portal
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: sid
+          required: true
+          schema: { type: string }
+          description: Twilio IncomingPhoneNumber SID, or "all" to configure every number
+      responses:
+        "200":
+          description: Webhook updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /voice/phone-numbers/{sid}/assign:
+    post:
+      tags: [Voice]
+      summary: Assign (or unassign) a Twilio phone number to a specific mortgage banker
+      description: |
+        Sets twilio_phone_sid and twilio_caller_id on the broker row.
+        The assigned broker rings first on inbound calls and their number appears as
+        caller ID on outbound calls. Pass brokerId: null to unassign.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: sid
+          required: true
+          schema: { type: string }
+          description: Twilio IncomingPhoneNumber SID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [brokerId]
+              properties:
+                brokerId:
+                  type: integer
+                  nullable: true
+                  description: Broker ID to assign, or null to unassign
+      responses:
+        "200":
+          description: Assignment saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  sid: { type: string }
+                  brokerId: { type: integer, nullable: true }
+                  callerIdE164: { type: string }
+
   /voice/log:
     post:
       tags: [Voice]
@@ -1457,12 +1618,89 @@ paths:
                 call_status: { type: string }
                 call_sid: { type: string }
                 client_name: { type: string }
+                direction:
+                  type: string
+                  enum: [inbound, outbound]
+                  description: Call direction (defaults to outbound)
       responses:
         "200":
           description: Call logged
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /voice/calls:
+    get:
+      tags: [Voice]
+      summary: Get paginated call history for the authenticated broker
+      security:
+        - BrokerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: Call history list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  calls:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        direction: { type: string, enum: [inbound, outbound] }
+                        body: { type: string }
+                        status: { type: string }
+                        external_id: { type: string, nullable: true }
+                        conversation_id: { type: string, nullable: true }
+                        client_name: { type: string, nullable: true }
+                        client_phone: { type: string, nullable: true }
+                        client_id: { type: integer, nullable: true }
+                        created_at: { type: string, format: date-time }
+                        sent_at:
+                          { type: string, format: date-time, nullable: true }
+                  pagination:
+                    type: object
+                    properties:
+                      page: { type: integer }
+                      limit: { type: integer }
+                      total: { type: integer }
+                      totalPages: { type: integer }
+
+  /conversations/lookup-contact:
+    get:
+      tags: [Conversations]
+      summary: Look up a client by phone number (used for resolving incoming call caller identity)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - name: phone
+          in: query
+          required: true
+          schema: { type: string }
+          description: E.164 or local phone number to look up
+      responses:
+        "200":
+          description: Contact lookup result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  found: { type: boolean }
+                  client_id: { type: integer }
+                  client_name: { type: string }
+                  phone: { type: string }
 
   # ── Brokers ───────────────────────────────────────────────────────────────────
   /brokers:

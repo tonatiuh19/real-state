@@ -36,6 +36,13 @@ interface VoiceCallPanelProps {
   clientId?: number | null;
   applicationId?: number | null;
   onClose: () => void;
+  /**
+   * When provided, the panel manages an already-accepted incoming call
+   * instead of dialling a new outbound call.
+   */
+  activeCall?: Call | null;
+  /** Direction to record in the call log. Defaults to "outbound". */
+  direction?: "inbound" | "outbound";
 }
 
 const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
@@ -44,6 +51,8 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   clientId,
   applicationId,
   onClose,
+  activeCall,
+  direction = "outbound",
 }) => {
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
 
@@ -51,7 +60,9 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const callRef = useRef<Call | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [callState, setCallState] = useState<CallState>("idle");
+  const [callState, setCallState] = useState<CallState>(
+    activeCall ? "in-call" : "idle",
+  );
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOff, setIsSpeakerOff] = useState(false);
@@ -73,6 +84,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
           client_id: clientId ?? undefined,
           application_id: applicationId ?? undefined,
           client_name: clientName ?? undefined,
+          direction,
         };
         await axios.post("/api/voice/log", payload, {
           headers: { Authorization: `Bearer ${sessionToken}` },
@@ -81,7 +93,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
         logger.error("[VoiceCallPanel] Failed to log call:", err);
       }
     },
-    [phone, clientId, applicationId, clientName, sessionToken],
+    [phone, clientId, applicationId, clientName, direction, sessionToken],
   );
 
   const stopTimer = useCallback(() => {
@@ -210,8 +222,45 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     callSid,
   ]);
 
-  // Auto-start call when component mounts
+  // Auto-start call when component mounts (outbound only)
   useEffect(() => {
+    if (activeCall) {
+      // Incoming call already accepted — wire up event listeners & start timer
+      callRef.current = activeCall;
+      setCallSid(activeCall.parameters?.CallSid ?? null);
+      startTimer();
+
+      activeCall.on("disconnect", () => {
+        stopTimer();
+        setCallState("ended");
+        logCall("completed", 0, activeCall.parameters?.CallSid).finally(
+          cleanupDevice,
+        );
+      });
+
+      activeCall.on("cancel", () => {
+        stopTimer();
+        setCallState("ended");
+        logCall("no-answer", 0, activeCall.parameters?.CallSid).finally(
+          cleanupDevice,
+        );
+      });
+
+      activeCall.on("error", (err: Error) => {
+        logger.error("[VoiceCallPanel] Incoming call error:", err);
+        setErrorMsg(err.message || "Call error");
+        stopTimer();
+        setCallState("error");
+        logCall("failed", 0, activeCall.parameters?.CallSid).finally(
+          cleanupDevice,
+        );
+      });
+
+      return () => {
+        stopTimer();
+      };
+    }
+
     initiateCall();
     return () => {
       cleanupDevice();

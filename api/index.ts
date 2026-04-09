@@ -12488,20 +12488,53 @@ const handleCheckWhatsApp: RequestHandler = async (req, res) => {
 
 /** Cache the TwiML App SID so we only look it up / create it once per process */
 let cachedTwimlAppSid: string | null = process.env.TWILIO_TWIML_APP_SID || null;
+/** Whether we've already verified the TwiML App's voiceUrl this process lifetime */
+let twimlAppVerified = false;
 
-async function getOrCreateTwimlAppSid(): Promise<string | null> {
-  if (cachedTwimlAppSid) return cachedTwimlAppSid;
-  if (!twilioClient) return null;
-
-  const appName = "Mortgage Portal Voice App";
-  const baseUrl =
+function getVoiceBaseUrl(): string {
+  return (
     process.env.APP_URL ||
     process.env.TWILIO_SMS_WEBHOOK_URL?.replace(
       /\/api\/webhooks\/inbound-sms$/,
       "",
     ) ||
-    "https://portal.encoremortgage.org";
-  const voiceUrl = `${baseUrl}/api/voice/twiml`;
+    "https://portal.encoremortgage.org"
+  );
+}
+
+async function getOrCreateTwimlAppSid(): Promise<string | null> {
+  if (!twilioClient) return null;
+
+  const voiceUrl = `${getVoiceBaseUrl()}/api/voice/twiml`;
+
+  // If we have a SID from env and haven't verified this process run yet, verify now
+  if (cachedTwimlAppSid && !twimlAppVerified) {
+    try {
+      const app = await twilioClient.applications(cachedTwimlAppSid).fetch();
+      if (app.voiceUrl !== voiceUrl) {
+        await twilioClient.applications(cachedTwimlAppSid).update({
+          voiceUrl,
+          voiceMethod: "POST",
+        });
+        console.log(
+          `✅ Fixed TwiML App ${cachedTwimlAppSid} voiceUrl → ${voiceUrl}`,
+        );
+      }
+      twimlAppVerified = true;
+      return cachedTwimlAppSid;
+    } catch (err) {
+      console.warn(
+        `⚠️ Env TWILIO_TWIML_APP_SID ${cachedTwimlAppSid} fetch failed — will search/create`,
+        err,
+      );
+      // Fall through to search/create below
+      cachedTwimlAppSid = null;
+    }
+  }
+
+  if (cachedTwimlAppSid) return cachedTwimlAppSid;
+
+  const appName = "Mortgage Portal Voice App";
 
   try {
     const apps = await twilioClient.applications.list({
@@ -12509,7 +12542,19 @@ async function getOrCreateTwimlAppSid(): Promise<string | null> {
       limit: 1,
     });
     if (apps.length > 0) {
-      cachedTwimlAppSid = apps[0].sid;
+      const existing = apps[0];
+      // Always ensure the voiceUrl is correct — update if stale
+      if (existing.voiceUrl !== voiceUrl) {
+        await twilioClient.applications(existing.sid).update({
+          voiceUrl,
+          voiceMethod: "POST",
+        });
+        console.log(
+          `✅ Updated TwiML App ${existing.sid} voiceUrl → ${voiceUrl}`,
+        );
+      }
+      cachedTwimlAppSid = existing.sid;
+      twimlAppVerified = true;
       return cachedTwimlAppSid;
     }
     const app = await twilioClient.applications.create({
@@ -12518,6 +12563,7 @@ async function getOrCreateTwimlAppSid(): Promise<string | null> {
       voiceMethod: "POST",
     });
     cachedTwimlAppSid = app.sid;
+    twimlAppVerified = true;
     console.log(`✅ Created TwiML App ${cachedTwimlAppSid} → ${voiceUrl}`);
     return cachedTwimlAppSid;
   } catch (err) {
@@ -12563,7 +12609,7 @@ const handleVoiceToken: RequestHandler = async (req, res) => {
 
     const voiceGrant = new VoiceGrant({
       outgoingApplicationSid: twimlAppSid,
-      incomingAllow: false,
+      incomingAllow: true,
     });
     token.addGrant(voiceGrant);
 
@@ -12580,9 +12626,13 @@ const handleVoiceToken: RequestHandler = async (req, res) => {
  * POST /api/voice/twiml
  * TwiML webhook called by Twilio when the browser SDK places a call.
  * No broker-session auth — this URL is called by Twilio servers.
+ * Uses the broker's assigned twilio_caller_id when available, falls back to
+ * the global TWILIO_PHONE_NUMBER env var.
  */
-const handleVoiceTwiml: RequestHandler = (req, res) => {
+const handleVoiceTwiml: RequestHandler = async (req, res) => {
   const To = (req.body?.To || req.query?.To) as string | undefined;
+  // The identity is "broker_{id}" — passed by the Twilio SDK as the caller identity
+  const identity = (req.body?.Called || req.body?.Identity || "") as string;
 
   res.setHeader("Content-Type", "text/xml");
 
@@ -12592,16 +12642,384 @@ const handleVoiceTwiml: RequestHandler = (req, res) => {
     );
   }
 
+  // Resolve caller ID: prefer the broker's assigned number, fall back to global env var
+  let callerId = process.env.TWILIO_PHONE_NUMBER || "5624490000";
+  try {
+    const brokerIdMatch = identity.match(/broker_(\d+)/);
+    if (brokerIdMatch) {
+      const [rows] = await pool.query<any>(
+        `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? AND twilio_caller_id IS NOT NULL`,
+        [parseInt(brokerIdMatch[1], 10), MORTGAGE_TENANT_ID],
+      );
+      if (rows.length > 0 && rows[0].twilio_caller_id) {
+        callerId = rows[0].twilio_caller_id;
+      }
+    }
+  } catch {
+    // Non-critical — fall back to global number
+  }
+
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
   const dial = twiml.dial({
-    callerId: process.env.TWILIO_PHONE_NUMBER,
+    callerId,
     timeout: 30,
     record: "do-not-record",
   });
   dial.number({}, To);
 
   return res.send(twiml.toString());
+};
+
+/**
+ * POST /api/voice/availability
+ * Called by the CRM frontend when the broker toggles Available / Unavailable.
+ * Updates voice_available in the DB so inbound routing knows who is online.
+ */
+const handleVoiceAvailability: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const { available } = req.body as { available: boolean };
+    if (typeof available !== "boolean") {
+      return res
+        .status(400)
+        .json({ success: false, error: "available must be a boolean" });
+    }
+    await pool.query(
+      `UPDATE brokers SET voice_available = ? WHERE id = ? AND tenant_id = ?`,
+      [available ? 1 : 0, brokerId, MORTGAGE_TENANT_ID],
+    );
+    return res.json({ success: true, available });
+  } catch (err) {
+    console.error("[handleVoiceAvailability] Error:", err);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to update availability" });
+  }
+};
+
+/**
+ * POST /api/voice/incoming
+ * TwiML webhook called by Twilio when an external caller dials a Twilio number.
+ * No broker-session auth — called by Twilio servers.
+ *
+ * Routing priority:
+ *   1. All available brokers whose assigned number (twilio_caller_id) matches the dialled number.
+ *   2. All other available brokers for the tenant.
+ *   Twilio rings them all simultaneously; the first to accept wins.
+ *   Fallback: if nobody is marked available, route to the first active broker so the call
+ *   is never silently dropped.
+ */
+const handleVoiceIncoming: RequestHandler = async (req, res) => {
+  res.setHeader("Content-Type", "text/xml");
+
+  try {
+    // The Twilio number that was dialled (E.164 or local format)
+    const calledNumber =
+      (req.body?.To as string) || (req.body?.Called as string) || "";
+
+    // ---------- determine which brokers should ring ----------
+
+    // 1) Available brokers — sorted so the assigned-to-this-number broker rings first.
+    const [availableRows] = await pool.query<any>(
+      `SELECT id FROM brokers
+       WHERE tenant_id = ? AND status = 'active' AND voice_available = 1
+       ORDER BY
+         CASE WHEN twilio_caller_id IS NOT NULL AND twilio_caller_id = ? THEN 0 ELSE 1 END ASC,
+         id ASC
+       LIMIT 10`,
+      [MORTGAGE_TENANT_ID, calledNumber],
+    );
+
+    let brokerIds: number[];
+
+    if (availableRows.length > 0) {
+      brokerIds = availableRows.map((r: any) => r.id as number);
+    } else {
+      // Fallback: nobody is available — still route so the call isn't dropped.
+      // Try the broker whose number was dialled first, then fall back to first active.
+      const [fallbackRows] = await pool.query<any>(
+        `SELECT id FROM brokers
+         WHERE tenant_id = ? AND status = 'active'
+         ORDER BY
+           CASE WHEN twilio_caller_id IS NOT NULL AND twilio_caller_id = ? THEN 0 ELSE 1 END ASC,
+           id ASC
+         LIMIT 1`,
+        [MORTGAGE_TENANT_ID, calledNumber],
+      );
+      const fallbackId =
+        fallbackRows.length > 0
+          ? (fallbackRows[0].id as number)
+          : parseInt(process.env.TWILIO_INCOMING_BROKER_ID || "1", 10);
+      brokerIds = [fallbackId];
+    }
+
+    const callerNumber =
+      (req.body?.From as string) || (req.body?.Caller as string) || "Unknown";
+
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const twiml = new VoiceResponse();
+    const dial = twiml.dial({ timeout: 30 });
+
+    // Ring all target brokers simultaneously — first to accept wins.
+    for (const bid of brokerIds) {
+      dial.client(`broker_${bid}`);
+    }
+
+    // Log the incoming call attempt
+    const conversationId = `conv_phone_${callerNumber.replace(/\D/g, "")}`;
+    const body = `📞 Incoming call from ${callerNumber}`;
+    const [commResult] = await pool.query<any>(
+      `INSERT INTO communications
+         (tenant_id, from_broker_id, to_user_id, communication_type, direction,
+          body, status, external_id, conversation_id, delivery_status, sent_at, created_at)
+       VALUES (?, NULL, NULL, 'call', 'inbound', ?, 'sent', ?, ?, 'sent', NOW(), NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        body,
+        (req.body?.CallSid as string) || null,
+        conversationId,
+      ],
+    );
+
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: commResult.insertId,
+      conversationId,
+      applicationId: null,
+      leadId: null,
+      fromUserId: null,
+      fromBrokerId: null,
+      toUserId: null,
+      toBrokerId: null,
+      communicationType: "call",
+      direction: "inbound",
+      body,
+    });
+
+    return res.send(twiml.toString());
+  } catch (err) {
+    console.error("[handleVoiceIncoming] Error:", err);
+    // Still return valid TwiML so Twilio doesn't retry indefinitely
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const twiml = new VoiceResponse();
+    twiml.say(
+      "We are unable to take your call right now. Please try again later.",
+    );
+    return res.send(twiml.toString());
+  }
+};
+
+/**
+ * POST /api/voice/fix-call-setup
+ * Forces a re-verification and update of the TwiML App voiceUrl.
+ * Call this when outbound calls fail with "update voice URL" errors.
+ */
+const handleFixCallSetup: RequestHandler = async (req, res) => {
+  try {
+    if (!twilioClient) {
+      return res
+        .status(503)
+        .json({ success: false, error: "Twilio not configured" });
+    }
+
+    // Reset the cache so getOrCreateTwimlAppSid does a full verify
+    cachedTwimlAppSid = process.env.TWILIO_TWIML_APP_SID || null;
+    twimlAppVerified = false;
+
+    const sid = await getOrCreateTwimlAppSid();
+    if (!sid) {
+      return res
+        .status(500)
+        .json({ success: false, error: "Could not create or find TwiML App" });
+    }
+
+    const voiceUrl = `${getVoiceBaseUrl()}/api/voice/twiml`;
+    return res.json({
+      success: true,
+      twimlAppSid: sid,
+      voiceUrl,
+      message: "TwiML App voiceUrl verified and updated",
+    });
+  } catch (error) {
+    console.error("[handleFixCallSetup] Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fix call setup" });
+  }
+};
+
+/**
+ * GET /api/voice/phone-numbers
+ * Returns all Twilio phone numbers with webhook status + current broker assignment.
+ */
+const handleGetPhoneNumbers: RequestHandler = async (req, res) => {
+  try {
+    if (!twilioClient) {
+      return res
+        .status(503)
+        .json({ success: false, error: "Twilio not configured" });
+    }
+    const incomingUrl = `${getVoiceBaseUrl()}/api/voice/incoming`;
+
+    // Fetch numbers and broker assignments in parallel
+    const [twilioNumbers, brokerRows] = await Promise.all([
+      twilioClient.incomingPhoneNumbers.list({ limit: 50 }),
+      pool.query<any>(
+        `SELECT id, first_name, last_name, twilio_phone_sid, twilio_caller_id
+         FROM brokers WHERE tenant_id = ? AND status = 'active' ORDER BY first_name ASC`,
+        [MORTGAGE_TENANT_ID],
+      ),
+    ]);
+
+    const brokers: {
+      id: number;
+      first_name: string;
+      last_name: string;
+      twilio_phone_sid: string | null;
+      twilio_caller_id: string | null;
+    }[] = (brokerRows as any)[0];
+
+    // Build a map: twilio_phone_sid → broker
+    const sidToBroker = new Map(
+      brokers
+        .filter((b) => b.twilio_phone_sid)
+        .map((b) => [b.twilio_phone_sid!, b]),
+    );
+
+    const result = twilioNumbers.map((n) => {
+      const assignedBroker = sidToBroker.get(n.sid);
+      return {
+        sid: n.sid,
+        phoneNumber: n.phoneNumber,
+        friendlyName: n.friendlyName,
+        voiceUrl: n.voiceUrl,
+        configured: n.voiceUrl === incomingUrl,
+        capabilities: {
+          voice: n.capabilities?.voice ?? false,
+          sms: n.capabilities?.sms ?? false,
+          mms: n.capabilities?.mms ?? false,
+        },
+        assignedBrokerId: assignedBroker?.id ?? null,
+        assignedBrokerName: assignedBroker
+          ? `${assignedBroker.first_name} ${assignedBroker.last_name}`
+          : null,
+      };
+    });
+
+    // Return the broker list so the UI can populate the assign dropdown
+    const brokerList = brokers.map((b) => ({
+      id: b.id,
+      name: `${b.first_name} ${b.last_name}`,
+    }));
+
+    return res.json({
+      success: true,
+      numbers: result,
+      incomingUrl,
+      brokers: brokerList,
+    });
+  } catch (error) {
+    console.error("[handleGetPhoneNumbers] Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to list phone numbers" });
+  }
+};
+
+/**
+ * POST /api/voice/phone-numbers/:sid/assign
+ * Assigns a Twilio phone number to a broker (or unassigns with brokerId: null).
+ * Sets twilio_phone_sid + twilio_caller_id on the broker row.
+ */
+const handleAssignPhoneNumber: RequestHandler = async (req, res) => {
+  try {
+    const { sid } = req.params as { sid: string };
+    const { brokerId } = req.body as { brokerId: number | null };
+
+    // Resolve the E.164 number for the SID
+    if (brokerId !== null && brokerId !== undefined) {
+      if (!twilioClient) {
+        return res
+          .status(503)
+          .json({ success: false, error: "Twilio not configured" });
+      }
+      const number = await twilioClient.incomingPhoneNumbers(sid).fetch();
+      const callerIdE164 = number.phoneNumber;
+
+      // Clear any previous broker that owned this SID
+      await pool.query(
+        `UPDATE brokers SET twilio_phone_sid = NULL, twilio_caller_id = NULL
+         WHERE tenant_id = ? AND twilio_phone_sid = ?`,
+        [MORTGAGE_TENANT_ID, sid],
+      );
+      // Assign to the new broker
+      await pool.query(
+        `UPDATE brokers SET twilio_phone_sid = ?, twilio_caller_id = ?
+         WHERE id = ? AND tenant_id = ?`,
+        [sid, callerIdE164, brokerId, MORTGAGE_TENANT_ID],
+      );
+      return res.json({ success: true, sid, brokerId, callerIdE164 });
+    } else {
+      // Unassign
+      await pool.query(
+        `UPDATE brokers SET twilio_phone_sid = NULL, twilio_caller_id = NULL
+         WHERE tenant_id = ? AND twilio_phone_sid = ?`,
+        [MORTGAGE_TENANT_ID, sid],
+      );
+      return res.json({ success: true, sid, brokerId: null });
+    }
+  } catch (error) {
+    console.error("[handleAssignPhoneNumber] Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to assign phone number" });
+  }
+};
+
+/**
+ * POST /api/voice/phone-numbers/:sid/configure
+ * Sets the Voice webhook on the given Twilio phone number to /api/voice/incoming.
+ * Pass sid = "all" to configure every number at once.
+ */
+const handleConfigurePhoneNumber: RequestHandler = async (req, res) => {
+  try {
+    if (!twilioClient) {
+      return res
+        .status(503)
+        .json({ success: false, error: "Twilio not configured" });
+    }
+    const { sid } = req.params as { sid: string };
+    const incomingUrl = `${getVoiceBaseUrl()}/api/voice/incoming`;
+
+    if (sid === "all") {
+      const numbers = await twilioClient.incomingPhoneNumbers.list({
+        limit: 50,
+      });
+      await Promise.all(
+        numbers.map((n) =>
+          twilioClient!
+            .incomingPhoneNumbers(n.sid)
+            .update({ voiceUrl: incomingUrl, voiceMethod: "POST" }),
+        ),
+      );
+      return res.json({
+        success: true,
+        updated: numbers.length,
+        incomingUrl,
+      });
+    }
+
+    await twilioClient
+      .incomingPhoneNumbers(sid)
+      .update({ voiceUrl: incomingUrl, voiceMethod: "POST" });
+    return res.json({ success: true, sid, incomingUrl });
+  } catch (error) {
+    console.error("[handleConfigurePhoneNumber] Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to configure phone number" });
+  }
 };
 
 /**
@@ -12619,6 +13037,7 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
       call_status,
       call_sid,
       client_name,
+      direction,
     } = req.body as {
       client_id?: number;
       application_id?: number;
@@ -12627,6 +13046,7 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
       call_status?: string;
       call_sid?: string;
       client_name?: string;
+      direction?: "inbound" | "outbound";
     };
 
     if (!phone) {
@@ -12651,11 +13071,12 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
       `INSERT INTO communications
          (tenant_id, from_broker_id, to_user_id, communication_type, direction,
           body, status, external_id, conversation_id, delivery_status, sent_at, created_at)
-       VALUES (?, ?, ?, 'call', 'outbound', ?, 'sent', ?, ?, 'sent', NOW(), NOW())`,
+       VALUES (?, ?, ?, 'call', ?, ?, 'sent', ?, ?, 'sent', NOW(), NOW())`,
       [
         MORTGAGE_TENANT_ID,
         brokerId,
         client_id ?? null,
+        direction ?? "outbound",
         body,
         call_sid ?? null,
         conversationId,
@@ -12683,6 +13104,113 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, error: "Failed to log call" });
+  }
+};
+
+/**
+ * GET /api/voice/calls
+ * Return paginated call history (communications where type='call') for the authenticated broker.
+ */
+const handleGetCallHistory: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 50),
+    );
+    const offset = (page - 1) * limit;
+
+    const [countRows] = await pool.query<any>(
+      `SELECT COUNT(*) AS total
+       FROM communications c
+       LEFT JOIN conversation_threads ct
+         ON c.conversation_id = ct.conversation_id AND ct.tenant_id = ?
+       WHERE c.communication_type = 'call'
+         AND c.tenant_id = ?
+         AND (c.from_broker_id = ? OR ct.broker_id = ?)`,
+      [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, brokerId, brokerId],
+    );
+    const total = countRows[0]?.total ?? 0;
+
+    const [rows] = await pool.query<any>(
+      `SELECT c.id, c.direction, c.body, c.status, c.external_id,
+              c.conversation_id, c.created_at, c.sent_at,
+              ct.client_name, ct.client_phone, ct.client_id
+       FROM communications c
+       LEFT JOIN conversation_threads ct
+         ON c.conversation_id = ct.conversation_id AND ct.tenant_id = ?
+       WHERE c.communication_type = 'call'
+         AND c.tenant_id = ?
+         AND (c.from_broker_id = ? OR ct.broker_id = ?)
+       ORDER BY c.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [
+        MORTGAGE_TENANT_ID,
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        brokerId,
+        limit,
+        offset,
+      ],
+    );
+
+    return res.json({
+      success: true,
+      calls: rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    console.error("Error fetching call history:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch call history" });
+  }
+};
+
+/**
+ * GET /api/conversations/lookup-contact
+ * Look up a client by phone number to resolve a name for incoming calls.
+ */
+const handleLookupContact: RequestHandler = async (req, res) => {
+  try {
+    const { phone } = req.query;
+    if (!phone || typeof phone !== "string") {
+      return res
+        .status(400)
+        .json({ success: false, error: "phone is required" });
+    }
+
+    const digits = phone.replace(/\D/g, "");
+    const lastTen = digits.slice(-10);
+
+    const [rows] = await pool.query<any>(
+      `SELECT id, first_name, last_name, phone
+       FROM clients
+       WHERE tenant_id = ?
+         AND (phone = ? OR phone = ? OR (LENGTH(REPLACE(phone, '-', '')) >= 10 AND RIGHT(REPLACE(REPLACE(REPLACE(phone, '+', ''), '-', ''), ' ', ''), 10) = ?))
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, phone, `+1${lastTen}`, lastTen],
+    );
+
+    if (!rows.length) {
+      return res.json({ success: true, found: false });
+    }
+
+    const client = rows[0];
+    return res.json({
+      success: true,
+      found: true,
+      client_id: client.id,
+      client_name:
+        `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim(),
+      phone: client.phone,
+    });
+  } catch (error) {
+    console.error("Error looking up contact:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to lookup contact" });
   }
 };
 
@@ -15568,6 +16096,11 @@ function createServer() {
     handleCheckWhatsApp,
   );
   expressApp.get(
+    "/api/conversations/lookup-contact",
+    verifyBrokerSession,
+    handleLookupContact,
+  );
+  expressApp.get(
     "/api/conversations/ably-token",
     verifyBrokerSession,
     handleAblyToken,
@@ -15576,7 +16109,34 @@ function createServer() {
   // Voice / Calling routes
   expressApp.post("/api/voice/token", verifyBrokerSession, handleVoiceToken);
   expressApp.post("/api/voice/twiml", handleVoiceTwiml); // no auth — called by Twilio
+  expressApp.post("/api/voice/incoming", handleVoiceIncoming); // no auth — Twilio webhook for inbound calls
+  expressApp.post(
+    "/api/voice/availability",
+    verifyBrokerSession,
+    handleVoiceAvailability,
+  );
   expressApp.post("/api/voice/log", verifyBrokerSession, handleVoiceLog);
+  expressApp.get("/api/voice/calls", verifyBrokerSession, handleGetCallHistory);
+  expressApp.post(
+    "/api/voice/fix-call-setup",
+    verifyBrokerSession,
+    handleFixCallSetup,
+  );
+  expressApp.get(
+    "/api/voice/phone-numbers",
+    verifyBrokerSession,
+    handleGetPhoneNumbers,
+  );
+  expressApp.post(
+    "/api/voice/phone-numbers/:sid/configure",
+    verifyBrokerSession,
+    handleConfigurePhoneNumber,
+  );
+  expressApp.post(
+    "/api/voice/phone-numbers/:sid/assign",
+    verifyBrokerSession,
+    handleAssignPhoneNumber,
+  );
 
   // Audit Logs routes
   expressApp.get("/api/audit-logs", verifyBrokerSession, handleGetAuditLogs);

@@ -23,6 +23,7 @@ import adminSectionControlsReducer from "./slices/adminSectionControlsSlice";
 import contactSubmissionsReducer from "./slices/contactSubmissionsSlice";
 import schedulerReducer from "./slices/schedulerSlice";
 import calendarEventsReducer from "./slices/calendarEventsSlice";
+import voiceReducer from "./slices/voiceSlice";
 
 export const store = configureStore({
   reducer: {
@@ -50,6 +51,7 @@ export const store = configureStore({
     contactSubmissions: contactSubmissionsReducer,
     scheduler: schedulerReducer,
     calendarEvents: calendarEventsReducer,
+    voice: voiceReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

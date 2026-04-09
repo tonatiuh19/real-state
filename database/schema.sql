@@ -343,7 +343,10 @@ CREATE TABLE `brokers` (
   `public_token` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'UUID token for public broker share link',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `created_by_broker_id` int(11) DEFAULT NULL COMMENT 'The admin/Mortgage Banker who created this partner broker'
+  `created_by_broker_id` int(11) DEFAULT NULL COMMENT 'The admin/Mortgage Banker who created this partner broker',
+  `twilio_phone_sid` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio IncomingPhoneNumber SID assigned to this broker for inbound routing and outbound caller ID',
+  `twilio_caller_id` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'E.164 phone number derived from twilio_phone_sid; used as callerId for outbound calls',
+  `voice_available` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = broker has toggled Available in the CRM and their Twilio Device is registered'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -1444,7 +1447,8 @@ INSERT INTO `system_settings` (`id`, `tenant_id`, `setting_key`, `setting_value`
 (8, 1, 'company_phone', '5623370000', 'string', 'Company phone displayed in pre-approval letters', '2026-02-28 23:15:03'),
 (9, 1, 'company_nmls', '1105497', 'string', 'Company NMLS license number for pre-approval letters', '2026-02-28 23:14:10'),
 (11, 1, 'pre_approval_default_template', '<div style=\"font-family: Arial, Helvetica, sans-serif; max-width: 750px; margin: 0 auto; padding: 48px; background: #fff; color: #222;\">\r\n\r\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\r\n    <tr>\r\n      <td style=\"vertical-align: top; width: 55%;\">{{COMPANY_LOGO}}</td>\r\n      <td style=\"vertical-align: top; text-align: right; font-size: 13px; color: #333; line-height: 1.8;\">\r\n        <strong>{{COMPANY_NAME}}</strong><br>P. {{COMPANY_PHONE}}<br>NMLS# {{COMPANY_NMLS}}\r\n      </td>\r\n    </tr>\r\n  </table>\r\n\r\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\r\n\r\n  <table style=\"width: 100%; margin-bottom: 20px; border-collapse: collapse;\">\r\n    <tr>\r\n      <td style=\"font-size: 13px;\">Date: {{LETTER_DATE}}</td>\r\n      <td style=\"font-size: 13px; text-align: right;\">Expires: {{EXPIRES_SHORT}}</td>\r\n    </tr>\r\n  </table>\r\n\r\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Re: {{CLIENT_FULL_NAME}}</p>\r\n  <hr style=\"border: none; border-top: 1px solid #ccc; margin-bottom: 20px;\">\r\n\r\n  <p style=\"margin: 0 0 16px; font-size: 13px; line-height: 1.7;\">This letter shall serve as a pre-approval for a loan in connection with the purchase transaction for the above referenced buyer(s). Based on preliminary information, a pre-approval is herein granted with the following terms:</p>\r\n\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Purchase Price: {{APPROVED_AMOUNT}}</p>\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Loan Type: </p>\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">Term: 30 years</p>\r\n  <p style=\"margin: 0 0 5px; font-size: 13px;\">FICO Score: </p>\r\n  <p style=\"margin: 0 0 20px; font-size: 13px;\">Property Address: {{PROPERTY_ADDRESS}}</p>\r\n\r\n  <p style=\"margin: 0 0 8px; font-size: 13px;\"><strong>We have reviewed the following:</strong></p>\r\n  <ul style=\"margin: 0 0 20px; padding-left: 24px; font-size: 13px; line-height: 1.9;\">\r\n    <li>Reviewed applicant&#39;s credit report and credit score</li>\r\n    <li>Verified applicant&#39;s income documentation and debt to income ratio</li>\r\n    <li>Verified applicant&#39;s assets documentation</li>\r\n  </ul>\r\n\r\n  <p style=\"margin: 0 0 20px; font-size: 13px; line-height: 1.7;\">Disclaimer: <strong>Loan Contingency.</strong> Even though a buyer may hold a pre-approval letter, further investigations concerning the property or the borrower could result in a loan denial. We suggest the buyer consider a loan contingency requirement in the purchase contract (to protect earnest money deposit) in accordance with applicable state law.</p>\r\n\r\n  <p style=\"margin: 0 0 32px; font-size: 13px;\">Realtor Partner: </p>\r\n\r\n  <table style=\"width: 100%; border-collapse: collapse;\">\r\n    <tr>\r\n      <td style=\"vertical-align: top; width: 100px;\">{{BROKER_PHOTO}}</td>\r\n      <td style=\"vertical-align: top; padding-left: 16px; font-size: 13px; line-height: 1.7;\">\r\n        <p style=\"margin: 0 0 3px;\"><strong>{{BROKER_FULL_NAME}}</strong></p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">Mortgage Banker</p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_LICENSE}}</p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">{{COMPANY_NAME}}</p>\r\n        <p style=\"margin: 0 0 3px; color: #444;\">{{BROKER_PHONE}}</p>\r\n        <p style=\"margin: 0; color: #444;\">{{BROKER_EMAIL}}</p>\r\n      </td>\r\n    </tr>\r\n  </table>\r\n\r\n</div>', 'string', 'Default HTML template for pre-approval letters — matches Encore Mortgage letter format', '2026-02-26 22:13:35'),
-(12, 1, 'pre_approval_require_all_tasks', 'false', 'string', NULL, '2026-03-05 13:52:59');
+(12, 1, 'pre_approval_require_all_tasks', 'false', 'string', NULL, '2026-03-05 13:52:59'),
+(30002, 1, 'voice_greeting', '', 'string', 'Text-to-speech greeting played when someone calls the CRM. Leave empty to skip greeting.', '2026-04-08 19:26:00');
 
 -- --------------------------------------------------------
 
@@ -1958,11 +1962,13 @@ ALTER TABLE `brokers`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `unique_tenant_email` (`tenant_id`,`email`),
   ADD UNIQUE KEY `uk_brokers_public_token` (`public_token`),
+  ADD UNIQUE KEY `uq_broker_twilio_phone` (`tenant_id`,`twilio_phone_sid`),
   ADD KEY `idx_email` (`email`),
   ADD KEY `idx_role` (`role`),
   ADD KEY `idx_status` (`status`),
   ADD KEY `tenant_id` (`tenant_id`),
-  ADD KEY `idx_brokers_created_by` (`created_by_broker_id`);
+  ADD KEY `idx_brokers_created_by` (`created_by_broker_id`),
+  ADD KEY `idx_broker_voice_available` (`tenant_id`,`status`,`voice_available`);
 
 --
 -- Indexes for table `broker_monthly_metrics`

@@ -8,10 +8,12 @@ import type {
   UpdateConversationResponse,
   GetConversationTemplatesResponse,
   GetConversationStatsResponse,
+  GetCallHistoryResponse,
   ConversationThread,
   Communication,
   ConversationTemplate,
   ConversationStats,
+  CallRecord,
   SendMessageRequest,
   UpdateConversationRequest,
 } from "@shared/api";
@@ -64,6 +66,16 @@ interface ConversationsState {
   whatsappAvailability: Record<string, boolean | null>; // phone -> true/false/null (null = checking)
   isCheckingWhatsApp: boolean;
 
+  // Call history
+  callHistory: CallRecord[];
+  isLoadingCallHistory: boolean;
+  callHistoryPagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+
   // Error handling
   error: string | null;
 }
@@ -110,6 +122,10 @@ const initialState: ConversationsState = {
 
   whatsappAvailability: {},
   isCheckingWhatsApp: false,
+
+  callHistory: [],
+  isLoadingCallHistory: false,
+  callHistoryPagination: { page: 1, limit: 50, total: 0, totalPages: 0 },
 
   error: null,
 };
@@ -288,6 +304,30 @@ export const fetchConversationStats = createAsyncThunk(
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.message || "Failed to fetch conversation stats",
+      );
+    }
+  },
+);
+
+export const fetchCallHistory = createAsyncThunk(
+  "conversations/fetchCallHistory",
+  async (
+    { page = 1, limit = 50 }: { page?: number; limit?: number } = {},
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetCallHistoryResponse>(
+        "/api/voice/calls",
+        {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+          params: { page, limit },
+        },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to fetch call history",
       );
     }
   },
@@ -530,6 +570,23 @@ const conversationsSlice = createSlice({
       })
       .addCase(fetchConversationStats.rejected, (state, action) => {
         state.isLoadingStats = false;
+        state.error = action.payload as string;
+      });
+
+    // Fetch call history
+    builder
+      .addCase(fetchCallHistory.pending, (state) => {
+        state.isLoadingCallHistory = true;
+        state.error = null;
+      })
+      .addCase(fetchCallHistory.fulfilled, (state, action) => {
+        state.isLoadingCallHistory = false;
+        state.callHistory = action.payload.calls;
+        state.callHistoryPagination = action.payload.pagination;
+        state.error = null;
+      })
+      .addCase(fetchCallHistory.rejected, (state, action) => {
+        state.isLoadingCallHistory = false;
         state.error = action.payload as string;
       });
   },

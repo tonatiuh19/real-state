@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import GlobalVoiceManager from "@/components/GlobalVoiceManager";
 import {
   LayoutDashboard,
   Kanban,
@@ -657,6 +658,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <GlobalVoiceManager />
     </div>
   );
 };

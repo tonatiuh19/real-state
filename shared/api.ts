@@ -1239,6 +1239,40 @@ export interface VoiceLogRequest {
   call_status?: string;
   call_sid?: string;
   client_name?: string;
+  direction?: "inbound" | "outbound";
+}
+
+export interface CallRecord {
+  id: number;
+  direction: "inbound" | "outbound";
+  body: string;
+  status: string;
+  external_id?: string | null;
+  conversation_id?: string | null;
+  client_name?: string | null;
+  client_phone?: string | null;
+  client_id?: number | null;
+  created_at: string;
+  sent_at?: string | null;
+}
+
+export interface GetCallHistoryResponse {
+  success: boolean;
+  calls: CallRecord[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface LookupContactResponse {
+  success: boolean;
+  found: boolean;
+  client_id?: number;
+  client_name?: string;
+  phone?: string;
 }
 
 // ─── Broker Public Share Link ─────────────────────────────────────────────────
