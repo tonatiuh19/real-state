@@ -17,6 +17,7 @@ import {
   Building2,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { ImageCropUploader } from "@/components/ImageCropUploader";
 import { Button } from "@/components/ui/button";
@@ -188,46 +189,42 @@ const BrokerProfile = () => {
       />
       <div className="p-4 sm:p-6 lg:p-8">
         {/* Page Header */}
-        <header className="mb-6 sm:mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-              My Profile
-            </h1>
-            <p className="text-sm sm:text-base text-muted-foreground">
-              Manage your personal information, contact details, and
-              public-facing profile.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              className="gap-2"
-              onClick={() => formik.resetForm()}
-              disabled={profileSaving || !formik.dirty}
-            >
-              Discard
-            </Button>
-            <Button
-              type="button"
-              disabled={profileSaving || !formik.dirty}
-              className="gap-2"
-              onClick={() => formik.submitForm()}
-            >
-              {profileSaving ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                <>
-                  <Save className="h-4 w-4" />
-                  Save Changes
-                </>
-              )}
-            </Button>
-          </div>
-        </header>
+        <PageHeader
+          title="My Profile"
+          description="Manage your personal information, contact details, and public-facing profile."
+          className="mb-6 sm:mb-8"
+          actions={
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2"
+                onClick={() => formik.resetForm()}
+                disabled={profileSaving || !formik.dirty}
+              >
+                Discard
+              </Button>
+              <Button
+                type="button"
+                disabled={profileSaving || !formik.dirty}
+                className="gap-2"
+                onClick={() => formik.submitForm()}
+              >
+                {profileSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4" />
+                    Save Changes
+                  </>
+                )}
+              </Button>
+            </div>
+          }
+        />
 
         {profileError && (
           <Alert variant="destructive" className="mb-6">

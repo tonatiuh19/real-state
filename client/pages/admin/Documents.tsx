@@ -12,6 +12,7 @@ import {
   ChevronsUpDown,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -157,41 +158,40 @@ const Documents = () => {
       />
       <div className="p-6 space-y-6">
         {/* Header */}
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-              <FileText className="h-8 w-8 text-primary" />
-              Documents
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              {isAdmin
-                ? "View and manage all client documents"
-                : "View and manage your client documents"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => dispatch(clearFilters())}
-              disabled={!searchQuery && filterType === "all" && !filterBroker}
-            >
-              <Filter className="h-4 w-4 mr-2" />
-              Clear Filters
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => dispatch(fetchAllDocuments())}
-              disabled={isLoading}
-            >
-              <RefreshCw
-                className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`}
-              />
-              Refresh
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          icon={<FileText className="h-7 w-7 text-primary" />}
+          title="Documents"
+          description={
+            isAdmin
+              ? "View and manage all client documents"
+              : "View and manage your client documents"
+          }
+          className="mb-0"
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => dispatch(clearFilters())}
+                disabled={!searchQuery && filterType === "all" && !filterBroker}
+              >
+                <Filter className="h-4 w-4 mr-2" />
+                Clear Filters
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => dispatch(fetchAllDocuments())}
+                disabled={isLoading}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`}
+                />
+                Refresh
+              </Button>
+            </div>
+          }
+        />
 
         {/* Filters */}
         <Card>

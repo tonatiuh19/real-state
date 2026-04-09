@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -300,23 +301,19 @@ const Settings = () => {
         )}
       />
       <div className="p-4 sm:p-6 lg:p-8">
-        <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-              <SettingsIcon className="h-7 w-7 text-primary" />
-              Settings
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Manage letter configuration, notifications, and system preferences
-            </p>
-          </div>
-          {!isAdmin && (
-            <Badge className="bg-amber-50 text-amber-700 border-amber-200 self-start md:self-auto">
-              <AlertCircle className="h-3 w-3 mr-1" />
-              View only — admin required to edit
-            </Badge>
-          )}
-        </header>
+        <PageHeader
+          icon={<SettingsIcon className="h-7 w-7 text-primary" />}
+          title="Settings"
+          description="Manage letter configuration, notifications, and system preferences"
+          actions={
+            !isAdmin ? (
+              <Badge className="bg-amber-50 text-amber-700 border-amber-200 self-start md:self-auto">
+                <AlertCircle className="h-3 w-3 mr-1" />
+                View only — admin required to edit
+              </Badge>
+            ) : undefined
+          }
+        />
 
         <div className="max-w-3xl space-y-6">
           {isLoading ? (

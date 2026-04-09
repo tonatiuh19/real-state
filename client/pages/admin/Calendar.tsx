@@ -49,6 +49,7 @@ import {
   subMonths,
 } from "date-fns";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -2288,46 +2289,42 @@ const AdminCalendar: React.FC = () => {
 
       <div className="p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <CalendarDays className="h-6 w-6 text-primary" />
-              Calendar
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Meetings, birthdays, anniversaries and important dates — all in
-              one place
-            </p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button
-              onClick={() => {
-                dispatch(fetchScheduledMeetings());
-                dispatch(fetchCalendarEvents());
-              }}
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <RefreshCw className="h-4 w-4 mr-1" /> Refresh
-            </Button>
-            <Button
-              onClick={() => setShowCreateEvent(true)}
-              variant="outline"
-              size="sm"
-              className="border-border text-foreground hover:bg-muted/50"
-            >
-              <Sparkles className="h-4 w-4 mr-1" /> Add Event
-            </Button>
-            <Button
-              onClick={() => setShowCreateMeeting(true)}
-              size="sm"
-              className="bg-primary hover:bg-primary/90 text-primary-foreground"
-            >
-              <Plus className="h-4 w-4 mr-1" /> New Meeting
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          icon={<CalendarDays className="h-7 w-7 text-primary" />}
+          title="Calendar"
+          description="Meetings, birthdays, anniversaries and important dates — all in one place"
+          className="mb-0"
+          actions={
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                onClick={() => {
+                  dispatch(fetchScheduledMeetings());
+                  dispatch(fetchCalendarEvents());
+                }}
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <RefreshCw className="h-4 w-4 mr-1" /> Refresh
+              </Button>
+              <Button
+                onClick={() => setShowCreateEvent(true)}
+                variant="outline"
+                size="sm"
+                className="border-border text-foreground hover:bg-muted/50"
+              >
+                <Sparkles className="h-4 w-4 mr-1" /> Add Event
+              </Button>
+              <Button
+                onClick={() => setShowCreateMeeting(true)}
+                size="sm"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                <Plus className="h-4 w-4 mr-1" /> New Meeting
+              </Button>
+            </div>
+          }
+        />
 
         {/* Booking link bar */}
         <div className="rounded-xl border border-border/50 bg-muted/30 p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">

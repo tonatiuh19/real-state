@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import NewConversationWizard from "@/components/NewConversationWizard";
 import VoiceCallPanel from "@/components/VoiceCallPanel";
 import PhoneLink from "@/components/PhoneLink";
@@ -707,28 +708,18 @@ const Conversations = () => {
       />
 
       {/* Header */}
-      <div className="bg-card border-b border-border px-4 md:px-6 py-3 flex-shrink-0">
-        {/* Top row: title + primary actions */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            {/* Back button on mobile when in chat view */}
-            {mobilePanel === "chat" && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="md:hidden h-8 w-8 flex-shrink-0"
-                onClick={() => setMobilePanel("list")}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-            )}
-            <h1 className="text-lg md:text-2xl font-bold tracking-tight flex items-center gap-2 text-foreground truncate">
-              <MessageCircle className="h-5 w-5 md:h-6 md:w-6 text-primary flex-shrink-0" />
-              <span className="hidden sm:inline">Conversations</span>
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-1.5">
+      <PageHeader
+        variant="toolbar"
+        icon={
+          <MessageCircle className="h-5 w-5 md:h-6 md:w-6 text-primary flex-shrink-0" />
+        }
+        title="Conversations"
+        description="Manage client communications via SMS, WhatsApp & Email"
+        mobileBack={
+          mobilePanel === "chat" ? () => setMobilePanel("list") : undefined
+        }
+        actions={
+          <>
             {/* Availability toggle */}
             <button
               onClick={() => dispatch(setVoiceAvailable(!isAvailable))}
@@ -821,9 +812,9 @@ const Conversations = () => {
               <Plus className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">New</span>
             </Button>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Main 3-column layout */}
       <div className="flex flex-1 overflow-hidden">

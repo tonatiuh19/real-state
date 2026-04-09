@@ -51,6 +51,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { DataGrid } from "@/components/ui/data-grid";
 import type { DataGridColumn } from "@/components/ui/data-grid";
@@ -127,13 +128,13 @@ import type {
 
 const TRIGGER_EVENT_OPTIONS: { value: ReminderTriggerEvent; label: string }[] =
   [
-    { value: "application_created", label: "Application Created" },
+    { value: "application_received", label: "Application Received" },
     { value: "task_pending", label: "Task Pending" },
     { value: "task_in_progress", label: "Task In Progress" },
     { value: "task_overdue", label: "Task Overdue" },
     { value: "no_activity", label: "No Activity" },
-    { value: "loan_approved", label: "Loan Approved" },
-    { value: "loan_documents_pending", label: "Documents Pending" },
+    { value: "approved_with_conditions", label: "Loan Approved" },
+    { value: "docs_out", label: "Documents Pending" },
     { value: "manual", label: "Manual Trigger" },
   ];
 
@@ -1852,7 +1853,7 @@ const ReminderFlows = () => {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newTrigger, setNewTrigger] = useState<ReminderTriggerEvent>(
-    "application_created",
+    "application_received",
   );
   const [newDelay, setNewDelay] = useState(0);
 
@@ -1891,7 +1892,7 @@ const ReminderFlows = () => {
       setShowCreateModal(false);
       setNewName("");
       setNewDesc("");
-      setNewTrigger("application_created");
+      setNewTrigger("application_received");
       setNewDelay(0);
       dispatch(fetchReminderFlows());
       // Immediately open editor
@@ -2040,25 +2041,20 @@ const ReminderFlows = () => {
       />
       <div className="p-4 sm:p-6 lg:p-8">
         {/* Header */}
-        <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-              <AlarmClock className="h-7 w-7 text-primary" />
-              Reminder Flows
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Build visual automation flows to keep clients engaged and on track
-              with their tasks
-            </p>
-          </div>
-          <Button
-            className="gap-2 self-start md:self-auto"
-            onClick={() => setShowCreateModal(true)}
-          >
-            <Plus className="h-4 w-4" />
-            New Flow
-          </Button>
-        </header>
+        <PageHeader
+          icon={<AlarmClock className="h-7 w-7 text-primary" />}
+          title="Reminder Flows"
+          description="Build visual automation flows to keep clients engaged and on track with their tasks"
+          actions={
+            <Button
+              className="gap-2 self-start md:self-auto"
+              onClick={() => setShowCreateModal(true)}
+            >
+              <Plus className="h-4 w-4" />
+              New Flow
+            </Button>
+          }
+        />
 
         {/* Tab switcher */}
         <Tabs

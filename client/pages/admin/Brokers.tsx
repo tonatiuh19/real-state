@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import type { Broker } from "@shared/api";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
@@ -299,27 +300,20 @@ export default function Brokers() {
       />
       <div className="space-y-6 p-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-3">
-              <UserCog className="h-6 w-6" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                Broker Management
-              </h1>
-              <p className="text-sm text-gray-600">
-                Manage broker accounts and permissions
-              </p>
-            </div>
-          </div>
-          {isAdmin && (
-            <Button onClick={handleCreateBroker} className="gap-2">
-              <Plus className="h-4 w-4" />
-              Add Broker
-            </Button>
-          )}
-        </div>
+        <PageHeader
+          icon={<UserCog className="h-7 w-7 text-primary" />}
+          title="Broker Management"
+          description="Manage broker accounts and permissions"
+          className="mb-0"
+          actions={
+            isAdmin ? (
+              <Button onClick={handleCreateBroker} className="gap-2">
+                <Plus className="h-4 w-4" />
+                Add Broker
+              </Button>
+            ) : undefined
+          }
+        />
 
         {/* Search Bar */}
         <div className="flex items-center gap-2 bg-white rounded-lg border p-3">

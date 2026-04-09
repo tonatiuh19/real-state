@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import {
   BarChart,
@@ -223,46 +224,43 @@ const AdminDashboard = () => {
         {...adminPageMeta("Dashboard", "Overview of your brokerage operations")}
       />
       <div className="p-4 sm:p-6 lg:p-8">
-        <header className="mb-6 sm:mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-              Overview
-            </h1>
-            <p className="text-sm sm:text-base text-muted-foreground">
-              Manage your brokerage operations efficiently.
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="relative w-full sm:max-w-xs md:w-64">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search loans..."
-                className="pl-9"
-                value={dashboardSearch}
-                onChange={(e) => setDashboardSearch(e.target.value)}
-              />
+        <PageHeader
+          title="Overview"
+          description="Manage your brokerage operations efficiently."
+          className="mb-6 sm:mb-8"
+          actions={
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <div className="relative w-full sm:max-w-xs md:w-64">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search loans..."
+                  className="pl-9"
+                  value={dashboardSearch}
+                  onChange={(e) => setDashboardSearch(e.target.value)}
+                />
+              </div>
+              {isPartner ? (
+                <Button
+                  className="gap-2 whitespace-nowrap"
+                  onClick={() => setShareLinkOpen(true)}
+                >
+                  <Link2 className="h-4 w-4" />{" "}
+                  <span className="hidden sm:inline">Get My Link</span>
+                  <span className="sm:hidden">My Link</span>
+                </Button>
+              ) : (
+                <Button
+                  className="gap-2 whitespace-nowrap"
+                  onClick={() => setWizardOpen(true)}
+                >
+                  <Plus className="h-4 w-4" />{" "}
+                  <span className="hidden sm:inline">New Loan</span>
+                  <span className="sm:hidden">New</span>
+                </Button>
+              )}
             </div>
-            {isPartner ? (
-              <Button
-                className="gap-2 whitespace-nowrap"
-                onClick={() => setShareLinkOpen(true)}
-              >
-                <Link2 className="h-4 w-4" />{" "}
-                <span className="hidden sm:inline">Get My Link</span>
-                <span className="sm:hidden">My Link</span>
-              </Button>
-            ) : (
-              <Button
-                className="gap-2 whitespace-nowrap"
-                onClick={() => setWizardOpen(true)}
-              >
-                <Plus className="h-4 w-4" />{" "}
-                <span className="hidden sm:inline">New Loan</span>
-                <span className="sm:hidden">New</span>
-              </Button>
-            )}
-          </div>
-        </header>
+          }
+        />
 
         <NewLoanWizard
           open={wizardOpen}

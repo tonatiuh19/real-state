@@ -13,6 +13,7 @@ import {
   ChevronsUpDown,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import { Button } from "@/components/ui/button";
@@ -114,32 +115,33 @@ const ContactSubmissions = () => {
       />
 
       {/* Header */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <MessageSquare className="h-6 w-6 text-primary" />
+      <PageHeader
+        icon={<MessageSquare className="h-7 w-7 text-primary" />}
+        title={
+          <>
             Contact Submissions
             {unreadCount > 0 && (
               <Badge className="ml-1 bg-primary text-primary-foreground">
                 {unreadCount} new
               </Badge>
             )}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Messages sent from the public contact form
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => dispatch(fetchContactSubmissions())}
-          disabled={isLoading}
-          className="gap-2 self-start sm:self-auto"
-        >
-          <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
-          Refresh
-        </Button>
-      </div>
+          </>
+        }
+        description="Messages sent from the public contact form"
+        className="mb-0"
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => dispatch(fetchContactSubmissions())}
+            disabled={isLoading}
+            className="gap-2 self-start sm:self-auto"
+          >
+            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+            Refresh
+          </Button>
+        }
+      />
 
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-3">

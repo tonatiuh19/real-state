@@ -4,6 +4,7 @@ import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import ClientFormDialog from "@/components/ClientFormDialog";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -281,40 +282,36 @@ const Clients = () => {
         )}
       />
       <div className="p-4 sm:p-6 lg:p-8">
-        <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-              <Users className="h-7 w-7 text-primary" />
-              Clients
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Manage your client relationships and applications
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="relative w-full sm:max-w-xs">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search clients..."
-                className="pl-9"
-                value={searchQuery}
-                onChange={(e) => handleSearch(e.target.value)}
-              />
+        <PageHeader
+          icon={<Users className="h-7 w-7 text-primary" />}
+          title="Clients"
+          description="Manage your client relationships and applications"
+          actions={
+            <div className="flex items-center gap-3">
+              <div className="relative w-full sm:max-w-xs">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search clients..."
+                  className="pl-9"
+                  value={searchQuery}
+                  onChange={(e) => handleSearch(e.target.value)}
+                />
+              </div>
+              {!isPartner && (
+                <Button
+                  onClick={() => {
+                    setClientToEdit(null);
+                    setFormOpen(true);
+                  }}
+                  className="gap-1.5 whitespace-nowrap"
+                >
+                  <Plus className="h-4 w-4" />
+                  New Client
+                </Button>
+              )}
             </div>
-            {!isPartner && (
-              <Button
-                onClick={() => {
-                  setClientToEdit(null);
-                  setFormOpen(true);
-                }}
-                className="gap-1.5 whitespace-nowrap"
-              >
-                <Plus className="h-4 w-4" />
-                New Client
-              </Button>
-            )}
-          </div>
-        </header>
+          }
+        />
 
         {loading ? (
           <div className="text-center py-12 text-muted-foreground">

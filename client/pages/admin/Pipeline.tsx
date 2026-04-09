@@ -17,6 +17,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -341,48 +342,44 @@ const Pipeline = () => {
         )}
       />
       <div className="min-h-screen bg-gray-50">
-        {/* Clean Modern Header */}
-        <div className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
-          <div className="px-4 sm:px-6 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-4">
-                  <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-                      <Kanban className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
-                      Pipeline
-                    </h1>
-                    <div className="flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4 text-green-500" />
-                      <p className="text-sm text-gray-600">
-                        {loans.length} active applications
-                      </p>
-                      <Badge className="bg-blue-50 text-blue-700">Live</Badge>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                {/* Clean Search */}
+        {/* Header */}
+        <div className="sticky top-0 z-50 shadow-sm">
+          <PageHeader
+            variant="toolbar"
+            icon={
+              <Kanban className="h-5 w-5 md:h-6 md:w-6 text-primary flex-shrink-0" />
+            }
+            title="Pipeline"
+            description={
+              <span className="flex items-center gap-1.5">
+                <TrendingUp className="h-3.5 w-3.5 text-green-500" />
+                {loans.length} active applications
+                <Badge className="bg-blue-50 text-blue-700 text-[10px] h-4 px-1.5">
+                  Live
+                </Badge>
+              </span>
+            }
+            actions={
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Search */}
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search applications, clients..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 w-full sm:w-80 h-10 bg-white border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    className="pl-10 w-full sm:w-72 h-9"
                   />
                   {searchQuery && (
-                    <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                      <Badge className="bg-blue-500 text-white text-xs">
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <Badge className="bg-primary text-primary-foreground text-xs">
                         {loans.length}
                       </Badge>
                     </div>
                   )}
                 </div>
 
-                {/* Refresh Button */}
+                {/* Refresh */}
                 <Button
                   variant="outline"
                   size="icon"
@@ -408,7 +405,7 @@ const Pipeline = () => {
                     await dispatch(fetchLoans(filtersToApply));
                     setIsRefreshing(false);
                   }}
-                  className="h-10 w-10 border-gray-300 text-gray-600 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-300 transition-colors duration-200"
+                  className="h-9 w-9"
                   title="Refresh pipeline"
                 >
                   <RefreshCw
@@ -416,15 +413,18 @@ const Pipeline = () => {
                   />
                 </Button>
 
-                {/* Clean Filters */}
+                {/* Filters */}
                 <DropdownMenu open={showFilters} onOpenChange={setShowFilters}>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="gap-2 h-10 px-4">
+                    <Button
+                      variant="outline"
+                      className="gap-2 h-9 px-3 text-xs"
+                    >
                       <Filter className="h-4 w-4" />
                       Filters
                       <ChevronDown className="h-3 w-3 opacity-50" />
                       {activeFiltersCount > 0 && (
-                        <Badge className="ml-1 h-5 w-5 p-0 flex items-center justify-center text-xs bg-blue-500 text-white">
+                        <Badge className="ml-1 h-4 w-4 p-0 flex items-center justify-center text-[10px] bg-primary text-primary-foreground">
                           {activeFiltersCount}
                         </Badge>
                       )}
@@ -577,7 +577,7 @@ const Pipeline = () => {
                 {isPartner ? (
                   <Button
                     onClick={() => setShareLinkOpen(true)}
-                    className="gap-2 h-10 px-6 bg-primary text-white"
+                    className="gap-2 h-9 px-4 bg-primary text-white"
                   >
                     <Link2 className="h-4 w-4" />
                     Get My Link
@@ -585,18 +585,18 @@ const Pipeline = () => {
                 ) : (
                   <Button
                     onClick={() => setIsNewLoanOpen(true)}
-                    className="gap-2 h-10 px-6 bg-primary text-white"
+                    className="gap-2 h-9 px-4 bg-primary text-white"
                   >
                     <Plus className="h-4 w-4" />
                     New Loan
                   </Button>
                 )}
               </div>
-            </div>
-          </div>
+            }
+          />
         </div>
 
-        {/* Clean Kanban Board */}
+        {/* Kanban Board */}
         <div className="flex-1 overflow-hidden">
           <div className="h-full flex gap-4 p-6 overflow-x-auto">
             {columns.map((column, index) => (
