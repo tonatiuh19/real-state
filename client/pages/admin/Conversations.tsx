@@ -37,6 +37,8 @@ import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import NewConversationWizard from "@/components/NewConversationWizard";
 import VoiceCallPanel from "@/components/VoiceCallPanel";
+import PhoneLink from "@/components/PhoneLink";
+import EmailLink from "@/components/EmailLink";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1181,19 +1183,18 @@ const Conversations = () => {
                       </p>
                       <div className="flex items-center gap-3 text-xs text-muted-foreground">
                         {currentThread.client_phone && (
-                          <a
-                            href={`tel:${currentThread.client_phone}`}
-                            className="flex items-center gap-1 hover:text-primary transition-colors"
-                          >
-                            <Phone className="h-3 w-3" />
-                            {currentThread.client_phone}
-                          </a>
+                          <PhoneLink
+                            phone={currentThread.client_phone}
+                            clientName={currentThread.client_name}
+                            clientId={currentThread.client_id}
+                            className="text-xs text-muted-foreground"
+                          />
                         )}
                         {currentThread.client_email && (
-                          <span className="flex items-center gap-1">
-                            <Mail className="h-3 w-3" />
-                            {currentThread.client_email}
-                          </span>
+                          <EmailLink
+                            email={currentThread.client_email}
+                            className="text-xs text-muted-foreground"
+                          />
                         )}
                       </div>
                     </div>
@@ -1729,9 +1730,13 @@ const Conversations = () => {
                         <p className="text-xs text-muted-foreground font-medium">
                           Phone
                         </p>
-                        <p className="text-sm text-foreground">
-                          {currentThread.client_phone}
-                        </p>
+                        <PhoneLink
+                          phone={currentThread.client_phone}
+                          clientName={currentThread.client_name}
+                          clientId={currentThread.client_id}
+                          noIcon
+                          className="text-sm text-foreground"
+                        />
                         <Button
                           variant="outline"
                           size="sm"
@@ -1759,12 +1764,11 @@ const Conversations = () => {
                         <p className="text-xs text-muted-foreground font-medium">
                           Email
                         </p>
-                        <a
-                          href={`mailto:${currentThread.client_email}`}
-                          className="text-sm text-foreground hover:text-primary transition-colors truncate block"
-                        >
-                          {currentThread.client_email}
-                        </a>
+                        <EmailLink
+                          email={currentThread.client_email}
+                          noIcon
+                          className="text-sm text-foreground"
+                        />
                       </div>
                     </div>
                   )}

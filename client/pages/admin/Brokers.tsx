@@ -40,6 +40,8 @@ import {
 import type { Broker } from "@shared/api";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
+import PhoneLink from "@/components/PhoneLink";
+import EmailLink from "@/components/EmailLink";
 
 export default function Brokers() {
   const dispatch = useAppDispatch();
@@ -354,18 +356,18 @@ export default function Brokers() {
                 render: (b) => (
                   <div className="flex flex-col gap-1 text-sm min-w-0">
                     <div className="flex items-center gap-1.5 text-gray-600">
-                      <Mail className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{b.email}</span>
+                      <EmailLink
+                        email={b.email}
+                        className="text-sm text-gray-600"
+                      />
                     </div>
                     {b.phone && (
                       <div className="flex items-center gap-1.5 text-gray-600">
-                        <Phone className="h-3.5 w-3.5 shrink-0" />
-                        <a
-                          href={`tel:${b.phone}`}
-                          className="hover:underline truncate"
-                        >
-                          {b.phone}
-                        </a>
+                        <PhoneLink
+                          phone={b.phone}
+                          clientName={`${b.first_name} ${b.last_name}`}
+                          className="text-sm text-gray-600"
+                        />
                       </div>
                     )}
                   </div>
@@ -488,16 +490,16 @@ export default function Brokers() {
                     <p className="font-semibold text-sm">
                       {broker.first_name} {broker.last_name}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      {broker.email}
-                    </p>
+                    <EmailLink
+                      email={broker.email}
+                      className="text-xs text-muted-foreground"
+                    />
                     {broker.phone && (
-                      <a
-                        href={`tel:${broker.phone}`}
-                        className="text-xs text-muted-foreground hover:underline"
-                      >
-                        {broker.phone}
-                      </a>
+                      <PhoneLink
+                        phone={broker.phone}
+                        clientName={`${broker.first_name} ${broker.last_name}`}
+                        className="text-xs text-muted-foreground"
+                      />
                     )}
                   </div>
                   <div className="flex flex-col items-end gap-1">

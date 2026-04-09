@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Users, Search, Mail, Phone, Trash2 } from "lucide-react";
+import PhoneLink from "@/components/PhoneLink";
+import EmailLink from "@/components/EmailLink";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
@@ -152,17 +154,24 @@ const Clients = () => {
       render: (client) => (
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm">
-            <Mail className="h-3 w-3 text-muted-foreground" />
-            <span className="truncate max-w-[200px]">{client.email}</span>
+            <EmailLink
+              email={client.email}
+              className="text-sm text-foreground"
+            />
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <Phone className="h-3 w-3 text-muted-foreground" />
             {client.phone ? (
-              <a href={`tel:${client.phone}`} className="hover:underline">
-                {client.phone}
-              </a>
+              <PhoneLink
+                phone={client.phone}
+                clientName={`${client.first_name} ${client.last_name}`}
+                clientId={client.id}
+                className="text-sm text-foreground"
+              />
             ) : (
-              <span className="text-muted-foreground">No phone</span>
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Phone className="h-3 w-3" />
+                No phone
+              </span>
             )}
           </div>
         </div>
@@ -353,19 +362,18 @@ const Clients = () => {
                       </div>
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Mail className="h-3 w-3" />
-                          <span className="truncate">{client.email}</span>
+                          <EmailLink
+                            email={client.email}
+                            className="text-xs text-muted-foreground"
+                          />
                         </div>
                         {client.phone && (
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Phone className="h-3 w-3" />
-                            <a
-                              href={`tel:${client.phone}`}
-                              className="hover:underline"
-                            >
-                              {client.phone}
-                            </a>
-                          </div>
+                          <PhoneLink
+                            phone={client.phone}
+                            clientName={`${client.first_name} ${client.last_name}`}
+                            clientId={client.id}
+                            className="text-xs text-muted-foreground"
+                          />
                         )}
                       </div>
                       {!isPartner && (

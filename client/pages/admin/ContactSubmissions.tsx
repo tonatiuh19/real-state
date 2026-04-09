@@ -13,6 +13,8 @@ import {
   ChevronsUpDown,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import PhoneLink from "@/components/PhoneLink";
+import EmailLink from "@/components/EmailLink";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -302,7 +304,7 @@ const ContactSubmissions = () => {
                             {sub.name}
                           </span>
                           <span className="text-xs text-muted-foreground mt-0.5">
-                            {sub.email}
+                            <EmailLink email={sub.email} className="text-sm" />
                           </span>
                         </div>
                       </TableCell>
@@ -313,12 +315,11 @@ const ContactSubmissions = () => {
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
                         {sub.phone ? (
-                          <a
-                            href={`tel:${sub.phone}`}
-                            className="hover:underline"
-                          >
-                            {sub.phone}
-                          </a>
+                          <PhoneLink
+                            phone={sub.phone}
+                            clientName={sub.name}
+                            className="text-sm"
+                          />
                         ) : (
                           "—"
                         )}
@@ -373,22 +374,21 @@ const ContactSubmissions = () => {
                   </div>
                   <div className="flex items-center gap-2 text-sm">
                     <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <a
-                      href={`mailto:${selected.email}`}
-                      className="text-primary hover:underline"
-                    >
-                      {selected.email}
-                    </a>
+                    <EmailLink
+                      email={selected.email}
+                      noIcon
+                      className="text-sm text-primary"
+                    />
                   </div>
                   {selected.phone && (
                     <div className="flex items-center gap-2 text-sm">
                       <Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <a
-                        href={`tel:${selected.phone}`}
-                        className="hover:underline"
-                      >
-                        {selected.phone}
-                      </a>
+                      <PhoneLink
+                        phone={selected.phone}
+                        clientName={selected.name}
+                        noIcon
+                        className="text-sm"
+                      />
                     </div>
                   )}
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
