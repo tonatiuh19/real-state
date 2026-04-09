@@ -5437,6 +5437,122 @@ const handleCreateClient: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Update client basic info (broker-side)
+ */
+const handleUpdateClient: RequestHandler = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const brokerId = (req as any).brokerId;
+    const {
+      first_name,
+      last_name,
+      phone,
+      date_of_birth,
+      address_street,
+      address_city,
+      address_state,
+      address_zip,
+    } = req.body as {
+      first_name?: string;
+      last_name?: string;
+      phone?: string;
+      date_of_birth?: string;
+      address_street?: string;
+      address_city?: string;
+      address_state?: string;
+      address_zip?: string;
+    };
+
+    // Verify client belongs to this tenant
+    const [[existing]] = await pool.query<any[]>(
+      "SELECT id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1",
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+    if (!existing) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Client not found" });
+    }
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (first_name !== undefined) {
+      updates.push("first_name = ?");
+      values.push(first_name.trim());
+    }
+    if (last_name !== undefined) {
+      updates.push("last_name = ?");
+      values.push(last_name.trim());
+    }
+    if (phone !== undefined) {
+      updates.push("phone = ?");
+      values.push(phone?.trim() || null);
+    }
+    if (date_of_birth !== undefined) {
+      updates.push("date_of_birth = ?");
+      values.push(date_of_birth || null);
+    }
+    if (address_street !== undefined) {
+      updates.push("address_street = ?");
+      values.push(address_street?.trim() || null);
+    }
+    if (address_city !== undefined) {
+      updates.push("address_city = ?");
+      values.push(address_city?.trim() || null);
+    }
+    if (address_state !== undefined) {
+      updates.push("address_state = ?");
+      values.push(address_state?.trim() || null);
+    }
+    if (address_zip !== undefined) {
+      updates.push("address_zip = ?");
+      values.push(address_zip?.trim() || null);
+    }
+
+    if (updates.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
+    }
+
+    values.push(clientId);
+    await pool.query(
+      `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ?`,
+      values,
+    );
+
+    const [[client]] = await pool.query<any[]>(
+      `SELECT c.id, c.email, c.first_name, c.last_name, c.phone, c.date_of_birth,
+              c.address_street, c.address_city, c.address_state, c.address_zip,
+              c.status, c.created_at,
+              COALESCE(apps.total,0) AS total_applications,
+              COALESCE(apps.active,0) AS active_applications,
+              COALESCE(convs.total,0) AS total_conversations
+       FROM clients c
+       LEFT JOIN (
+         SELECT client_id, COUNT(*) as total, SUM(status='active') as active
+         FROM loan_applications GROUP BY client_id
+       ) apps ON apps.client_id = c.id
+       LEFT JOIN (
+         SELECT client_id, COUNT(DISTINCT conversation_id) as total
+         FROM conversation_threads GROUP BY client_id
+       ) convs ON convs.client_id = c.id
+       WHERE c.id = ?`,
+      [clientId],
+    );
+
+    return res.json({ success: true, client });
+  } catch (error) {
+    console.error("Error updating client:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to update client",
+    });
+  }
+};
+
+/**
  * Delete client with comprehensive safety guards
  */
 const handleDeleteClient: RequestHandler = async (req, res) => {
@@ -15745,6 +15861,11 @@ function createServer() {
   );
   expressApp.get("/api/clients", verifyBrokerSession, handleGetClients);
   expressApp.post("/api/clients", verifyBrokerSession, handleCreateClient);
+  expressApp.put(
+    "/api/clients/:clientId",
+    verifyBrokerSession,
+    handleUpdateClient,
+  );
   expressApp.delete(
     "/api/clients/:clientId",
     verifyBrokerSession,

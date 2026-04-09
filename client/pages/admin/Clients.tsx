@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Users, Search, Mail, Phone, Trash2 } from "lucide-react";
+import { Users, Search, Mail, Phone, Trash2, Plus, Pencil } from "lucide-react";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
+import ClientFormDialog from "@/components/ClientFormDialog";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,8 @@ const Clients = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("first_name");
   const [sortDir, setSortDir] = useState<"ASC" | "DESC">("ASC");
+  const [formOpen, setFormOpen] = useState(false);
+  const [clientToEdit, setClientToEdit] = useState<ClientRow | null>(null);
 
   const doFetch = useCallback(
     (params: {
@@ -227,16 +230,30 @@ const Clients = () => {
             label: "Actions",
             shrink: true,
             render: (client: ClientRow) => (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleDeleteClick(client)}
-                disabled={isDeleting}
-                className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-3 w-3" />
-                Delete
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setClientToEdit(client);
+                    setFormOpen(true);
+                  }}
+                  className="h-7 text-xs gap-1"
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDeleteClick(client)}
+                  disabled={isDeleting}
+                  className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Delete
+                </Button>
+              </div>
             ),
           } as DataGridColumn<ClientRow>,
         ]
@@ -284,6 +301,18 @@ const Clients = () => {
                 onChange={(e) => handleSearch(e.target.value)}
               />
             </div>
+            {!isPartner && (
+              <Button
+                onClick={() => {
+                  setClientToEdit(null);
+                  setFormOpen(true);
+                }}
+                className="gap-1.5 whitespace-nowrap"
+              >
+                <Plus className="h-4 w-4" />
+                New Client
+              </Button>
+            )}
           </div>
         </header>
 
@@ -377,7 +406,18 @@ const Clients = () => {
                         )}
                       </div>
                       {!isPartner && (
-                        <div className="flex justify-end pt-1">
+                        <div className="flex justify-end gap-1 pt-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setClientToEdit(client);
+                              setFormOpen(true);
+                            }}
+                            className="h-7 text-xs gap-1"
+                          >
+                            <Pencil className="h-3 w-3" /> Edit
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -396,6 +436,16 @@ const Clients = () => {
             </Card>
           </div>
         )}
+
+        {/* Create / Edit Client Dialog */}
+        <ClientFormDialog
+          open={formOpen}
+          onClose={() => {
+            setFormOpen(false);
+            setClientToEdit(null);
+          }}
+          client={clientToEdit}
+        />
 
         {/* Delete Confirmation Dialog */}
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

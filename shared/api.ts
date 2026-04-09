@@ -828,6 +828,27 @@ export interface CreateClientRequest {
   phone?: string;
 }
 
+export interface UpdateClientRequest {
+  first_name?: string;
+  last_name?: string;
+  phone?: string;
+  date_of_birth?: string;
+  address_street?: string;
+  address_city?: string;
+  address_state?: string;
+  address_zip?: string;
+}
+
+export interface UpdateClientResponse {
+  success: boolean;
+  client: CreateClientResponse["client"] & {
+    address_street: string | null;
+    address_city: string | null;
+    address_state: string | null;
+    address_zip: string | null;
+  };
+}
+
 export interface CreateClientResponse {
   success: boolean;
   client: {

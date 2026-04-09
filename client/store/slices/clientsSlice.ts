@@ -5,6 +5,8 @@ import type {
   GetClientsResponse,
   CreateClientRequest,
   CreateClientResponse,
+  UpdateClientRequest,
+  UpdateClientResponse,
   PaginationInfo,
 } from "@shared/api";
 import { logger } from "@/lib/logger";
@@ -90,6 +92,28 @@ export const createClient = createAsyncThunk(
   },
 );
 
+export const updateClient = createAsyncThunk(
+  "clients/updateClient",
+  async (
+    { clientId, payload }: { clientId: number; payload: UpdateClientRequest },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.put<UpdateClientResponse>(
+        `/api/clients/${clientId}`,
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data.client;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update client",
+      );
+    }
+  },
+);
+
 const clientsSlice = createSlice({
   name: "clients",
   initialState,
@@ -121,6 +145,13 @@ const clientsSlice = createSlice({
       })
       .addCase(createClient.fulfilled, (state, action) => {
         state.clients = [action.payload, ...state.clients];
+      })
+      .addCase(updateClient.fulfilled, (state, action) => {
+        const updated = action.payload;
+        const idx = state.clients.findIndex((c) => c.id === updated.id);
+        if (idx !== -1) {
+          state.clients[idx] = { ...state.clients[idx], ...updated };
+        }
       });
   },
 });
