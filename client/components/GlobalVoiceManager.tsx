@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
+import * as AblyLib from "ably";
 import { Phone, PhoneOff, PhoneIncoming } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
@@ -22,6 +23,8 @@ const GlobalVoiceManager: React.FC = () => {
   const deviceReadyRef = useRef(false);
   // Mirrors ringingCall state for use inside event listeners (no stale closure).
   const ringingCallRef = useRef<Call | null>(null);
+  // Tracks the CallSid of the current ringing call so Ably dismissal can match it.
+  const ringingCallSidRef = useRef<string | null>(null);
 
   const [ringingCall, setRingingCall] = useState<Call | null>(null);
   const [ringingPhone, setRingingPhone] = useState<string>("");
@@ -32,6 +35,8 @@ const GlobalVoiceManager: React.FC = () => {
   const [activeIncomingCall, setActiveIncomingCall] = useState<Call | null>(
     null,
   );
+  // Tracks the Device's audio helper so inbound VoiceCallPanel can switch devices
+  const [deviceAudio, setDeviceAudio] = useState<Device["audio"] | null>(null);
 
   // POST /api/voice/availability — called ONLY from registered/unregistered events.
   const reportAvailability = useCallback(
@@ -90,8 +95,8 @@ const GlobalVoiceManager: React.FC = () => {
       });
       deviceRef.current = device;
 
-      // ── Lifecycle events ──────────────────────────────────────────
-      // reportAvailability is ONLY called here — AFTER the device state actually
+      // Expose audio helper for device selection in inbound call panels
+      setDeviceAudio(device.audio);
       // changes — never before register() / unregister() completes. This prevents
       // the race where DB says available but no Device endpoint is registered yet.
       device.on("registered", () => {
@@ -140,6 +145,7 @@ const GlobalVoiceManager: React.FC = () => {
           call.parameters?.From || call.customParameters?.get("from") || "";
         logger.log("[GlobalVoiceManager] Incoming call from:", from);
         ringingCallRef.current = call;
+        ringingCallSidRef.current = call.parameters?.CallSid ?? null;
         setRingingPhone(from);
         setRingingClientName(null);
         setRingingClientId(null);
@@ -163,6 +169,7 @@ const GlobalVoiceManager: React.FC = () => {
 
         const clearRinging = () => {
           ringingCallRef.current = null;
+          ringingCallSidRef.current = null;
           setRingingCall(null);
           setRingingPhone("");
           setRingingClientName(null);
@@ -197,6 +204,7 @@ const GlobalVoiceManager: React.FC = () => {
       device?.removeAllListeners();
       device?.destroy();
       deviceRef.current = null;
+      setDeviceAudio(null);
       dispatch(setDeviceStatus("idle"));
       reportAvailability(false);
     };
@@ -228,12 +236,80 @@ const GlobalVoiceManager: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAvailable]);
 
+  // Subscribe to Ably voice:incoming so we hear when another broker accepts.
+  // When that happens, immediately dismiss this broker's ringing notification
+  // without waiting for the Twilio SDK cancel event (which may lag under load).
+  useEffect(() => {
+    if (!sessionToken) return;
+    let ablyClient: AblyLib.Realtime | null = null;
+
+    const connect = async () => {
+      try {
+        const res = await fetch("/api/conversations/ably-token", {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        });
+        if (!res.ok) return;
+        const tokenRequest = await res.json();
+
+        ablyClient = new AblyLib.Realtime({
+          authCallback: (_tokenParams, callback) =>
+            callback(null, tokenRequest),
+        });
+
+        const channel = ablyClient.channels.get("voice:incoming");
+        channel.subscribe("call-answered", (msg) => {
+          const { callSid } = (msg.data ?? {}) as { callSid?: string };
+          // Only act if we're currently showing a ringing notification AND
+          // the announced SID matches our ringing call (or no SID to match against).
+          if (
+            ringingCallRef.current &&
+            (!callSid || ringingCallSidRef.current === callSid)
+          ) {
+            logger.log(
+              "[GlobalVoiceManager] Ably: call answered by another broker — dismissing ringing UI",
+            );
+            // Tell the Twilio SDK to close this leg so audio resources are freed.
+            ringingCallRef.current.reject();
+            ringingCallRef.current = null;
+            ringingCallSidRef.current = null;
+            setRingingCall(null);
+            setRingingPhone("");
+            setRingingClientName(null);
+            setRingingClientId(null);
+          }
+        });
+      } catch {
+        // Graceful degradation — the Twilio SDK cancel event is the fallback
+      }
+    };
+
+    connect();
+
+    return () => {
+      ablyClient?.close();
+    };
+  }, [sessionToken]);
+
   const handleAccept = () => {
     if (!ringingCall) return;
+    // Grab SID before clearing refs
+    const sid = ringingCallSidRef.current;
     ringingCall.accept();
     setActiveIncomingCall(ringingCall);
     ringingCallRef.current = null;
+    ringingCallSidRef.current = null;
     setRingingCall(null);
+    // Immediately notify all other online brokers via Ably to dismiss their ringing UI
+    if (sid && sessionToken) {
+      fetch("/api/voice/call-answered", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({ callSid: sid }),
+      }).catch(() => {});
+    }
   };
 
   const handleDecline = () => {
@@ -318,6 +394,7 @@ const GlobalVoiceManager: React.FC = () => {
             clientId={ringingClientId ?? undefined}
             activeCall={activeIncomingCall}
             direction="inbound"
+            deviceAudio={deviceAudio}
             onClose={handleCloseActive}
           />
         </div>

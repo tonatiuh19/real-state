@@ -346,7 +346,9 @@ CREATE TABLE `brokers` (
   `created_by_broker_id` int(11) DEFAULT NULL COMMENT 'The admin/Mortgage Banker who created this partner broker',
   `twilio_phone_sid` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio IncomingPhoneNumber SID assigned to this broker for inbound routing and outbound caller ID',
   `twilio_caller_id` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'E.164 phone number derived from twilio_phone_sid; used as callerId for outbound calls',
-  `voice_available` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = broker has toggled Available in the CRM and their Twilio Device is registered'
+  `voice_available` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = broker has toggled Available in the CRM and their Twilio Device is registered',
+  `call_forwarding_enabled` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = simultaneously ring this broker personal phone on incoming CRM calls',
+  `call_forwarding_phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'E.164 personal phone number for call forwarding'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -663,10 +665,11 @@ CREATE TABLE `conversation_threads` (
   `application_id` int(11) DEFAULT NULL,
   `lead_id` int(11) DEFAULT NULL,
   `client_id` int(11) DEFAULT NULL,
-  `broker_id` int(11) NOT NULL,
+  `broker_id` int(11) DEFAULT NULL,
   `client_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `client_phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `client_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `inbox_number` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio number (To) that received the first inbound message',
   `last_message_at` datetime NOT NULL,
   `last_message_preview` text COLLATE utf8mb4_unicode_ci,
   `last_message_type` enum('email','sms','whatsapp','call','internal_note') COLLATE utf8mb4_unicode_ci NOT NULL,

@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import {
@@ -15,6 +15,10 @@ import {
   CheckCircle2,
   BadgeCheck,
   Building2,
+  PhoneForwarded,
+  Monitor,
+  Smartphone,
+  Zap,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -27,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -77,6 +82,72 @@ const BrokerProfile = () => {
   const { toast } = useToast();
   const { user, profileLoading, profileSaving, avatarUploading, profileError } =
     useAppSelector((state) => state.brokerAuth);
+  const { sessionToken } = useAppSelector((s) => s.brokerAuth);
+
+  // ── Call forwarding state ────────────────────────────────────────────────
+  const [fwdEnabled, setFwdEnabled] = useState(false);
+  const [fwdPhone, setFwdPhone] = useState("");
+  const [fwdLoading, setFwdLoading] = useState(false);
+  const [fwdSaving, setFwdSaving] = useState(false);
+
+  const loadFwdSettings = async () => {
+    if (!sessionToken) return;
+    setFwdLoading(true);
+    try {
+      const res = await fetch("/api/voice/call-forwarding", {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setFwdEnabled(!!data.call_forwarding_enabled);
+        setFwdPhone(data.call_forwarding_phone ?? "");
+      }
+    } catch {
+      // graceful degradation
+    } finally {
+      setFwdLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFwdSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionToken]);
+
+  const saveForwarding = async () => {
+    if (!sessionToken) return;
+    setFwdSaving(true);
+    try {
+      const res = await fetch("/api/voice/call-forwarding", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({ enabled: fwdEnabled, phone: fwdPhone }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setFwdPhone(data.call_forwarding_phone ?? fwdPhone);
+        toast({
+          title: "Call forwarding saved",
+          description: fwdEnabled
+            ? `Calls will also ring ${data.call_forwarding_phone ?? fwdPhone}`
+            : "Forwarding disabled.",
+        });
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (e: any) {
+      toast({
+        title: "Save failed",
+        description: e?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setFwdSaving(false);
+    }
+  };
 
   useEffect(() => {
     dispatch(fetchBrokerProfile());
@@ -129,6 +200,8 @@ const BrokerProfile = () => {
           title: "Profile updated",
           description: "Your profile has been saved successfully.",
         });
+        // Re-sync forwarding phone in case profile phone changed
+        loadFwdSettings();
       } else {
         toast({
           title: "Update failed",
@@ -554,6 +627,158 @@ const BrokerProfile = () => {
                     );
                   })}
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Call & Voicemail Settings */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <PhoneForwarded className="h-4 w-4 text-primary" />
+                  Call &amp; Voicemail Settings
+                </CardTitle>
+                <CardDescription>
+                  Choose where incoming CRM calls ring. Multiple destinations
+                  ring simultaneously — first to answer wins.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                {fwdLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading settings…
+                  </div>
+                ) : (
+                  <>
+                    {/* Forward Calls to — checkboxes */}
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">
+                        Forward Calls to
+                      </p>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        {/* Browser — always on */}
+                        <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                            <Monitor className="h-4 w-4 text-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">
+                              Browser (Web App)
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Always rings in the CRM
+                            </p>
+                          </div>
+                          <Badge
+                            variant="secondary"
+                            className="text-[10px] bg-green-100 text-green-700 border-0 shrink-0"
+                          >
+                            Always on
+                          </Badge>
+                        </div>
+
+                        {/* My Phone Number — toggle */}
+                        <div
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors",
+                            fwdEnabled
+                              ? "border-primary/40 bg-primary/5"
+                              : "border-border bg-background",
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
+                              fwdEnabled ? "bg-primary/15" : "bg-muted",
+                            )}
+                          >
+                            <Smartphone
+                              className={cn(
+                                "h-4 w-4",
+                                fwdEnabled
+                                  ? "text-primary"
+                                  : "text-muted-foreground",
+                              )}
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">
+                              My Phone Number
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Ring my personal cell
+                            </p>
+                          </div>
+                          <Switch
+                            checked={fwdEnabled}
+                            onCheckedChange={setFwdEnabled}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Forwarding number input — shown when enabled */}
+                    <div
+                      className={cn(
+                        "overflow-hidden transition-all duration-300",
+                        fwdEnabled
+                          ? "max-h-40 opacity-100"
+                          : "max-h-0 opacity-0 pointer-events-none",
+                      )}
+                    >
+                      <div className="space-y-1.5">
+                        <Label htmlFor="fwd_phone">Forwarding Number</Label>
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="fwd_phone"
+                            value={fwdPhone}
+                            onChange={(e) => setFwdPhone(e.target.value)}
+                            placeholder="+1 (555) 000-0000"
+                            className="pl-9"
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Enter your personal cell. Defaults to your profile
+                          phone if left blank.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Info banner */}
+                    <div className="flex items-start gap-2.5 rounded-lg bg-blue-50 border border-blue-100 px-3.5 py-3">
+                      <Zap className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+                      <p className="text-xs text-blue-700">
+                        When enabled, incoming calls ring your browser{" "}
+                        <strong>and</strong> your personal phone simultaneously.
+                        Answering on either one lets you handle the call.
+                      </p>
+                    </div>
+
+                    {/* Save button */}
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="gap-2"
+                        onClick={saveForwarding}
+                        disabled={fwdSaving}
+                      >
+                        {fwdSaving ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Saving…
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-3.5 w-3.5" />
+                            Save Settings
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 

@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import * as AblyLib from "ably";
+import { useFormik } from "formik";
+import * as Yup from "yup";
 import {
   MessageCircle,
   Phone,
@@ -32,6 +34,9 @@ import {
   Zap,
   Delete,
   PhoneCall,
+  UserPlus,
+  Loader2,
+  Lock,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -69,7 +74,9 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
@@ -84,6 +91,8 @@ import {
   setThreadsFilters,
   markConversationAsRead,
   checkWhatsAppAvailability,
+  removeThread,
+  saveContactFromConversation,
 } from "@/store/slices/conversationsSlice";
 import { setVoiceAvailable } from "@/store/slices/voiceSlice";
 import type { DeviceStatus } from "@/store/slices/voiceSlice";
@@ -156,6 +165,51 @@ const Conversations = () => {
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [isCallDetailDialing, setIsCallDetailDialing] = useState(false);
 
+  // Save unknown contact state
+  const [isSaveContactOpen, setIsSaveContactOpen] = useState(false);
+  const [isSavingContact, setIsSavingContact] = useState(false);
+
+  const saveContactSchema = Yup.object({
+    first_name: Yup.string().required("First name is required"),
+    last_name: Yup.string().required("Last name is required"),
+    email: Yup.string().email("Invalid email").optional(),
+  });
+
+  const saveContactFormik = useFormik({
+    initialValues: { first_name: "", last_name: "", email: "" },
+    validationSchema: saveContactSchema,
+    onSubmit: async (values, { resetForm }) => {
+      if (!currentThread?.conversation_id) return;
+      setIsSavingContact(true);
+      try {
+        const result = await dispatch(
+          saveContactFromConversation({
+            conversationId: currentThread.conversation_id,
+            first_name: values.first_name,
+            last_name: values.last_name,
+            email: values.email || undefined,
+          }),
+        );
+        if (saveContactFromConversation.fulfilled.match(result)) {
+          toast({
+            title: "Contact saved",
+            description: `${values.first_name} ${values.last_name} added as a client.`,
+          });
+          setIsSaveContactOpen(false);
+          resetForm();
+        } else {
+          toast({
+            title: "Failed to save",
+            description: (result.payload as string) || "Please try again.",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        setIsSavingContact(false);
+      }
+    },
+  });
+
   // Resizable left panel
   const [leftPanelWidth, setLeftPanelWidth] = useState(320);
   const isResizingRef = useRef(false);
@@ -186,7 +240,9 @@ const Conversations = () => {
     window.addEventListener("mouseup", onUp);
   };
 
-  const { sessionToken } = useAppSelector((s) => s.brokerAuth);
+  const { sessionToken, user: currentUser } = useAppSelector(
+    (s) => s.brokerAuth,
+  );
   const isAvailable = useAppSelector((s) => s.voice.isAvailable);
   const deviceStatus = useAppSelector((s) => s.voice.deviceStatus);
 
@@ -197,7 +253,9 @@ const Conversations = () => {
     phoneNumber: string;
     friendlyName: string;
     voiceUrl: string;
+    smsUrl: string;
     configured: boolean;
+    smsConfigured: boolean;
     capabilities: { voice: boolean; sms: boolean; mms: boolean };
     assignedBrokerId: number | null;
     assignedBrokerName: string | null;
@@ -420,6 +478,23 @@ const Conversations = () => {
         allChannel.subscribe("thread-updated", () => {
           dispatch(fetchConversationThreads(threadsFilters));
         });
+        // Another broker claimed an unassigned thread — remove it from our list.
+        // If WE claimed it, refresh our threads so the "Unassigned" badge disappears
+        // and our name appears instead.
+        allChannel.subscribe("thread-claimed", (msg) => {
+          const { conversationId, claimedByBrokerId } = (msg.data ?? {}) as {
+            conversationId?: string;
+            claimedByBrokerId?: number;
+          };
+          if (conversationId) {
+            if (claimedByBrokerId === currentUser?.id) {
+              // We claimed it — keep thread but refresh to drop "Unassigned" badge
+              dispatch(fetchConversationThreads(threadsFilters));
+            } else {
+              dispatch(removeThread(conversationId));
+            }
+          }
+        });
       } catch {
         // Real-time unavailable — graceful degradation
       }
@@ -575,6 +650,7 @@ const Conversations = () => {
     body: string;
     message_type: "text" | "template";
     template_id?: number;
+    client_id?: number;
   }) => {
     try {
       await dispatch(sendMessage(data)).unwrap();
@@ -904,27 +980,35 @@ const Conversations = () => {
 
               {/* Channel tabs — scrollable on mobile */}
               <div className="flex rounded-lg bg-muted p-0.5 gap-0.5 overflow-x-auto scrollbar-hide">
-                {CHANNEL_TABS.map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => {
-                      setChannelFilter(key);
-                      if (key !== "calls") setSelectedCall(null);
-                    }}
-                    className={cn(
-                      "flex-1 min-w-[2.5rem] text-xs font-medium py-1 px-1 rounded-md transition-all whitespace-nowrap",
-                      channelFilter === key
-                        ? "bg-card text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {/* Abbreviated on mobile if long label */}
-                    <span className="sm:hidden">
-                      {key === "whatsapp" ? "WA" : label}
-                    </span>
-                    <span className="hidden sm:inline">{label}</span>
-                  </button>
-                ))}
+                {CHANNEL_TABS.map(({ key, label }) => {
+                  const locked = key === "whatsapp";
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        if (locked) return;
+                        setChannelFilter(key);
+                        if (key !== "calls") setSelectedCall(null);
+                      }}
+                      disabled={locked}
+                      title={locked ? "WhatsApp coming soon" : undefined}
+                      className={cn(
+                        "flex-1 min-w-[2.5rem] inline-flex items-center justify-center gap-1 text-xs font-medium py-1 px-2 rounded-md transition-all whitespace-nowrap",
+                        locked
+                          ? "opacity-40 cursor-not-allowed text-muted-foreground"
+                          : channelFilter === key
+                            ? "bg-card text-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <span className="sm:hidden">
+                        {key === "whatsapp" ? "WA" : label}
+                      </span>
+                      <span className="hidden sm:inline">{label}</span>
+                      {locked && <Lock className="h-2.5 w-2.5 shrink-0" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -1083,6 +1167,11 @@ const Conversations = () => {
                               {thread.client_name || "Unknown Client"}
                             </p>
                             <div className="flex items-center gap-1 flex-shrink-0">
+                              {!thread.broker_id && (
+                                <span className="bg-amber-100 text-amber-700 text-[10px] rounded px-1.5 py-0.5 font-semibold leading-none border border-amber-300">
+                                  Unassigned
+                                </span>
+                              )}
                               {thread.unread_count > 0 && (
                                 <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
                                   {thread.unread_count}
@@ -1215,6 +1304,20 @@ const Conversations = () => {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        {!currentThread.client_id && (
+                          <>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                saveContactFormik.resetForm();
+                                setIsSaveContactOpen(true);
+                              }}
+                            >
+                              <UserPlus className="h-4 w-4 mr-2" />
+                              Add as Contact
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                          </>
+                        )}
                         <DropdownMenuItem>
                           <Star className="h-4 w-4 mr-2" />
                           Mark as Important
@@ -1706,6 +1809,21 @@ const Conversations = () => {
                       {currentThread.priority}
                     </Badge>
                   </div>
+                  {/* Add as Contact — shown only for unknown senders */}
+                  {!currentThread.client_id && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 text-xs h-7 border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:border-primary"
+                      onClick={() => {
+                        saveContactFormik.resetForm();
+                        setIsSaveContactOpen(true);
+                      }}
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      Add as Contact
+                    </Button>
+                  )}
                 </div>
 
                 <Separator />
@@ -1886,6 +2004,134 @@ const Conversations = () => {
         onSendMessage={handleNewConversation}
         isSending={isSendingMessage}
       />
+
+      {/* ── Save Unknown Sender as Contact ── */}
+      <Dialog open={isSaveContactOpen} onOpenChange={setIsSaveContactOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-4 w-4 text-primary" />
+              Add as Contact
+            </DialogTitle>
+            <DialogDescription>
+              Save this number
+              {currentThread?.client_phone
+                ? ` (${currentThread.client_phone})`
+                : ""}{" "}
+              as a new client.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={saveContactFormik.handleSubmit}
+            className="space-y-4 pt-1"
+          >
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="sc_first_name">First Name *</Label>
+                <Input
+                  id="sc_first_name"
+                  name="first_name"
+                  value={saveContactFormik.values.first_name}
+                  onChange={saveContactFormik.handleChange}
+                  onBlur={saveContactFormik.handleBlur}
+                  placeholder="John"
+                  className={cn(
+                    saveContactFormik.touched.first_name &&
+                      saveContactFormik.errors.first_name
+                      ? "border-destructive"
+                      : "",
+                  )}
+                />
+                {saveContactFormik.touched.first_name &&
+                  saveContactFormik.errors.first_name && (
+                    <p className="text-xs text-destructive">
+                      {saveContactFormik.errors.first_name}
+                    </p>
+                  )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sc_last_name">Last Name *</Label>
+                <Input
+                  id="sc_last_name"
+                  name="last_name"
+                  value={saveContactFormik.values.last_name}
+                  onChange={saveContactFormik.handleChange}
+                  onBlur={saveContactFormik.handleBlur}
+                  placeholder="Doe"
+                  className={cn(
+                    saveContactFormik.touched.last_name &&
+                      saveContactFormik.errors.last_name
+                      ? "border-destructive"
+                      : "",
+                  )}
+                />
+                {saveContactFormik.touched.last_name &&
+                  saveContactFormik.errors.last_name && (
+                    <p className="text-xs text-destructive">
+                      {saveContactFormik.errors.last_name}
+                    </p>
+                  )}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sc_email">
+                Email{" "}
+                <span className="text-muted-foreground text-xs font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id="sc_email"
+                name="email"
+                type="email"
+                value={saveContactFormik.values.email}
+                onChange={saveContactFormik.handleChange}
+                onBlur={saveContactFormik.handleBlur}
+                placeholder="john@example.com"
+                className={cn(
+                  saveContactFormik.touched.email &&
+                    saveContactFormik.errors.email
+                    ? "border-destructive"
+                    : "",
+                )}
+              />
+              {saveContactFormik.touched.email &&
+                saveContactFormik.errors.email && (
+                  <p className="text-xs text-destructive">
+                    {saveContactFormik.errors.email}
+                  </p>
+                )}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsSaveContactOpen(false)}
+                disabled={isSavingContact}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                className="gap-2"
+                disabled={isSavingContact}
+              >
+                {isSavingContact ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="h-3.5 w-3.5" /> Save Contact
+                  </>
+                )}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Dialpad overlay ── */}
       {isDialerOpen && (
@@ -2135,10 +2381,12 @@ const Conversations = () => {
                       <div
                         className={cn(
                           "p-2 rounded-full flex-shrink-0",
-                          num.configured ? "bg-green-100" : "bg-amber-100",
+                          num.configured && num.smsConfigured
+                            ? "bg-green-100"
+                            : "bg-amber-100",
                         )}
                       >
-                        {num.configured ? (
+                        {num.configured && num.smsConfigured ? (
                           <Wifi className="h-4 w-4 text-green-600" />
                         ) : (
                           <WifiOff className="h-4 w-4 text-amber-600" />
@@ -2151,15 +2399,32 @@ const Conversations = () => {
                         <p className="text-xs text-muted-foreground truncate">
                           {num.friendlyName}
                         </p>
-                        <div className="flex gap-1.5 mt-1">
+                        {/* Webhook status badges */}
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
                           {num.capabilities.voice && (
-                            <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">
-                              Voice
+                            <span
+                              className={cn(
+                                "text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5",
+                                num.configured
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-amber-50 text-amber-700",
+                              )}
+                            >
+                              <Phone className="h-2.5 w-2.5" />
+                              Voice {num.configured ? "✓" : "not set"}
                             </span>
                           )}
                           {num.capabilities.sms && (
-                            <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium">
-                              SMS
+                            <span
+                              className={cn(
+                                "text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5",
+                                num.smsConfigured
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-amber-50 text-amber-700",
+                              )}
+                            >
+                              <MessageSquare className="h-2.5 w-2.5" />
+                              SMS {num.smsConfigured ? "✓" : "not set"}
                             </span>
                           )}
                           {num.capabilities.mms && (
@@ -2170,7 +2435,7 @@ const Conversations = () => {
                         </div>
                       </div>
                       <div className="flex-shrink-0">
-                        {num.configured ? (
+                        {num.configured && num.smsConfigured ? (
                           <span className="text-xs text-green-600 font-medium flex items-center gap-1">
                             <CheckCircle className="h-3.5 w-3.5" />
                             Ready

@@ -1066,7 +1066,7 @@ export interface ConversationThread {
   application_id?: number | null;
   lead_id?: number | null;
   client_id?: number | null;
-  broker_id: number;
+  broker_id: number | null;
   client_name?: string | null;
   client_phone?: string | null;
   client_email?: string | null;

@@ -333,6 +333,38 @@ export const fetchCallHistory = createAsyncThunk(
   },
 );
 
+export const saveContactFromConversation = createAsyncThunk(
+  "conversations/saveContactFromConversation",
+  async (
+    {
+      conversationId,
+      first_name,
+      last_name,
+      email,
+    }: {
+      conversationId: string;
+      first_name: string;
+      last_name: string;
+      email?: string;
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post(
+        `/api/conversations/${conversationId}/save-contact`,
+        { first_name, last_name, email },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { conversationId, ...data };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to save contact",
+      );
+    }
+  },
+);
+
 const conversationsSlice = createSlice({
   name: "conversations",
   initialState,
@@ -434,6 +466,19 @@ const conversationsSlice = createSlice({
         state.currentThread.conversation_id === conversationId
       ) {
         state.currentThread.unread_count = 0;
+      }
+    },
+
+    // Remove a thread from the list — used when another broker claims an
+    // unassigned shared-inbox thread so it disappears from everyone else's view.
+    removeThread: (state, action: { payload: string }) => {
+      const conversationId = action.payload;
+      state.threads = state.threads.filter(
+        (t) => t.conversation_id !== conversationId,
+      );
+      if (state.currentThread?.conversation_id === conversationId) {
+        state.currentThread = null;
+        state.messages = [];
       }
     },
   },
@@ -589,6 +634,29 @@ const conversationsSlice = createSlice({
         state.isLoadingCallHistory = false;
         state.error = action.payload as string;
       });
+
+    builder.addCase(saveContactFromConversation.fulfilled, (state, action) => {
+      const { conversationId, client_id, client_name, client_email } =
+        action.payload;
+      // Update the thread in the list
+      const thread = state.threads.find(
+        (t) => t.conversation_id === conversationId,
+      );
+      if (thread) {
+        thread.client_id = client_id;
+        thread.client_name = client_name;
+        if (client_email) thread.client_email = client_email;
+      }
+      // Update currentThread if it matches
+      if (state.currentThread?.conversation_id === conversationId) {
+        state.currentThread = {
+          ...state.currentThread,
+          client_id,
+          client_name,
+          ...(client_email ? { client_email } : {}),
+        };
+      }
+    });
   },
 });
 
@@ -600,6 +668,7 @@ export const {
   clearError,
   addNewMessage,
   markConversationAsRead,
+  removeThread,
 } = conversationsSlice.actions;
 
 export default conversationsSlice.reducer;

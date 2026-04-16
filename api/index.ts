@@ -181,6 +181,9 @@ async function upsertConversationThread(params: {
   communicationType: string;
   direction: string;
   body: string | null;
+  inboxNumber?: string | null;
+  recipientPhone?: string | null;
+  recipientEmail?: string | null;
 }): Promise<void> {
   try {
     const {
@@ -196,8 +199,10 @@ async function upsertConversationThread(params: {
       communicationType,
       direction,
       body,
+      inboxNumber,
+      recipientPhone,
+      recipientEmail,
     } = params;
-
     const resolvedClientId = toUserId ?? fromUserId ?? null;
     const resolvedBrokerId = fromBrokerId ?? toBrokerId ?? null;
     const convId = conversationId ?? `conv_auto_${commId}`;
@@ -205,8 +210,8 @@ async function upsertConversationThread(params: {
     const unreadDelta = direction === "inbound" ? 1 : 0;
 
     let clientName: string | null = null;
-    let clientPhone: string | null = null;
-    let clientEmail: string | null = null;
+    let clientPhone: string | null = recipientPhone ?? null;
+    let clientEmail: string | null = recipientEmail ?? null;
 
     if (resolvedClientId !== null) {
       const [rows] = await pool.query<RowDataPacket[]>(
@@ -215,74 +220,55 @@ async function upsertConversationThread(params: {
       );
       if (rows.length > 0) {
         clientName = rows[0].name;
-        clientPhone = rows[0].phone;
-        clientEmail = rows[0].email;
+        clientPhone = rows[0].phone ?? clientPhone;
+        clientEmail = rows[0].email ?? clientEmail;
       }
     }
 
-    if (resolvedBrokerId !== null) {
-      await pool.query(
-        `INSERT INTO conversation_threads
-           (tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
-            client_name, client_phone, client_email,
-            last_message_at, last_message_preview, last_message_type,
-            message_count, unread_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
-         ON DUPLICATE KEY UPDATE
-           last_message_at      = IF(NOW() > last_message_at, NOW(), last_message_at),
-           last_message_preview = IF(NOW() > last_message_at, ?, last_message_preview),
-           last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
-           message_count        = message_count + 1,
-           unread_count         = unread_count + ?,
-           client_name          = COALESCE(client_name, ?),
-           client_phone         = COALESCE(client_phone, ?),
-           client_email         = COALESCE(client_email, ?),
-           updated_at           = NOW()`,
-        [
-          tenantId,
-          convId,
-          applicationId,
-          leadId,
-          resolvedClientId,
-          resolvedBrokerId,
-          clientName,
-          clientPhone,
-          clientEmail,
-          preview,
-          communicationType,
-          unreadDelta,
-          // ON DUPLICATE KEY values
-          preview,
-          communicationType,
-          unreadDelta,
-          clientName,
-          clientPhone,
-          clientEmail,
-        ],
-      );
-    } else {
-      await pool.query(
-        `UPDATE conversation_threads
-         SET last_message_at      = IF(NOW() > last_message_at, NOW(), last_message_at),
-             last_message_preview = IF(NOW() > last_message_at, ?, last_message_preview),
-             last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
-             message_count        = message_count + 1,
-             unread_count         = unread_count + ?,
-             client_name          = COALESCE(client_name, ?),
-             client_phone         = COALESCE(client_phone, ?),
-             updated_at           = NOW()
-         WHERE conversation_id = ? AND tenant_id = ?`,
-        [
-          preview,
-          communicationType,
-          unreadDelta,
-          clientName,
-          clientPhone,
-          convId,
-          tenantId,
-        ],
-      );
-    }
+    // Always INSERT — broker_id is now nullable so shared-inbox threads (broker_id=NULL)
+    // are also persisted and visible to all brokers.
+    await pool.query(
+      `INSERT INTO conversation_threads
+         (tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
+          client_name, client_phone, client_email, inbox_number,
+          last_message_at, last_message_preview, last_message_type,
+          message_count, unread_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
+       ON DUPLICATE KEY UPDATE
+         last_message_at      = IF(NOW() > last_message_at, NOW(), last_message_at),
+         last_message_preview = IF(NOW() > last_message_at, ?, last_message_preview),
+         last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
+         message_count        = message_count + 1,
+         unread_count         = unread_count + ?,
+         client_name          = COALESCE(client_name, ?),
+         client_phone         = COALESCE(client_phone, ?),
+         client_email         = COALESCE(client_email, ?),
+         inbox_number         = COALESCE(inbox_number, ?),
+         updated_at           = NOW()`,
+      [
+        tenantId,
+        convId,
+        applicationId,
+        leadId,
+        resolvedClientId,
+        resolvedBrokerId, // may be null for shared-inbox threads
+        clientName,
+        clientPhone,
+        clientEmail,
+        inboxNumber ?? null,
+        preview,
+        communicationType,
+        unreadDelta,
+        // ON DUPLICATE KEY values
+        preview,
+        communicationType,
+        unreadDelta,
+        clientName,
+        clientPhone,
+        clientEmail,
+        inboxNumber ?? null,
+      ],
+    );
   } catch (err) {
     console.error("upsertConversationThread error:", err);
   }
@@ -297,6 +283,7 @@ async function sendSMSMessage(
   to: string,
   body: string,
   metadata?: any,
+  from?: string,
 ): Promise<{
   success: boolean;
   external_id?: string;
@@ -333,7 +320,7 @@ async function sendSMSMessage(
     const message = await twilioClient.messages.create({
       body,
       to: normalizedPhone,
-      from: process.env.TWILIO_PHONE_NUMBER,
+      from: from || process.env.TWILIO_PHONE_NUMBER,
       ...metadata,
     });
 
@@ -11550,6 +11537,7 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     // Parse Twilio fields (sent as form-encoded or JSON depending on config)
     const body: string = req.body?.Body ?? req.body?.body ?? "";
     const fromRaw: string = req.body?.From ?? req.body?.from ?? "";
+    const toRaw: string = req.body?.To ?? req.body?.to ?? "";
     const messageSid: string =
       req.body?.MessageSid ?? req.body?.messageSid ?? "";
 
@@ -11558,8 +11546,9 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       return res.status(200).send("<Response></Response>");
     }
 
-    // Normalise phone: keep only digits and optional leading +
+    // Normalise phones
     const fromPhone = fromRaw.replace(/[^\d+]/g, "");
+    const toPhone = toRaw.replace(/[^\d+]/g, "") || null; // The Twilio number that received this SMS
 
     // ── Find the client by phone number ──────────────────────────────────────
     // We try an exact match first, then strip country code (+1 prefix) as fallback.
@@ -11584,6 +11573,21 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       clientId = clientRows[0].id;
       brokerId = clientRows[0].assigned_broker_id ?? null;
       loanId = clientRows[0].loan_id ?? null;
+    }
+
+    // If no client matched, route to the broker who owns the called Twilio number.
+    // This means the number assignment in the CRM also defines inbox ownership.
+    if (brokerId === null) {
+      if (toPhone) {
+        const [ownerRows] = await pool.query<RowDataPacket[]>(
+          `SELECT id FROM brokers
+           WHERE tenant_id = ? AND status = 'active'
+             AND twilio_caller_id = ?
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, toPhone],
+        );
+        if (ownerRows.length > 0) brokerId = ownerRows[0].id;
+      }
     }
 
     // ── Determine conversation_id ────────────────────────────────────────────
@@ -11627,6 +11631,13 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       conversationId = `conv_client_${clientId}`;
     }
 
+    // For unknown senders (no client record), derive a stable ID from the phone
+    // so all future messages from the same number land in the same thread.
+    if (!conversationId) {
+      const sanitizedPhone = fromPhone.replace(/[^\d]/g, "");
+      conversationId = `conv_unknown_${sanitizedPhone}`;
+    }
+
     // ── Insert inbound communications record ─────────────────────────────────
     await pool.query(
       `INSERT INTO communications (
@@ -11662,7 +11673,19 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       communicationType: "sms",
       direction: "inbound",
       body: body.slice(0, 5000),
+      inboxNumber: toPhone,
     });
+
+    // For unknown senders (no client record), persist the sender's phone on the
+    // thread so brokers can reply without needing a client_id.
+    if (!clientId && fromPhone) {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET client_phone = COALESCE(client_phone, ?), updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [fromPhone, conversationId, MORTGAGE_TENANT_ID],
+      );
+    }
 
     console.log(
       `📥 Inbound SMS stored: conv=${conversationId} from=${fromPhone}`,
@@ -11720,6 +11743,7 @@ const handleAblyToken: RequestHandler = async (req, res) => {
       capability: {
         "conversation:*": ["subscribe"],
         "conversations:all": ["subscribe"],
+        "voice:incoming": ["subscribe"],
       },
       ttl: 3_600_000, // 1 hour in ms
     });
@@ -11747,7 +11771,12 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-    let whereConditions = ["ct.tenant_id = ?", "ct.broker_id = ?"];
+    let whereConditions = [
+      "ct.tenant_id = ?",
+      // Show threads assigned to this broker OR unassigned (shared inbox — broker_id IS NULL).
+      // Unassigned threads are visible to ALL brokers; the first to reply claims ownership.
+      "(ct.broker_id = ? OR ct.broker_id IS NULL)",
+    ];
     let queryParams: any[] = [MORTGAGE_TENANT_ID, brokerId];
 
     if (status !== "all") {
@@ -11840,9 +11869,10 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
     // Verify broker has access to this conversation
+    // Unassigned threads (broker_id IS NULL) are visible to all brokers (shared inbox)
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       `SELECT id FROM conversation_threads 
-       WHERE conversation_id = ? AND broker_id = ? AND tenant_id = ?`,
+       WHERE conversation_id = ? AND (broker_id = ? OR broker_id IS NULL) AND tenant_id = ?`,
       [conversationId, brokerId, MORTGAGE_TENANT_ID],
     );
 
@@ -11994,19 +12024,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       });
     }
 
-    if (
-      ["sms", "whatsapp"].includes(communication_type) &&
-      !recipient_phone &&
-      !client_id &&
-      !application_id
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "recipient_phone is required for SMS/WhatsApp communications",
-      });
-    }
-
-    // Get recipient info if not provided but client_id or application_id is provided
+    // Get recipient info if not provided but client_id, application_id, or conversation_id is available
     let finalRecipientEmail = recipient_email;
     let finalRecipientPhone = recipient_phone;
 
@@ -12039,6 +12057,48 @@ const handleSendMessage: RequestHandler = async (req, res) => {
           finalRecipientPhone = finalRecipientPhone || clientInfo[0].phone;
         }
       }
+
+      // Fallback: look up phone/email from the conversation thread itself.
+      // This handles unknown-sender threads (no client_id) where the phone
+      // is stored directly on the thread row.
+      if ((!finalRecipientPhone || !finalRecipientEmail) && conversation_id) {
+        const [threadPhone] = await pool.query<RowDataPacket[]>(
+          `SELECT client_phone, client_email, inbox_number FROM conversation_threads
+           WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+          [conversation_id, MORTGAGE_TENANT_ID],
+        );
+        if (threadPhone.length > 0) {
+          finalRecipientPhone =
+            finalRecipientPhone || threadPhone[0].client_phone || null;
+          finalRecipientEmail =
+            finalRecipientEmail || threadPhone[0].client_email || null;
+        }
+      }
+    }
+
+    // Determine which Twilio number to send from — use the inbox_number stored on
+    // the thread (the number that originally received the inbound message) so replies
+    // come from the same number the client texted.
+    let fromNumber: string = process.env.TWILIO_PHONE_NUMBER || "";
+    if (conversation_id) {
+      const [threadRow] = await pool.query<RowDataPacket[]>(
+        `SELECT inbox_number FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+        [conversation_id, MORTGAGE_TENANT_ID],
+      );
+      if (threadRow.length > 0 && threadRow[0].inbox_number) {
+        fromNumber = threadRow[0].inbox_number;
+      }
+    }
+
+    if (
+      ["sms", "whatsapp"].includes(communication_type) &&
+      !finalRecipientPhone
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "recipient_phone is required for SMS/WhatsApp communications",
+      });
     }
 
     // Generate conversation_id if not provided — use canonical per-client ID when possible
@@ -12125,7 +12185,26 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       communicationType: communication_type,
       direction: "outbound",
       body: processedBody,
+      recipientPhone: finalRecipientPhone || null,
+      recipientEmail: finalRecipientEmail || null,
     });
+
+    // Auto-claim: if this thread was previously unassigned (shared inbox),
+    // assign it to the broker who just replied. This removes it from other
+    // brokers' unassigned queues and makes it a personal thread.
+    const [claimResult] = await pool.query<any>(
+      `UPDATE conversation_threads
+       SET broker_id = ?, updated_at = NOW()
+       WHERE conversation_id = ? AND tenant_id = ? AND broker_id IS NULL`,
+      [brokerId, finalConversationId, MORTGAGE_TENANT_ID],
+    );
+    // Only notify if an actual claim happened (affectedRows > 0)
+    if (claimResult.affectedRows > 0) {
+      await publishToAbly("conversations:all", "thread-claimed", {
+        conversationId: finalConversationId,
+        claimedByBrokerId: brokerId,
+      });
+    }
 
     // Send the actual message
     let sendResult: any = { success: false, error: "Unknown error" };
@@ -12141,6 +12220,8 @@ const handleSendMessage: RequestHandler = async (req, res) => {
             sendResult = await sendSMSMessage(
               finalRecipientPhone,
               processedBody,
+              undefined,
+              fromNumber,
             );
           } else {
             sendResult = { success: false, error: "No phone number available" };
@@ -12273,6 +12354,117 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       success: false,
       message: "Failed to send message",
     });
+  }
+};
+
+/**
+ * POST /api/conversations/:conversationId/save-contact
+ * Save an unknown caller/SMS sender as a client and link them to the thread.
+ * Body: { first_name, last_name, email? }
+ */
+const handleSaveContactFromConversation: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { conversationId } = req.params;
+    const { first_name, last_name, email } = req.body as {
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+    };
+
+    if (!first_name?.trim() || !last_name?.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: "first_name and last_name are required",
+      });
+    }
+
+    // Load thread
+    const [[thread]] = await pool.query<RowDataPacket[]>(
+      `SELECT id, client_phone, client_email, client_id
+       FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+    if (!thread) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Thread not found" });
+    }
+    if (thread.client_id) {
+      return res
+        .status(409)
+        .json({ success: false, error: "Thread already has a linked client" });
+    }
+
+    // Resolve email — required in DB, so use a placeholder when omitted
+    const providedEmail = email?.trim().toLowerCase() || null;
+    const placeholderEmail = `noemail_${(thread.client_phone || String(Date.now())).replace(/\D/g, "")}@noemail.placeholder`;
+    const clientEmail = providedEmail ?? placeholderEmail;
+
+    // Guard against duplicate email (only for real emails)
+    if (providedEmail) {
+      const [[dup]] = await pool.query<RowDataPacket[]>(
+        "SELECT id FROM clients WHERE tenant_id = ? AND email = ? LIMIT 1",
+        [MORTGAGE_TENANT_ID, clientEmail],
+      );
+      if (dup) {
+        return res.status(409).json({
+          success: false,
+          error: "A client with this email already exists",
+        });
+      }
+    }
+
+    // Create client
+    const [result] = await pool.query<any>(
+      `INSERT INTO clients (tenant_id, first_name, last_name, email, phone, status, assigned_broker_id, income_type)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, 'W-2')`,
+      [
+        MORTGAGE_TENANT_ID,
+        first_name.trim(),
+        last_name.trim(),
+        clientEmail,
+        thread.client_phone || null,
+        brokerId,
+      ],
+    );
+    const newClientId: number = result.insertId;
+    const fullName = `${first_name.trim()} ${last_name.trim()}`;
+
+    // Link thread to new client
+    await pool.query(
+      `UPDATE conversation_threads
+       SET client_id = ?, client_name = ?, client_email = COALESCE(NULLIF(client_email, ''), ?)
+       WHERE conversation_id = ? AND tenant_id = ?`,
+      [
+        newClientId,
+        fullName,
+        providedEmail,
+        conversationId,
+        MORTGAGE_TENANT_ID,
+      ],
+    );
+
+    // Link inbound communications to new client
+    await pool.query(
+      `UPDATE communications
+       SET from_user_id = ?
+       WHERE conversation_id = ? AND direction = 'inbound' AND tenant_id = ?`,
+      [newClientId, conversationId, MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({
+      success: true,
+      client_id: newClientId,
+      client_name: fullName,
+      client_email: providedEmail,
+    });
+  } catch (error) {
+    console.error("[handleSaveContactFromConversation] Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to save contact" });
   }
 };
 
@@ -12815,6 +13007,136 @@ const handleVoiceAvailability: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/voice/call-forwarding
+ * Returns the authenticated broker's call forwarding settings.
+ */
+const handleGetCallForwarding: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT call_forwarding_enabled, call_forwarding_phone, phone
+       FROM brokers WHERE id = ? AND tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+    return res.json({
+      success: true,
+      call_forwarding_enabled: !!rows[0].call_forwarding_enabled,
+      call_forwarding_phone:
+        rows[0].call_forwarding_phone ?? rows[0].phone ?? null,
+    });
+  } catch (err) {
+    console.error("[handleGetCallForwarding] Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to get call forwarding settings",
+    });
+  }
+};
+
+/**
+ * PUT /api/voice/call-forwarding
+ * Updates call forwarding settings for the authenticated broker.
+ * Body: { enabled: boolean, phone?: string }
+ */
+const handleUpdateCallForwarding: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { enabled, phone } = req.body as { enabled: boolean; phone?: string };
+
+    if (typeof enabled !== "boolean") {
+      return res
+        .status(400)
+        .json({ success: false, error: "enabled (boolean) is required" });
+    }
+
+    // Normalise phone to E.164 if provided
+    let normalizedPhone: string | null = null;
+    if (phone && phone.trim()) {
+      const digits = phone.replace(/\D/g, "");
+      if (digits.length === 10) normalizedPhone = `+1${digits}`;
+      else if (digits.length === 11 && digits.startsWith("1"))
+        normalizedPhone = `+${digits}`;
+      else
+        normalizedPhone = phone.trim().startsWith("+")
+          ? phone.trim()
+          : `+${digits}`;
+    }
+
+    await pool.query(
+      `UPDATE brokers
+       SET call_forwarding_enabled = ?, call_forwarding_phone = ?, updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [enabled ? 1 : 0, normalizedPhone, brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({
+      success: true,
+      call_forwarding_enabled: enabled,
+      call_forwarding_phone: normalizedPhone,
+    });
+  } catch (err) {
+    console.error("[handleUpdateCallForwarding] Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to update call forwarding settings",
+    });
+  }
+};
+
+/**
+ * POST /api/voice/dial-status
+ * Twilio statusCallback fired when ANY leg of the <Dial> is answered (browser OR phone).
+ * We use this to publish the Ably call-answered event so ALL broker browsers dismiss
+ * the ringing UI immediately — including when a personal phone answers.
+ * No broker-session auth — called by Twilio servers.
+ */
+const handleDialStatus: RequestHandler = async (req, res) => {
+  try {
+    const callSid = (req.body?.CallSid as string) || "";
+    const dialCallStatus = (req.body?.DialCallStatus as string) || "";
+
+    // Only broadcast when a leg actually answered (not busy/no-answer/failed)
+    if (callSid && dialCallStatus === "answered") {
+      await publishToAbly("voice:incoming", "call-answered", { callSid });
+    }
+
+    // Twilio expects a 200 with optional TwiML — empty response is fine
+    res.set("Content-Type", "text/xml");
+    return res.status(200).send("<Response></Response>");
+  } catch (err) {
+    console.error("[handleDialStatus] Error:", err);
+    res.set("Content-Type", "text/xml");
+    return res.status(200).send("<Response></Response>");
+  }
+};
+
+/**
+ * POST /api/voice/call-answered
+ * Called by the broker whose browser accepted an inbound simultaneous-ring call.
+ * Publishes a 'call-answered' event on Ably so all other online brokers immediately
+ * dismiss their ringing notification — no waiting for the Twilio SDK cancel event.
+ */
+const handleVoiceCallAnswered: RequestHandler = async (req, res) => {
+  try {
+    const { callSid } = req.body as { callSid?: string };
+    if (callSid) {
+      await publishToAbly("voice:incoming", "call-answered", { callSid });
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("[handleVoiceCallAnswered] Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to broadcast call-answered" });
+  }
+};
+
+/**
  * POST /api/voice/incoming
  * TwiML webhook called by Twilio when an external caller dials a Twilio number.
  * No broker-session auth — called by Twilio servers.
@@ -12873,47 +13195,83 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     const callerNumber =
       (req.body?.From as string) || (req.body?.Caller as string) || "Unknown";
 
+    // Fetch call forwarding phones for the brokers who will ring
+    const [forwardingRows] = await pool.query<any>(
+      `SELECT id, call_forwarding_enabled, call_forwarding_phone
+       FROM brokers WHERE id IN (${brokerIds.map(() => "?").join(",")}) AND tenant_id = ?`,
+      [...brokerIds, MORTGAGE_TENANT_ID],
+    );
+    const forwardingMap = new Map<number, string | null>(
+      forwardingRows.map((r: any) => [
+        r.id as number,
+        r.call_forwarding_enabled
+          ? (r.call_forwarding_phone as string | null)
+          : null,
+      ]),
+    );
+
     const VoiceResponse = twilio.twiml.VoiceResponse;
     const twiml = new VoiceResponse();
-    const dial = twiml.dial({ timeout: 30 });
+    const statusCallbackUrl = `${getVoiceBaseUrl()}/api/voice/dial-status`;
+    const dial = twiml.dial({
+      timeout: 30,
+      // Twilio fires this URL on our server when any leg is answered — we use it
+      // to broadcast the Ably call-answered event so all browsers dismiss instantly,
+      // even when the answerer is a personal phone (not a browser).
+      action: statusCallbackUrl,
+      method: "POST",
+    } as any);
 
     // Ring all target brokers simultaneously — first to accept wins.
     for (const bid of brokerIds) {
       dial.client(`broker_${bid}`);
+      // If this broker has call forwarding enabled, also ring their personal phone
+      const fwdPhone = forwardingMap.get(bid);
+      if (fwdPhone) {
+        dial.number({}, fwdPhone);
+      }
     }
 
-    // Log the incoming call attempt
+    // Respond to Twilio immediately — DB logging must NOT block the TwiML response.
+    // Any delay here postpones the moment Twilio starts ringing the brokers, causing
+    // the caller to hear silence and the call to drop after a single ring.
+    res.send(twiml.toString());
+
+    // Fire-and-forget: log the incoming call attempt asynchronously.
     const conversationId = `conv_phone_${callerNumber.replace(/\D/g, "")}`;
     const body = `📞 Incoming call from ${callerNumber}`;
-    const [commResult] = await pool.query<any>(
-      `INSERT INTO communications
-         (tenant_id, from_broker_id, to_user_id, communication_type, direction,
-          body, status, external_id, conversation_id, delivery_status, sent_at, created_at)
-       VALUES (?, NULL, NULL, 'call', 'inbound', ?, 'sent', ?, ?, 'sent', NOW(), NOW())`,
-      [
-        MORTGAGE_TENANT_ID,
-        body,
-        (req.body?.CallSid as string) || null,
-        conversationId,
-      ],
-    );
-
-    await upsertConversationThread({
-      tenantId: MORTGAGE_TENANT_ID,
-      commId: commResult.insertId,
-      conversationId,
-      applicationId: null,
-      leadId: null,
-      fromUserId: null,
-      fromBrokerId: null,
-      toUserId: null,
-      toBrokerId: null,
-      communicationType: "call",
-      direction: "inbound",
-      body,
-    });
-
-    return res.send(twiml.toString());
+    pool
+      .query<any>(
+        `INSERT INTO communications
+           (tenant_id, from_broker_id, to_user_id, communication_type, direction,
+            body, status, external_id, conversation_id, delivery_status, sent_at, created_at)
+         VALUES (?, NULL, NULL, 'call', 'inbound', ?, 'sent', ?, ?, 'sent', NOW(), NOW())`,
+        [
+          MORTGAGE_TENANT_ID,
+          body,
+          (req.body?.CallSid as string) || null,
+          conversationId,
+        ],
+      )
+      .then(([commResult]) =>
+        upsertConversationThread({
+          tenantId: MORTGAGE_TENANT_ID,
+          commId: commResult.insertId,
+          conversationId,
+          applicationId: null,
+          leadId: null,
+          fromUserId: null,
+          fromBrokerId: null,
+          toUserId: null,
+          toBrokerId: null,
+          communicationType: "call",
+          direction: "inbound",
+          body,
+        }),
+      )
+      .catch((logErr) =>
+        console.error("[handleVoiceIncoming] Log error:", logErr),
+      );
   } catch (err) {
     console.error("[handleVoiceIncoming] Error:", err);
     // Still return valid TwiML so Twilio doesn't retry indefinitely
@@ -13010,7 +13368,10 @@ const handleGetPhoneNumbers: RequestHandler = async (req, res) => {
         phoneNumber: n.phoneNumber,
         friendlyName: n.friendlyName,
         voiceUrl: n.voiceUrl,
+        smsUrl: n.smsUrl,
         configured: n.voiceUrl === incomingUrl,
+        smsConfigured:
+          n.smsUrl === `${getVoiceBaseUrl()}/api/webhooks/inbound-sms`,
         capabilities: {
           voice: n.capabilities?.voice ?? false,
           sms: n.capabilities?.sms ?? false,
@@ -13095,7 +13456,7 @@ const handleAssignPhoneNumber: RequestHandler = async (req, res) => {
 
 /**
  * POST /api/voice/phone-numbers/:sid/configure
- * Sets the Voice webhook on the given Twilio phone number to /api/voice/incoming.
+ * Sets the Voice AND SMS webhooks on the given Twilio phone number.
  * Pass sid = "all" to configure every number at once.
  */
 const handleConfigurePhoneNumber: RequestHandler = async (req, res) => {
@@ -13107,6 +13468,7 @@ const handleConfigurePhoneNumber: RequestHandler = async (req, res) => {
     }
     const { sid } = req.params as { sid: string };
     const incomingUrl = `${getVoiceBaseUrl()}/api/voice/incoming`;
+    const smsIncomingUrl = `${getVoiceBaseUrl()}/api/webhooks/inbound-sms`;
 
     if (sid === "all") {
       const numbers = await twilioClient.incomingPhoneNumbers.list({
@@ -13114,22 +13476,29 @@ const handleConfigurePhoneNumber: RequestHandler = async (req, res) => {
       });
       await Promise.all(
         numbers.map((n) =>
-          twilioClient!
-            .incomingPhoneNumbers(n.sid)
-            .update({ voiceUrl: incomingUrl, voiceMethod: "POST" }),
+          twilioClient!.incomingPhoneNumbers(n.sid).update({
+            voiceUrl: incomingUrl,
+            voiceMethod: "POST",
+            smsUrl: smsIncomingUrl,
+            smsMethod: "POST",
+          }),
         ),
       );
       return res.json({
         success: true,
         updated: numbers.length,
         incomingUrl,
+        smsIncomingUrl,
       });
     }
 
-    await twilioClient
-      .incomingPhoneNumbers(sid)
-      .update({ voiceUrl: incomingUrl, voiceMethod: "POST" });
-    return res.json({ success: true, sid, incomingUrl });
+    await twilioClient.incomingPhoneNumbers(sid).update({
+      voiceUrl: incomingUrl,
+      voiceMethod: "POST",
+      smsUrl: smsIncomingUrl,
+      smsMethod: "POST",
+    });
+    return res.json({ success: true, sid, incomingUrl, smsIncomingUrl });
   } catch (error) {
     console.error("[handleConfigurePhoneNumber] Error:", error);
     return res
@@ -16196,6 +16565,11 @@ function createServer() {
     verifyBrokerSession,
     handleSendMessage,
   );
+  expressApp.post(
+    "/api/conversations/:conversationId/save-contact",
+    verifyBrokerSession,
+    handleSaveContactFromConversation,
+  );
   expressApp.put(
     "/api/conversations/:conversationId",
     verifyBrokerSession,
@@ -16231,10 +16605,26 @@ function createServer() {
   expressApp.post("/api/voice/token", verifyBrokerSession, handleVoiceToken);
   expressApp.post("/api/voice/twiml", handleVoiceTwiml); // no auth — called by Twilio
   expressApp.post("/api/voice/incoming", handleVoiceIncoming); // no auth — Twilio webhook for inbound calls
+  expressApp.post("/api/voice/dial-status", handleDialStatus); // no auth — Twilio statusCallback
   expressApp.post(
     "/api/voice/availability",
     verifyBrokerSession,
     handleVoiceAvailability,
+  );
+  expressApp.post(
+    "/api/voice/call-answered",
+    verifyBrokerSession,
+    handleVoiceCallAnswered,
+  );
+  expressApp.get(
+    "/api/voice/call-forwarding",
+    verifyBrokerSession,
+    handleGetCallForwarding,
+  );
+  expressApp.put(
+    "/api/voice/call-forwarding",
+    verifyBrokerSession,
+    handleUpdateCallForwarding,
   );
   expressApp.post("/api/voice/log", verifyBrokerSession, handleVoiceLog);
   expressApp.get("/api/voice/calls", verifyBrokerSession, handleGetCallHistory);

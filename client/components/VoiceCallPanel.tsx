@@ -7,12 +7,24 @@ import {
   PhoneMissed,
   Mic,
   MicOff,
-  Volume2,
-  VolumeX,
+  Settings2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { useAppSelector } from "@/store/hooks";
@@ -43,6 +55,11 @@ interface VoiceCallPanelProps {
   activeCall?: Call | null;
   /** Direction to record in the call log. Defaults to "outbound". */
   direction?: "inbound" | "outbound";
+  /**
+   * The Twilio Device's audio helper — required for inbound calls where the
+   * Device lives in GlobalVoiceManager. Outbound calls use their own device.
+   */
+  deviceAudio?: Device["audio"] | null;
 }
 
 const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
@@ -53,6 +70,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   onClose,
   activeCall,
   direction = "outbound",
+  deviceAudio,
 }) => {
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
 
@@ -65,12 +83,92 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   );
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
-  const [isSpeakerOff, setIsSpeakerOff] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [callSid, setCallSid] = useState<string | null>(null);
   const [closeCountdown, setCloseCountdown] = useState<number | null>(null);
 
+  // Device selection
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [speakerDevices, setSpeakerDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState("default");
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState("default");
+  const supportsSinkId =
+    typeof (document.createElement("audio") as any).setSinkId === "function";
+
   const formattedDuration = `${String(Math.floor(duration / 60)).padStart(2, "0")}:${String(duration % 60).padStart(2, "0")}`;
+
+  // Resolve the active Twilio AudioHelper (inbound uses the passed prop; outbound uses its own device)
+  const getAudioHelper = useCallback(
+    () => deviceAudio ?? deviceRef.current?.audio ?? null,
+    [deviceAudio],
+  );
+
+  // Enumerate available audio devices and keep the list live while the call is active.
+  // Bluetooth devices (AirPods, etc.) fire a 'devicechange' event when they connect —
+  // we re-enumerate immediately so they appear in the picker without a page reload.
+  // If the OS switches the default input (e.g. AirPods just connected and became the
+  // new default), we also transparently re-apply the currently selected device so the
+  // Twilio stream stays on whatever the user picked.
+  useEffect(() => {
+    if (callState !== "in-call") return;
+
+    const enumerate = () => {
+      navigator.mediaDevices
+        .enumerateDevices()
+        .then((devices) => {
+          setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+          setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
+        })
+        .catch(() => {});
+    };
+
+    const handleDeviceChange = () => {
+      enumerate();
+      // Re-apply the selected input device so Twilio doesn't silently stay
+      // on the old one after the OS switches defaults (common with AirPods).
+      const audio = getAudioHelper();
+      if (audio) {
+        audio.setInputDevice(selectedMicId).catch(() => {});
+      }
+    };
+
+    enumerate();
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        handleDeviceChange,
+      );
+    };
+  }, [callState, getAudioHelper, selectedMicId]);
+
+  const handleMicChange = useCallback(
+    async (deviceId: string) => {
+      setSelectedMicId(deviceId);
+      const audio = getAudioHelper();
+      if (!audio) return;
+      try {
+        await audio.setInputDevice(deviceId);
+      } catch (e) {
+        logger.error("[VoiceCallPanel] Failed to set input device:", e);
+      }
+    },
+    [getAudioHelper],
+  );
+
+  const handleSpeakerChange = useCallback(
+    async (deviceId: string) => {
+      setSelectedSpeakerId(deviceId);
+      const audio = getAudioHelper();
+      if (!audio) return;
+      try {
+        await audio.speakerDevices.set([deviceId]);
+      } catch (e) {
+        logger.error("[VoiceCallPanel] Failed to set speaker device:", e);
+      }
+    },
+    [getAudioHelper],
+  );
 
   // Log the call to the server after it ends
   const logCall = useCallback(
@@ -450,24 +548,91 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
             <PhoneOff className="h-5 w-5" />
           </Button>
 
-          {/* Speaker placeholder (visual only — browser controls audio output) */}
-          <Button
-            variant="outline"
-            size="icon"
-            className={cn(
-              "h-10 w-10 rounded-full transition-colors",
-              isSpeakerOff && "bg-muted text-muted-foreground",
-            )}
-            onClick={() => setIsSpeakerOff((v) => !v)}
-            title="Speaker"
-            disabled
-          >
-            {isSpeakerOff ? (
-              <VolumeX className="h-4 w-4" />
-            ) : (
-              <Volume2 className="h-4 w-4" />
-            )}
-          </Button>
+          {/* Audio device settings */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-10 w-10 rounded-full transition-colors"
+                title="Audio settings"
+                disabled={callState !== "in-call"}
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="end"
+              className="w-72 space-y-4 p-4"
+            >
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Audio Settings
+              </p>
+
+              {/* Microphone */}
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1.5">
+                  <Mic className="h-3.5 w-3.5" />
+                  Microphone
+                </Label>
+                <Select
+                  value={selectedMicId}
+                  onValueChange={handleMicChange}
+                  disabled={micDevices.length === 0}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {micDevices.length === 0 ? (
+                      <SelectItem value="default">Default</SelectItem>
+                    ) : (
+                      micDevices.map((d) => (
+                        <SelectItem key={d.deviceId} value={d.deviceId}>
+                          {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Speaker */}
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1.5">
+                  <Settings2 className="h-3.5 w-3.5" />
+                  Speaker
+                </Label>
+                {supportsSinkId ? (
+                  <Select
+                    value={selectedSpeakerId}
+                    onValueChange={handleSpeakerChange}
+                    disabled={speakerDevices.length === 0}
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue placeholder="Default" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {speakerDevices.length === 0 ? (
+                        <SelectItem value="default">Default</SelectItem>
+                      ) : (
+                        speakerDevices.map((d) => (
+                          <SelectItem key={d.deviceId} value={d.deviceId}>
+                            {d.label || `Speaker ${d.deviceId.slice(0, 6)}`}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Speaker selection not supported in this browser.
+                  </p>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       )}
 
