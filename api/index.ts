@@ -7,7 +7,7 @@ import mysql, {
   type RowDataPacket,
 } from "mysql2/promise";
 import jwt from "jsonwebtoken";
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import twilio from "twilio";
 import crypto from "crypto";
 import { ImapFlow } from "imapflow";
@@ -79,6 +79,55 @@ async function publishToAbly(channel: string, event: string, data: unknown) {
   } catch (err) {
     console.error("❌ Ably publish error:", err);
   }
+}
+
+// Initialize Resend email client
+let resendClient: Resend | null = null;
+if (process.env.RESEND_API_KEY) {
+  resendClient = new Resend(process.env.RESEND_API_KEY);
+  console.log("✅ Resend client initialized successfully");
+} else {
+  console.warn(
+    "⚠️  Warning: RESEND_API_KEY not set. Email functionality will be disabled.",
+  );
+}
+
+const RESEND_FROM =
+  process.env.SMTP_FROM || "Encore Mortgage <no-reply@encoremortgage.org>";
+
+async function sendViaResend(options: {
+  from?: string;
+  to: string;
+  subject: string;
+  html?: string;
+  text?: string;
+  replyTo?: string;
+  headers?: Record<string, string>;
+  attachments?: Array<{
+    filename: string;
+    content: Buffer;
+    contentType?: string;
+  }>;
+}): Promise<{ messageId?: string }> {
+  if (!resendClient) {
+    throw new Error("Email not configured (missing RESEND_API_KEY)");
+  }
+  const { data, error } = await resendClient.emails.send({
+    from: options.from || RESEND_FROM,
+    to: options.to,
+    subject: options.subject,
+    html: options.html,
+    text: options.text,
+    replyTo: options.replyTo,
+    headers: options.headers,
+    attachments: options.attachments?.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      content_type: a.contentType,
+    })),
+  });
+  if (error) throw new Error(error.message);
+  return { messageId: data?.id };
 }
 
 // Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
@@ -424,67 +473,26 @@ async function sendEmailMessage(
   provider_response?: any;
 }> {
   const isReminderFlowChannel = options?.channel === "reminder_flow";
-  const smtpHost = isReminderFlowChannel
-    ? process.env.REMINDER_SMTP_HOST || process.env.SMTP_HOST
-    : process.env.SMTP_HOST;
-  const smtpPort = isReminderFlowChannel
-    ? parseInt(process.env.REMINDER_SMTP_PORT || process.env.SMTP_PORT || "587")
-    : parseInt(process.env.SMTP_PORT || "587");
-  const smtpSecure = isReminderFlowChannel
-    ? (process.env.REMINDER_SMTP_SECURE || process.env.SMTP_SECURE) === "true"
-    : process.env.SMTP_SECURE === "true";
-  const smtpUser = isReminderFlowChannel
-    ? process.env.REMINDER_SMTP_USER || process.env.SMTP_USER
-    : process.env.SMTP_USER;
-  const smtpPassword = isReminderFlowChannel
-    ? process.env.REMINDER_SMTP_PASSWORD || process.env.SMTP_PASSWORD
-    : process.env.SMTP_PASSWORD;
   const smtpFrom = isReminderFlowChannel
     ? process.env.REMINDER_SMTP_FROM || process.env.SMTP_FROM
     : process.env.SMTP_FROM;
 
-  // Guard: check credentials before creating the transporter
-  if (!smtpUser || !smtpPassword) {
-    console.error(
-      `❌ sendEmailMessage: SMTP credentials not configured — channel=${isReminderFlowChannel ? "reminder_flow" : "default"} to=${to}`,
-    );
-    return {
-      success: false,
-      error: "SMTP credentials not configured",
-    };
-  }
-
   console.log(
-    `📧 sendEmailMessage: to=${to} | subject="${subject}" | channel=${isReminderFlowChannel ? "reminder_flow" : "default"} | isHTML=${isHTML} | conv=${conversationId ?? "none"} | host=${smtpHost ?? "(not set)"} | from=${smtpFrom ?? "(not set)"}`,
+    `📧 sendEmailMessage: to=${to} | subject="${subject}" | channel=${isReminderFlowChannel ? "reminder_flow" : "default"} | isHTML=${isHTML} | conv=${conversationId ?? "none"} | from=${smtpFrom ?? "(not set)"}`,
   );
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpSecure,
-      auth: {
-        user: smtpUser,
-        pass: smtpPassword,
-      },
-    });
-
     // Derive the domain from SMTP_FROM for threading headers.
-    // This makes client replies carry In-Reply-To / References back to us.
     const smtpFromEmail =
       smtpFrom?.match(/<([^>]+)>/)?.[1] || smtpFrom || "noreply@example.com";
     const emailDomain = smtpFromEmail.split("@")[1] || "example.com";
 
-    // Encode conversationId into the Message-ID so every email client
-    // will echo it back in In-Reply-To / References when the client hits Reply.
-    // Format: <enc-{conversationId}-{timestamp}@{domain}>
+    // Encode conversationId into the Message-ID for email threading.
     const messageId = conversationId
       ? `<enc-${conversationId}-${Date.now()}@${emailDomain}>`
       : undefined;
 
-    // Reply-To: use a dedicated IMAP mailbox (IMAP_USER) when configured,
-    // otherwise fall back to the subaddress scheme (INBOUND_EMAIL_DOMAIN),
-    // otherwise fall back to SMTP_FROM.
+    // Reply-To: use a dedicated IMAP mailbox (IMAP_USER) when configured.
     const inboundMailbox = process.env.IMAP_USER;
     const inboundDomain = process.env.INBOUND_EMAIL_DOMAIN;
     const replyTo = inboundMailbox
@@ -497,25 +505,19 @@ async function sendEmailMessage(
     if (conversationId) headers["X-Conversation-Id"] = conversationId;
     if (messageId) headers["Message-ID"] = messageId;
 
-    const mailOptions: nodemailer.SendMailOptions = {
-      from: smtpFrom,
+    const info = await sendViaResend({
+      from: smtpFrom || RESEND_FROM,
       to,
       subject,
-      replyTo,
+      replyTo: replyTo || undefined,
       headers: Object.keys(headers).length ? headers : undefined,
-      [isHTML ? "html" : "text"]: body,
-    };
-
-    const info = await transporter.sendMail(mailOptions);
+      ...(isHTML ? { html: body } : { text: body }),
+    });
 
     return {
       success: true,
       external_id: info.messageId,
-      provider_response: {
-        messageId: info.messageId,
-        response: info.response,
-        envelope: info.envelope,
-      },
+      provider_response: { messageId: info.messageId },
     };
   } catch (error: any) {
     console.error(
@@ -563,27 +565,6 @@ async function sendBrokerVerificationEmail(
     console.log("📧 Sending broker verification email");
     console.log("   Email:", email);
     console.log("   Name:", firstName);
-    console.log("   SMTP Host:", process.env.SMTP_HOST);
-    console.log("   SMTP From:", process.env.SMTP_FROM);
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
-      console.error("❌ SMTP credentials not configured!");
-      throw new Error("SMTP credentials not configured");
-    }
-
-    console.log("🔍 Verifying SMTP connection...");
-    await transporter.verify();
-    console.log("✅ SMTP connection verified");
 
     const emailBody = `
       <!DOCTYPE html>
@@ -642,8 +623,7 @@ async function sendBrokerVerificationEmail(
     `;
 
     console.log("📨 Sending email to:", email);
-    const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM,
+    const info = await sendViaResend({
       to: email,
       subject: `${code} is your verification code - Admin`,
       html: emailBody,
@@ -651,7 +631,6 @@ async function sendBrokerVerificationEmail(
 
     console.log("✅ Broker verification email sent successfully!");
     console.log("📧 Message ID:", info.messageId);
-    console.log("📬 Response:", info.response);
   } catch (error) {
     console.error("❌ Error sending broker email:", error);
     throw error;
@@ -670,23 +649,6 @@ async function sendClientVerificationEmail(
     console.log("📧 Sending client verification email");
     console.log("   Email:", email);
     console.log("   Name:", firstName);
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
-      console.error("❌ SMTP credentials not configured!");
-      return;
-    }
-
-    await transporter.verify();
 
     const emailBody = `
       <!DOCTYPE html>
@@ -754,8 +716,7 @@ async function sendClientVerificationEmail(
       </html>
     `;
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM,
+    await sendViaResend({
       to: email,
       subject: `${code} is your access code - Encore Mortgage`,
       html: emailBody,
@@ -785,16 +746,6 @@ async function sendClientLoanWelcomeEmail(
 ): Promise<void> {
   try {
     console.log("📧 Sending client loan welcome email");
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
 
     const taskListHTML = tasks
       .map(
@@ -828,7 +779,7 @@ async function sendClientLoanWelcomeEmail(
       .join("");
 
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: RESEND_FROM,
       to: email,
       subject: `Your Loan Application ${applicationNumber} - Next Steps`,
       html: `
@@ -893,7 +844,7 @@ async function sendClientLoanWelcomeEmail(
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendViaResend(mailOptions);
     console.log("✅ Client welcome email sent!");
   } catch (error) {
     console.error("❌ Error sending client welcome email:", error);
@@ -918,16 +869,6 @@ async function sendPublicApplicationWelcomeEmail(
   try {
     console.log("📧 Sending public wizard welcome email");
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-
     const loanTypeLabel: Record<string, string> = {
       purchase: "Home Purchase",
       refinance: "Refinance",
@@ -937,7 +878,7 @@ async function sendPublicApplicationWelcomeEmail(
       process.env.CLIENT_URL || "https://portal.encoremortgage.org";
 
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: RESEND_FROM,
       to: email,
       subject: `We received your application! — ${applicationNumber}`,
       html: `
@@ -1094,7 +1035,7 @@ async function sendPublicApplicationWelcomeEmail(
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendViaResend(mailOptions);
     console.log("✅ Public application welcome email sent!");
   } catch (error) {
     console.error("❌ Error sending public application welcome email:", error);
@@ -1114,18 +1055,8 @@ async function sendTaskReopenedEmail(
   try {
     console.log("📧 Sending task reopened email");
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: RESEND_FROM,
       to: email,
       subject: `Task Needs Revision: ${taskTitle}`,
       html: `
@@ -1201,7 +1132,7 @@ async function sendTaskReopenedEmail(
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendViaResend(mailOptions);
     console.log("✅ Task reopened email sent!");
   } catch (error) {
     console.error("❌ Error sending task reopened email:", error);
@@ -1217,18 +1148,8 @@ async function sendTaskApprovedEmail(
   try {
     console.log("📧 Sending task approved email");
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: RESEND_FROM,
       to: email,
       subject: `Task Approved: ${taskTitle}`,
       html: `
@@ -1300,7 +1221,7 @@ async function sendTaskApprovedEmail(
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendViaResend(mailOptions);
     console.log("✅ Task approved email sent!");
   } catch (error) {
     console.error("❌ Error sending task approved email:", error);
@@ -1320,18 +1241,8 @@ async function sendNewTaskAssignedEmail(
   applicationNumber: string,
 ): Promise<void> {
   try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT!),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-
     const mailOptions = {
-      from: `"Encore Mortgage" <${process.env.SMTP_USER}>`,
+      from: RESEND_FROM,
       to: email,
       subject: `New Task Assigned: ${taskTitle}`,
       html: `
@@ -1403,7 +1314,7 @@ async function sendNewTaskAssignedEmail(
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendViaResend(mailOptions);
     console.log("✅ New task assigned email sent!");
   } catch (error) {
     console.error("❌ Error sending new task assigned email:", error);
@@ -10887,9 +10798,9 @@ const handleProcessReminderFlows: RequestHandler = async (req, res) => {
       }
     }
 
-    // Log SMTP configuration status (no secrets) for traceability
+    // Log email configuration status for traceability
     console.log(
-      `\ud83d\udd52 Reminder flows cron triggered | SMTP_HOST=${process.env.SMTP_HOST ?? "(not set)"} | SMTP_USER=${process.env.SMTP_USER ? "\u2713 set" : "\u274c NOT SET"} | SMTP_FROM=${process.env.SMTP_FROM ?? "(not set)"}`,
+      `⏰ Reminder flows cron triggered | RESEND=${process.env.RESEND_API_KEY ? "set" : "NOT SET"} | SMTP_FROM=${process.env.SMTP_FROM ?? "(not set)"}`,
     );
 
     // Load all due active executions (next_execution_at <= NOW())
@@ -15462,12 +15373,6 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
     }
 
     // --- Send the email (inline transporter to support PDF attachment) ---
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
-    });
 
     const attachments: Array<{
       filename: string;
@@ -15485,7 +15390,7 @@ const handleSendPreApprovalLetterEmail: RequestHandler = async (req, res) => {
     let sendSuccess = false;
     let externalId: string | undefined;
     try {
-      const info = await transporter.sendMail({
+      const info = await sendViaResend({
         from: process.env.SMTP_FROM,
         to: letter.client_email,
         subject: finalSubject,
@@ -16805,14 +16710,6 @@ function createServer() {
     bookingToken: string;
     notes: string | null;
   }): Promise<void> {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
-    });
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) return;
-
     const formattedDate = new Date(
       opts.meetingDate + "T12:00:00",
     ).toLocaleDateString("en-US", {
@@ -16848,7 +16745,7 @@ function createServer() {
 
     const cancelUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/cancel/${opts.bookingToken}`;
 
-    await transporter.sendMail({
+    await sendViaResend({
       from: process.env.SMTP_FROM,
       to: opts.email,
       subject: `Meeting Confirmed — ${formattedDate} at ${formatTime(opts.meetingTime)}`,
@@ -16920,14 +16817,6 @@ function createServer() {
     notes: string | null;
     meetingId: number;
   }): Promise<void> {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
-    });
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) return;
-
     const formattedDate = new Date(
       opts.meetingDate + "T12:00:00",
     ).toLocaleDateString("en-US", {
@@ -16943,7 +16832,7 @@ function createServer() {
     };
     const adminUrl = `${process.env.BASE_URL || "https://portal.encoremortgage.org"}/admin/scheduler`;
 
-    await transporter.sendMail({
+    await sendViaResend({
       from: process.env.SMTP_FROM,
       to: opts.brokerEmail,
       subject: `New Meeting Scheduled — ${opts.clientName} on ${formattedDate}`,
@@ -17012,14 +16901,6 @@ function createServer() {
     cancelledBy: "client" | "broker";
     reason: string | null;
   }): Promise<void> {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_SECURE === "true",
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
-    });
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASSWORD) return;
-
     const formattedDate = new Date(
       opts.meetingDate + "T12:00:00",
     ).toLocaleDateString("en-US", {
@@ -17035,7 +16916,7 @@ function createServer() {
     };
     const scheduleUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler`;
 
-    await transporter.sendMail({
+    await sendViaResend({
       from: process.env.SMTP_FROM,
       to: opts.email,
       subject: `Meeting Cancelled — ${formattedDate}`,

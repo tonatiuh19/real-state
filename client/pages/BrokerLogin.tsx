@@ -41,6 +41,7 @@ export default function BrokerLogin() {
   const [code, setCode] = useState("");
   const [success, setSuccess] = useState("");
   const [emailError, setEmailError] = useState("");
+  const [isSendingCode, setIsSendingCode] = useState(false);
   const [deliveryMethod, setDeliveryMethod] = useState<"email" | "sms">(
     "email",
   );
@@ -63,12 +64,14 @@ export default function BrokerLogin() {
       return;
     }
 
+    setIsSendingCode(true);
     const result = await dispatch(
       sendVerificationCode({
         email: trimmedEmail,
         delivery_method: deliveryMethod,
       }),
     );
+    setIsSendingCode(false);
 
     if (sendVerificationCode.fulfilled.match(result)) {
       setSuccess(
@@ -77,6 +80,26 @@ export default function BrokerLogin() {
           : "Verification code sent to your email",
       );
       setStep("code");
+    }
+  };
+
+  const handleResendCode = async () => {
+    setSuccess("");
+    dispatch(clearError());
+    setIsSendingCode(true);
+    const result = await dispatch(
+      sendVerificationCode({
+        email: email.trim().toLowerCase(),
+        delivery_method: deliveryMethod,
+      }),
+    );
+    setIsSendingCode(false);
+    if (sendVerificationCode.fulfilled.match(result)) {
+      setSuccess(
+        deliveryMethod === "sms"
+          ? "Code resent to your phone"
+          : "Code resent to your email",
+      );
     }
   };
 
@@ -345,9 +368,9 @@ export default function BrokerLogin() {
                 <Button
                   type="submit"
                   className="w-full h-12 text-base shadow-lg transition-all duration-300"
-                  disabled={loading || !email}
+                  disabled={isSendingCode || !email}
                 >
-                  {loading ? (
+                  {isSendingCode ? (
                     <span className="flex items-center gap-2">
                       <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                       Sending Code...
@@ -403,6 +426,47 @@ export default function BrokerLogin() {
                     </span>
                     {deliveryMethod === "email" && <> ({email})</>}
                   </p>
+                </div>
+
+                {/* Change delivery method */}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-gray-500 text-center">
+                    Didn't receive it? Try a different method:
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("email")}
+                      className={`flex items-center justify-center gap-2 h-10 rounded-lg border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "email"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-gray-200 text-gray-500 hover:border-gray-300"
+                      }`}
+                    >
+                      <Mail className="h-4 w-4" />
+                      Email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("sms")}
+                      className={`flex items-center justify-center gap-2 h-10 rounded-lg border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "sms"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-gray-200 text-gray-500 hover:border-gray-300"
+                      }`}
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      SMS
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResendCode}
+                    disabled={isSendingCode}
+                    className="w-full text-sm text-primary hover:underline font-semibold disabled:opacity-50 pt-1"
+                  >
+                    {isSendingCode ? "Sending..." : "Resend Code"}
+                  </button>
                 </div>
 
                 <Button

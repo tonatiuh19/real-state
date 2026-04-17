@@ -38,6 +38,9 @@ const ClientLogin = () => {
   const error = useAppSelector(selectClientAuthError);
   const shouldRedirect = useAppSelector(selectShouldRedirectToWizard);
   const isAuthenticated = useAppSelector(selectIsClientAuthenticated);
+  const sendCodeLoading = useAppSelector(
+    (state) => state.clientAuth.sendCodeLoading,
+  );
 
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
@@ -113,6 +116,11 @@ const ClientLogin = () => {
     setDeliveryMethod("email");
     codeFormik.resetForm();
     dispatch(clearClientError());
+  };
+
+  const handleResend = async () => {
+    dispatch(clearClientError());
+    await dispatch(sendClientCode({ email, delivery_method: deliveryMethod }));
   };
 
   return (
@@ -675,18 +683,45 @@ const ClientLogin = () => {
                     ← Back to Email
                   </Button>
 
-                  {/* Resend Code */}
-                  <div className="text-center pt-2">
-                    <p className="text-xs text-muted-foreground">
-                      Didn't receive the code?{" "}
+                  {/* Resend / Change delivery */}
+                  <div className="space-y-3 pt-2">
+                    <p className="text-xs text-muted-foreground text-center font-medium">
+                      Didn't receive it? Try a different method:
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
                       <button
                         type="button"
-                        onClick={() => emailFormik.handleSubmit()}
-                        className="text-primary hover:underline font-semibold"
+                        onClick={() => setDeliveryMethod("email")}
+                        className={`flex items-center justify-center gap-2 h-10 rounded-xl border-2 text-sm font-medium transition-all ${
+                          deliveryMethod === "email"
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border/50 text-muted-foreground hover:border-border"
+                        }`}
                       >
-                        Resend Code
+                        <Mail className="h-4 w-4" />
+                        Email
                       </button>
-                    </p>
+                      <button
+                        type="button"
+                        onClick={() => setDeliveryMethod("sms")}
+                        className={`flex items-center justify-center gap-2 h-10 rounded-xl border-2 text-sm font-medium transition-all ${
+                          deliveryMethod === "sms"
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border/50 text-muted-foreground hover:border-border"
+                        }`}
+                      >
+                        <MessageSquare className="h-4 w-4" />
+                        SMS
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleResend}
+                      disabled={sendCodeLoading}
+                      className="w-full text-sm text-primary hover:underline font-semibold disabled:opacity-50"
+                    >
+                      {sendCodeLoading ? "Sending..." : "Resend Code"}
+                    </button>
                   </div>
                 </div>
               </motion.form>
