@@ -18268,10 +18268,15 @@ function createServer() {
 
       const [rows] = await pool.query<RowDataPacket[]>(
         `SELECT sm.client_name, sm.client_email, sm.client_phone,
-                sm.meeting_date, sm.meeting_time, sm.status,
-                b.public_token AS broker_public_token
+          sm.meeting_date, sm.meeting_time, sm.meeting_type, sm.status,
+          b.public_token AS broker_public_token,
+          CONCAT(b.first_name, ' ', b.last_name) AS broker_name,
+          ss.timezone AS broker_timezone
          FROM scheduled_meetings sm
          LEFT JOIN brokers b ON b.id = sm.broker_id
+         LEFT JOIN scheduler_settings ss
+          ON ss.broker_id = sm.broker_id
+               AND ss.tenant_id = sm.tenant_id
          WHERE sm.booking_token = ? AND sm.tenant_id = ?`,
         [bookingToken, MORTGAGE_TENANT_ID],
       );
@@ -18294,9 +18299,12 @@ function createServer() {
       return res.json({
         success: true,
         broker_public_token: meeting.broker_public_token,
+        broker_name: meeting.broker_name,
+        broker_timezone: meeting.broker_timezone,
         client_name: meeting.client_name,
         client_email: meeting.client_email,
         client_phone: meeting.client_phone,
+        meeting_type: meeting.meeting_type,
         old_meeting_date: meeting.meeting_date,
         old_meeting_time: meeting.meeting_time,
       });
@@ -18308,13 +18316,42 @@ function createServer() {
     }
   };
 
-  // Cancels the existing meeting so the client can book a new slot
+  // Cancels the existing meeting and books a new slot atomically.
+  // Body: { new_date: "YYYY-MM-DD", new_time: "HH:MM" }
   const handleRescheduleMeeting: RequestHandler = async (req, res) => {
     try {
       const { bookingToken } = req.params as { bookingToken: string };
+      const { new_date, new_time } = req.body as {
+        new_date?: string;
+        new_time?: string;
+      };
 
+      if (!new_date || !new_time) {
+        return res.status(400).json({
+          success: false,
+          error: "new_date and new_time are required",
+        });
+      }
+
+      // Validate date / time format
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(new_date)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "new_date must be YYYY-MM-DD" });
+      }
+      if (!/^\d{2}:\d{2}$/.test(new_time)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "new_time must be HH:MM" });
+      }
+
+      // Load old meeting + broker data
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT sm.id, sm.status, b.public_token AS broker_public_token
+        `SELECT sm.id, sm.status, sm.client_name, sm.client_email,
+                sm.client_phone, sm.meeting_type, sm.notes,
+                b.id AS broker_id, b.public_token AS broker_public_token,
+                b.first_name, b.last_name, b.email AS broker_email,
+                b.phone AS broker_phone, b.timezone AS broker_timezone
          FROM scheduled_meetings sm
          LEFT JOIN brokers b ON b.id = sm.broker_id
          WHERE sm.booking_token = ? AND sm.tenant_id = ?`,
@@ -18327,27 +18364,152 @@ function createServer() {
           .json({ success: false, error: "Booking not found" });
       }
 
-      const meeting = rows[0];
+      const old = rows[0];
 
-      if (meeting.status === "cancelled") {
-        // Already cancelled — just return the broker token so they can re-book
-        return res.json({
-          success: true,
-          broker_public_token: meeting.broker_public_token,
+      if (old.status === "cancelled") {
+        return res.status(410).json({
+          success: false,
+          error: "This booking has already been cancelled",
         });
       }
 
+      // Load scheduler settings
+      const [[settings]] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        [old.broker_id, MORTGAGE_TENANT_ID],
+      );
+
+      if (!settings || !settings.is_enabled) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Scheduler is not available" });
+      }
+
+      // Validate that the requested new slot is actually available
+      const allSlots = await getAvailableSlotsForDate(
+        old.broker_id,
+        new_date,
+        settings.slot_duration_minutes,
+        settings.buffer_time_minutes,
+        settings.min_booking_hours,
+      );
+
+      const requestedSlot = allSlots.find((s) => s.time === new_time);
+      if (!requestedSlot) {
+        return res
+          .status(400)
+          .json({ success: false, error: "This time slot is not available" });
+      }
+      if (!requestedSlot.available) {
+        return res
+          .status(409)
+          .json({ success: false, error: "This time slot is already taken" });
+      }
+
+      // Cancel the old meeting
       await pool.query(
         `UPDATE scheduled_meetings
          SET status = 'cancelled', cancelled_by = 'client',
              cancelled_reason = 'Rescheduled by client', cancelled_at = NOW()
          WHERE id = ? AND tenant_id = ?`,
-        [meeting.id, MORTGAGE_TENANT_ID],
+        [old.id, MORTGAGE_TENANT_ID],
+      );
+
+      // Create Zoom meeting for video calls
+      let zoomMeetingId: string | null = null;
+      let zoomJoinUrl: string | null = null;
+      let zoomStartUrl: string | null = null;
+
+      if (old.meeting_type === "video") {
+        const zoomMeeting = await createZoomMeeting({
+          topic: settings.meeting_title || "Mortgage Consultation",
+          startDatetime: `${new_date}T${new_time}:00`,
+          durationMinutes: settings.slot_duration_minutes,
+          timezone: settings.timezone || "America/Chicago",
+        });
+        if (zoomMeeting) {
+          zoomMeetingId = zoomMeeting.meeting_id;
+          zoomJoinUrl = zoomMeeting.join_url;
+          zoomStartUrl = zoomMeeting.start_url;
+        }
+      }
+
+      const newBookingToken = crypto.randomUUID();
+
+      // Insert new booking
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO scheduled_meetings
+           (tenant_id, broker_id, client_name, client_email, client_phone,
+            meeting_date, meeting_time, meeting_end_time, meeting_type,
+            zoom_meeting_id, zoom_join_url, zoom_start_url,
+            status, notes, booking_token, public_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          old.broker_id,
+          old.client_name,
+          old.client_email,
+          old.client_phone,
+          new_date,
+          new_time + ":00",
+          requestedSlot.end_time + ":00",
+          old.meeting_type,
+          zoomMeetingId,
+          zoomJoinUrl,
+          zoomStartUrl,
+          old.notes,
+          newBookingToken,
+          old.broker_public_token,
+        ],
+      );
+
+      const brokerName = `${old.first_name} ${old.last_name}`;
+
+      // Send confirmation emails (non-blocking)
+      sendMeetingConfirmationToClient({
+        email: old.client_email,
+        clientName: old.client_name,
+        brokerName,
+        brokerEmail: old.broker_email,
+        meetingId: result.insertId,
+        meetingDate: new_date,
+        meetingTime: new_time,
+        meetingEndTime: requestedSlot.end_time,
+        meetingType: old.meeting_type,
+        videoRoomUrl: zoomJoinUrl,
+        brokerPhone: old.broker_phone,
+        bookingToken: newBookingToken,
+        notes: old.notes || null,
+        brokerTimezone: old.broker_timezone || undefined,
+        rescheduleToken: newBookingToken,
+      }).catch((e) => console.error("Reschedule confirmation email error:", e));
+
+      sendMeetingNotificationToBroker({
+        brokerEmail: old.broker_email,
+        brokerName,
+        clientName: old.client_name,
+        clientEmail: old.client_email,
+        clientPhone: old.client_phone || null,
+        meetingDate: new_date,
+        meetingTime: new_time,
+        meetingEndTime: requestedSlot.end_time,
+        meetingType: old.meeting_type,
+        videoRoomUrl: zoomJoinUrl,
+        zoomStartUrl,
+        notes: old.notes || null,
+        meetingId: result.insertId,
+        brokerTimezone: old.broker_timezone || undefined,
+      }).catch((e) =>
+        console.error("Reschedule broker notification email error:", e),
       );
 
       return res.json({
         success: true,
-        broker_public_token: meeting.broker_public_token,
+        booking_token: newBookingToken,
+        meeting_date: new_date,
+        meeting_time: new_time,
+        zoom_join_url: zoomJoinUrl,
+        broker_name: brokerName,
       });
     } catch (err) {
       console.error("handleRescheduleMeeting error:", err);

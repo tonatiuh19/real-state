@@ -99,27 +99,32 @@ const STATUS_CONFIG: Record<
 > = {
   pending: {
     label: "Pending",
-    color: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
+    color:
+      "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30",
     icon: Clock,
   },
   confirmed: {
     label: "Confirmed",
-    color: "bg-green-500/15 text-green-300 border-green-500/30",
+    color:
+      "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30",
     icon: CheckCircle2,
   },
   cancelled: {
     label: "Cancelled",
-    color: "bg-red-500/15 text-red-300 border-red-500/30",
+    color:
+      "bg-red-100 text-red-800 border-red-300 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30",
     icon: XCircle,
   },
   completed: {
     label: "Completed",
-    color: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+    color:
+      "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30",
     icon: CheckCircle2,
   },
   no_show: {
     label: "No Show",
-    color: "bg-slate-500/15 text-foreground/80 border-slate-500/30",
+    color:
+      "bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-500/15 dark:text-foreground/80 dark:border-slate-500/30",
     icon: AlertCircle,
   },
 };
@@ -148,6 +153,13 @@ function formatDate(dateStr: string): string {
   } catch {
     return dateStr;
   }
+}
+
+function meetingWithLabel(meeting: ScheduledMeeting): string {
+  const first = meeting.broker_first_name?.trim() ?? "";
+  const last = meeting.broker_last_name?.trim() ?? "";
+  const fullName = [first, last].filter(Boolean).join(" ").trim();
+  return fullName || "Unassigned Partner / Mortgage Banker";
 }
 
 // ─── Default availability (Mon-Fri 9-5) ──────────────────────────────────────
@@ -212,6 +224,10 @@ function MeetingCard({
           </h4>
           <p className="text-xs text-muted-foreground truncate">
             {meeting.client_email}
+          </p>
+          <p className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-0.5">
+            <User className="h-3 w-3" />
+            With {meetingWithLabel(meeting)}
           </p>
 
           <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
@@ -1297,7 +1313,7 @@ const AdminScheduler: React.FC = () => {
   const { user } = useAppSelector((s) => s.brokerAuth);
 
   const [activeTab, setActiveTab] = useState("calendar");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editingMeeting, setEditingMeeting] = useState<ScheduledMeeting | null>(
     null,
@@ -1331,7 +1347,10 @@ const AdminScheduler: React.FC = () => {
   );
 
   const filteredMeetings = meetings.filter((m) => {
-    const matchStatus = statusFilter === "all" || m.status === statusFilter;
+    const matchStatus =
+      statusFilter === "all" ||
+      (statusFilter === "active" && m.status !== "cancelled") ||
+      m.status === statusFilter;
     const q = search.toLowerCase();
     const matchSearch =
       !q ||
@@ -1539,6 +1558,12 @@ const AdminScheduler: React.FC = () => {
                 </SelectTrigger>
                 <SelectContent className="bg-popover border-border">
                   <SelectItem
+                    value="active"
+                    className="text-foreground focus:bg-muted/50"
+                  >
+                    Active (hide cancelled)
+                  </SelectItem>
+                  <SelectItem
                     value="all"
                     className="text-foreground focus:bg-muted/50"
                   >
@@ -1634,6 +1659,9 @@ const AdminScheduler: React.FC = () => {
                             </div>
                             <div className="text-xs text-muted-foreground">
                               {m.client_email}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              With {meetingWithLabel(m)}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-foreground/80">

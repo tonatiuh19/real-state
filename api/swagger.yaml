@@ -3894,6 +3894,108 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /public/scheduler/reschedule/{bookingToken}:
+    get:
+      tags: [Scheduler (Public)]
+      summary: Get current booking details for reschedule confirmation
+      parameters:
+        - in: path
+          name: bookingToken
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Reschedule info loaded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      broker_public_token: { type: string }
+                      broker_name: { type: string, nullable: true }
+                      broker_timezone: { type: string, nullable: true }
+                      client_name: { type: string }
+                      client_email: { type: string, format: email }
+                      client_phone: { type: string, nullable: true }
+                      meeting_type: { type: string, enum: [phone, video] }
+                      old_meeting_date: { type: string, format: date }
+                      old_meeting_time: { type: string, example: "12:00:00" }
+        "404":
+          description: Booking not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: Booking already cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    post:
+      tags: [Scheduler (Public)]
+      summary: Cancel current booking and atomically book a new slot
+      parameters:
+        - in: path
+          name: bookingToken
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_date, new_time]
+              properties:
+                new_date:
+                  {
+                    type: string,
+                    example: "2026-05-10",
+                    description: "New meeting date (YYYY-MM-DD)",
+                  }
+                new_time:
+                  {
+                    type: string,
+                    example: "14:00",
+                    description: "New meeting time (HH:MM)",
+                  }
+      responses:
+        "200":
+          description: Old booking cancelled and new booking confirmed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      booking_token: { type: string }
+                      meeting_date: { type: string }
+                      meeting_time: { type: string }
+                      zoom_join_url: { type: string, nullable: true }
+                      broker_name: { type: string }
+        "400":
+          description: Missing or invalid new_date / new_time, or slot unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Booking not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: Requested slot is already taken
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: Booking already cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   # ── Scheduler (Admin) ─────────────────────────────────────────────────────────
   /scheduler/settings:
     get:

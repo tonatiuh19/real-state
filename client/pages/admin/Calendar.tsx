@@ -196,27 +196,32 @@ const STATUS_CONFIG: Record<
 > = {
   pending: {
     label: "Pending",
-    color: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
+    color:
+      "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30",
     icon: Clock,
   },
   confirmed: {
     label: "Confirmed",
-    color: "bg-green-500/15 text-green-300 border-green-500/30",
+    color:
+      "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30",
     icon: CheckCircle2,
   },
   cancelled: {
     label: "Cancelled",
-    color: "bg-red-500/15 text-red-300 border-red-500/30",
+    color:
+      "bg-red-100 text-red-800 border-red-300 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30",
     icon: XCircle,
   },
   completed: {
     label: "Completed",
-    color: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+    color:
+      "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30",
     icon: CheckCircle2,
   },
   no_show: {
     label: "No Show",
-    color: "bg-slate-500/15 text-foreground/80 border-slate-500/30",
+    color:
+      "bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-500/15 dark:text-foreground/80 dark:border-slate-500/30",
     icon: AlertCircle,
   },
 };
@@ -282,6 +287,13 @@ function formatDate(dateStr: string): string {
   } catch {
     return dateStr;
   }
+}
+
+function meetingWithLabel(meeting: ScheduledMeeting): string {
+  const first = meeting.broker_first_name?.trim() ?? "";
+  const last = meeting.broker_last_name?.trim() ?? "";
+  const fullName = [first, last].filter(Boolean).join(" ").trim();
+  return fullName || "Unassigned Partner / Mortgage Banker";
 }
 
 function defaultAvailability(): SchedulerAvailability[] {
@@ -651,6 +663,10 @@ function MeetingCard({
           <p className="text-xs text-muted-foreground truncate">
             {meeting.client_email}
           </p>
+          <p className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-0.5">
+            <User className="h-3 w-3" />
+            With {meetingWithLabel(meeting)}
+          </p>
           <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <CalendarDays className="h-3 w-3 text-primary" />
@@ -1008,6 +1024,9 @@ function UnifiedCalendarView({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">
                       {m.client_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      With {meetingWithLabel(m)}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {formatTime(m.meeting_time)} ·{" "}
@@ -2368,7 +2387,7 @@ const AdminCalendar: React.FC = () => {
   const isPartner = user?.role === "broker";
 
   const [activeTab, setActiveTab] = useState<string>("calendar");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editingMeeting, setEditingMeeting] = useState<ScheduledMeeting | null>(
@@ -2510,7 +2529,10 @@ const AdminCalendar: React.FC = () => {
   }, [dispatch, toast]);
 
   const filteredMeetings = meetings.filter((m) => {
-    const matchStatus = statusFilter === "all" || m.status === statusFilter;
+    const matchStatus =
+      statusFilter === "all" ||
+      (statusFilter === "active" && m.status !== "cancelled") ||
+      m.status === statusFilter;
     const q = search.toLowerCase();
     const matchSearch =
       !q ||
@@ -2753,6 +2775,12 @@ const AdminCalendar: React.FC = () => {
                   </SelectTrigger>
                   <SelectContent className="bg-popover border-border">
                     <SelectItem
+                      value="active"
+                      className="text-foreground focus:bg-muted/50"
+                    >
+                      Active (hide cancelled)
+                    </SelectItem>
+                    <SelectItem
                       value="all"
                       className="text-foreground focus:bg-muted/50"
                     >
@@ -2849,6 +2877,9 @@ const AdminCalendar: React.FC = () => {
                               </div>
                               <div className="text-xs text-muted-foreground">
                                 {m.client_email}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                With {meetingWithLabel(m)}
                               </div>
                             </td>
                             <td className="px-4 py-3 text-foreground/80">
