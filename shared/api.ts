@@ -849,7 +849,7 @@ export interface UpdateClientRequest {
   source?: string | null;
 }
 
-export interface GetClientProfileResponse {
+export interface GetClientDetailProfileResponse {
   success: boolean;
   client: {
     id: number;
@@ -882,6 +882,7 @@ export interface GetClientProfileResponse {
       last_name: string;
       email: string;
       role: string;
+      public_token: string | null;
     } | null;
   };
   loans: Array<{
@@ -1484,6 +1485,7 @@ export interface BrokerProfileDetails {
   role: string;
   license_number: string | null;
   specializations: string[] | null;
+  timezone: string;
   // from broker_profiles
   bio: string | null;
   avatar_url: string | null;
@@ -1520,6 +1522,7 @@ export interface UpdateBrokerProfileRequest {
   office_state?: string;
   office_zip?: string;
   years_experience?: number | null;
+  timezone?: string;
   // Social networks
   facebook_url?: string | null;
   instagram_url?: string | null;

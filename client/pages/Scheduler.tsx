@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { format, parseISO, isToday, isTomorrow } from "date-fns";
 import {
@@ -64,6 +64,20 @@ function formatSlotTime(time: string): string {
   const [h, m] = time.split(":").map(Number);
   const ampm = h >= 12 ? "PM" : "AM";
   return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+const TZ_LABELS: Record<string, string> = {
+  "America/New_York": "Eastern Time (ET)",
+  "America/Chicago": "Central Time (CT)",
+  "America/Denver": "Mountain Time (MT)",
+  "America/Phoenix": "Mountain Time – no DST (MT)",
+  "America/Los_Angeles": "Pacific Time (PT)",
+  "America/Anchorage": "Alaska Time (AKT)",
+  "Pacific/Honolulu": "Hawaii Time (HST)",
+};
+
+function friendlyTz(tz: string): string {
+  return TZ_LABELS[tz] ?? tz.replace(/_/g, " ");
 }
 
 function formatDisplayDate(dateStr: string): string {
@@ -239,6 +253,16 @@ function SlotGrid({
 
 const SchedulerPage: React.FC = () => {
   const { token } = useParams<{ token?: string }>();
+  const location = useLocation();
+  const prefill = (
+    location.state as {
+      prefill?: {
+        client_name?: string;
+        client_email?: string;
+        client_phone?: string | null;
+      };
+    } | null
+  )?.prefill;
   const dispatch = useAppDispatch();
 
   const {
@@ -297,9 +321,9 @@ const SchedulerPage: React.FC = () => {
 
   const formik = useFormik({
     initialValues: {
-      client_name: "",
-      client_email: "",
-      client_phone: "",
+      client_name: prefill?.client_name ?? "",
+      client_email: prefill?.client_email ?? "",
+      client_phone: prefill?.client_phone ?? "",
       notes: "",
     },
     validationSchema: bookingSchema,
@@ -476,18 +500,40 @@ const SchedulerPage: React.FC = () => {
                     <p className="text-xs font-semibold uppercase tracking-wider text-primary">
                       Selected
                     </p>
-                    <div className="flex items-center gap-2 text-foreground font-medium">
-                      <CalendarDays className="h-4 w-4 text-primary" />
-                      {formatDisplayDate(selectedDate)}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-foreground font-medium">
+                        <CalendarDays className="h-4 w-4 text-primary shrink-0" />
+                        {formatDisplayDate(selectedDate)}
+                      </div>
+                      {step !== "confirm" && (
+                        <button
+                          type="button"
+                          onClick={() => setStep("calendar")}
+                          className="text-xs font-semibold text-primary hover:underline shrink-0"
+                        >
+                          Change
+                        </button>
+                      )}
                     </div>
                     {selectedTime && (
-                      <div className="flex items-center gap-2 text-foreground font-medium">
-                        <Clock className="h-4 w-4 text-primary" />
-                        {formatSlotTime(selectedTime)}
-                        {selectedSlotData && (
-                          <span className="text-muted-foreground text-sm">
-                            – {formatSlotTime(selectedSlotData.end_time)}
-                          </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-foreground font-medium">
+                          <Clock className="h-4 w-4 text-primary shrink-0" />
+                          {formatSlotTime(selectedTime)}
+                          {selectedSlotData && (
+                            <span className="text-muted-foreground text-sm">
+                              – {formatSlotTime(selectedSlotData.end_time)}
+                            </span>
+                          )}
+                        </div>
+                        {step !== "confirm" && (
+                          <button
+                            type="button"
+                            onClick={() => setStep("slots")}
+                            className="text-xs font-semibold text-primary hover:underline shrink-0"
+                          >
+                            Change
+                          </button>
                         )}
                       </div>
                     )}
@@ -587,7 +633,7 @@ const SchedulerPage: React.FC = () => {
                     transition={{ duration: 0.2 }}
                     className="rounded-2xl border border-border bg-card p-6"
                   >
-                    <div className="flex items-center gap-3 mb-6">
+                    <div className="flex items-center gap-3 mb-4">
                       <button
                         onClick={() => setStep("calendar")}
                         className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
@@ -601,6 +647,31 @@ const SchedulerPage: React.FC = () => {
                           : "Pick a Time"}
                       </h2>
                     </div>
+
+                    {/* Timezone notice */}
+                    {publicBroker.timezone && (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4 bg-muted/40 rounded-lg px-3 py-2">
+                        <Clock className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          Times shown in{" "}
+                          <span className="font-semibold text-foreground">
+                            {friendlyTz(publicBroker.timezone)}
+                          </span>
+                          {Intl.DateTimeFormat().resolvedOptions().timeZone !==
+                            publicBroker.timezone && (
+                            <span className="ml-1 text-amber-600">
+                              · your local time is{" "}
+                              <span className="font-semibold">
+                                {friendlyTz(
+                                  Intl.DateTimeFormat().resolvedOptions()
+                                    .timeZone,
+                                )}
+                              </span>
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
 
                     {isLoadingSlots ? (
                       <div className="flex items-center justify-center py-12">
@@ -628,9 +699,10 @@ const SchedulerPage: React.FC = () => {
                     <div className="flex items-center gap-3 mb-6">
                       <button
                         onClick={() => setStep("slots")}
-                        className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
+                        className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-2 py-1.5 rounded-lg hover:bg-muted"
                       >
-                        <ChevronLeft className="h-5 w-5" />
+                        <ChevronLeft className="h-4 w-4" />
+                        Back
                       </button>
                       <h2 className="text-lg font-bold text-foreground">
                         Your Details

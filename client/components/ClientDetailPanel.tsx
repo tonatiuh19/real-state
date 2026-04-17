@@ -100,7 +100,15 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  createScheduledMeeting,
+  fetchSchedulerSettingsForBroker,
+} from "@/store/slices/schedulerSlice";
+import { BrokerDatePicker } from "@/components/BrokerDatePicker";
+import { BrokerTimePicker } from "@/components/BrokerTimePicker";
 
 interface ClientDetailPanelProps {
   isOpen: boolean;
@@ -535,9 +543,20 @@ export default function ClientDetailPanel({
   );
   const { templates: convTemplates } = useAppSelector((s) => s.conversations);
   const { user: currentBroker } = useAppSelector((s) => s.brokerAuth);
+  const {
+    settings: schedulerSettings,
+    availability: schedulerAvailability,
+    availableSlots,
+  } = useAppSelector((s) => s.scheduler);
 
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  const [copiedSchedule, setCopiedSchedule] = useState(false);
+  const [meetingForm, setMeetingForm] = useState({
+    meeting_date: "",
+    meeting_time: "",
+    meeting_type: "phone" as "phone" | "video",
+    notes: "",
+  });
+  const [isSavingMeeting, setIsSavingMeeting] = useState(false);
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
@@ -717,6 +736,7 @@ export default function ClientDetailPanel({
   const loans = profile?.loans ?? [];
   const conversations = profile?.conversations ?? [];
   const communications = profile?.communications ?? [];
+  const hasAssignedBroker = Boolean(client?.assigned_broker?.id);
 
   const statusMeta = CLIENT_STATUS_META[client?.status ?? "active"];
 
@@ -906,54 +926,51 @@ export default function ClientDetailPanel({
                   </Button>
                 </>
               ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setEditing(true)}
-                  className="h-8 text-xs"
-                >
-                  <Edit3 className="w-3.5 h-3.5 mr-1" />
-                  Edit
-                </Button>
+                <>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            disabled={!hasAssignedBroker}
+                            onClick={() => {
+                              const brokerId = client?.assigned_broker?.id;
+                              if (!brokerId) return;
+                              dispatch(
+                                fetchSchedulerSettingsForBroker(brokerId),
+                              );
+                              setScheduleDialogOpen(true);
+                            }}
+                            className="h-8 text-xs bg-violet-600 hover:bg-violet-700 text-white border-0 disabled:opacity-50"
+                          >
+                            <CalendarPlus className="w-3.5 h-3.5 mr-1" />
+                            Schedule
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {!hasAssignedBroker && (
+                        <TooltipContent>
+                          Assign a Partner / Mortgage Banker before scheduling.
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEditing(true)}
+                    className="h-8 text-xs"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 mr-1" />
+                    Edit
+                  </Button>
+                </>
               )}
             </div>
           )}
         </div>
-
-        {/* ─── stat chips ─────────────────────────────────────────────── */}
-        {!isLoading && client && (
-          <div className="flex gap-2 px-6 py-3 border-b bg-card">
-            <StatChip
-              icon={<Building2 className="w-4 h-4" />}
-              label="Loans"
-              value={String(loans.length)}
-            />
-            <StatChip
-              icon={<MessageSquare className="w-4 h-4" />}
-              label="Convos"
-              value={String(conversations.length)}
-            />
-            <StatChip
-              icon={<Activity className="w-4 h-4" />}
-              label="Messages"
-              value={String(communications.length)}
-            />
-            {client.credit_score && (
-              <StatChip
-                icon={<TrendingUp className="w-4 h-4" />}
-                label="Credit"
-                value={String(client.credit_score)}
-              />
-            )}
-            <button
-              onClick={() => setScheduleDialogOpen(true)}
-              className="ml-auto flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100 hover:border-violet-400 transition-colors font-medium shrink-0"
-            >
-              <CalendarPlus className="w-3.5 h-3.5" />
-              Schedule
-            </button>
-          </div>
-        )}
 
         {/* ─── tabs ───────────────────────────────────────────────────── */}
         {isLoading ? (
@@ -1000,7 +1017,7 @@ export default function ClientDetailPanel({
                   {client.assigned_broker && (
                     <section className="space-y-3">
                       <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Owner / Assigned Realtor
+                        Owner / Assigned Broker
                       </h3>
                       <div className="flex items-center gap-3 bg-muted/40 rounded-xl p-3">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500/20 to-violet-500/40 flex items-center justify-center shrink-0">
@@ -1017,7 +1034,12 @@ export default function ClientDetailPanel({
                             {client.assigned_broker.last_name}
                           </p>
                           <p className="text-xs text-muted-foreground capitalize flex items-center gap-1 flex-wrap">
-                            {client.assigned_broker.role} ·{" "}
+                            {client.assigned_broker.role === "broker"
+                              ? "Partner / Mortgage Banker"
+                              : client.assigned_broker.role === "admin"
+                                ? "Mortgage Banker"
+                                : client.assigned_broker.role}{" "}
+                            ·{" "}
                             <EmailLink
                               email={client.assigned_broker.email}
                               noIcon
@@ -1842,114 +1864,218 @@ export default function ClientDetailPanel({
       </SheetContent>
 
       {/* ── Schedule Meeting dialog ── */}
-      {(() => {
-        const schedulerUrl = currentBroker?.public_token
-          ? `${window.location.origin}/scheduler/${currentBroker.public_token}`
-          : null;
-        return (
-          <Dialog
-            open={scheduleDialogOpen}
-            onOpenChange={(v) => {
-              setScheduleDialogOpen(v);
-              if (!v) setCopiedSchedule(false);
-            }}
-          >
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <CalendarPlus className="h-4 w-4 text-violet-600" />
-                  Schedule a Meeting
-                </DialogTitle>
-                <DialogDescription>
-                  Share your booking link with{" "}
-                  <strong>
-                    {client
-                      ? `${client.first_name} ${client.last_name}`
-                      : "this client"}
-                  </strong>{" "}
-                  so they can pick a time that works.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-3 pt-1">
-                {schedulerUrl ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 flex items-center gap-2 bg-muted border rounded-lg px-3 py-2.5 min-w-0">
-                        <CalendarPlus className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <input
-                          readOnly
-                          value={schedulerUrl}
-                          className="bg-transparent text-sm text-foreground w-full outline-none truncate"
-                          onClick={(e) =>
-                            (e.target as HTMLInputElement).select()
-                          }
-                        />
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className={
-                          copiedSchedule
-                            ? "shrink-0 gap-1.5 border-green-500 text-green-600 bg-green-50"
-                            : "shrink-0 gap-1.5"
-                        }
-                        onClick={() => {
-                          navigator.clipboard.writeText(schedulerUrl);
-                          setCopiedSchedule(true);
-                          toast({
-                            title: "Copied!",
-                            description: "Booking link copied to clipboard.",
-                          });
-                          setTimeout(() => setCopiedSchedule(false), 2500);
-                        }}
-                      >
-                        {copiedSchedule ? (
-                          <>
-                            <CheckCheck className="h-3.5 w-3.5" /> Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3.5 w-3.5" /> Copy
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full gap-2"
-                      onClick={() =>
-                        window.open(
-                          schedulerUrl,
-                          "_blank",
-                          "noopener,noreferrer",
-                        )
-                      }
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      Preview Booking Page
-                    </Button>
-                    <div className="flex items-start gap-2 p-3 bg-violet-50 rounded-lg border border-violet-100 text-xs text-violet-700">
-                      <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                      <span>
-                        Copy this link and send it to the client via SMS or
-                        email so they can pick an available time slot on your
-                        calendar.
-                      </span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex items-center gap-2 text-sm text-red-600 py-2">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    No scheduler link found. Configure your availability in
-                    Calendar → Settings.
-                  </div>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
-        );
-      })()}
+      <Dialog
+        open={scheduleDialogOpen}
+        onOpenChange={(v) => {
+          if (!v) {
+            setMeetingForm({
+              meeting_date: "",
+              meeting_time: "",
+              meeting_type: "phone",
+              notes: "",
+            });
+            setScheduleDialogOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarPlus className="h-4 w-4 text-violet-600" />
+              Schedule a Meeting
+            </DialogTitle>
+            <DialogDescription>
+              Book a meeting with{" "}
+              <strong>
+                {client
+                  ? `${client.first_name} ${client.last_name}`
+                  : "this client"}
+              </strong>
+              . A confirmation email will be sent automatically.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-1">
+            {/* Client info read-only row */}
+            <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg border text-sm">
+              <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-muted-foreground">
+                {client?.email ?? "—"}
+              </span>
+              {client?.phone && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-muted-foreground">{client.phone}</span>
+                </>
+              )}
+            </div>
+
+            {/* Date */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Date</Label>
+              <BrokerDatePicker
+                value={meetingForm.meeting_date}
+                onChange={(d) =>
+                  setMeetingForm((f) => ({
+                    ...f,
+                    meeting_date: d,
+                    meeting_time: "",
+                  }))
+                }
+                availability={schedulerAvailability}
+                settings={schedulerSettings}
+                disabled={isSavingMeeting}
+              />
+            </div>
+
+            {/* Time slots */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Time</Label>
+              <BrokerTimePicker
+                date={meetingForm.meeting_date}
+                value={meetingForm.meeting_time}
+                onChange={(t) =>
+                  setMeetingForm((f) => ({ ...f, meeting_time: t }))
+                }
+                brokerToken={
+                  client?.assigned_broker?.public_token ??
+                  currentBroker?.public_token ??
+                  undefined
+                }
+                disabled={isSavingMeeting}
+              />
+            </div>
+
+            {/* Meeting type */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Meeting Type</Label>
+              <Select
+                value={meetingForm.meeting_type}
+                onValueChange={(v) =>
+                  setMeetingForm((f) => ({
+                    ...f,
+                    meeting_type: v as "phone" | "video",
+                  }))
+                }
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="phone">
+                    <span className="flex items-center gap-2">
+                      <PhoneCall className="h-3.5 w-3.5" /> Phone Call
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="video" disabled>
+                    <span className="flex items-center gap-2 opacity-50">
+                      <Lock className="h-3.5 w-3.5" /> Video (Zoom) — coming
+                      soon
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-1.5">
+              <Label htmlFor="meet-notes" className="text-xs font-medium">
+                Notes{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <Textarea
+                id="meet-notes"
+                placeholder="Agenda, topics to discuss…"
+                rows={2}
+                value={meetingForm.notes}
+                onChange={(e) =>
+                  setMeetingForm((f) => ({ ...f, notes: e.target.value }))
+                }
+                className="text-sm resize-none"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setScheduleDialogOpen(false)}
+              disabled={isSavingMeeting}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+              disabled={(() => {
+                if (
+                  isSavingMeeting ||
+                  !meetingForm.meeting_date ||
+                  !meetingForm.meeting_time
+                )
+                  return true;
+                const slot = availableSlots.find(
+                  (s) => s.time === meetingForm.meeting_time,
+                );
+                // slot not found means time was typed manually — allow it
+                if (slot && !slot.available) return true;
+                return false;
+              })()}
+              onClick={async () => {
+                if (!client) return;
+                setIsSavingMeeting(true);
+                try {
+                  const result = await dispatch(
+                    createScheduledMeeting({
+                      client_name:
+                        `${client.first_name} ${client.last_name}`.trim(),
+                      client_email: client.email,
+                      client_phone: client.phone ?? undefined,
+                      meeting_date: meetingForm.meeting_date,
+                      meeting_time: meetingForm.meeting_time,
+                      meeting_type: meetingForm.meeting_type,
+                      notes: meetingForm.notes || undefined,
+                    }),
+                  );
+                  if (createScheduledMeeting.fulfilled.match(result)) {
+                    toast({
+                      title: "Meeting scheduled!",
+                      description: `Confirmation sent to ${client.email}.`,
+                    });
+                    setScheduleDialogOpen(false);
+                    setMeetingForm({
+                      meeting_date: "",
+                      meeting_time: "",
+                      meeting_type: "phone",
+                      notes: "",
+                    });
+                  } else {
+                    toast({
+                      title: "Error",
+                      description:
+                        (result.payload as string) ??
+                        "Failed to schedule meeting.",
+                      variant: "destructive",
+                    });
+                  }
+                } finally {
+                  setIsSavingMeeting(false);
+                }
+              }}
+            >
+              {isSavingMeeting ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <CalendarPlus className="h-3.5 w-3.5 mr-1" />
+              )}
+              Book Meeting
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
 }

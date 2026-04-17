@@ -23,6 +23,7 @@ interface BrokerUser {
   email_verified: boolean;
   last_login?: string;
   public_token?: string | null;
+  timezone?: string;
   // profile fields
   avatar_url?: string | null;
   bio?: string | null;

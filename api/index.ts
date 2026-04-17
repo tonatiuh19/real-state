@@ -2286,7 +2286,7 @@ const handleGetBrokerProfile: RequestHandler = async (req, res) => {
     const [rows] = await pool.query<any[]>(
       `SELECT
         b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
-        b.license_number, b.specializations,
+        b.license_number, b.specializations, b.timezone,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
         bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
         bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
@@ -2347,6 +2347,7 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
       twitter_url,
       youtube_url,
       website_url,
+      timezone,
     } = req.body;
 
     // Update brokers table
@@ -2372,6 +2373,10 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
     if (specializations !== undefined) {
       brokerUpdates.push("specializations = ?");
       brokerValues.push(JSON.stringify(specializations));
+    }
+    if (timezone !== undefined) {
+      brokerUpdates.push("timezone = ?");
+      brokerValues.push(timezone || "America/Los_Angeles");
     }
 
     if (brokerUpdates.length > 0) {
@@ -2466,7 +2471,7 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
     const [rows] = await pool.query<any[]>(
       `SELECT
         b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
-        b.license_number, b.specializations,
+        b.license_number, b.specializations, b.timezone,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
         bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
         bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
@@ -5356,7 +5361,8 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
               b.first_name AS broker_first_name,
               b.last_name  AS broker_last_name,
               b.email      AS broker_email,
-              b.role       AS broker_role
+              b.role       AS broker_role,
+              b.public_token AS broker_public_token
        FROM clients c
        LEFT JOIN brokers b ON b.id = c.assigned_broker_id AND b.tenant_id = c.tenant_id
        WHERE c.id = ? AND c.tenant_id = ?
@@ -5458,6 +5464,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
               last_name: client.broker_last_name,
               email: client.broker_email,
               role: client.broker_role,
+              public_token: client.broker_public_token ?? null,
             }
           : null,
       },
@@ -17340,6 +17347,8 @@ function createServer() {
     brokerPhone: string | null;
     bookingToken: string;
     notes: string | null;
+    brokerTimezone?: string;
+    rescheduleToken: string;
   }): Promise<void> {
     const formattedDate = new Date(
       opts.meetingDate + "T12:00:00",
@@ -17354,6 +17363,16 @@ function createServer() {
       const ampm = h >= 12 ? "PM" : "AM";
       return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
     };
+    const tzAbbr = opts.brokerTimezone
+      ? (new Intl.DateTimeFormat("en-US", {
+          timeZone: opts.brokerTimezone,
+          timeZoneName: "short",
+        })
+          .formatToParts(new Date())
+          .find((p) => p.type === "timeZoneName")?.value ?? "")
+      : "";
+    const timeLabel = (t: string) =>
+      `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
     const connectionHtml =
       opts.meetingType === "video" && opts.videoRoomUrl
         ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
@@ -17375,6 +17394,7 @@ function createServer() {
           </table>`;
 
     const cancelUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/cancel/${opts.bookingToken}`;
+    const rescheduleUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/reschedule/${opts.rescheduleToken}`;
 
     const icsLocation =
       opts.meetingType === "video" && opts.videoRoomUrl
@@ -17401,7 +17421,7 @@ function createServer() {
     await sendViaResend({
       from: process.env.SMTP_FROM,
       to: opts.email,
-      subject: `Meeting Confirmed — ${formattedDate} at ${formatTime(opts.meetingTime)}`,
+      subject: `Meeting Confirmed — ${formattedDate} at ${timeLabel(opts.meetingTime)}`,
       attachments: [
         {
           filename: "meeting-invite.ics",
@@ -17429,10 +17449,7 @@ function createServer() {
                       </td></tr>
                       <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
                         <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">⏰ Time</span>
-                        <strong style="color:#0f172a;font-size:14px;">${formatTime(opts.meetingTime)} – ${formatTime(opts.meetingEndTime)}</strong>
-                      </td></tr>
-                      <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
-                        <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">👤 With</span>
+                        <strong style="color:#0f172a;font-size:14px;">${timeLabel(opts.meetingTime)} – ${timeLabel(opts.meetingEndTime)}</strong>
                         <strong style="color:#0f172a;font-size:14px;">${opts.brokerName}</strong>
                       </td></tr>
                       <tr><td style="padding:6px 0;">
@@ -17447,7 +17464,12 @@ function createServer() {
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
                   <tr>
                     <td align="center" style="padding-bottom:10px;">
-                      <a href="${cancelUrl}" style="display:inline-block;background-color:#f1f5f9;color:#64748b;text-decoration:none;padding:12px 32px;border-radius:8px;font-size:13px;border:1px solid #e2e8f0;">📅 Cancel Meeting</a>
+                      <a href="${rescheduleUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:12px 32px;border-radius:8px;font-size:13px;font-weight:700;">📅 Reschedule</a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding-bottom:10px;">
+                      <a href="${cancelUrl}" style="display:inline-block;background-color:#f1f5f9;color:#64748b;text-decoration:none;padding:12px 32px;border-radius:8px;font-size:13px;border:1px solid #e2e8f0;">Cancel Meeting</a>
                     </td>
                   </tr>
                   <tr>
@@ -17456,7 +17478,7 @@ function createServer() {
                     </td>
                   </tr>
                 </table>
-                <p style="margin:20px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">Need to reschedule? Reply to this email or call us directly.</p>
+                <p style="margin:20px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">Questions? Reply to this email and we'll get back to you.</p>
               </td></tr>
               <tr><td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
                 <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
@@ -17483,6 +17505,7 @@ function createServer() {
     zoomStartUrl: string | null;
     notes: string | null;
     meetingId: number;
+    brokerTimezone?: string;
   }): Promise<void> {
     const formattedDate = new Date(
       opts.meetingDate + "T12:00:00",
@@ -17497,6 +17520,16 @@ function createServer() {
       const ampm = h >= 12 ? "PM" : "AM";
       return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
     };
+    const tzAbbr = opts.brokerTimezone
+      ? (new Intl.DateTimeFormat("en-US", {
+          timeZone: opts.brokerTimezone,
+          timeZoneName: "short",
+        })
+          .formatToParts(new Date())
+          .find((p) => p.type === "timeZoneName")?.value ?? "")
+      : "";
+    const timeLabel = (t: string) =>
+      `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
     const adminUrl = `${process.env.BASE_URL || "https://portal.encoremortgage.org"}/admin/scheduler`;
 
     await sendViaResend({
@@ -17532,7 +17565,7 @@ function createServer() {
                       </td></tr>
                       <tr><td style="padding:6px 0;border-bottom:1px solid #fecdd3;">
                         <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">⏰ Time</span>
-                        <strong style="color:#0f172a;font-size:14px;">${formatTime(opts.meetingTime)} – ${formatTime(opts.meetingEndTime)}</strong>
+                        <strong style="color:#0f172a;font-size:14px;">${timeLabel(opts.meetingTime)} – ${timeLabel(opts.meetingEndTime)}</strong>
                       </td></tr>
                       <tr><td style="padding:6px 0;">
                         <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">📡 Method</span>
@@ -17567,6 +17600,7 @@ function createServer() {
     meetingTime: string;
     cancelledBy: "client" | "broker";
     reason: string | null;
+    brokerTimezone?: string;
   }): Promise<void> {
     const formattedDate = new Date(
       opts.meetingDate + "T12:00:00",
@@ -17581,6 +17615,16 @@ function createServer() {
       const ampm = h >= 12 ? "PM" : "AM";
       return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
     };
+    const tzAbbr = opts.brokerTimezone
+      ? (new Intl.DateTimeFormat("en-US", {
+          timeZone: opts.brokerTimezone,
+          timeZoneName: "short",
+        })
+          .formatToParts(new Date())
+          .find((p) => p.type === "timeZoneName")?.value ?? "")
+      : "";
+    const timeLabel = (t: string) =>
+      `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
     const scheduleUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler`;
 
     await sendViaResend({
@@ -17597,7 +17641,7 @@ function createServer() {
               </td></tr>
               <tr><td style="background-color:#ffffff;padding:40px 32px 32px;">
                 <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Hi ${opts.clientName},</h2>
-                <p style="margin:0 0 24px 0;color:#475569;font-size:15px;">Your meeting scheduled for <strong>${formattedDate} at ${formatTime(opts.meetingTime)}</strong> with <strong>${opts.brokerName}</strong> has been cancelled${opts.cancelledBy === "broker" ? " by your mortgage banker" : ""}.</p>
+                <p style="margin:0 0 24px 0;color:#475569;font-size:15px;">Your meeting scheduled for <strong>${formattedDate} at ${timeLabel(opts.meetingTime)}</strong> with <strong>${opts.brokerName}</strong> has been cancelled${opts.cancelledBy === "broker" ? " by your mortgage banker" : ""}.</p>
                 ${opts.reason ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;"><tr><td style="background-color:#fef2f2;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:14px;font-weight:700;">Reason</p><p style="margin:0;color:#475569;font-size:14px;">${opts.reason}</p></td></tr></table>` : ""}
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
                   <tr><td align="center">
@@ -18018,7 +18062,7 @@ function createServer() {
 
       if (broker_token === "default") {
         const [rows] = await pool.query<RowDataPacket[]>(
-          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token
+          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token, b.timezone
            FROM brokers b WHERE b.status = 'active' AND b.role = 'admin' AND b.tenant_id = ?
            ORDER BY b.id ASC LIMIT 1`,
           [MORTGAGE_TENANT_ID],
@@ -18030,7 +18074,7 @@ function createServer() {
         brokerData = rows[0];
       } else {
         const [rows] = await pool.query<RowDataPacket[]>(
-          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token
+          `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token, b.timezone
            FROM brokers b WHERE b.public_token = ? AND b.status = 'active' AND b.tenant_id = ?`,
           [broker_token, MORTGAGE_TENANT_ID],
         );
@@ -18110,10 +18154,10 @@ function createServer() {
       const [result] = await pool.query<ResultSetHeader>(
         `INSERT INTO scheduled_meetings
            (tenant_id, broker_id, client_name, client_email, client_phone,
-            meeting_date, meeting_time, meeting_end_time, meeting_type, jitsi_room_id,
+            meeting_date, meeting_time, meeting_end_time, meeting_type,
             zoom_meeting_id, zoom_join_url, zoom_start_url,
             status, notes, booking_token, public_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
         [
           MORTGAGE_TENANT_ID,
           brokerId,
@@ -18150,6 +18194,8 @@ function createServer() {
         brokerPhone: brokerData.phone,
         bookingToken,
         notes: notes || null,
+        brokerTimezone: brokerData.timezone || undefined,
+        rescheduleToken: bookingToken,
       }).catch((e) => console.error("Meeting confirmation email error:", e));
 
       sendMeetingNotificationToBroker({
@@ -18166,7 +18212,34 @@ function createServer() {
         zoomStartUrl,
         notes: notes || null,
         meetingId: result.insertId,
+        brokerTimezone: brokerData.timezone || undefined,
       }).catch((e) => console.error("Broker notification email error:", e));
+
+      // Auto-create client record from scheduler booking (upsert by email — ignore if already exists)
+      try {
+        const nameParts = client_name.trim().split(" ");
+        const firstName = nameParts[0] ?? client_name.trim();
+        const lastName = nameParts.slice(1).join(" ") || "-";
+        await pool.query(
+          `INSERT INTO clients
+             (tenant_id, email, first_name, last_name, phone, assigned_broker_id, source, income_type, status)
+           VALUES (?, ?, ?, ?, ?, ?, 'scheduler', 'W-2', 'active')
+           ON DUPLICATE KEY UPDATE
+             phone            = IF(phone IS NULL AND VALUES(phone) IS NOT NULL, VALUES(phone), phone),
+             assigned_broker_id = IF(assigned_broker_id IS NULL, VALUES(assigned_broker_id), assigned_broker_id)`,
+          [
+            MORTGAGE_TENANT_ID,
+            client_email.trim().toLowerCase(),
+            firstName,
+            lastName,
+            client_phone || null,
+            brokerId,
+          ],
+        );
+      } catch (clientErr) {
+        // Non-fatal — booking already confirmed, just log
+        console.error("Scheduler auto-create client error:", clientErr);
+      }
 
       return res.json({
         success: true,
@@ -18187,13 +18260,110 @@ function createServer() {
     }
   };
 
+  // Returns broker public_token + client prefill data for a given booking token
+  // Does NOT cancel — just used to pre-populate the reschedule form
+  const handleGetRescheduleInfo: RequestHandler = async (req, res) => {
+    try {
+      const { bookingToken } = req.params as { bookingToken: string };
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT sm.client_name, sm.client_email, sm.client_phone,
+                sm.meeting_date, sm.meeting_time, sm.status,
+                b.public_token AS broker_public_token
+         FROM scheduled_meetings sm
+         LEFT JOIN brokers b ON b.id = sm.broker_id
+         WHERE sm.booking_token = ? AND sm.tenant_id = ?`,
+        [bookingToken, MORTGAGE_TENANT_ID],
+      );
+
+      if (!rows[0]) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Booking not found" });
+      }
+
+      const meeting = rows[0];
+
+      if (meeting.status === "cancelled") {
+        return res.status(410).json({
+          success: false,
+          error: "This meeting has already been cancelled",
+        });
+      }
+
+      return res.json({
+        success: true,
+        broker_public_token: meeting.broker_public_token,
+        client_name: meeting.client_name,
+        client_email: meeting.client_email,
+        client_phone: meeting.client_phone,
+        old_meeting_date: meeting.meeting_date,
+        old_meeting_time: meeting.meeting_time,
+      });
+    } catch (err) {
+      console.error("handleGetRescheduleInfo error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  // Cancels the existing meeting so the client can book a new slot
+  const handleRescheduleMeeting: RequestHandler = async (req, res) => {
+    try {
+      const { bookingToken } = req.params as { bookingToken: string };
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT sm.id, sm.status, b.public_token AS broker_public_token
+         FROM scheduled_meetings sm
+         LEFT JOIN brokers b ON b.id = sm.broker_id
+         WHERE sm.booking_token = ? AND sm.tenant_id = ?`,
+        [bookingToken, MORTGAGE_TENANT_ID],
+      );
+
+      if (!rows[0]) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Booking not found" });
+      }
+
+      const meeting = rows[0];
+
+      if (meeting.status === "cancelled") {
+        // Already cancelled — just return the broker token so they can re-book
+        return res.json({
+          success: true,
+          broker_public_token: meeting.broker_public_token,
+        });
+      }
+
+      await pool.query(
+        `UPDATE scheduled_meetings
+         SET status = 'cancelled', cancelled_by = 'client',
+             cancelled_reason = 'Rescheduled by client', cancelled_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [meeting.id, MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({
+        success: true,
+        broker_public_token: meeting.broker_public_token,
+      });
+    } catch (err) {
+      console.error("handleRescheduleMeeting error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
   const handleCancelMeetingByToken: RequestHandler = async (req, res) => {
     try {
       const { bookingToken } = req.params as { bookingToken: string };
       const { reason } = req.body as { reason?: string };
 
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT sm.*, b.first_name, b.last_name, b.email AS broker_email, b.phone AS broker_phone
+        `SELECT sm.*, b.first_name, b.last_name, b.email AS broker_email, b.phone AS broker_phone, b.timezone AS broker_timezone
          FROM scheduled_meetings sm
          LEFT JOIN brokers b ON b.id = sm.broker_id
          WHERE sm.booking_token = ? AND sm.tenant_id = ?`,
@@ -18233,6 +18403,7 @@ function createServer() {
         meetingTime: meeting.meeting_time,
         cancelledBy: "client",
         reason: reason || null,
+        brokerTimezone: meeting.broker_timezone || undefined,
       }).catch((e) => console.error("Cancellation email error:", e));
 
       return res.json({
@@ -18494,7 +18665,7 @@ function createServer() {
       };
 
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT sm.*, b.first_name, b.last_name, b.email AS broker_email
+        `SELECT sm.*, b.first_name, b.last_name, b.email AS broker_email, b.timezone AS broker_timezone
          FROM scheduled_meetings sm
          LEFT JOIN brokers b ON b.id = sm.broker_id
          WHERE sm.id = ? AND sm.tenant_id = ?`,
@@ -18593,6 +18764,7 @@ function createServer() {
           meetingTime: meeting.meeting_time,
           cancelledBy: "broker",
           reason: cancelled_reason || null,
+          brokerTimezone: meeting.broker_timezone || undefined,
         }).catch((e) => console.error("Cancellation email error:", e));
       }
 
@@ -18650,7 +18822,7 @@ function createServer() {
 
       // Load broker info for email
       const [[brokerData]] = (await pool.query(
-        `SELECT first_name, last_name, email, phone FROM brokers WHERE id = ? LIMIT 1`,
+        `SELECT first_name, last_name, email, phone, timezone FROM brokers WHERE id = ? LIMIT 1`,
         [effectiveBrokerId],
       )) as [any[], any];
 
@@ -18662,6 +18834,25 @@ function createServer() {
       const [mh, mm] = meeting_time.split(":").map(Number);
       const endMin = mh * 60 + mm + dur;
       const endTime = `${String(Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}:00`;
+
+      // Check for overlapping meetings for this broker
+      const [overlapping] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM scheduled_meetings
+         WHERE broker_id = ?
+           AND meeting_date = ?
+           AND status NOT IN ('cancelled', 'no_show')
+           AND meeting_time < ?
+           AND meeting_end_time > ?
+         LIMIT 1`,
+        [effectiveBrokerId, meeting_date, endTime, meeting_time + ":00"],
+      );
+      if ((overlapping as RowDataPacket[]).length > 0) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "This time slot is already booked. Please choose a different time.",
+        });
+      }
 
       // Create Zoom meeting for video type
       let zoomMeetingId: string | null = null;
@@ -18736,6 +18927,8 @@ function createServer() {
           brokerPhone: brokerData.phone || null,
           bookingToken,
           notes: notes || null,
+          brokerTimezone: brokerData.timezone || undefined,
+          rescheduleToken: bookingToken,
         }).catch((e) =>
           console.error("Meeting confirmation email error (admin booking):", e),
         );
@@ -18754,6 +18947,7 @@ function createServer() {
           zoomStartUrl,
           notes: notes || null,
           meetingId: result.insertId,
+          brokerTimezone: brokerData.timezone || undefined,
         }).catch((e) =>
           console.error("Broker notification email error (admin booking):", e),
         );
@@ -18784,12 +18978,62 @@ function createServer() {
     "/api/public/scheduler/cancel/:bookingToken",
     handleCancelMeetingByToken,
   );
+  expressApp.get(
+    "/api/public/scheduler/reschedule/:bookingToken",
+    handleGetRescheduleInfo,
+  );
+  expressApp.post(
+    "/api/public/scheduler/reschedule/:bookingToken",
+    handleRescheduleMeeting,
+  );
 
   // Admin (authenticated)
   expressApp.get(
     "/api/scheduler/settings",
     verifyBrokerSession,
     handleGetSchedulerSettings,
+  );
+  expressApp.get(
+    "/api/scheduler/settings/:brokerId",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const targetBrokerId = parseInt(req.params.brokerId);
+        if (isNaN(targetBrokerId)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid broker ID" });
+        }
+        const [[settings]] = await pool.query<RowDataPacket[]>(
+          `SELECT * FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+          [targetBrokerId, MORTGAGE_TENANT_ID],
+        );
+        const [availability] = await pool.query<RowDataPacket[]>(
+          `SELECT * FROM scheduler_availability WHERE broker_id = ? AND tenant_id = ? ORDER BY day_of_week ASC`,
+          [targetBrokerId, MORTGAGE_TENANT_ID],
+        );
+        return res.json({
+          success: true,
+          settings: settings
+            ? {
+                ...settings,
+                is_enabled: !!settings.is_enabled,
+                allow_phone: !!settings.allow_phone,
+                allow_video: !!settings.allow_video,
+              }
+            : null,
+          availability: availability.map((a) => ({
+            ...a,
+            is_active: !!a.is_active,
+          })),
+        });
+      } catch (err) {
+        console.error("handleGetSchedulerSettingsForBroker error:", err);
+        return res
+          .status(500)
+          .json({ success: false, error: "Internal server error" });
+      }
+    },
   );
   expressApp.put(
     "/api/scheduler/settings",

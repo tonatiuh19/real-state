@@ -21,6 +21,7 @@ import {
 } from "@/store/slices/brokerAuthSlice";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { authPageMeta } from "@/lib/seo-helpers";
+import { ResendCodeButton } from "@/components/ResendCodeButton";
 
 export default function BrokerLogin() {
   const navigate = useNavigate();
@@ -459,14 +460,10 @@ export default function BrokerLogin() {
                       SMS
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleResendCode}
-                    disabled={isSendingCode}
-                    className="w-full text-sm text-primary hover:underline font-semibold disabled:opacity-50 pt-1"
-                  >
-                    {isSendingCode ? "Sending..." : "Resend Code"}
-                  </button>
+                  <ResendCodeButton
+                    onResend={handleResendCode}
+                    loading={isSendingCode}
+                  />
                 </div>
 
                 <Button

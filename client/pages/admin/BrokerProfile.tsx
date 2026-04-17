@@ -19,6 +19,7 @@ import {
   Monitor,
   Smartphone,
   Zap,
+  Globe,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -32,6 +33,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -48,6 +56,56 @@ import {
 } from "@/store/slices/brokerAuthSlice";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+
+const TIMEZONES = [
+  {
+    value: "America/New_York",
+    label: "Eastern Time (ET)",
+    cities: "New York, Miami, Atlanta",
+  },
+  {
+    value: "America/Chicago",
+    label: "Central Time (CT)",
+    cities: "Chicago, Dallas, Houston",
+  },
+  {
+    value: "America/Denver",
+    label: "Mountain Time (MT)",
+    cities: "Denver, Salt Lake City",
+  },
+  {
+    value: "America/Phoenix",
+    label: "Mountain – no DST (MT)",
+    cities: "Phoenix, Tucson",
+  },
+  {
+    value: "America/Los_Angeles",
+    label: "Pacific Time (PT)",
+    cities: "Los Angeles, Seattle, Las Vegas",
+  },
+  {
+    value: "America/Anchorage",
+    label: "Alaska Time (AKT)",
+    cities: "Anchorage, Fairbanks",
+  },
+  {
+    value: "Pacific/Honolulu",
+    label: "Hawaii Time (HST)",
+    cities: "Honolulu, Maui",
+  },
+];
+
+function tzOffset(tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      timeZoneName: "shortOffset",
+    }).formatToParts(new Date());
+    return parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    return "";
+  }
+}
 
 const SPECIALIZATION_OPTIONS = [
   "First-Time Home Buyers",
@@ -173,6 +231,7 @@ const BrokerProfile = () => {
       office_zip: user?.office_zip || "",
       years_experience: user?.years_experience ?? "",
       specializations: user?.specializations || [],
+      timezone: user?.timezone || "America/Los_Angeles",
     },
     validationSchema: profileSchema,
     onSubmit: async (values) => {
@@ -192,6 +251,7 @@ const BrokerProfile = () => {
               ? Number(values.years_experience)
               : null,
           specializations: values.specializations,
+          timezone: values.timezone || "America/Los_Angeles",
         }),
       );
 
@@ -556,6 +616,74 @@ const BrokerProfile = () => {
                           </p>
                         )}
                     </div>
+                  </div>
+
+                  {/* Timezone */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label className="flex items-center gap-1.5">
+                        <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                        Your Timezone
+                      </Label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const detected =
+                            Intl.DateTimeFormat().resolvedOptions().timeZone;
+                          const match = TIMEZONES.find(
+                            (tz) => tz.value === detected,
+                          );
+                          if (match) formik.setFieldValue("timezone", detected);
+                        }}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Detect automatically
+                      </button>
+                    </div>
+                    <Select
+                      value={formik.values.timezone}
+                      onValueChange={(v) => formik.setFieldValue("timezone", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue>
+                          {(() => {
+                            const tz = TIMEZONES.find(
+                              (t) => t.value === formik.values.timezone,
+                            );
+                            return tz ? (
+                              <span>
+                                {tz.label}{" "}
+                                <span className="text-muted-foreground text-xs">
+                                  ({tzOffset(tz.value)})
+                                </span>
+                              </span>
+                            ) : (
+                              formik.values.timezone
+                            );
+                          })()}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TIMEZONES.map((tz) => (
+                          <SelectItem key={tz.value} value={tz.value}>
+                            <div className="flex flex-col py-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{tz.label}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {tzOffset(tz.value)}
+                                </span>
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {tz.cities}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Used for scheduler time slots and conversation timestamps.
+                    </p>
                   </div>
 
                   <div className="space-y-1.5">

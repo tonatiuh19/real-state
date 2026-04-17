@@ -35,6 +35,7 @@ import {
   Check,
   X,
   Lock,
+  MapPin,
 } from "lucide-react";
 import {
   format,
@@ -127,6 +128,8 @@ import type {
 } from "@shared/api";
 import { useFormik } from "formik";
 import * as Yup from "yup";
+import { BrokerDatePicker } from "@/components/BrokerDatePicker";
+import { BrokerTimePicker } from "@/components/BrokerTimePicker";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -142,14 +145,50 @@ const DAY_NAMES = [
 const DAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 const TIMEZONES = [
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "America/Phoenix",
-  "America/Anchorage",
-  "Pacific/Honolulu",
+  {
+    value: "America/New_York",
+    label: "Eastern Time",
+    cities: "New York, Miami, Atlanta",
+  },
+  {
+    value: "America/Chicago",
+    label: "Central Time",
+    cities: "Chicago, Dallas, Houston",
+  },
+  {
+    value: "America/Denver",
+    label: "Mountain Time",
+    cities: "Denver, Salt Lake City",
+  },
+  {
+    value: "America/Phoenix",
+    label: "Mountain (no DST)",
+    cities: "Phoenix, Tucson",
+  },
+  {
+    value: "America/Los_Angeles",
+    label: "Pacific Time",
+    cities: "Los Angeles, Seattle, Las Vegas",
+  },
+  {
+    value: "America/Anchorage",
+    label: "Alaska Time",
+    cities: "Anchorage, Fairbanks",
+  },
+  { value: "Pacific/Honolulu", label: "Hawaii Time", cities: "Honolulu, Maui" },
 ];
+
+function tzOffset(tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      timeZoneName: "shortOffset",
+    }).formatToParts(new Date());
+    return parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    return "";
+  }
+}
 
 const STATUS_CONFIG: Record<
   MeetingStatus,
@@ -1131,25 +1170,36 @@ function EditMeetingDialog({
               Meeting Type
             </Label>
             <div className="grid grid-cols-2 gap-2">
-              {(["phone", "video"] as MeetingType[]).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setMeetingType(t)}
-                  className={cn(
-                    "flex items-center gap-2 p-3 rounded-xl border transition-all text-sm font-medium",
-                    meetingType === t
-                      ? "border-primary bg-primary/15 text-foreground"
-                      : "border-border bg-muted/40 text-muted-foreground hover:border-border",
-                  )}
-                >
-                  {t === "phone" ? (
-                    <Phone className="h-4 w-4" />
-                  ) : (
-                    <Video className="h-4 w-4" />
-                  )}
-                  {t === "phone" ? "Phone" : "Video"}
-                </button>
-              ))}
+              {(["phone", "video"] as MeetingType[]).map((t) => {
+                const isZoom = t === "video";
+                return (
+                  <button
+                    key={t}
+                    disabled={isZoom}
+                    onClick={() => !isZoom && setMeetingType(t)}
+                    className={cn(
+                      "relative flex items-center gap-2 p-3 rounded-xl border transition-all text-sm font-medium",
+                      isZoom
+                        ? "border-border bg-muted/20 text-muted-foreground/50 cursor-not-allowed opacity-60"
+                        : meetingType === t
+                          ? "border-primary bg-primary/15 text-foreground"
+                          : "border-border bg-muted/40 text-muted-foreground hover:border-border",
+                    )}
+                  >
+                    {t === "phone" ? (
+                      <Phone className="h-4 w-4" />
+                    ) : (
+                      <Video className="h-4 w-4" />
+                    )}
+                    {t === "phone" ? "Phone" : "Video"}
+                    {isZoom && (
+                      <span className="ml-auto inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200 rounded px-1 py-0.5">
+                        <Lock className="h-2.5 w-2.5" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
           {status === "cancelled" && (
@@ -1568,14 +1618,21 @@ function CreateMeetingDialog({
   onClose,
   onCreated,
   isCreating,
+  brokerToken,
+  schedulerSettings,
+  schedulerAvailability,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (values: any) => void;
   isCreating: boolean;
+  brokerToken?: string;
+  schedulerSettings: import("@shared/api").SchedulerSettings | null;
+  schedulerAvailability: import("@shared/api").SchedulerAvailability[];
 }) {
   const dispatch = useAppDispatch();
   const { clients } = useAppSelector((s) => s.clients);
+  const { availableSlots } = useAppSelector((s) => s.scheduler);
 
   const [clientPicker, setClientPicker] = useState<ClientPickerValue>({
     mode: "existing",
@@ -1686,38 +1743,45 @@ function CreateMeetingDialog({
 
           <Separator className="opacity-30" />
 
-          {/* Date & Time */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label className="text-foreground/80 text-sm mb-1 block">
-                Date *
-              </Label>
-              <Input
-                {...formik.getFieldProps("meeting_date")}
-                type="date"
-                className="bg-muted/40 border-border text-foreground"
-              />
-              {formik.touched.meeting_date && formik.errors.meeting_date && (
-                <p className="text-primary text-xs mt-1">
-                  {formik.errors.meeting_date}
-                </p>
-              )}
-            </div>
-            <div>
-              <Label className="text-foreground/80 text-sm mb-1 block">
-                Time *
-              </Label>
-              <Input
-                {...formik.getFieldProps("meeting_time")}
-                type="time"
-                className="bg-muted/40 border-border text-foreground"
-              />
-              {formik.touched.meeting_time && formik.errors.meeting_time && (
-                <p className="text-primary text-xs mt-1">
-                  {formik.errors.meeting_time}
-                </p>
-              )}
-            </div>
+          {/* Date */}
+          <div>
+            <Label className="text-foreground/80 text-sm mb-1 block">
+              Date *
+            </Label>
+            <BrokerDatePicker
+              value={formik.values.meeting_date}
+              onChange={(d) => {
+                formik.setFieldValue("meeting_date", d);
+                formik.setFieldValue("meeting_time", "");
+              }}
+              availability={schedulerAvailability}
+              settings={schedulerSettings}
+              disabled={isBusy}
+            />
+            {formik.touched.meeting_date && formik.errors.meeting_date && (
+              <p className="text-primary text-xs mt-1">
+                {formik.errors.meeting_date}
+              </p>
+            )}
+          </div>
+
+          {/* Time slots */}
+          <div>
+            <Label className="text-foreground/80 text-sm mb-1 block">
+              Time *
+            </Label>
+            <BrokerTimePicker
+              date={formik.values.meeting_date}
+              value={formik.values.meeting_time}
+              onChange={(t) => formik.setFieldValue("meeting_time", t)}
+              brokerToken={brokerToken}
+              disabled={isBusy}
+            />
+            {formik.touched.meeting_time && formik.errors.meeting_time && (
+              <p className="text-primary text-xs mt-1">
+                {formik.errors.meeting_time}
+              </p>
+            )}
           </div>
 
           {/* Meeting type */}
@@ -1726,26 +1790,39 @@ function CreateMeetingDialog({
               Method *
             </Label>
             <div className="grid grid-cols-2 gap-2">
-              {(["phone", "video"] as MeetingType[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => formik.setFieldValue("meeting_type", t)}
-                  className={cn(
-                    "flex items-center gap-2 p-3 rounded-xl border transition-all text-sm font-medium",
-                    formik.values.meeting_type === t
-                      ? "border-primary bg-primary/15 text-foreground"
-                      : "border-border bg-muted/40 text-muted-foreground hover:border-border",
-                  )}
-                >
-                  {t === "phone" ? (
-                    <Phone className="h-4 w-4" />
-                  ) : (
-                    <Video className="h-4 w-4" />
-                  )}
-                  {t === "phone" ? "Phone" : "Video"}
-                </button>
-              ))}
+              {(["phone", "video"] as MeetingType[]).map((t) => {
+                const isZoom = t === "video";
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={isZoom}
+                    onClick={() =>
+                      !isZoom && formik.setFieldValue("meeting_type", t)
+                    }
+                    className={cn(
+                      "relative flex items-center gap-2 p-3 rounded-xl border transition-all text-sm font-medium",
+                      isZoom
+                        ? "border-border bg-muted/20 text-muted-foreground/50 cursor-not-allowed opacity-60"
+                        : formik.values.meeting_type === t
+                          ? "border-primary bg-primary/15 text-foreground"
+                          : "border-border bg-muted/40 text-muted-foreground hover:border-border",
+                    )}
+                  >
+                    {t === "phone" ? (
+                      <Phone className="h-4 w-4" />
+                    ) : (
+                      <Video className="h-4 w-4" />
+                    )}
+                    {t === "phone" ? "Phone" : "Video"}
+                    {isZoom && (
+                      <span className="ml-auto inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200 rounded px-1 py-0.5">
+                        <Lock className="h-2.5 w-2.5" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -1779,7 +1856,15 @@ function CreateMeetingDialog({
             </Button>
             <Button
               type="submit"
-              disabled={isBusy || !isClientReady || !formik.isValid}
+              disabled={(() => {
+                if (isBusy || !isClientReady || !formik.isValid) return true;
+                if (!formik.values.meeting_time) return true;
+                const slot = availableSlots.find(
+                  (s) => s.time === formik.values.meeting_time,
+                );
+                if (slot && !slot.available) return true;
+                return false;
+              })()}
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {isBusy ? (
@@ -1830,7 +1915,8 @@ function SettingsPanel() {
       buffer_time_minutes: settings?.buffer_time_minutes ?? 15,
       advance_booking_days: settings?.advance_booking_days ?? 30,
       min_booking_hours: settings?.min_booking_hours ?? 2,
-      timezone: settings?.timezone ?? "America/Chicago",
+      timezone:
+        settings?.timezone ?? authUser?.timezone ?? "America/Los_Angeles",
       allow_phone: settings?.allow_phone ?? true,
       allow_video: settings?.allow_video ?? true,
     },
@@ -1864,11 +1950,15 @@ function SettingsPanel() {
       p.map((a) => (a.day_of_week === d ? { ...a, [f]: v + ":00" } : a)),
     );
 
+  const portalOrigin =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+      ? window.location.origin
+      : `https://portal.encoremortgage.org`;
+
   const handleCopyLink = (id: number, token: string | null | undefined) => {
     if (!token) return;
-    navigator.clipboard.writeText(
-      `${window.location.origin}/scheduler/${token}`,
-    );
+    navigator.clipboard.writeText(`${portalOrigin}/scheduler/${token}`);
     setCopiedBrokerId(id);
     setTimeout(() => setCopiedBrokerId(null), 2000);
   };
@@ -1976,24 +2066,62 @@ function SettingsPanel() {
           ))}
         </div>
         <div>
-          <Label className="text-foreground/80 text-sm mb-1.5 block">
-            Timezone
-          </Label>
+          <div className="flex items-center justify-between mb-1.5">
+            <Label className="text-foreground/80 text-sm">Timezone</Label>
+            <button
+              type="button"
+              onClick={() => {
+                const detected =
+                  Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const match = TIMEZONES.find((tz) => tz.value === detected);
+                if (match) formik.setFieldValue("timezone", detected);
+              }}
+              className="text-xs text-primary hover:underline flex items-center gap-1"
+            >
+              <MapPin className="h-3 w-3" /> Detect my timezone
+            </button>
+          </div>
           <Select
             value={formik.values.timezone}
             onValueChange={(v) => formik.setFieldValue("timezone", v)}
           >
             <SelectTrigger className="bg-muted/40 border-border text-foreground">
-              <SelectValue />
+              <SelectValue>
+                {(() => {
+                  const tz = TIMEZONES.find(
+                    (t) => t.value === formik.values.timezone,
+                  );
+                  return tz ? (
+                    <span>
+                      {tz.label}{" "}
+                      <span className="text-muted-foreground text-xs">
+                        ({tzOffset(tz.value)})
+                      </span>
+                    </span>
+                  ) : (
+                    formik.values.timezone
+                  );
+                })()}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent className="bg-popover border-border">
               {TIMEZONES.map((tz) => (
                 <SelectItem
-                  key={tz}
-                  value={tz}
+                  key={tz.value}
+                  value={tz.value}
                   className="text-foreground focus:bg-muted/50"
                 >
-                  {tz}
+                  <div className="flex flex-col py-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{tz.label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {tzOffset(tz.value)}
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {tz.cities}
+                    </span>
+                  </div>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -2148,7 +2276,7 @@ function SettingsPanel() {
               .filter((b) => b.status === "active")
               .map((b) => {
                 const link = b.public_token
-                  ? `${window.location.origin}/scheduler/${b.public_token}`
+                  ? `${portalOrigin}/scheduler/${b.public_token}`
                   : null;
                 const isCopied = copiedBrokerId === b.id;
                 return (
@@ -2218,8 +2346,14 @@ const AdminCalendar: React.FC = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
 
-  const { meetings, isLoadingMeetings, isUpdatingMeeting, isCreatingMeeting } =
-    useAppSelector((s) => s.scheduler);
+  const {
+    meetings,
+    isLoadingMeetings,
+    isUpdatingMeeting,
+    isCreatingMeeting,
+    settings: schedulerSettings,
+    availability: schedulerAvailability,
+  } = useAppSelector((s) => s.scheduler);
   const {
     events,
     isLoading: isLoadingEvents,
@@ -2268,9 +2402,16 @@ const AdminCalendar: React.FC = () => {
     }
   }, [calendarError, toast, dispatch]);
 
+  // Scheduler lives on the portal origin, not the admin subdomain
+  const portalOrigin =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+      ? window.location.origin
+      : `https://portal.encoremortgage.org`;
+
   const schedulerUrl = user?.public_token
-    ? `${window.location.origin}/scheduler/${user.public_token}`
-    : `${window.location.origin}/scheduler`;
+    ? `${portalOrigin}/scheduler/${user.public_token}`
+    : `${portalOrigin}/scheduler`;
 
   const handleCopyUrl = () => {
     navigator.clipboard.writeText(schedulerUrl);
@@ -2916,6 +3057,9 @@ const AdminCalendar: React.FC = () => {
         onClose={() => setShowCreateMeeting(false)}
         onCreated={handleCreateMeeting}
         isCreating={isCreatingMeeting}
+        brokerToken={user?.public_token ?? undefined}
+        schedulerSettings={schedulerSettings}
+        schedulerAvailability={schedulerAvailability}
       />
 
       {/* Create event */}

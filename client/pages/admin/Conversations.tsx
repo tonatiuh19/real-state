@@ -787,12 +787,16 @@ const Conversations = () => {
         : date.replace(" ", "T") + "Z";
     const d = new Date(normalized);
     const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
+    const tz = currentUser?.timezone || undefined;
+    const isToday =
+      d.toLocaleDateString("en-US", { timeZone: tz }) ===
+      now.toLocaleDateString("en-US", { timeZone: tz });
     if (isToday) {
       return d.toLocaleString("en-US", {
         hour: "numeric",
         minute: "2-digit",
         hour12: true,
+        timeZone: tz,
       });
     }
     return d.toLocaleString("en-US", {
@@ -801,6 +805,7 @@ const Conversations = () => {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
+      timeZone: tz,
     });
   };
 

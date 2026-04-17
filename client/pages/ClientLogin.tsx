@@ -31,7 +31,7 @@ import {
   selectShouldRedirectToWizard,
   selectIsClientAuthenticated,
 } from "@/store/slices/clientAuthSlice";
-
+import { ResendCodeButton } from "@/components/ResendCodeButton";
 const ClientLogin = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -714,14 +714,10 @@ const ClientLogin = () => {
                         SMS
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleResend}
-                      disabled={sendCodeLoading}
-                      className="w-full text-sm text-primary hover:underline font-semibold disabled:opacity-50"
-                    >
-                      {sendCodeLoading ? "Sending..." : "Resend Code"}
-                    </button>
+                    <ResendCodeButton
+                      onResend={handleResend}
+                      loading={sendCodeLoading}
+                    />
                   </div>
                 </div>
               </motion.form>

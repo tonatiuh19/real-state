@@ -34,6 +34,7 @@ import LoanOptions from "./pages/LoanOptions";
 import About from "./pages/About";
 import Contact from "./pages/Contact";
 import SchedulerPage from "./pages/Scheduler";
+import SchedulerReschedule from "./pages/SchedulerReschedule";
 import AdminScheduler from "./pages/admin/Scheduler";
 import AdminCalendar from "./pages/admin/Calendar";
 
@@ -325,6 +326,10 @@ const AppRoutes = () => (
     {/* Public Scheduler */}
     <Route path="/scheduler" element={<SchedulerPage />} />
     <Route path="/scheduler/:token" element={<SchedulerPage />} />
+    <Route
+      path="/scheduler/reschedule/:bookingToken"
+      element={<SchedulerReschedule />}
+    />
 
     {/* Catch-all 404 */}
     <Route path="*" element={<NotFound />} />

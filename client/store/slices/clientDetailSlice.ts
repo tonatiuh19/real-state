@@ -2,12 +2,12 @@ import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
 import type {
-  GetClientProfileResponse,
+  GetClientDetailProfileResponse,
   UpdateClientRequest,
 } from "@shared/api";
 
 interface ClientDetailState {
-  profile: GetClientProfileResponse | null;
+  profile: GetClientDetailProfileResponse | null;
   isLoading: boolean;
   isSaving: boolean;
   error: string | null;
@@ -25,7 +25,7 @@ export const fetchClientProfile = createAsyncThunk(
   async (clientId: number, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
-      const { data } = await axios.get<GetClientProfileResponse>(
+      const { data } = await axios.get<GetClientDetailProfileResponse>(
         `/api/clients/${clientId}/profile`,
         { headers: { Authorization: `Bearer ${sessionToken}` } },
       );

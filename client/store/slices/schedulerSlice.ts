@@ -150,6 +150,25 @@ export const fetchSchedulerSettings = createAsyncThunk(
   },
 );
 
+export const fetchSchedulerSettingsForBroker = createAsyncThunk(
+  "scheduler/fetchSettingsForBroker",
+  async (brokerId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetSchedulerSettingsResponse>(
+        `/api/scheduler/settings/${brokerId}`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error ||
+          "Failed to fetch broker scheduler settings",
+      );
+    }
+  },
+);
+
 export const updateSchedulerSettings = createAsyncThunk(
   "scheduler/updateSettings",
   async (
@@ -332,6 +351,22 @@ const schedulerSlice = createSlice({
         state.availability = action.payload.availability;
       })
       .addCase(fetchSchedulerSettings.rejected, (state, action) => {
+        state.isLoadingSettings = false;
+        state.error = action.payload as string;
+      });
+
+    // fetchSchedulerSettingsForBroker (same state shape)
+    builder
+      .addCase(fetchSchedulerSettingsForBroker.pending, (state) => {
+        state.isLoadingSettings = true;
+        state.error = null;
+      })
+      .addCase(fetchSchedulerSettingsForBroker.fulfilled, (state, action) => {
+        state.isLoadingSettings = false;
+        state.settings = action.payload.settings;
+        state.availability = action.payload.availability;
+      })
+      .addCase(fetchSchedulerSettingsForBroker.rejected, (state, action) => {
         state.isLoadingSettings = false;
         state.error = action.payload as string;
       });
