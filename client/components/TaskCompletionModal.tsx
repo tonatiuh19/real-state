@@ -569,7 +569,7 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
             <div>
               <h2 className="text-xl font-bold">Submitted for Review!</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                Your submission has been received and is awaiting broker
+                Your submission has been received and is awaiting realtor
                 approval.
               </p>
             </div>
@@ -675,7 +675,7 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
                     <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                     <p className="text-sm text-amber-700 dark:text-amber-400">
                       The signing document is not yet ready. Please contact your
-                      broker.
+                      realtor.
                     </p>
                   </div>
                 )

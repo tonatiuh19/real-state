@@ -247,7 +247,15 @@ const Pipeline = () => {
       color: "bg-slate-50",
       headerColor: "bg-slate-100",
       textColor: "text-slate-600",
-      description: "Application in progress",
+      description: "Action item for realtor",
+    },
+    {
+      id: "app_sent",
+      name: "App Sent",
+      color: "bg-indigo-50",
+      headerColor: "bg-indigo-100",
+      textColor: "text-indigo-700",
+      description: "Application sent to client",
     },
     {
       id: "application_received",

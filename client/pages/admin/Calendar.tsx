@@ -34,6 +34,7 @@ import {
   ChevronsUpDown,
   Check,
   X,
+  Lock,
 } from "lucide-react";
 import {
   format,
@@ -80,7 +81,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import {
   Popover,
@@ -96,6 +96,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchSchedulerSettings,
@@ -110,6 +111,8 @@ import {
   createCalendarEvent,
   updateCalendarEvent,
   deleteCalendarEvent,
+  syncBirthdays,
+  clearError as clearCalendarError,
 } from "@/store/slices/calendarEventsSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import { fetchClients, createClient } from "@/store/slices/clientsSlice";
@@ -776,9 +779,9 @@ function UnifiedCalendarView({
   const selectedEvents = selectedKey ? (eventsByDate[selectedKey] ?? []) : [];
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full gap-2 sm:gap-3">
       {/* Month navigation */}
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between">
         <button
           onClick={() => setViewDate((d) => subMonths(d, 1))}
           className="p-2 rounded-lg hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors"
@@ -797,7 +800,7 @@ function UnifiedCalendarView({
       </div>
 
       {/* Day-of-week headers */}
-      <div className="grid grid-cols-7 gap-1 mb-1">
+      <div className="grid grid-cols-7 gap-1">
         {DAY_SHORT.map((d) => (
           <div
             key={d}
@@ -808,8 +811,8 @@ function UnifiedCalendarView({
         ))}
       </div>
 
-      {/* Calendar grid */}
-      <div className="grid grid-cols-7 gap-1">
+      {/* Calendar grid — flex-1 so it fills remaining vertical space */}
+      <div className="flex-1 grid grid-cols-7 auto-rows-fr gap-1 sm:gap-1.5 min-h-0">
         {emptyBefore.map((_, i) => (
           <div key={`empty-${i}`} />
         ))}
@@ -830,7 +833,7 @@ function UnifiedCalendarView({
                 )
               }
               className={cn(
-                "min-h-[52px] rounded-lg p-1.5 flex flex-col items-center gap-0.5 transition-all border text-sm",
+                "h-full min-h-[48px] rounded-lg p-1.5 sm:p-2 flex flex-col items-start gap-0.5 transition-all border text-sm overflow-hidden",
                 isSelected
                   ? "border-primary bg-primary/10"
                   : todayFlag
@@ -839,9 +842,10 @@ function UnifiedCalendarView({
                 !isSameMonth(day, viewDate) && "opacity-40",
               )}
             >
+              {/* Date number */}
               <span
                 className={cn(
-                  "w-6 h-6 flex items-center justify-center rounded-full text-xs font-medium",
+                  "w-6 h-6 flex items-center justify-center rounded-full text-xs font-medium shrink-0 self-center sm:self-start",
                   todayFlag &&
                     !isSelected &&
                     "bg-primary text-primary-foreground",
@@ -850,28 +854,70 @@ function UnifiedCalendarView({
               >
                 {format(day, "d")}
               </span>
+
               {hasItems && (
-                <div className="flex flex-wrap gap-0.5 justify-center max-w-full">
-                  {dayMeetings.slice(0, 2).map((m) => (
-                    <span
-                      key={`m-${m.id}`}
-                      className="w-1.5 h-1.5 rounded-full bg-primary"
-                    />
-                  ))}
-                  {dayEvents.slice(0, 3).map((e) => (
-                    <span
-                      key={`e-${e.id}`}
-                      className={cn(
-                        "w-1.5 h-1.5 rounded-full",
-                        EVENT_TYPE_CONFIG[e.event_type].dotColor,
-                      )}
-                    />
-                  ))}
-                  {dayMeetings.length + dayEvents.length > 5 && (
-                    <span className="text-[9px] text-muted-foreground leading-none ml-0.5">
-                      +{dayMeetings.length + dayEvents.length - 5}
-                    </span>
-                  )}
+                <div className="flex flex-col gap-0.5 w-full min-w-0 mt-0.5">
+                  {/* sm and below: color dots */}
+                  <div className="flex flex-wrap gap-0.5 justify-center sm:justify-start lg:hidden">
+                    {dayMeetings.slice(0, 2).map((m) => (
+                      <span
+                        key={`m-${m.id}`}
+                        className="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                      />
+                    ))}
+                    {dayEvents.slice(0, 3).map((e) => (
+                      <span
+                        key={`e-${e.id}`}
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          EVENT_TYPE_CONFIG[e.event_type].dotColor,
+                        )}
+                      />
+                    ))}
+                    {dayMeetings.length + dayEvents.length > 5 && (
+                      <span className="text-[9px] text-muted-foreground leading-none">
+                        +{dayMeetings.length + dayEvents.length - 5}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* lg+: label pills */}
+                  <div className="hidden lg:flex flex-col gap-0.5 w-full">
+                    {dayMeetings.slice(0, 1).map((m) => (
+                      <span
+                        key={`m-${m.id}`}
+                        className="flex items-center gap-1 text-[10px] leading-tight rounded-sm px-1 py-0.5 bg-primary/15 text-primary truncate w-full"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+                        <span className="truncate">{m.client_name}</span>
+                      </span>
+                    ))}
+                    {dayEvents.slice(0, 2).map((e) => {
+                      const cfg = EVENT_TYPE_CONFIG[e.event_type];
+                      return (
+                        <span
+                          key={`e-${e.id}`}
+                          className={cn(
+                            "flex items-center gap-1 text-[10px] leading-tight rounded-sm px-1 py-0.5 truncate w-full",
+                            cfg.color,
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "w-1.5 h-1.5 rounded-full shrink-0",
+                              cfg.dotColor,
+                            )}
+                          />
+                          <span className="truncate">{e.title}</span>
+                        </span>
+                      );
+                    })}
+                    {dayMeetings.length + dayEvents.length > 3 && (
+                      <span className="text-[10px] text-muted-foreground pl-1">
+                        +{dayMeetings.length + dayEvents.length - 3} more
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
             </button>
@@ -879,9 +925,9 @@ function UnifiedCalendarView({
         })}
       </div>
 
-      {/* Legend */}
-      <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border/30">
-        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+      {/* Legend — compact single line */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 border-t border-border/20">
+        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
           <span className="w-2 h-2 rounded-full bg-primary" /> Meeting
         </span>
         {(
@@ -892,7 +938,7 @@ function UnifiedCalendarView({
         ).map(([type, cfg]) => (
           <span
             key={type}
-            className="flex items-center gap-1 text-xs text-muted-foreground"
+            className="flex items-center gap-1 text-[11px] text-muted-foreground"
           >
             <span className={cn("w-2 h-2 rounded-full", cfg.dotColor)} />{" "}
             {cfg.label}
@@ -900,7 +946,7 @@ function UnifiedCalendarView({
         ))}
       </div>
 
-      {/* Selected day detail */}
+      {/* Selected day detail — slides in below legend without disrupting the grid */}
       <AnimatePresence>
         {selectedDay &&
           (selectedMeetings.length > 0 || selectedEvents.length > 0) && (
@@ -908,7 +954,7 @@ function UnifiedCalendarView({
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
-              className="mt-4 rounded-xl border border-border/50 bg-muted/20 p-4 space-y-3"
+              className="rounded-xl border border-border/50 bg-muted/20 p-3 space-y-2"
             >
               <h4 className="font-semibold text-foreground text-sm">
                 {format(selectedDay, "EEEE, MMMM d")}
@@ -917,7 +963,7 @@ function UnifiedCalendarView({
                 <div
                   key={`m-${m.id}`}
                   onClick={() => onEditMeeting(m)}
-                  className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 cursor-pointer border border-border/30 transition-all"
+                  className="flex items-center gap-2.5 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50 cursor-pointer border border-border/30 transition-all"
                 >
                   <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -946,7 +992,7 @@ function UnifiedCalendarView({
                   <div
                     key={`e-${e.id}`}
                     onClick={() => onEditEvent(e)}
-                    className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 cursor-pointer border border-border/30 transition-all"
+                    className="flex items-center gap-2.5 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50 cursor-pointer border border-border/30 transition-all"
                   >
                     <span
                       className={cn(
@@ -1272,7 +1318,9 @@ function EventFormDialog({
         ...values,
         event_time: values.all_day ? undefined : values.event_time || undefined,
         linked_client_id: linkedClientId,
-        linked_person_name: linkedPersonName || undefined,
+        // Explicitly null out if not in 'new' mode to avoid stale values on edit
+        linked_person_name:
+          clientPicker.mode === "new" ? linkedPersonName || undefined : null,
         description: values.description || undefined,
       });
     },
@@ -1971,27 +2019,44 @@ function SettingsPanel() {
             sub: "Creates a Zoom meeting automatically",
             icon: <Video className="h-4 w-4 text-blue-400" />,
           },
-        ].map(({ key, label, sub, icon }, i) => (
-          <div
-            key={key}
-            className={cn(
-              "flex items-center justify-between py-2",
-              i > 0 && "border-t border-border/30",
-            )}
-          >
-            <div className="flex items-center gap-3">
-              {icon}
-              <div>
-                <p className="text-foreground text-sm font-medium">{label}</p>
-                <p className="text-xs text-muted-foreground">{sub}</p>
+        ].map(({ key, label, sub, icon }, i) => {
+          const isZoom = key === "allow_video";
+          return (
+            <div
+              key={key}
+              className={cn(
+                "flex items-center justify-between py-2",
+                i > 0 && "border-t border-border/30",
+                isZoom && "opacity-50",
+              )}
+            >
+              <div className="flex items-center gap-3">
+                {icon}
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-foreground text-sm font-medium">
+                      {label}
+                    </p>
+                    {isZoom && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5">
+                        <Lock className="h-2.5 w-2.5" /> Coming Soon
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{sub}</p>
+                </div>
               </div>
+              <Switch
+                checked={isZoom ? false : (formik.values as any)[key]}
+                onCheckedChange={
+                  isZoom ? undefined : (v) => formik.setFieldValue(key, v)
+                }
+                disabled={isZoom}
+                className={isZoom ? "cursor-not-allowed" : ""}
+              />
             </div>
-            <Switch
-              checked={(formik.values as any)[key]}
-              onCheckedChange={(v) => formik.setFieldValue(key, v)}
-            />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Availability */}
@@ -2094,8 +2159,8 @@ function SettingsPanel() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground">
                         {b.first_name} {b.last_name}{" "}
-                        <span className="ml-2 text-xs text-muted-foreground capitalize">
-                          {b.role}
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {b.role === "broker" ? "Partner" : "Mortgage Banker"}
                         </span>
                       </p>
                       <p className="text-xs text-muted-foreground truncate">
@@ -2151,6 +2216,7 @@ function SettingsPanel() {
 
 const AdminCalendar: React.FC = () => {
   const dispatch = useAppDispatch();
+  const { toast } = useToast();
 
   const { meetings, isLoadingMeetings, isUpdatingMeeting, isCreatingMeeting } =
     useAppSelector((s) => s.scheduler);
@@ -2160,10 +2226,14 @@ const AdminCalendar: React.FC = () => {
     isCreating: isCreatingEvent,
     isUpdating: isUpdatingEvent,
     isDeleting: isDeletingEvent,
+    isSyncing: isSyncingBirthdays,
+    error: calendarError,
   } = useAppSelector((s) => s.calendarEvents);
   const { user } = useAppSelector((s) => s.brokerAuth);
 
-  const [activeTab, setActiveTab] = useState("calendar");
+  const isPartner = user?.role === "broker";
+
+  const [activeTab, setActiveTab] = useState<string>("calendar");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -2185,6 +2255,18 @@ const AdminCalendar: React.FC = () => {
     dispatch(fetchCalendarEvents());
     dispatch(fetchClients({ page: 1, limit: 200 }));
   }, [dispatch]);
+
+  // Show toast when a calendar error surfaces
+  useEffect(() => {
+    if (calendarError) {
+      toast({
+        title: "Calendar Error",
+        description: calendarError,
+        variant: "destructive",
+      });
+      dispatch(clearCalendarError());
+    }
+  }, [calendarError, toast, dispatch]);
 
   const schedulerUrl = user?.public_token
     ? `${window.location.origin}/scheduler/${user.public_token}`
@@ -2218,29 +2300,73 @@ const AdminCalendar: React.FC = () => {
 
   const handleCreateEvent = useCallback(
     async (values: CreateCalendarEventRequest) => {
-      await dispatch(createCalendarEvent(values));
-      setShowCreateEvent(false);
+      const result = await dispatch(createCalendarEvent(values));
+      if (createCalendarEvent.fulfilled.match(result)) {
+        toast({ title: "Event created", description: values.title });
+        setShowCreateEvent(false);
+      } else {
+        toast({
+          title: "Failed to create event",
+          description: (result.payload as string) || "Unknown error",
+          variant: "destructive",
+        });
+      }
     },
-    [dispatch],
+    [dispatch, toast],
   );
 
   const handleUpdateEvent = useCallback(
     async (values: any) => {
       if (!editingEvent) return;
-      await dispatch(
+      const result = await dispatch(
         updateCalendarEvent({ eventId: editingEvent.id, payload: values }),
       );
-      setEditingEvent(null);
-      dispatch(fetchCalendarEvents());
+      if (updateCalendarEvent.fulfilled.match(result)) {
+        toast({ title: "Event updated" });
+        setEditingEvent(null);
+        dispatch(fetchCalendarEvents());
+      } else {
+        toast({
+          title: "Failed to update event",
+          description: (result.payload as string) || "Unknown error",
+          variant: "destructive",
+        });
+      }
     },
-    [dispatch, editingEvent],
+    [dispatch, editingEvent, toast],
   );
 
   const handleDeleteEvent = useCallback(async () => {
     if (!deletingEvent) return;
-    await dispatch(deleteCalendarEvent(deletingEvent.id));
-    setDeletingEvent(null);
-  }, [dispatch, deletingEvent]);
+    const result = await dispatch(deleteCalendarEvent(deletingEvent.id));
+    if (deleteCalendarEvent.fulfilled.match(result)) {
+      toast({ title: "Event deleted" });
+      setDeletingEvent(null);
+    } else {
+      toast({
+        title: "Failed to delete event",
+        description: (result.payload as string) || "Unknown error",
+        variant: "destructive",
+      });
+    }
+  }, [dispatch, deletingEvent, toast]);
+
+  const handleSyncBirthdays = useCallback(async () => {
+    const result = await dispatch(syncBirthdays());
+    if (syncBirthdays.fulfilled.match(result)) {
+      const { created, updated } = result.payload;
+      toast({
+        title: "Birthdays synced",
+        description: `${created} created, ${updated} updated`,
+      });
+    } else {
+      toast({
+        title: "Birthday sync failed",
+        description: (result.payload as string) || "Unknown error",
+        variant: "destructive",
+      });
+    }
+  }, [dispatch, toast]);
 
   const filteredMeetings = meetings.filter((m) => {
     const matchStatus = statusFilter === "all" || m.status === statusFilter;
@@ -2268,16 +2394,27 @@ const AdminCalendar: React.FC = () => {
   const upcomingMeetings = meetings.filter(
     (m) => m.status === "confirmed",
   ).length;
-  const upcomingEvents = events.filter(
-    (e) => e.event_date >= format(new Date(), "yyyy-MM-dd"),
-  ).length;
+  const today = format(new Date(), "yyyy-MM-dd");
+  const upcomingEvents = events.filter((e) => {
+    const base = e.event_date.split("T")[0];
+    // For yearly recurring events, project to current year for comparison
+    const effectiveDate =
+      e.recurrence === "yearly"
+        ? `${new Date().getFullYear()}-${base.slice(5)}`
+        : base;
+    return effectiveDate >= today;
+  }).length;
   const yearlyEvents = events.filter((e) => e.recurrence === "yearly").length;
   const thisMonthEvents = events.filter((e) => {
     const d = e.event_date.split("T")[0];
     const now = new Date();
-    return d.startsWith(
-      `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
-    );
+    const thisMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    // For yearly recurrence, project the month to this year
+    const projected =
+      e.recurrence === "yearly"
+        ? `${now.getFullYear()}-${d.slice(5, 7)}-${d.slice(8, 10)}`
+        : d;
+    return projected.startsWith(thisMonthPrefix);
   }).length;
 
   return (
@@ -2287,7 +2424,7 @@ const AdminCalendar: React.FC = () => {
         description="Manage your calendar, meetings, and important dates"
       />
 
-      <div className="p-4 sm:p-6 lg:p-8 space-y-6">
+      <div className="flex flex-col h-full p-4 sm:p-6 lg:p-8 gap-4 sm:gap-5">
         {/* Header */}
         <PageHeader
           icon={<CalendarDays className="h-7 w-7 text-primary" />}
@@ -2367,372 +2504,402 @@ const AdminCalendar: React.FC = () => {
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            {
-              label: "Confirmed Meetings",
-              value: upcomingMeetings,
-              color: "text-green-300",
-              bg: "border-green-500/20 bg-green-500/5",
-            },
-            {
-              label: "Upcoming Events",
-              value: upcomingEvents,
-              color: "text-cyan-300",
-              bg: "border-cyan-500/20 bg-cyan-500/5",
-            },
-            {
-              label: "Yearly Recurring",
-              value: yearlyEvents,
-              color: "text-violet-300",
-              bg: "border-violet-500/20 bg-violet-500/5",
-            },
-            {
-              label: "This Month",
-              value: thisMonthEvents,
-              color: "text-pink-300",
-              bg: "border-pink-500/20 bg-pink-500/5",
-            },
-          ].map((s) => (
-            <div key={s.label} className={cn("rounded-xl border p-4", s.bg)}>
-              <p className="text-xs text-muted-foreground mb-1">{s.label}</p>
-              <p className={cn("text-2xl font-bold", s.color)}>{s.value}</p>
-            </div>
-          ))}
-        </div>
-
         {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-muted/40 border border-border p-1">
-            <TabsTrigger
-              value="calendar"
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground"
-            >
-              <CalendarDays className="h-4 w-4 mr-1.5" /> Calendar
-            </TabsTrigger>
-            <TabsTrigger
-              value="meetings"
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground"
-            >
-              <Phone className="h-4 w-4 mr-1.5" /> Meetings
-            </TabsTrigger>
-            <TabsTrigger
-              value="events"
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground"
-            >
-              <Sparkles className="h-4 w-4 mr-1.5" /> Events
-            </TabsTrigger>
-            <TabsTrigger
-              value="settings"
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground"
-            >
-              <Settings2 className="h-4 w-4 mr-1.5" /> Settings
-            </TabsTrigger>
-          </TabsList>
-
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Custom underline-style tab bar */}
+          <div className="shrink-0 flex items-end gap-0 border-b border-border/50 overflow-x-auto scrollbar-none">
+            {(
+              [
+                {
+                  value: "calendar",
+                  label: "Calendar",
+                  icon: <CalendarDays className="h-4 w-4" />,
+                  badge: null,
+                },
+                {
+                  value: "meetings",
+                  label: "Meetings",
+                  icon: <Phone className="h-4 w-4" />,
+                  badge:
+                    meetings.filter((m) => m.status === "confirmed").length ||
+                    null,
+                },
+                {
+                  value: "events",
+                  label: "Events",
+                  icon: <Sparkles className="h-4 w-4" />,
+                  badge: events.length || null,
+                },
+                {
+                  value: "settings",
+                  label: "Settings",
+                  icon: <Settings2 className="h-4 w-4" />,
+                  badge: null,
+                },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.value}
+                onClick={() => setActiveTab(tab.value)}
+                className={cn(
+                  "relative flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors select-none",
+                  activeTab === tab.value
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {tab.icon}
+                <span className="hidden sm:inline">{tab.label}</span>
+                {tab.badge !== null && (
+                  <span
+                    className={cn(
+                      "inline-flex items-center justify-center rounded-full text-[10px] font-bold h-4 min-w-4 px-1",
+                      activeTab === tab.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
+                {/* Active indicator */}
+                {activeTab === tab.value && (
+                  <motion.span
+                    layoutId="calendar-tab-indicator"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full"
+                  />
+                )}
+              </button>
+            ))}
+          </div>
           {/* ── Calendar Tab ── */}
-          <TabsContent value="calendar" className="mt-6">
-            <div className="rounded-2xl border border-border/50 bg-muted/30 p-6">
-              {isLoadingMeetings || isLoadingEvents ? (
+          {activeTab === "calendar" && (
+            <div className="mt-3 flex-1 flex flex-col min-h-0">
+              <div className="rounded-2xl border border-border/50 bg-muted/30 p-4 sm:p-6 flex-1 flex flex-col min-h-0">
+                {isLoadingMeetings || isLoadingEvents ? (
+                  <div className="flex items-center justify-center py-20">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  </div>
+                ) : (
+                  <UnifiedCalendarView
+                    meetings={meetings}
+                    events={events}
+                    onEditMeeting={setEditingMeeting}
+                    onEditEvent={setEditingEvent}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Meetings Tab ── */}
+          {activeTab === "meetings" && (
+            <div className="mt-4 flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pb-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                <div className="relative flex-1 max-w-xs">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search client…"
+                    className="pl-9 bg-muted/40 border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="bg-muted/40 border-border text-foreground w-[160px]">
+                    <ListFilter className="h-4 w-4 mr-2" />
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                    <SelectItem
+                      value="all"
+                      className="text-foreground focus:bg-muted/50"
+                    >
+                      All statuses
+                    </SelectItem>
+                    {(Object.keys(STATUS_CONFIG) as MeetingStatus[]).map(
+                      (s) => (
+                        <SelectItem
+                          key={s}
+                          value={s}
+                          className="text-foreground focus:bg-muted/50"
+                        >
+                          {STATUS_CONFIG[s].label}
+                        </SelectItem>
+                      ),
+                    )}
+                  </SelectContent>
+                </Select>
+                <div className="flex rounded-lg border border-border overflow-hidden">
+                  {(["grid", "list"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setViewMode(m)}
+                      className={cn(
+                        "p-2 transition-colors",
+                        viewMode === m
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-muted/50",
+                      )}
+                    >
+                      {m === "grid" ? (
+                        <LayoutGrid className="h-4 w-4" />
+                      ) : (
+                        <List className="h-4 w-4" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {isLoadingMeetings ? (
                 <div className="flex items-center justify-center py-20">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 </div>
+              ) : filteredMeetings.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <CalendarDays className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No meetings found</p>
+                  <p className="text-sm mt-1">
+                    Try adjusting your filters or create a new meeting
+                  </p>
+                </div>
+              ) : viewMode === "grid" ? (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filteredMeetings.map((m) => (
+                    <MeetingCard
+                      key={m.id}
+                      meeting={m}
+                      onEdit={setEditingMeeting}
+                    />
+                  ))}
+                </div>
               ) : (
-                <UnifiedCalendarView
-                  meetings={meetings}
-                  events={events}
-                  onEditMeeting={setEditingMeeting}
-                  onEditEvent={setEditingEvent}
-                />
+                <div className="rounded-xl border border-border/50 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/50 bg-muted/20">
+                        {["Client", "Date & Time", "Method", "Status", ""].map(
+                          (h) => (
+                            <th
+                              key={h}
+                              className={cn(
+                                "text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase",
+                                !h && "text-right",
+                              )}
+                            >
+                              {h}
+                            </th>
+                          ),
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredMeetings.map((m) => {
+                        const cfg = STATUS_CONFIG[m.status];
+                        return (
+                          <tr
+                            key={m.id}
+                            className="border-b border-border/30 hover:bg-muted/20 transition-colors"
+                          >
+                            <td className="px-4 py-3">
+                              <div className="font-medium text-foreground">
+                                {m.client_name}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {m.client_email}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-foreground/80">
+                              <div>{formatDate(m.meeting_date)}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {formatTime(m.meeting_time)}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="flex items-center gap-1.5 text-foreground/80 text-xs">
+                                {m.meeting_type === "phone" ? (
+                                  <Phone className="h-3.5 w-3.5 text-sky-400" />
+                                ) : (
+                                  <Video className="h-3.5 w-3.5 text-green-400" />
+                                )}
+                                {m.meeting_type === "phone" ? "Phone" : "Video"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={cn(
+                                  "inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border",
+                                  cfg.color,
+                                )}
+                              >
+                                {cfg.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                onClick={() => setEditingMeeting(m)}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all"
+                              >
+                                <Edit2 className="h-4 w-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
-          </TabsContent>
-
-          {/* ── Meetings Tab ── */}
-          <TabsContent value="meetings" className="mt-6 space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-              <div className="relative flex-1 max-w-xs">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search client…"
-                  className="pl-9 bg-muted/40 border-border text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="bg-muted/40 border-border text-foreground w-[160px]">
-                  <ListFilter className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent className="bg-popover border-border">
-                  <SelectItem
-                    value="all"
-                    className="text-foreground focus:bg-muted/50"
-                  >
-                    All statuses
-                  </SelectItem>
-                  {(Object.keys(STATUS_CONFIG) as MeetingStatus[]).map((s) => (
-                    <SelectItem
-                      key={s}
-                      value={s}
-                      className="text-foreground focus:bg-muted/50"
-                    >
-                      {STATUS_CONFIG[s].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="flex rounded-lg border border-border overflow-hidden">
-                {(["grid", "list"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setViewMode(m)}
-                    className={cn(
-                      "p-2 transition-colors",
-                      viewMode === m
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-muted/50",
-                    )}
-                  >
-                    {m === "grid" ? (
-                      <LayoutGrid className="h-4 w-4" />
-                    ) : (
-                      <List className="h-4 w-4" />
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {isLoadingMeetings ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              </div>
-            ) : filteredMeetings.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground">
-                <CalendarDays className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                <p className="font-medium">No meetings found</p>
-                <p className="text-sm mt-1">
-                  Try adjusting your filters or create a new meeting
-                </p>
-              </div>
-            ) : viewMode === "grid" ? (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {filteredMeetings.map((m) => (
-                  <MeetingCard
-                    key={m.id}
-                    meeting={m}
-                    onEdit={setEditingMeeting}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-border/50 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border/50 bg-muted/20">
-                      {["Client", "Date & Time", "Method", "Status", ""].map(
-                        (h) => (
-                          <th
-                            key={h}
-                            className={cn(
-                              "text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase",
-                              !h && "text-right",
-                            )}
-                          >
-                            {h}
-                          </th>
-                        ),
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredMeetings.map((m) => {
-                      const cfg = STATUS_CONFIG[m.status];
-                      return (
-                        <tr
-                          key={m.id}
-                          className="border-b border-border/30 hover:bg-muted/20 transition-colors"
-                        >
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-foreground">
-                              {m.client_name}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              {m.client_email}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-foreground/80">
-                            <div>{formatDate(m.meeting_date)}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {formatTime(m.meeting_time)}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="flex items-center gap-1.5 text-foreground/80 text-xs">
-                              {m.meeting_type === "phone" ? (
-                                <Phone className="h-3.5 w-3.5 text-sky-400" />
-                              ) : (
-                                <Video className="h-3.5 w-3.5 text-green-400" />
-                              )}
-                              {m.meeting_type === "phone" ? "Phone" : "Video"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={cn(
-                                "inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border",
-                                cfg.color,
-                              )}
-                            >
-                              {cfg.label}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              onClick={() => setEditingMeeting(m)}
-                              className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all"
-                            >
-                              <Edit2 className="h-4 w-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </TabsContent>
+          )}
 
           {/* ── Events Tab ── */}
-          <TabsContent value="events" className="mt-6 space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
-              <div className="relative flex-1 max-w-xs">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search events…"
-                  className="pl-9 bg-muted/40 border-border text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
-              <Select
-                value={eventTypeFilter}
-                onValueChange={setEventTypeFilter}
-              >
-                <SelectTrigger className="bg-muted/40 border-border text-foreground w-[180px]">
-                  <ListFilter className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Event type" />
-                </SelectTrigger>
-                <SelectContent className="bg-popover border-border">
-                  <SelectItem
-                    value="all"
-                    className="text-foreground focus:bg-muted/50"
-                  >
-                    All types
-                  </SelectItem>
-                  {(
-                    Object.entries(EVENT_TYPE_CONFIG) as [
-                      CalendarEventType,
-                      (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
-                    ][]
-                  ).map(([type, cfg]) => (
+          {activeTab === "events" && (
+            <div className="mt-4 flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pb-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
+                <div className="relative flex-1 max-w-xs">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search events…"
+                    className="pl-9 bg-muted/40 border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+                <Select
+                  value={eventTypeFilter}
+                  onValueChange={setEventTypeFilter}
+                >
+                  <SelectTrigger className="bg-muted/40 border-border text-foreground w-[180px]">
+                    <ListFilter className="h-4 w-4 mr-2" />
+                    <SelectValue placeholder="Event type" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
                     <SelectItem
-                      key={type}
-                      value={type}
+                      value="all"
                       className="text-foreground focus:bg-muted/50"
                     >
-                      {cfg.label}
+                      All types
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={() => setShowCreateEvent(true)}
-                size="sm"
-                className="bg-primary hover:bg-primary/90 text-primary-foreground ml-auto"
-              >
-                <Plus className="h-4 w-4 mr-1" /> Add Event
-              </Button>
-            </div>
-
-            {/* Type chips legend */}
-            <div className="flex flex-wrap gap-2">
-              {(
-                Object.entries(EVENT_TYPE_CONFIG) as [
-                  CalendarEventType,
-                  (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
-                ][]
-              ).map(([type, cfg]) => {
-                const Icon = cfg.icon;
-                const count = events.filter(
-                  (e) => e.event_type === type,
-                ).length;
-                return count > 0 ? (
-                  <button
-                    key={type}
-                    onClick={() =>
-                      setEventTypeFilter(
-                        eventTypeFilter === type ? "all" : type,
-                      )
-                    }
-                    className={cn(
-                      "inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all",
-                      eventTypeFilter === type
-                        ? cfg.color
-                        : "border-border/50 bg-muted/30 text-muted-foreground hover:border-border",
-                    )}
-                  >
-                    <Icon className="h-3 w-3" /> {cfg.label}{" "}
-                    <Badge className="ml-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px] bg-current/20">
-                      {count}
-                    </Badge>
-                  </button>
-                ) : null;
-              })}
-            </div>
-
-            {isLoadingEvents ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              </div>
-            ) : filteredEvents.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground">
-                <Sparkles className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                <p className="font-medium">No events yet</p>
-                <p className="text-sm mt-1 mb-4">
-                  Add birthdays, anniversaries, and important dates
-                </p>
+                    {(
+                      Object.entries(EVENT_TYPE_CONFIG) as [
+                        CalendarEventType,
+                        (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
+                      ][]
+                    ).map(([type, cfg]) => (
+                      <SelectItem
+                        key={type}
+                        value={type}
+                        className="text-foreground focus:bg-muted/50"
+                      >
+                        {cfg.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button
                   onClick={() => setShowCreateEvent(true)}
                   size="sm"
-                  className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground ml-auto"
                 >
-                  <Plus className="h-4 w-4 mr-1" /> Add First Event
+                  <Plus className="h-4 w-4 mr-1" /> Add Event
                 </Button>
+                {!isPartner && (
+                  <Button
+                    onClick={handleSyncBirthdays}
+                    disabled={isSyncingBirthdays}
+                    size="sm"
+                    variant="outline"
+                    className="border-pink-500/40 text-pink-300 hover:bg-pink-500/10"
+                  >
+                    {isSyncingBirthdays ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Cake className="h-4 w-4 mr-1" />
+                    )}
+                    Sync Birthdays
+                  </Button>
+                )}
               </div>
-            ) : (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {filteredEvents.map((e) => (
-                  <EventCard
-                    key={e.id}
-                    event={e}
-                    onEdit={setEditingEvent}
-                    onDelete={setDeletingEvent}
-                  />
-                ))}
+
+              {/* Type chips legend */}
+              <div className="flex flex-wrap gap-2">
+                {(
+                  Object.entries(EVENT_TYPE_CONFIG) as [
+                    CalendarEventType,
+                    (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
+                  ][]
+                ).map(([type, cfg]) => {
+                  const Icon = cfg.icon;
+                  const count = events.filter(
+                    (e) => e.event_type === type,
+                  ).length;
+                  return count > 0 ? (
+                    <button
+                      key={type}
+                      onClick={() =>
+                        setEventTypeFilter(
+                          eventTypeFilter === type ? "all" : type,
+                        )
+                      }
+                      className={cn(
+                        "inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all",
+                        eventTypeFilter === type
+                          ? cfg.color
+                          : "border-border/50 bg-muted/30 text-muted-foreground hover:border-border",
+                      )}
+                    >
+                      <Icon className="h-3 w-3" /> {cfg.label}{" "}
+                      <Badge className="ml-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px] bg-current/20">
+                        {count}
+                      </Badge>
+                    </button>
+                  ) : null;
+                })}
               </div>
-            )}
-          </TabsContent>
+
+              {isLoadingEvents ? (
+                <div className="flex items-center justify-center py-20">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : filteredEvents.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <Sparkles className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No events yet</p>
+                  <p className="text-sm mt-1 mb-4">
+                    Add birthdays, anniversaries, and important dates
+                  </p>
+                  <Button
+                    onClick={() => setShowCreateEvent(true)}
+                    size="sm"
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> Add First Event
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filteredEvents.map((e) => (
+                    <EventCard
+                      key={e.id}
+                      event={e}
+                      onEdit={setEditingEvent}
+                      onDelete={setDeletingEvent}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Settings Tab ── */}
-          <TabsContent value="settings" className="mt-6">
-            <SettingsPanel />
-          </TabsContent>
-        </Tabs>
+          {activeTab === "settings" && (
+            <div className="mt-4 flex-1 min-h-0 overflow-y-auto pb-6">
+              <SettingsPanel />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Dialogs */}

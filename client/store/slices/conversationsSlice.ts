@@ -341,11 +341,45 @@ export const saveContactFromConversation = createAsyncThunk(
       first_name,
       last_name,
       email,
+      phone,
+      alternate_phone,
+      date_of_birth,
+      address_street,
+      address_city,
+      address_state,
+      address_zip,
+      employment_status,
+      income_type,
+      annual_income,
+      credit_score,
+      citizenship_status,
+      create_pipeline_draft,
+      loan_type,
+      notes,
     }: {
       conversationId: string;
       first_name: string;
       last_name: string;
       email?: string;
+      phone?: string;
+      alternate_phone?: string;
+      date_of_birth?: string;
+      address_street?: string;
+      address_city?: string;
+      address_state?: string;
+      address_zip?: string;
+      employment_status?: string;
+      income_type?: "W-2" | "1099" | "Self-Employed" | "Investor" | "Mixed";
+      annual_income?: number;
+      credit_score?: number;
+      citizenship_status?:
+        | "us_citizen"
+        | "permanent_resident"
+        | "non_resident"
+        | "other";
+      create_pipeline_draft?: boolean;
+      loan_type?: "purchase" | "refinance";
+      notes?: string;
     },
     { getState, rejectWithValue },
   ) => {
@@ -353,7 +387,26 @@ export const saveContactFromConversation = createAsyncThunk(
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.post(
         `/api/conversations/${conversationId}/save-contact`,
-        { first_name, last_name, email },
+        {
+          first_name,
+          last_name,
+          email,
+          phone,
+          alternate_phone,
+          date_of_birth,
+          address_street,
+          address_city,
+          address_state,
+          address_zip,
+          employment_status,
+          income_type,
+          annual_income,
+          credit_score,
+          citizenship_status,
+          create_pipeline_draft,
+          loan_type,
+          notes,
+        },
         { headers: { Authorization: `Bearer ${sessionToken}` } },
       );
       return { conversationId, ...data };

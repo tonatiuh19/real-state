@@ -38,6 +38,21 @@ export interface ClientDocument {
   property_state?: string;
 }
 
+export interface ClientMeeting {
+  id: number;
+  meeting_date: string; // "YYYY-MM-DD"
+  meeting_time: string; // "HH:MM:SS"
+  meeting_end_time: string;
+  meeting_type: "phone" | "video";
+  status: string;
+  zoom_join_url: string | null;
+  notes: string | null;
+  booking_token: string;
+  cancelled_reason: string | null;
+  broker_name: string;
+  broker_phone: string | null;
+}
+
 export interface TaskDetails {
   id: number;
   title: string;
@@ -97,11 +112,13 @@ interface ClientPortalState {
   taskDetails: TaskDetails | null;
   taskFormDrafts: Record<number, TaskFormDraft>; // Keyed by taskId
   clientDocuments: ClientDocument[];
+  meetings: ClientMeeting[];
   loading: boolean;
   tasksLoading: boolean;
   profileLoading: boolean;
   taskDetailsLoading: boolean;
   documentsLoading: boolean;
+  meetingsLoading: boolean;
   error: string | null;
 }
 
@@ -112,11 +129,13 @@ const initialState: ClientPortalState = {
   taskDetails: null,
   taskFormDrafts: {},
   clientDocuments: [],
+  meetings: [],
   loading: false,
   tasksLoading: false,
   profileLoading: false,
   taskDetailsLoading: false,
   documentsLoading: false,
+  meetingsLoading: false,
   error: null,
 };
 
@@ -562,6 +581,27 @@ export const submitTaskSignatures = createAsyncThunk(
   },
 );
 
+export const fetchClientMeetings = createAsyncThunk(
+  "clientPortal/fetchMeetings",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const state = getState() as RootState;
+      const token = state.clientAuth.sessionToken;
+      const { data } = await axios.get<{
+        success: boolean;
+        meetings: ClientMeeting[];
+      }>("/api/client/meetings", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return data.meetings;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch meetings",
+      );
+    }
+  },
+);
+
 const clientPortalSlice = createSlice({
   name: "clientPortal",
   initialState,
@@ -715,6 +755,19 @@ const clientPortalSlice = createSlice({
       state.taskDetails = null;
       delete state.taskFormDrafts[action.payload.taskId];
     });
+
+    // Fetch meetings
+    builder
+      .addCase(fetchClientMeetings.pending, (state) => {
+        state.meetingsLoading = true;
+      })
+      .addCase(fetchClientMeetings.fulfilled, (state, action) => {
+        state.meetingsLoading = false;
+        state.meetings = action.payload;
+      })
+      .addCase(fetchClientMeetings.rejected, (state) => {
+        state.meetingsLoading = false;
+      });
   },
 });
 
@@ -744,5 +797,9 @@ export const selectClientDocuments = (state: RootState) =>
   state.clientPortal.clientDocuments;
 export const selectDocumentsLoading = (state: RootState) =>
   state.clientPortal.documentsLoading;
+export const selectClientMeetings = (state: RootState) =>
+  state.clientPortal.meetings;
+export const selectMeetingsLoading = (state: RootState) =>
+  state.clientPortal.meetingsLoading;
 
 export default clientPortalSlice.reducer;

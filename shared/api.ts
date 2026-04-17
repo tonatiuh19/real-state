@@ -637,6 +637,7 @@ export interface Broker {
   license_number: string | null;
   specializations: string[] | null;
   public_token?: string | null;
+  created_by_broker_id?: number | null;
   created_at?: string;
 }
 
@@ -664,6 +665,8 @@ export interface UpdateBrokerRequest {
   status?: "active" | "inactive" | "suspended";
   license_number?: string;
   specializations?: string[];
+  /** Reassign the Mortgage Banker who "owns" this partner (role=broker only) */
+  created_by_broker_id?: number | null;
 }
 
 export interface BrokerResponse {
@@ -832,11 +835,99 @@ export interface UpdateClientRequest {
   first_name?: string;
   last_name?: string;
   phone?: string;
+  alternate_phone?: string;
   date_of_birth?: string;
   address_street?: string;
   address_city?: string;
   address_state?: string;
   address_zip?: string;
+  employment_status?: string;
+  income_type?: string;
+  annual_income?: number | null;
+  credit_score?: number | null;
+  citizenship_status?: string;
+  source?: string | null;
+}
+
+export interface GetClientProfileResponse {
+  success: boolean;
+  client: {
+    id: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string | null;
+    alternate_phone: string | null;
+    date_of_birth: string | null;
+    address_street: string | null;
+    address_city: string | null;
+    address_state: string | null;
+    address_zip: string | null;
+    employment_status: string | null;
+    income_type: string | null;
+    annual_income: number | null;
+    credit_score: number | null;
+    citizenship_status: string | null;
+    status: string;
+    source: string | null;
+    referral_code: string | null;
+    email_verified: boolean;
+    phone_verified: boolean;
+    last_login: string | null;
+    created_at: string;
+    updated_at: string;
+    assigned_broker: {
+      id: number;
+      first_name: string;
+      last_name: string;
+      email: string;
+      role: string;
+    } | null;
+  };
+  loans: Array<{
+    id: number;
+    application_number: string;
+    loan_type: string;
+    loan_amount: number | null;
+    property_value: number | null;
+    down_payment: number | null;
+    status: string;
+    priority: string | null;
+    estimated_close_date: string | null;
+    property_address: string | null;
+    property_city: string | null;
+    property_state: string | null;
+    source_category: string | null;
+    created_at: string;
+    updated_at: string;
+    broker_first_name: string | null;
+    broker_last_name: string | null;
+  }>;
+  conversations: Array<{
+    id: number;
+    conversation_id: string;
+    last_message_at: string | null;
+    message_count: number;
+    unread_count: number;
+    last_message_type: string | null;
+    status: string;
+    priority: string | null;
+    last_message_preview: string | null;
+  }>;
+  communications: Array<{
+    id: number;
+    communication_type: string;
+    direction: string;
+    subject: string | null;
+    body: string | null;
+    status: string;
+    delivery_status: string;
+    created_at: string;
+    sent_at: string | null;
+    broker_first_name: string | null;
+    broker_last_name: string | null;
+    application_number: string | null;
+  }>;
 }
 
 export interface UpdateClientResponse {
@@ -1402,6 +1493,7 @@ export interface BrokerProfileDetails {
   office_zip: string | null;
   years_experience: number | null;
   total_loans_closed: number;
+  date_of_birth: string | null;
   // Social networks
   facebook_url: string | null;
   instagram_url: string | null;
@@ -1975,6 +2067,7 @@ export interface PublicSchedulerBrokerInfo {
   phone: string | null;
   avatar_url: string | null;
   years_experience: number | null;
+  role: string;
   meeting_title: string;
   meeting_description: string | null;
   slot_duration_minutes: number;
@@ -2125,4 +2218,10 @@ export interface UpdateCalendarEventRequest {
   color?: string | null;
   linked_client_id?: number | null;
   linked_person_name?: string | null;
+}
+
+export interface SyncBirthdaysResponse {
+  success: boolean;
+  created: number;
+  updated: number;
 }

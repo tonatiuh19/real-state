@@ -1031,6 +1031,118 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
 
+  /loans/{loanId}/details:
+    patch:
+      tags: [Loans]
+      summary: Update editable loan application fields
+      description: >
+        Updates one or more loan detail fields (financial, property, terms,
+        applicant, notes). Accessible to the assigned broker, partner broker,
+        admin, or superadmin.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: loanId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                loan_type:
+                  type: string
+                  enum: [purchase, refinance]
+                loan_amount:
+                  type: number
+                  nullable: true
+                property_value:
+                  type: number
+                  nullable: true
+                property_address:
+                  type: string
+                  nullable: true
+                property_city:
+                  type: string
+                  nullable: true
+                property_state:
+                  type: string
+                  nullable: true
+                property_zip:
+                  type: string
+                  nullable: true
+                property_type:
+                  type: string
+                  nullable: true
+                  enum:
+                    [
+                      single_family,
+                      condo,
+                      multi_family,
+                      commercial,
+                      land,
+                      other,
+                    ]
+                down_payment:
+                  type: number
+                  nullable: true
+                loan_purpose:
+                  type: string
+                  nullable: true
+                estimated_close_date:
+                  type: string
+                  format: date
+                  nullable: true
+                interest_rate:
+                  type: number
+                  nullable: true
+                loan_term_months:
+                  type: integer
+                  nullable: true
+                priority:
+                  type: string
+                  enum: [low, medium, high, urgent]
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+                citizenship_status:
+                  type: string
+                  nullable: true
+                  enum: [us_citizen, permanent_resident, non_resident, other]
+                employment_status:
+                  type: string
+                  nullable: true
+                  enum:
+                    [
+                      employed,
+                      self_employed,
+                      unemployed,
+                      retired,
+                      retired_with_pension,
+                    ]
+                employer_name:
+                  type: string
+                  nullable: true
+                years_employed:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Loan details updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Validation error or no fields provided
+        "403":
+          description: Access denied
+        "404":
+          description: Loan not found
+
   /loans/{loanId}/export-mismo:
     get:
       tags: [Loans]
@@ -1397,6 +1509,95 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+    put:
+      tags: [Clients]
+      summary: Update client profile fields
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                phone: { type: string }
+                alternate_phone: { type: string }
+                date_of_birth: { type: string, format: date }
+                address_street: { type: string }
+                address_city: { type: string }
+                address_state: { type: string }
+                address_zip: { type: string }
+                employment_status: { type: string }
+                income_type:
+                  {
+                    type: string,
+                    enum: [W-2, 1099, Self-Employed, Investor, Mixed],
+                  }
+                annual_income: { type: number }
+                credit_score: { type: integer }
+                citizenship_status:
+                  {
+                    type: string,
+                    enum: [us_citizen, permanent_resident, non_resident, other],
+                  }
+                source: { type: string }
+      responses:
+        "200":
+          description: Updated client
+
+  /clients/{clientId}/profile:
+    get:
+      tags: [Clients]
+      summary: Get full client profile with loans, conversations, and activity
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Full client profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  client:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      first_name: { type: string }
+                      last_name: { type: string }
+                      email: { type: string }
+                      phone: { type: string }
+                      alternate_phone: { type: string }
+                      date_of_birth: { type: string }
+                      address_street: { type: string }
+                      address_city: { type: string }
+                      address_state: { type: string }
+                      address_zip: { type: string }
+                      employment_status: { type: string }
+                      income_type: { type: string }
+                      annual_income: { type: number }
+                      credit_score: { type: integer }
+                      citizenship_status: { type: string }
+                      status: { type: string }
+                      source: { type: string }
+                      created_at: { type: string }
+                      assigned_broker: { type: object }
+                  loans: { type: array, items: { type: object } }
+                  conversations: { type: array, items: { type: object } }
+                  communications: { type: array, items: { type: object } }
 
   # ── Voice / Calling ──────────────────────────────────────────────────────────
   /voice/token:
@@ -3100,6 +3301,70 @@ paths:
         "503":
           description: Real-time service not configured
 
+  /conversations/{conversationId}/save-contact:
+    post:
+      tags: [Conversations]
+      summary: Save unknown conversation sender as a client (and optionally create a Draft pipeline entry)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name]
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string }
+                alternate_phone: { type: string }
+                date_of_birth: { type: string, format: date }
+                address_street: { type: string }
+                address_city: { type: string }
+                address_state: { type: string, maxLength: 2 }
+                address_zip: { type: string }
+                employment_status: { type: string }
+                income_type:
+                  type: string
+                  enum: [W-2, 1099, Self-Employed, Investor, Mixed]
+                annual_income: { type: number }
+                credit_score: { type: integer, minimum: 300, maximum: 850 }
+                citizenship_status:
+                  type: string
+                  enum: [us_citizen, permanent_resident, non_resident, other]
+                create_pipeline_draft: { type: boolean }
+                loan_type:
+                  type: string
+                  enum: [purchase, refinance]
+                notes: { type: string }
+      responses:
+        "200":
+          description: Contact saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  client_id: { type: integer }
+                  client_name: { type: string }
+                  client_email: { type: string, nullable: true }
+                  pipeline_draft:
+                    type: object
+                    nullable: true
+                    properties:
+                      application_id: { type: integer }
+                      application_number: { type: string }
+        "409":
+          description: Thread already has a client, or duplicate email
+
   # ── Audit Logs ─────────────────────────────────────────────────────────────────
   /audit-logs:
     get:
@@ -3950,6 +4215,38 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /calendar/sync-birthdays:
+    post:
+      tags: [Calendar]
+      summary: Sync birthday events from clients and broker profiles
+      description: >
+        Upserts yearly birthday calendar events for all clients with a date_of_birth,
+        and all broker_profiles (partners + mortgage bankers) with a date_of_birth.
+        Admin only. Idempotent — safe to run multiple times.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  created:
+                    {
+                      type: integer,
+                      description: "Number of new birthday events created",
+                    }
+                  updated:
+                    {
+                      type: integer,
+                      description: "Number of existing birthday events updated",
+                    }
+        "403":
+          description: Admin only
 
   # ── Contact ───────────────────────────────────────────────────────────────────
   /contact:

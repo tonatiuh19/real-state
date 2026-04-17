@@ -257,7 +257,7 @@ const BrokerProfile = () => {
       <MetaHelmet
         {...adminPageMeta(
           "My Profile",
-          "Manage your broker profile and settings",
+          "Manage your realtor profile and settings",
         )}
       />
       <div className="p-4 sm:p-6 lg:p-8">

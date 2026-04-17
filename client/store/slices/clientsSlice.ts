@@ -17,6 +17,7 @@ interface FetchClientsParams {
   sortBy?: string;
   sortOrder?: "ASC" | "DESC";
   search?: string;
+  source?: string;
 }
 
 interface ClientsState {

@@ -221,12 +221,12 @@ const AdminDashboard = () => {
   return (
     <>
       <MetaHelmet
-        {...adminPageMeta("Dashboard", "Overview of your brokerage operations")}
+        {...adminPageMeta("Dashboard", "Overview of your operations")}
       />
       <div className="p-4 sm:p-6 lg:p-8">
         <PageHeader
           title="Overview"
-          description="Manage your brokerage operations efficiently."
+          description="Manage your operations efficiently."
           className="mb-6 sm:mb-8"
           actions={
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -557,12 +557,12 @@ const AdminDashboard = () => {
                             <Badge
                               className={cn(
                                 "text-white text-xs whitespace-nowrap",
-                                getStatusColor(loan.status || "draft"),
+                                getStatusColor(loan.status || "app_sent"),
                               )}
                             >
                               {loan.status
                                 ? formatLoanType(loan.status)
-                                : "Draft"}
+                                : "App Sent"}
                             </Badge>
                           </div>
                           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -741,12 +741,12 @@ const AdminDashboard = () => {
                               <Badge
                                 className={cn(
                                   "text-white whitespace-nowrap text-xs",
-                                  getStatusColor(loan.status || "draft"),
+                                  getStatusColor(loan.status || "app_sent"),
                                 )}
                               >
                                 {loan.status
                                   ? formatLoanType(loan.status)
-                                  : "Draft"}
+                                  : "App Sent"}
                               </Badge>
                             </td>
                             <td className="p-2 sm:p-4 align-middle">

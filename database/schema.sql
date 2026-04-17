@@ -392,6 +392,36 @@ CREATE TABLE `broker_monthly_metrics` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `calendar_events`
+--
+
+CREATE TABLE `calendar_events` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tenant_id` int NOT NULL DEFAULT '1',
+  `broker_id` int DEFAULT NULL COMMENT 'Owning broker (NULL = applies to all)',
+  `event_type` enum('birthday','home_anniversary','realtor_anniversary','important_date','reminder','other') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'other',
+  `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `event_date` date NOT NULL COMMENT 'The date of the event (or base date for yearly recurrence)',
+  `event_time` time DEFAULT NULL COMMENT 'Optional time for non-all-day events',
+  `all_day` tinyint NOT NULL DEFAULT '1',
+  `recurrence` enum('none','yearly') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none',
+  `color` varchar(30) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Optional hex or named color for display',
+  `linked_client_id` int DEFAULT NULL COMMENT 'Optional FK to clients.id',
+  `linked_person_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Free-text contact name (realtor, etc.)',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_calendar_events_tenant_broker` (`tenant_id`,`broker_id`),
+  KEY `idx_calendar_events_date` (`event_date`),
+  KEY `idx_calendar_events_client` (`linked_client_id`),
+  CONSTRAINT `fk_calendar_events_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_calendar_events_client` FOREIGN KEY (`linked_client_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `broker_profiles`
 --
 
@@ -412,6 +442,7 @@ CREATE TABLE `broker_profiles` (
   `avatar_url` mediumtext COLLATE utf8mb4_unicode_ci,
   `years_experience` int(11) DEFAULT NULL,
   `total_loans_closed` int(11) DEFAULT '0',
+  `date_of_birth` date DEFAULT NULL COMMENT 'Date of birth for birthday calendar events',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

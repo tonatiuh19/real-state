@@ -37,6 +37,9 @@ import {
   UserPlus,
   Loader2,
   Lock,
+  CalendarPlus,
+  Copy,
+  CheckCheck,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -168,15 +171,59 @@ const Conversations = () => {
   // Save unknown contact state
   const [isSaveContactOpen, setIsSaveContactOpen] = useState(false);
   const [isSavingContact, setIsSavingContact] = useState(false);
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [copiedSchedule, setCopiedSchedule] = useState(false);
 
   const saveContactSchema = Yup.object({
     first_name: Yup.string().required("First name is required"),
     last_name: Yup.string().required("Last name is required"),
     email: Yup.string().email("Invalid email").optional(),
+    phone: Yup.string().optional(),
+    alternate_phone: Yup.string().optional(),
+    date_of_birth: Yup.string().optional(),
+    address_street: Yup.string().optional(),
+    address_city: Yup.string().optional(),
+    address_state: Yup.string().optional(),
+    address_zip: Yup.string().optional(),
+    employment_status: Yup.string().optional(),
+    income_type: Yup.string().optional(),
+    annual_income: Yup.number().typeError("Must be a number").optional(),
+    credit_score: Yup.number()
+      .typeError("Must be a number")
+      .min(300)
+      .max(850)
+      .optional(),
+    citizenship_status: Yup.string().optional(),
+    add_to_pipeline: Yup.boolean(),
+    loan_type: Yup.string().when("add_to_pipeline", {
+      is: true,
+      then: (s) => s.required("Loan type is required"),
+      otherwise: (s) => s.optional(),
+    }),
+    pipeline_notes: Yup.string().optional(),
   });
 
   const saveContactFormik = useFormik({
-    initialValues: { first_name: "", last_name: "", email: "" },
+    initialValues: {
+      first_name: "",
+      last_name: "",
+      email: "",
+      phone: "",
+      alternate_phone: "",
+      date_of_birth: "",
+      address_street: "",
+      address_city: "",
+      address_state: "",
+      address_zip: "",
+      employment_status: "",
+      income_type: "",
+      annual_income: "",
+      credit_score: "",
+      citizenship_status: "",
+      add_to_pipeline: false,
+      loan_type: "",
+      pipeline_notes: "",
+    },
     validationSchema: saveContactSchema,
     onSubmit: async (values, { resetForm }) => {
       if (!currentThread?.conversation_id) return;
@@ -188,12 +235,36 @@ const Conversations = () => {
             first_name: values.first_name,
             last_name: values.last_name,
             email: values.email || undefined,
+            phone: values.phone || undefined,
+            alternate_phone: values.alternate_phone || undefined,
+            date_of_birth: values.date_of_birth || undefined,
+            address_street: values.address_street || undefined,
+            address_city: values.address_city || undefined,
+            address_state: values.address_state || undefined,
+            address_zip: values.address_zip || undefined,
+            employment_status: values.employment_status || undefined,
+            income_type: (values.income_type as any) || undefined,
+            annual_income: values.annual_income
+              ? Number(values.annual_income)
+              : undefined,
+            credit_score: values.credit_score
+              ? Number(values.credit_score)
+              : undefined,
+            citizenship_status: (values.citizenship_status as any) || undefined,
+            create_pipeline_draft: values.add_to_pipeline || undefined,
+            loan_type: values.add_to_pipeline
+              ? (values.loan_type as "purchase" | "refinance")
+              : undefined,
+            notes: values.pipeline_notes || undefined,
           }),
         );
         if (saveContactFromConversation.fulfilled.match(result)) {
+          const hasDraft = !!(result.payload as any).pipeline_draft;
           toast({
             title: "Contact saved",
-            description: `${values.first_name} ${values.last_name} added as a client.`,
+            description: hasDraft
+              ? `${values.first_name} ${values.last_name} added as a client and placed in Draft pipeline.`
+              : `${values.first_name} ${values.last_name} added as a client.`,
           });
           setIsSaveContactOpen(false);
           resetForm();
@@ -1162,6 +1233,7 @@ const Conversations = () => {
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
+                          {/* Row 1: name + badges */}
                           <div className="flex items-center justify-between gap-1">
                             <p className="text-sm font-semibold text-foreground truncate">
                               {thread.client_name || "Unknown Client"}
@@ -1177,8 +1249,21 @@ const Conversations = () => {
                                   {thread.unread_count}
                                 </span>
                               )}
+                              {(thread.priority === "urgent" ||
+                                thread.priority === "high") && (
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "text-[10px] py-0 px-1 leading-none",
+                                    getPriorityColor(thread.priority),
+                                  )}
+                                >
+                                  {thread.priority}
+                                </Badge>
+                              )}
                             </div>
                           </div>
+                          {/* Row 2: channel icon + preview (1 line, hard truncated) */}
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span
                               className={cn(
@@ -1191,26 +1276,16 @@ const Conversations = () => {
                                 "h-3 w-3",
                               )}
                             </span>
-                            <p className="text-xs text-muted-foreground truncate flex-1">
+                            <p className="text-xs text-muted-foreground line-clamp-1 flex-1 leading-snug">
                               {thread.last_message_preview || "No messages yet"}
                             </p>
                           </div>
-                          <div className="flex items-center justify-between mt-1">
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "text-xs py-0 px-1.5",
-                                getPriorityColor(thread.priority),
-                              )}
-                            >
-                              {thread.priority}
-                            </Badge>
-                            <p className="text-xs text-muted-foreground">
-                              {thread.last_message_at
-                                ? formatTime(thread.last_message_at)
-                                : ""}
+                          {/* Row 3: timestamp */}
+                          {thread.last_message_at && (
+                            <p className="text-[10px] text-muted-foreground/70 mt-0.5">
+                              {formatTime(thread.last_message_at)}
                             </p>
-                          </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1811,18 +1886,24 @@ const Conversations = () => {
                   </div>
                   {/* Add as Contact — shown only for unknown senders */}
                   {!currentThread.client_id && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1.5 text-xs h-7 border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:border-primary"
-                      onClick={() => {
-                        saveContactFormik.resetForm();
-                        setIsSaveContactOpen(true);
-                      }}
-                    >
-                      <UserPlus className="h-3.5 w-3.5" />
-                      Add as Contact
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 text-xs h-7 border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:border-primary"
+                        onClick={() => {
+                          saveContactFormik.resetForm();
+                          setIsSaveContactOpen(true);
+                        }}
+                      >
+                        <UserPlus className="h-3.5 w-3.5" />
+                        Add as Contact
+                      </Button>
+                      <p className="text-xs text-muted-foreground text-center leading-snug px-1">
+                        Save this sender as a client to track them in the
+                        pipeline.
+                      </p>
+                    </>
                   )}
                 </div>
 
@@ -1859,6 +1940,15 @@ const Conversations = () => {
                         >
                           <Phone className="h-3 w-3" />
                           {isCallActive ? "In call" : "Start Call"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-1.5 h-7 text-xs w-full gap-1.5 hover:bg-violet-50 hover:text-violet-700 hover:border-violet-300"
+                          onClick={() => setScheduleDialogOpen(true)}
+                        >
+                          <CalendarPlus className="h-3 w-3" />
+                          Schedule Meeting
                         </Button>
                       </div>
                     </div>
@@ -2005,10 +2095,125 @@ const Conversations = () => {
         isSending={isSendingMessage}
       />
 
+      {/* ── Schedule Meeting dialog ── */}
+      {(() => {
+        const schedulerUrl = currentUser?.public_token
+          ? `${window.location.origin}/scheduler/${currentUser.public_token}`
+          : null;
+        return (
+          <Dialog
+            open={scheduleDialogOpen}
+            onOpenChange={(v) => {
+              setScheduleDialogOpen(v);
+              if (!v) setCopiedSchedule(false);
+            }}
+          >
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CalendarPlus className="h-4 w-4 text-violet-600" />
+                  Schedule a Meeting
+                </DialogTitle>
+                <DialogDescription>
+                  Share your booking link with{" "}
+                  <strong>
+                    {currentThread?.client_name || "this contact"}
+                  </strong>{" "}
+                  so they can pick a time that works.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 pt-1">
+                {schedulerUrl ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 flex items-center gap-2 bg-muted border rounded-lg px-3 py-2.5 min-w-0">
+                        <CalendarPlus className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <input
+                          readOnly
+                          value={schedulerUrl}
+                          className="bg-transparent text-sm text-foreground w-full outline-none truncate"
+                          onClick={(e) =>
+                            (e.target as HTMLInputElement).select()
+                          }
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className={cn(
+                          "shrink-0 gap-1.5 transition-all",
+                          copiedSchedule
+                            ? "border-green-500 text-green-600 bg-green-50"
+                            : "",
+                        )}
+                        onClick={() => {
+                          navigator.clipboard.writeText(schedulerUrl);
+                          setCopiedSchedule(true);
+                          toast({
+                            title: "Copied!",
+                            description: "Booking link copied to clipboard.",
+                          });
+                          setTimeout(() => setCopiedSchedule(false), 2500);
+                        }}
+                      >
+                        {copiedSchedule ? (
+                          <>
+                            <CheckCheck className="h-3.5 w-3.5" /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" /> Copy
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full gap-2"
+                      onClick={() =>
+                        window.open(
+                          schedulerUrl,
+                          "_blank",
+                          "noopener,noreferrer",
+                        )
+                      }
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      Preview Booking Page
+                    </Button>
+                    <div className="flex items-start gap-2 p-3 bg-violet-50 rounded-lg border border-violet-100 text-xs text-violet-700">
+                      <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                      <span>
+                        Copy this link and send it to the client via SMS or
+                        email so they can pick an available time slot directly
+                        on your calendar.
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-sm text-red-600 py-2">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    No scheduler link found. Configure your availability in
+                    Calendar → Settings.
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
+
       {/* ── Save Unknown Sender as Contact ── */}
-      <Dialog open={isSaveContactOpen} onOpenChange={setIsSaveContactOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
+      <Dialog
+        open={isSaveContactOpen}
+        onOpenChange={(open) => {
+          setIsSaveContactOpen(open);
+          if (!open) saveContactFormik.resetForm();
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0">
+          <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
             <DialogTitle className="flex items-center gap-2">
               <UserPlus className="h-4 w-4 text-primary" />
               Add as Contact
@@ -2021,93 +2226,469 @@ const Conversations = () => {
               as a new client.
             </DialogDescription>
           </DialogHeader>
+
+          {/* Legend */}
+          <div className="mx-6 flex items-start gap-2.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 shrink-0">
+            <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+            <p className="text-xs text-amber-800 leading-relaxed">
+              <span className="font-semibold">
+                The contact must be saved as a client first.
+              </span>{" "}
+              Once saved, you can optionally create a Draft entry in the
+              pipeline as an action item for the realtor.
+            </p>
+          </div>
+
           <form
             onSubmit={saveContactFormik.handleSubmit}
-            className="space-y-4 pt-1"
+            className="flex flex-col flex-1 min-h-0 mt-4"
           >
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="sc_first_name">First Name *</Label>
-                <Input
-                  id="sc_first_name"
-                  name="first_name"
-                  value={saveContactFormik.values.first_name}
-                  onChange={saveContactFormik.handleChange}
-                  onBlur={saveContactFormik.handleBlur}
-                  placeholder="John"
-                  className={cn(
-                    saveContactFormik.touched.first_name &&
-                      saveContactFormik.errors.first_name
-                      ? "border-destructive"
-                      : "",
-                  )}
-                />
-                {saveContactFormik.touched.first_name &&
-                  saveContactFormik.errors.first_name && (
-                    <p className="text-xs text-destructive">
-                      {saveContactFormik.errors.first_name}
-                    </p>
-                  )}
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="sc_last_name">Last Name *</Label>
-                <Input
-                  id="sc_last_name"
-                  name="last_name"
-                  value={saveContactFormik.values.last_name}
-                  onChange={saveContactFormik.handleChange}
-                  onBlur={saveContactFormik.handleBlur}
-                  placeholder="Doe"
-                  className={cn(
-                    saveContactFormik.touched.last_name &&
-                      saveContactFormik.errors.last_name
-                      ? "border-destructive"
-                      : "",
-                  )}
-                />
-                {saveContactFormik.touched.last_name &&
-                  saveContactFormik.errors.last_name && (
-                    <p className="text-xs text-destructive">
-                      {saveContactFormik.errors.last_name}
-                    </p>
-                  )}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="sc_email">
-                Email{" "}
-                <span className="text-muted-foreground text-xs font-normal">
-                  (optional)
-                </span>
-              </Label>
-              <Input
-                id="sc_email"
-                name="email"
-                type="email"
-                value={saveContactFormik.values.email}
-                onChange={saveContactFormik.handleChange}
-                onBlur={saveContactFormik.handleBlur}
-                placeholder="john@example.com"
-                className={cn(
-                  saveContactFormik.touched.email &&
-                    saveContactFormik.errors.email
-                    ? "border-destructive"
-                    : "",
-                )}
-              />
-              {saveContactFormik.touched.email &&
-                saveContactFormik.errors.email && (
-                  <p className="text-xs text-destructive">
-                    {saveContactFormik.errors.email}
+            <ScrollArea className="flex-1">
+              <div className="space-y-5 px-6 pb-2">
+                {/* ── Basic Info ── */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                    Basic Info
                   </p>
-                )}
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_first_name">First Name *</Label>
+                      <Input
+                        id="sc_first_name"
+                        name="first_name"
+                        value={saveContactFormik.values.first_name}
+                        onChange={saveContactFormik.handleChange}
+                        onBlur={saveContactFormik.handleBlur}
+                        placeholder="John"
+                        className={cn(
+                          saveContactFormik.touched.first_name &&
+                            saveContactFormik.errors.first_name
+                            ? "border-destructive"
+                            : "",
+                        )}
+                      />
+                      {saveContactFormik.touched.first_name &&
+                        saveContactFormik.errors.first_name && (
+                          <p className="text-xs text-destructive">
+                            {saveContactFormik.errors.first_name}
+                          </p>
+                        )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_last_name">Last Name *</Label>
+                      <Input
+                        id="sc_last_name"
+                        name="last_name"
+                        value={saveContactFormik.values.last_name}
+                        onChange={saveContactFormik.handleChange}
+                        onBlur={saveContactFormik.handleBlur}
+                        placeholder="Doe"
+                        className={cn(
+                          saveContactFormik.touched.last_name &&
+                            saveContactFormik.errors.last_name
+                            ? "border-destructive"
+                            : "",
+                        )}
+                      />
+                      {saveContactFormik.touched.last_name &&
+                        saveContactFormik.errors.last_name && (
+                          <p className="text-xs text-destructive">
+                            {saveContactFormik.errors.last_name}
+                          </p>
+                        )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_email">
+                        Email{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          (optional)
+                        </span>
+                      </Label>
+                      <Input
+                        id="sc_email"
+                        name="email"
+                        type="email"
+                        value={saveContactFormik.values.email}
+                        onChange={saveContactFormik.handleChange}
+                        onBlur={saveContactFormik.handleBlur}
+                        placeholder="john@example.com"
+                        className={cn(
+                          saveContactFormik.touched.email &&
+                            saveContactFormik.errors.email
+                            ? "border-destructive"
+                            : "",
+                        )}
+                      />
+                      {saveContactFormik.touched.email &&
+                        saveContactFormik.errors.email && (
+                          <p className="text-xs text-destructive">
+                            {saveContactFormik.errors.email}
+                          </p>
+                        )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_phone">
+                        Phone{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          (optional)
+                        </span>
+                      </Label>
+                      <Input
+                        id="sc_phone"
+                        name="phone"
+                        type="tel"
+                        value={saveContactFormik.values.phone}
+                        onChange={saveContactFormik.handleChange}
+                        placeholder={
+                          currentThread?.client_phone ?? "+1 555 0000"
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_alt_phone">
+                        Alternate Phone{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          (optional)
+                        </span>
+                      </Label>
+                      <Input
+                        id="sc_alt_phone"
+                        name="alternate_phone"
+                        type="tel"
+                        value={saveContactFormik.values.alternate_phone}
+                        onChange={saveContactFormik.handleChange}
+                        placeholder="+1 555 0001"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_dob">
+                        Date of Birth{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          (optional)
+                        </span>
+                      </Label>
+                      <Input
+                        id="sc_dob"
+                        name="date_of_birth"
+                        type="date"
+                        value={saveContactFormik.values.date_of_birth}
+                        onChange={saveContactFormik.handleChange}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_citizenship">
+                        Citizenship Status{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          (optional)
+                        </span>
+                      </Label>
+                      <Select
+                        value={
+                          saveContactFormik.values.citizenship_status ||
+                          "__none__"
+                        }
+                        onValueChange={(v) =>
+                          saveContactFormik.setFieldValue(
+                            "citizenship_status",
+                            v === "__none__" ? "" : v,
+                          )
+                        }
+                      >
+                        <SelectTrigger id="sc_citizenship">
+                          <SelectValue placeholder="Select…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          <SelectItem value="us_citizen">US Citizen</SelectItem>
+                          <SelectItem value="permanent_resident">
+                            Permanent Resident
+                          </SelectItem>
+                          <SelectItem value="non_resident">
+                            Non-Resident
+                          </SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Address ── */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                    Address
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5 col-span-2">
+                      <Label htmlFor="sc_street">Street</Label>
+                      <Input
+                        id="sc_street"
+                        name="address_street"
+                        value={saveContactFormik.values.address_street}
+                        onChange={saveContactFormik.handleChange}
+                        placeholder="123 Main St"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_city">City</Label>
+                      <Input
+                        id="sc_city"
+                        name="address_city"
+                        value={saveContactFormik.values.address_city}
+                        onChange={saveContactFormik.handleChange}
+                        placeholder="Los Angeles"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sc_state">State</Label>
+                        <Input
+                          id="sc_state"
+                          name="address_state"
+                          value={saveContactFormik.values.address_state}
+                          onChange={(e) =>
+                            saveContactFormik.setFieldValue(
+                              "address_state",
+                              e.target.value.toUpperCase(),
+                            )
+                          }
+                          placeholder="CA"
+                          maxLength={2}
+                          className="uppercase"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sc_zip">ZIP</Label>
+                        <Input
+                          id="sc_zip"
+                          name="address_zip"
+                          value={saveContactFormik.values.address_zip}
+                          onChange={saveContactFormik.handleChange}
+                          placeholder="90210"
+                          maxLength={10}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Financial / Employment ── */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                    Financial &amp; Employment
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_employment">Employment Status</Label>
+                      <Select
+                        value={
+                          saveContactFormik.values.employment_status ||
+                          "__none__"
+                        }
+                        onValueChange={(v) =>
+                          saveContactFormik.setFieldValue(
+                            "employment_status",
+                            v === "__none__" ? "" : v,
+                          )
+                        }
+                      >
+                        <SelectTrigger id="sc_employment">
+                          <SelectValue placeholder="Select…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          <SelectItem value="employed">Employed</SelectItem>
+                          <SelectItem value="self_employed">
+                            Self-Employed
+                          </SelectItem>
+                          <SelectItem value="unemployed">Unemployed</SelectItem>
+                          <SelectItem value="retired">Retired</SelectItem>
+                          <SelectItem value="retired_with_pension">
+                            Retired w/ Pension
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_income_type">Income Type</Label>
+                      <Select
+                        value={
+                          saveContactFormik.values.income_type || "__none__"
+                        }
+                        onValueChange={(v) =>
+                          saveContactFormik.setFieldValue(
+                            "income_type",
+                            v === "__none__" ? "" : v,
+                          )
+                        }
+                      >
+                        <SelectTrigger id="sc_income_type">
+                          <SelectValue placeholder="Select…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          <SelectItem value="W-2">W-2</SelectItem>
+                          <SelectItem value="1099">1099</SelectItem>
+                          <SelectItem value="Self-Employed">
+                            Self-Employed
+                          </SelectItem>
+                          <SelectItem value="Investor">Investor</SelectItem>
+                          <SelectItem value="Mixed">Mixed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_income">
+                        Annual Income{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          (optional)
+                        </span>
+                      </Label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm pointer-events-none">
+                          $
+                        </span>
+                        <Input
+                          id="sc_income"
+                          name="annual_income"
+                          type="number"
+                          min="0"
+                          step="1000"
+                          value={saveContactFormik.values.annual_income}
+                          onChange={saveContactFormik.handleChange}
+                          placeholder="0"
+                          className={cn(
+                            "pl-6",
+                            saveContactFormik.touched.annual_income &&
+                              saveContactFormik.errors.annual_income
+                              ? "border-destructive"
+                              : "",
+                          )}
+                        />
+                      </div>
+                      {saveContactFormik.touched.annual_income &&
+                        saveContactFormik.errors.annual_income && (
+                          <p className="text-xs text-destructive">
+                            {saveContactFormik.errors.annual_income as string}
+                          </p>
+                        )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sc_credit">
+                        Credit Score{" "}
+                        <span className="text-muted-foreground text-xs font-normal">
+                          300–850
+                        </span>
+                      </Label>
+                      <Input
+                        id="sc_credit"
+                        name="credit_score"
+                        type="number"
+                        min="300"
+                        max="850"
+                        value={saveContactFormik.values.credit_score}
+                        onChange={saveContactFormik.handleChange}
+                        placeholder="720"
+                        className={cn(
+                          saveContactFormik.touched.credit_score &&
+                            saveContactFormik.errors.credit_score
+                            ? "border-destructive"
+                            : "",
+                        )}
+                      />
+                      {saveContactFormik.touched.credit_score &&
+                        saveContactFormik.errors.credit_score && (
+                          <p className="text-xs text-destructive">
+                            {saveContactFormik.errors.credit_score as string}
+                          </p>
+                        )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Add to Pipeline as Draft ── */}
+                <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-3">
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      name="add_to_pipeline"
+                      checked={saveContactFormik.values.add_to_pipeline}
+                      onChange={saveContactFormik.handleChange}
+                      className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                    />
+                    <span className="text-sm font-medium text-foreground">
+                      Add to Pipeline as Draft
+                    </span>
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      Action item for realtor
+                    </span>
+                  </label>
+
+                  {saveContactFormik.values.add_to_pipeline && (
+                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sc_loan_type">Loan Type *</Label>
+                        <Select
+                          value={saveContactFormik.values.loan_type}
+                          onValueChange={(v) =>
+                            saveContactFormik.setFieldValue("loan_type", v)
+                          }
+                        >
+                          <SelectTrigger
+                            id="sc_loan_type"
+                            className={cn(
+                              saveContactFormik.touched.loan_type &&
+                                saveContactFormik.errors.loan_type
+                                ? "border-destructive"
+                                : "",
+                            )}
+                          >
+                            <SelectValue placeholder="Select type…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="purchase">Purchase</SelectItem>
+                            <SelectItem value="refinance">Refinance</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {saveContactFormik.touched.loan_type &&
+                          saveContactFormik.errors.loan_type && (
+                            <p className="text-xs text-destructive">
+                              {saveContactFormik.errors.loan_type}
+                            </p>
+                          )}
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="sc_pipeline_notes">
+                          Notes{" "}
+                          <span className="text-muted-foreground text-xs font-normal">
+                            (optional)
+                          </span>
+                        </Label>
+                        <Textarea
+                          id="sc_pipeline_notes"
+                          name="pipeline_notes"
+                          value={saveContactFormik.values.pipeline_notes}
+                          onChange={saveContactFormik.handleChange}
+                          placeholder="Any context for the realtor…"
+                          rows={2}
+                          className="resize-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </ScrollArea>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t border-border shrink-0 bg-card rounded-b-lg">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => setIsSaveContactOpen(false)}
+                onClick={() => {
+                  setIsSaveContactOpen(false);
+                  saveContactFormik.resetForm();
+                }}
                 disabled={isSavingContact}
               >
                 Cancel
@@ -2124,7 +2705,10 @@ const Conversations = () => {
                   </>
                 ) : (
                   <>
-                    <UserPlus className="h-3.5 w-3.5" /> Save Contact
+                    <UserPlus className="h-3.5 w-3.5" />
+                    {saveContactFormik.values.add_to_pipeline
+                      ? "Save & Add to Pipeline"
+                      : "Save Contact"}
                   </>
                 )}
               </Button>

@@ -21,6 +21,9 @@ interface BrokersState {
   pagination: PaginationInfo | null;
   isLoading: boolean;
   error: string | null;
+  // Mortgage Bankers (admin-role) list for dropdowns
+  mortgageBankers: Broker[];
+  mortgageBankersLoading: boolean;
   // Selected broker profile (for admin editing)
   selectedBrokerProfile: BrokerProfileDetails | null;
   profileLoading: boolean;
@@ -34,6 +37,8 @@ const initialState: BrokersState = {
   pagination: null,
   isLoading: false,
   error: null,
+  mortgageBankers: [],
+  mortgageBankersLoading: false,
   selectedBrokerProfile: null,
   profileLoading: false,
   brokerShareLink: null,
@@ -199,6 +204,25 @@ export const uploadBrokerAvatarByAdmin = createAsyncThunk(
   },
 );
 
+/** Fetch all active Mortgage Bankers (role=admin) for dropdowns — stored separately from the main paginated list */
+export const fetchMortgageBankers = createAsyncThunk(
+  "brokers/fetchMortgageBankers",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetBrokersResponse>("/api/brokers", {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+        params: { role: "admin", limit: 100 },
+      });
+      return data.brokers;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch mortgage bankers",
+      );
+    }
+  },
+);
+
 /** Admin: get share link for any broker */
 /** Self-service: fetch the logged-in broker's own share link */
 export const fetchMyShareLink = createAsyncThunk(
@@ -309,6 +333,17 @@ const brokersSlice = createSlice({
       .addCase(deleteBroker.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload as string;
+      })
+      // Fetch mortgage bankers
+      .addCase(fetchMortgageBankers.pending, (state) => {
+        state.mortgageBankersLoading = true;
+      })
+      .addCase(fetchMortgageBankers.fulfilled, (state, action) => {
+        state.mortgageBankersLoading = false;
+        state.mortgageBankers = action.payload;
+      })
+      .addCase(fetchMortgageBankers.rejected, (state) => {
+        state.mortgageBankersLoading = false;
       })
       // Fetch broker profile for edit
       .addCase(fetchBrokerProfileForEdit.pending, (state) => {

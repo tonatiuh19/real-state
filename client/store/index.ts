@@ -23,6 +23,7 @@ import adminSectionControlsReducer from "./slices/adminSectionControlsSlice";
 import contactSubmissionsReducer from "./slices/contactSubmissionsSlice";
 import schedulerReducer from "./slices/schedulerSlice";
 import calendarEventsReducer from "./slices/calendarEventsSlice";
+import clientDetailReducer from "./slices/clientDetailSlice";
 import voiceReducer from "./slices/voiceSlice";
 
 export const store = configureStore({
@@ -52,6 +53,7 @@ export const store = configureStore({
     scheduler: schedulerReducer,
     calendarEvents: calendarEventsReducer,
     voice: voiceReducer,
+    clientDetail: clientDetailReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

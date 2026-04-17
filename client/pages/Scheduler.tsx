@@ -418,7 +418,9 @@ const SchedulerPage: React.FC = () => {
                       {brokerFullName}
                     </h2>
                     <p className="text-muted-foreground text-sm">
-                      Mortgage Banker
+                      {publicBroker.role === "broker"
+                        ? "Partner"
+                        : "Mortgage Banker"}
                     </p>
                   </div>
                 </div>

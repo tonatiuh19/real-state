@@ -7,12 +7,14 @@
 - **NEVER fetch data directly in components with axios or fetch**
 - **ALL data fetching MUST be done in Redux store (slices) using createAsyncThunk**
 - **Components ONLY dispatch actions and select state from store**
-- **NO EXCEPTIONS to these rules**
 - **NEVER touch schema.sql, any database changes must be made through migration files in `database/migrations/`**
 - **When using any console logging for debugging use logger functions from `client/utils/logger.ts` for consistent formatting and log levels only in UI components**
 - **NEVER Patch issues, always fix the root cause of type errors or bugs immediately**
 - **if any update is made to api/index.ts, update swagger.yaml accordingly**
-- **if any update is needed in DESIGN_SYSTEM.md, update it immediately and ensure changes are reflected in client/global.css and tailwind.config.ts**
+- **if any revelant change update DESIGN_SYSTEM.md**
+- **Always think about mobile responsiveness and cool, engaging UI/UX when making frontend changes**
+- **if there is an opportunity to add reusable components or utilities, do it immediately to avoid technical debt**
+- **NO EXCEPTIONS to these rules**
 
 ### Package Manager
 

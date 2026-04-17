@@ -3,6 +3,7 @@ import { Users, Search, Mail, Phone, Trash2, Plus, Pencil } from "lucide-react";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import ClientFormDialog from "@/components/ClientFormDialog";
+import ClientDetailPanel from "@/components/ClientDetailPanel";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -53,6 +54,7 @@ const Clients = () => {
   const [sortDir, setSortDir] = useState<"ASC" | "DESC">("ASC");
   const [formOpen, setFormOpen] = useState(false);
   const [clientToEdit, setClientToEdit] = useState<ClientRow | null>(null);
+  const [detailClientId, setDetailClientId] = useState<number | null>(null);
 
   const doFetch = useCallback(
     (params: {
@@ -235,7 +237,8 @@ const Clients = () => {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setClientToEdit(client);
                     setFormOpen(true);
                   }}
@@ -247,7 +250,10 @@ const Clients = () => {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => handleDeleteClick(client)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteClick(client);
+                  }}
                   disabled={isDeleting}
                   className="h-7 text-xs gap-1 border-red-500 text-red-600 hover:bg-red-50"
                 >
@@ -348,6 +354,7 @@ const Clients = () => {
                   sortBy={sortBy}
                   sortDir={sortDir}
                   onSort={handleSort}
+                  onRowClick={(client) => setDetailClientId(client.id)}
                   pagination={pagination}
                   onPageChange={(page) =>
                     doFetch({
@@ -442,6 +449,13 @@ const Clients = () => {
             setClientToEdit(null);
           }}
           client={clientToEdit}
+        />
+
+        {/* Client Detail Panel */}
+        <ClientDetailPanel
+          isOpen={detailClientId !== null}
+          onClose={() => setDetailClientId(null)}
+          clientId={detailClientId}
         />
 
         {/* Delete Confirmation Dialog */}

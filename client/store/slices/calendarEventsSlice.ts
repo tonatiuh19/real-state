@@ -11,6 +11,7 @@ import type {
   GetCalendarEventsResponse,
   CreateCalendarEventRequest,
   UpdateCalendarEventRequest,
+  SyncBirthdaysResponse,
 } from "@shared/api";
 
 interface CalendarEventsState {
@@ -20,6 +21,7 @@ interface CalendarEventsState {
   isCreating: boolean;
   isUpdating: boolean;
   isDeleting: boolean;
+  isSyncing: boolean;
   error: string | null;
 }
 
@@ -30,6 +32,7 @@ const initialState: CalendarEventsState = {
   isCreating: false,
   isUpdating: false,
   isDeleting: false,
+  isSyncing: false,
   error: null,
 };
 
@@ -124,6 +127,27 @@ export const deleteCalendarEvent = createAsyncThunk(
   },
 );
 
+export const syncBirthdays = createAsyncThunk(
+  "calendarEvents/syncBirthdays",
+  async (_, { getState, dispatch, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<SyncBirthdaysResponse>(
+        "/api/calendar/sync-birthdays",
+        {},
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      // Refresh events after sync
+      dispatch(fetchCalendarEvents());
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to sync birthdays",
+      );
+    }
+  },
+);
+
 const calendarEventsSlice = createSlice({
   name: "calendarEvents",
   initialState,
@@ -198,8 +222,22 @@ const calendarEventsSlice = createSlice({
         state.isDeleting = false;
         state.error = action.payload as string;
       });
+
+    builder
+      .addCase(syncBirthdays.pending, (state) => {
+        state.isSyncing = true;
+        state.error = null;
+      })
+      .addCase(syncBirthdays.fulfilled, (state) => {
+        state.isSyncing = false;
+      })
+      .addCase(syncBirthdays.rejected, (state, action) => {
+        state.isSyncing = false;
+        state.error = action.payload as string;
+      });
   },
 });
 
 export const { clearError } = calendarEventsSlice.actions;
 export default calendarEventsSlice.reducer;
+export type { CalendarEventsState };

@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { BrokerWizard, type BrokerFormValues } from "@/components/BrokerWizard";
 import BrokerShareLinkModal from "@/components/BrokerShareLinkModal";
+import BrokerSchedulerLinkModal from "@/components/BrokerSchedulerLinkModal";
 import { DataGrid, type DataGridColumn } from "@/components/ui/data-grid";
 import {
   UserCog,
@@ -36,6 +37,7 @@ import {
   Mail,
   Phone,
   Link2,
+  CalendarDays,
 } from "lucide-react";
 import type { Broker } from "@shared/api";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -66,6 +68,14 @@ export default function Brokers() {
   const [brokerForShareLink, setBrokerForShareLink] = useState<Broker | null>(
     null,
   );
+  const [schedulerLinkModalOpen, setSchedulerLinkModalOpen] = useState(false);
+  const [brokerForSchedulerLink, setBrokerForSchedulerLink] =
+    useState<Broker | null>(null);
+
+  const handleOpenSchedulerLink = (b: Broker) => {
+    setBrokerForSchedulerLink(b);
+    setSchedulerLinkModalOpen(true);
+  };
 
   const isAdmin = currentBroker?.role === "admin";
 
@@ -147,6 +157,19 @@ export default function Brokers() {
                 : undefined,
           }),
         ).unwrap();
+        // If a partner, set the assigned MB right away
+        if (
+          values.role === "broker" &&
+          values.created_by_broker_id &&
+          newBroker?.id
+        ) {
+          await dispatch(
+            updateBroker({
+              id: newBroker.id,
+              created_by_broker_id: values.created_by_broker_id,
+            }),
+          ).unwrap();
+        }
         // Save profile fields if any were filled
         const hasProfileData =
           values.bio ||
@@ -184,7 +207,7 @@ export default function Brokers() {
         }
         toast({
           title: "Success",
-          description: "Broker created successfully",
+          description: "Realtor created successfully",
         });
       } else if (selectedBroker) {
         await dispatch(
@@ -198,6 +221,10 @@ export default function Brokers() {
             specializations:
               values.specializations.length > 0
                 ? values.specializations
+                : undefined,
+            created_by_broker_id:
+              values.role === "broker"
+                ? (values.created_by_broker_id ?? null)
                 : undefined,
           }),
         ).unwrap();
@@ -238,7 +265,7 @@ export default function Brokers() {
         }
         toast({
           title: "Success",
-          description: "Broker updated successfully",
+          description: "Realtor updated successfully",
         });
       }
       setWizardOpen(false);
@@ -258,14 +285,14 @@ export default function Brokers() {
       await dispatch(deleteBroker(brokerToDelete.id)).unwrap();
       toast({
         title: "Success",
-        description: "Broker deleted successfully",
+        description: "Realtor deleted successfully",
       });
       setDeleteDialogOpen(false);
       setBrokerToDelete(null);
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error || "Failed to delete broker",
+        description: error || "Failed to delete realtor",
         variant: "destructive",
       });
     }
@@ -294,22 +321,22 @@ export default function Brokers() {
     <>
       <MetaHelmet
         {...adminPageMeta(
-          "Broker Management",
-          "Manage broker accounts and permissions",
+          "Realtor Management",
+          "Manage realtor accounts and permissions",
         )}
       />
       <div className="space-y-6 p-6">
         {/* Header */}
         <PageHeader
           icon={<UserCog className="h-7 w-7 text-primary" />}
-          title="Broker Management"
-          description="Manage broker accounts and permissions"
+          title="Realtor Management"
+          description="Manage realtor accounts and permissions"
           className="mb-0"
           actions={
             isAdmin ? (
               <Button onClick={handleCreateBroker} className="gap-2">
                 <Plus className="h-4 w-4" />
-                Add Broker
+                Add Realtor
               </Button>
             ) : undefined
           }
@@ -319,7 +346,7 @@ export default function Brokers() {
         <div className="flex items-center gap-2 bg-white rounded-lg border p-3">
           <Search className="h-4 w-4 text-gray-400" />
           <Input
-            placeholder="Search brokers by name or email..."
+            placeholder="Search realtors by name or email..."
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
             className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -372,11 +399,24 @@ export default function Brokers() {
                 label: "Role",
                 sortable: true,
                 shrink: true,
-                render: (b) => (
-                  <Badge className={getRoleBadgeColor(b.role)}>
-                    {b.role === "admin" ? "Mortgage Banker" : "Partner"}
-                  </Badge>
-                ),
+                render: (b) => {
+                  const assignedMB =
+                    b.role === "broker" && b.created_by_broker_id
+                      ? brokers.find((mb) => mb.id === b.created_by_broker_id)
+                      : null;
+                  return (
+                    <div className="space-y-1">
+                      <Badge className={getRoleBadgeColor(b.role)}>
+                        {b.role === "admin" ? "Mortgage Banker" : "Partner"}
+                      </Badge>
+                      {assignedMB && (
+                        <p className="text-xs text-gray-500 whitespace-nowrap">
+                          → {assignedMB.first_name} {assignedMB.last_name}
+                        </p>
+                      )}
+                    </div>
+                  );
+                },
               },
               {
                 key: "status",
@@ -422,6 +462,60 @@ export default function Brokers() {
                     <span className="text-sm text-gray-400">\u2014</span>
                   ),
               },
+              {
+                key: "last_login",
+                label: "Last Login",
+                shrink: true,
+                render: (b) => {
+                  if (!b.last_login) {
+                    return (
+                      <span className="text-xs text-gray-400 italic">
+                        Never
+                      </span>
+                    );
+                  }
+                  const normalized =
+                    /[Zz+\-]\d{2}:?\d{2}$/.test(b.last_login) ||
+                    b.last_login.endsWith("Z")
+                      ? b.last_login
+                      : b.last_login.replace(" ", "T") + "Z";
+                  const d = new Date(normalized);
+                  const now = new Date();
+                  const diffMs = now.getTime() - d.getTime();
+                  const diffMins = Math.floor(diffMs / 60000);
+                  const diffHrs = Math.floor(diffMins / 60);
+                  const diffDays = Math.floor(diffHrs / 24);
+                  let relative: string;
+                  if (diffMins < 1) relative = "Just now";
+                  else if (diffMins < 60) relative = `${diffMins}m ago`;
+                  else if (diffHrs < 24) relative = `${diffHrs}h ago`;
+                  else if (diffDays === 1) relative = "Yesterday";
+                  else if (diffDays < 7) relative = `${diffDays}d ago`;
+                  else
+                    relative = d.toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    });
+                  const exact = d.toLocaleString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                    hour12: true,
+                  });
+                  return (
+                    <div title={exact} className="cursor-default">
+                      <p className="text-xs font-medium text-foreground">
+                        {relative}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {exact}
+                      </p>
+                    </div>
+                  );
+                },
+              },
               ...(isAdmin
                 ? [
                     {
@@ -431,6 +525,15 @@ export default function Brokers() {
                       headerClassName: "text-right",
                       render: (b: Broker) => (
                         <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title="Copy scheduler link"
+                            onClick={() => handleOpenSchedulerLink(b)}
+                            className="h-8 w-8 p-0 text-violet-600 hover:text-violet-700 hover:bg-violet-50"
+                          >
+                            <CalendarDays className="h-4 w-4" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -476,7 +579,7 @@ export default function Brokers() {
               })
             }
             isLoading={isLoading}
-            emptyMessage="No brokers found."
+            emptyMessage="No realtors found."
             mobileCard={(broker) => (
               <div className="p-4 space-y-2 border-b">
                 <div className="flex items-start justify-between gap-2">
@@ -512,6 +615,15 @@ export default function Brokers() {
                 )}
                 {isAdmin && (
                   <div className="flex items-center gap-2 pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Copy scheduler link"
+                      onClick={() => handleOpenSchedulerLink(broker)}
+                      className="h-8 gap-1 text-violet-600 hover:text-violet-700 hover:bg-violet-50"
+                    >
+                      <CalendarDays className="h-3.5 w-3.5" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -563,11 +675,21 @@ export default function Brokers() {
           broker={brokerForShareLink}
         />
 
+        {/* Scheduler Link Modal */}
+        <BrokerSchedulerLinkModal
+          open={schedulerLinkModalOpen}
+          onOpenChange={(open) => {
+            setSchedulerLinkModalOpen(open);
+            if (!open) setBrokerForSchedulerLink(null);
+          }}
+          broker={brokerForSchedulerLink}
+        />
+
         {/* Delete Confirmation Dialog */}
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete Broker</AlertDialogTitle>
+              <AlertDialogTitle>Delete Realtor</AlertDialogTitle>
               <AlertDialogDescription>
                 Are you sure you want to delete{" "}
                 <strong>
