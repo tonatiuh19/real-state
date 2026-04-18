@@ -91,6 +91,11 @@ interface DataGridProps<T> {
   colSpan?: number;
   /** Optional row click handler */
   onRowClick?: (item: T) => void;
+  /**
+   * When true, disables the negative-margin bleed used to escape card padding.
+   * Use this when rendering DataGrid outside of a CardContent.
+   */
+  noBleeding?: boolean;
 }
 
 // ─── Sort icon helper ─────────────────────────────────────────────────────────
@@ -137,6 +142,7 @@ export function DataGrid<T>({
   mobileCard,
   colSpan,
   onRowClick,
+  noBleeding = false,
 }: DataGridProps<T>) {
   // ── Pagination footer ──────────────────────────────────────────────────────
   const paginationFooter = pagination && pagination.totalPages > 1 && (
@@ -209,7 +215,8 @@ export function DataGrid<T>({
           mobileCard ? "hidden sm:block" : "block",
           // Negative margin lets the scroll area bleed to card edges;
           // padding restores the inner spacing so content isn't clipped.
-          "-mx-6 px-0 overflow-x-auto",
+          // When noBleeding=true (no card padding context) skip the bleed.
+          noBleeding ? "overflow-x-auto" : "-mx-6 px-0 overflow-x-auto",
         )}
       >
         {/*

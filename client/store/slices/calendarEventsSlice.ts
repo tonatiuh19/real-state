@@ -12,11 +12,13 @@ import type {
   CreateCalendarEventRequest,
   UpdateCalendarEventRequest,
   SyncBirthdaysResponse,
+  PaginationInfo,
 } from "@shared/api";
 
 interface CalendarEventsState {
   events: CalendarEvent[];
   total: number;
+  pagination: PaginationInfo | null;
   isLoading: boolean;
   isCreating: boolean;
   isUpdating: boolean;
@@ -28,6 +30,7 @@ interface CalendarEventsState {
 const initialState: CalendarEventsState = {
   events: [],
   total: 0,
+  pagination: null,
   isLoading: false,
   isCreating: false,
   isUpdating: false,
@@ -43,6 +46,14 @@ export const fetchCalendarEvents = createAsyncThunk(
       from?: string;
       to?: string;
       event_type?: CalendarEventType | "all";
+      search?: string;
+      sort_by?: string;
+      sort_order?: "ASC" | "DESC";
+      page?: number;
+      limit?: number;
+      /** YYYY-MM — calendar view mode. Fetches all events visible in that month,
+       *  projecting yearly events by month/day. No pagination applied. */
+      calendar_month?: string;
     } | void,
     { getState, rejectWithValue },
   ) => {
@@ -166,6 +177,7 @@ const calendarEventsSlice = createSlice({
         state.isLoading = false;
         state.events = action.payload.events;
         state.total = action.payload.total;
+        state.pagination = action.payload.pagination ?? null;
       })
       .addCase(fetchCalendarEvents.rejected, (state, action) => {
         state.isLoading = false;

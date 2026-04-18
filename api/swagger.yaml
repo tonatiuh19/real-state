@@ -4289,6 +4289,25 @@ paths:
                 all,
               ]
           description: Filter by event type (omit or "all" for all types)
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Full-text search against title, linked client name, and linked person name
+        - in: query
+          name: sort_by
+          schema:
+            type: string
+            enum:
+              [event_date, title, event_type, linked_client_name, recurrence]
+            default: event_date
+          description: Column to sort by
+        - in: query
+          name: sort_order
+          schema:
+            type: string
+            enum: [ASC, DESC]
+            default: ASC
+          description: Sort direction
       responses:
         "200":
           description: List of calendar events

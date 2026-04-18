@@ -17,6 +17,7 @@ import {
   UserPlus,
   Loader2,
   Edit2,
+  Pencil,
   Trash2,
   List,
   Copy,
@@ -59,6 +60,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { DataGrid, type DataGridColumn } from "@/components/ui/data-grid";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
@@ -243,38 +245,42 @@ export const EVENT_TYPE_CONFIG: Record<
 > = {
   birthday: {
     label: "Birthday",
-    color: "bg-pink-500/15 text-pink-300 border-pink-500/30",
-    dotColor: "bg-pink-400",
+    color: "bg-pink-500/20 text-pink-600 dark:text-pink-300 border-pink-500/40",
+    dotColor: "bg-pink-500",
     icon: Cake,
   },
   home_anniversary: {
     label: "Home Anniversary",
-    color: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-    dotColor: "bg-amber-400",
+    color:
+      "bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/40",
+    dotColor: "bg-amber-500",
     icon: Home,
   },
   realtor_anniversary: {
     label: "Realtor Anniversary",
-    color: "bg-violet-500/15 text-violet-300 border-violet-500/30",
-    dotColor: "bg-violet-400",
+    color:
+      "bg-violet-500/20 text-violet-700 dark:text-violet-300 border-violet-500/40",
+    dotColor: "bg-violet-500",
     icon: Star,
   },
   important_date: {
     label: "Important Date",
-    color: "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
-    dotColor: "bg-cyan-400",
+    color: "bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border-cyan-500/40",
+    dotColor: "bg-cyan-500",
     icon: Sparkles,
   },
   reminder: {
     label: "Reminder",
-    color: "bg-orange-500/15 text-orange-300 border-orange-500/30",
-    dotColor: "bg-orange-400",
+    color:
+      "bg-orange-500/20 text-orange-700 dark:text-orange-300 border-orange-500/40",
+    dotColor: "bg-orange-500",
     icon: Bell,
   },
   other: {
     label: "Other",
-    color: "bg-slate-500/15 text-slate-300 border-slate-500/30",
-    dotColor: "bg-slate-400",
+    color:
+      "bg-slate-500/20 text-slate-600 dark:text-slate-300 border-slate-500/40",
+    dotColor: "bg-slate-500",
     icon: Heart,
   },
 };
@@ -791,13 +797,16 @@ function UnifiedCalendarView({
   events,
   onEditMeeting,
   onEditEvent,
+  viewDate,
+  onViewDateChange,
 }: {
   meetings: ScheduledMeeting[];
   events: CalendarEvent[];
   onEditMeeting: (m: ScheduledMeeting) => void;
   onEditEvent: (e: CalendarEvent) => void;
+  viewDate: Date;
+  onViewDateChange: (d: Date) => void;
 }) {
-  const [viewDate, setViewDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
 
   const monthStart = startOfMonth(viewDate);
@@ -844,7 +853,7 @@ function UnifiedCalendarView({
       {/* Month navigation */}
       <div className="flex items-center justify-between">
         <button
-          onClick={() => setViewDate((d) => subMonths(d, 1))}
+          onClick={() => onViewDateChange(subMonths(viewDate, 1))}
           className="p-2 rounded-lg hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors"
         >
           <ChevronLeft className="h-4 w-4" />
@@ -853,7 +862,7 @@ function UnifiedCalendarView({
           {format(viewDate, "MMMM yyyy")}
         </h3>
         <button
-          onClick={() => setViewDate((d) => addMonths(d, 1))}
+          onClick={() => onViewDateChange(addMonths(viewDate, 1))}
           className="p-2 rounded-lg hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors"
         >
           <ChevronRight className="h-4 w-4" />
@@ -955,6 +964,12 @@ function UnifiedCalendarView({
                     ))}
                     {dayEvents.slice(0, 2).map((e) => {
                       const cfg = EVENT_TYPE_CONFIG[e.event_type];
+                      const Icon = cfg.icon;
+                      // For birthdays strip "'s Birthday" suffix to fit more name
+                      const displayTitle =
+                        e.event_type === "birthday"
+                          ? e.title.replace(/'s Birthday.*$/i, "")
+                          : e.title;
                       return (
                         <span
                           key={`e-${e.id}`}
@@ -963,13 +978,8 @@ function UnifiedCalendarView({
                             cfg.color,
                           )}
                         >
-                          <span
-                            className={cn(
-                              "w-1.5 h-1.5 rounded-full shrink-0",
-                              cfg.dotColor,
-                            )}
-                          />
-                          <span className="truncate">{e.title}</span>
+                          <Icon className="h-2.5 w-2.5 shrink-0" />
+                          <span className="truncate">{displayTitle}</span>
                         </span>
                       );
                     })}
@@ -2550,6 +2560,78 @@ function SettingsPanel() {
   );
 }
 
+// ─── Events DataGrid column definitions ─────────────────────────────────────
+
+const EVENTS_COLUMNS: DataGridColumn<CalendarEvent>[] = [
+  {
+    key: "event_type",
+    label: "Type",
+    sortable: true,
+    shrink: true,
+    render: (e) => {
+      const cfg = EVENT_TYPE_CONFIG[e.event_type];
+      const Icon = cfg?.icon;
+      return (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border",
+            cfg?.color ?? "border-border/50 bg-muted/30 text-muted-foreground",
+          )}
+        >
+          {Icon && <Icon className="h-3 w-3" />}
+          {cfg?.label ?? e.event_type}
+        </span>
+      );
+    },
+  },
+  {
+    key: "title",
+    label: "Title",
+    sortable: true,
+    render: (e) => (
+      <span className="font-medium text-foreground">{e.title}</span>
+    ),
+  },
+  {
+    key: "linked_client_name",
+    label: "Linked to",
+    sortable: true,
+    render: (e) => (
+      <span className="text-muted-foreground text-sm">
+        {e.linked_client_name ?? e.linked_person_name ?? "—"}
+      </span>
+    ),
+  },
+  {
+    key: "event_date",
+    label: "Date",
+    sortable: true,
+    shrink: true,
+    render: (e) => (
+      <span className="text-sm tabular-nums">
+        {format(parseISO(e.event_date), "MMM d, yyyy")}
+      </span>
+    ),
+  },
+  {
+    key: "recurrence",
+    label: "Recurrence",
+    sortable: true,
+    shrink: true,
+    render: (e) => (
+      <span className="text-muted-foreground text-xs capitalize">
+        {e.recurrence === "yearly" ? (
+          <span className="inline-flex items-center gap-1">
+            <RefreshCw className="h-3 w-3" /> Yearly
+          </span>
+        ) : (
+          "Once"
+        )}
+      </span>
+    ),
+  },
+];
+
 // ─── Main Admin Calendar Page ─────────────────────────────────────────────────
 
 const AdminCalendar: React.FC = () => {
@@ -2571,6 +2653,7 @@ const AdminCalendar: React.FC = () => {
     isUpdating: isUpdatingEvent,
     isDeleting: isDeletingEvent,
     isSyncing: isSyncingBirthdays,
+    pagination: eventsPagination,
     error: calendarError,
   } = useAppSelector((s) => s.calendarEvents);
   const { user } = useAppSelector((s) => s.brokerAuth);
@@ -2591,12 +2674,64 @@ const AdminCalendar: React.FC = () => {
     null,
   );
   const [search, setSearch] = useState("");
+  const [eventSortBy, setEventSortBy] = useState("event_date");
+  const [eventSortDir, setEventSortDir] = useState<"ASC" | "DESC">("ASC");
+  const [eventPage, setEventPage] = useState(1);
   const [urlCopied, setUrlCopied] = useState(false);
+
+  // Lifted from UnifiedCalendarView so AdminCalendar can fetch month-scoped events
+  const [calendarViewDate, setCalendarViewDate] = useState(() => new Date());
+
+  /** Fetch events visible in the given month (handles yearly recurrence server-side) */
+  const doFetchCalendarView = useCallback(
+    (month: Date) => {
+      dispatch(
+        fetchCalendarEvents({
+          calendar_month: format(month, "yyyy-MM"),
+        }),
+      );
+    },
+    [dispatch],
+  );
+
+  /** Fetch all events (paginated) for the Events tab */
+  const doFetchEvents = useCallback(
+    (params: {
+      search?: string;
+      sort_by?: string;
+      sort_order?: "ASC" | "DESC";
+      event_type?: string;
+      page?: number;
+    }) => {
+      dispatch(
+        fetchCalendarEvents({
+          ...(params.event_type && params.event_type !== "all"
+            ? { event_type: params.event_type as any }
+            : {}),
+          ...(params.search ? { search: params.search } : {}),
+          sort_by: params.sort_by ?? "event_date",
+          sort_order: params.sort_order ?? "ASC",
+          page: params.page ?? 1,
+          limit: 25,
+        }),
+      );
+    },
+    [dispatch],
+  );
+
+  const handleCalendarViewDateChange = useCallback(
+    (newDate: Date) => {
+      setCalendarViewDate(newDate);
+      doFetchCalendarView(newDate);
+    },
+    [doFetchCalendarView],
+  );
 
   useEffect(() => {
     dispatch(fetchSchedulerSettings());
     dispatch(fetchScheduledMeetings());
-    dispatch(fetchCalendarEvents());
+    // Initial load: calendar tab is active, so fetch the current month
+    doFetchCalendarView(new Date());
     dispatch(fetchClients({ page: 1, limit: 200 }));
   }, [dispatch]);
 
@@ -2655,6 +2790,18 @@ const AdminCalendar: React.FC = () => {
       if (createCalendarEvent.fulfilled.match(result)) {
         toast({ title: "Event created", description: values.title });
         setShowCreateEvent(false);
+        // Refresh the active view
+        if (activeTab === "calendar") {
+          doFetchCalendarView(calendarViewDate);
+        } else {
+          doFetchEvents({
+            search,
+            sort_by: eventSortBy,
+            sort_order: eventSortDir,
+            event_type: eventTypeFilter,
+            page: eventPage,
+          });
+        }
       } else {
         toast({
           title: "Failed to create event",
@@ -2663,7 +2810,19 @@ const AdminCalendar: React.FC = () => {
         });
       }
     },
-    [dispatch, toast],
+    [
+      dispatch,
+      toast,
+      activeTab,
+      calendarViewDate,
+      doFetchCalendarView,
+      doFetchEvents,
+      search,
+      eventSortBy,
+      eventSortDir,
+      eventTypeFilter,
+      eventPage,
+    ],
   );
 
   const handleUpdateEvent = useCallback(
@@ -2675,7 +2834,17 @@ const AdminCalendar: React.FC = () => {
       if (updateCalendarEvent.fulfilled.match(result)) {
         toast({ title: "Event updated" });
         setEditingEvent(null);
-        dispatch(fetchCalendarEvents());
+        if (activeTab === "calendar") {
+          doFetchCalendarView(calendarViewDate);
+        } else {
+          doFetchEvents({
+            search,
+            sort_by: eventSortBy,
+            sort_order: eventSortDir,
+            event_type: eventTypeFilter,
+            page: eventPage,
+          });
+        }
       } else {
         toast({
           title: "Failed to update event",
@@ -2684,7 +2853,20 @@ const AdminCalendar: React.FC = () => {
         });
       }
     },
-    [dispatch, editingEvent, toast],
+    [
+      dispatch,
+      editingEvent,
+      toast,
+      activeTab,
+      calendarViewDate,
+      doFetchCalendarView,
+      doFetchEvents,
+      search,
+      eventSortBy,
+      eventSortDir,
+      eventTypeFilter,
+      eventPage,
+    ],
   );
 
   const handleDeleteEvent = useCallback(async () => {
@@ -2693,6 +2875,17 @@ const AdminCalendar: React.FC = () => {
     if (deleteCalendarEvent.fulfilled.match(result)) {
       toast({ title: "Event deleted" });
       setDeletingEvent(null);
+      if (activeTab === "calendar") {
+        doFetchCalendarView(calendarViewDate);
+      } else {
+        doFetchEvents({
+          search,
+          sort_by: eventSortBy,
+          sort_order: eventSortDir,
+          event_type: eventTypeFilter,
+          page: eventPage,
+        });
+      }
     } else {
       toast({
         title: "Failed to delete event",
@@ -2700,7 +2893,20 @@ const AdminCalendar: React.FC = () => {
         variant: "destructive",
       });
     }
-  }, [dispatch, deletingEvent, toast]);
+  }, [
+    dispatch,
+    deletingEvent,
+    toast,
+    activeTab,
+    calendarViewDate,
+    doFetchCalendarView,
+    doFetchEvents,
+    search,
+    eventSortBy,
+    eventSortDir,
+    eventTypeFilter,
+    eventPage,
+  ]);
 
   const handleSyncBirthdays = useCallback(async () => {
     const result = await dispatch(syncBirthdays());
@@ -2710,6 +2916,14 @@ const AdminCalendar: React.FC = () => {
         title: "Birthdays synced",
         description: `${created} created, ${updated} updated`,
       });
+      // Always refresh Events tab data after sync (sync is only triggered from Events tab)
+      doFetchEvents({
+        search,
+        sort_by: eventSortBy,
+        sort_order: eventSortDir,
+        event_type: eventTypeFilter,
+        page: eventPage,
+      });
     } else {
       toast({
         title: "Birthday sync failed",
@@ -2717,7 +2931,16 @@ const AdminCalendar: React.FC = () => {
         variant: "destructive",
       });
     }
-  }, [dispatch, toast]);
+  }, [
+    dispatch,
+    toast,
+    doFetchEvents,
+    search,
+    eventSortBy,
+    eventSortDir,
+    eventTypeFilter,
+    eventPage,
+  ]);
 
   const filteredMeetings = meetings.filter((m) => {
     const matchStatus =
@@ -2732,17 +2955,8 @@ const AdminCalendar: React.FC = () => {
     return matchStatus && matchSearch;
   });
 
-  const filteredEvents = events.filter((e) => {
-    const matchType =
-      eventTypeFilter === "all" || e.event_type === eventTypeFilter;
-    const q = search.toLowerCase();
-    const matchSearch =
-      !q ||
-      e.title.toLowerCase().includes(q) ||
-      (e.linked_client_name ?? "").toLowerCase().includes(q) ||
-      (e.linked_person_name ?? "").toLowerCase().includes(q);
-    return matchType && matchSearch;
-  });
+  // Events are filtered/sorted server-side; no client-side filter needed.
+  const filteredEvents = events;
 
   // Stats
   const upcomingMeetings = meetings.filter(
@@ -2790,7 +3004,17 @@ const AdminCalendar: React.FC = () => {
               <Button
                 onClick={() => {
                   dispatch(fetchScheduledMeetings());
-                  dispatch(fetchCalendarEvents());
+                  if (activeTab === "calendar") {
+                    doFetchCalendarView(calendarViewDate);
+                  } else {
+                    doFetchEvents({
+                      search,
+                      sort_by: eventSortBy,
+                      sort_order: eventSortDir,
+                      event_type: eventTypeFilter,
+                      page: eventPage,
+                    });
+                  }
                 }}
                 variant="ghost"
                 size="sm"
@@ -2894,7 +3118,20 @@ const AdminCalendar: React.FC = () => {
             ).map((tab) => (
               <button
                 key={tab.value}
-                onClick={() => setActiveTab(tab.value)}
+                onClick={() => {
+                  setActiveTab(tab.value);
+                  if (tab.value === "calendar") {
+                    doFetchCalendarView(calendarViewDate);
+                  } else if (tab.value === "events") {
+                    doFetchEvents({
+                      sort_by: eventSortBy,
+                      sort_order: eventSortDir,
+                      event_type: eventTypeFilter,
+                      search,
+                      page: eventPage,
+                    });
+                  }
+                }}
                 className={cn(
                   "relative flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors select-none",
                   activeTab === tab.value
@@ -2940,6 +3177,8 @@ const AdminCalendar: React.FC = () => {
                     events={events}
                     onEditMeeting={setEditingMeeting}
                     onEditEvent={setEditingEvent}
+                    viewDate={calendarViewDate}
+                    onViewDateChange={handleCalendarViewDateChange}
                   />
                 )}
               </div>
@@ -3119,140 +3358,208 @@ const AdminCalendar: React.FC = () => {
 
           {/* ── Events Tab ── */}
           {activeTab === "events" && (
-            <div className="mt-4 flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pb-6">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
-                <div className="relative flex-1 max-w-xs">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search events…"
-                    className="pl-9 bg-muted/40 border-border text-foreground placeholder:text-muted-foreground"
-                  />
-                </div>
-                <Select
-                  value={eventTypeFilter}
-                  onValueChange={setEventTypeFilter}
-                >
-                  <SelectTrigger className="bg-muted/40 border-border text-foreground w-[180px]">
-                    <ListFilter className="h-4 w-4 mr-2" />
-                    <SelectValue placeholder="Event type" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                    <SelectItem
-                      value="all"
-                      className="text-foreground focus:bg-muted/50"
-                    >
-                      All types
-                    </SelectItem>
-                    {(
-                      Object.entries(EVENT_TYPE_CONFIG) as [
-                        CalendarEventType,
-                        (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
-                      ][]
-                    ).map(([type, cfg]) => (
+            <div className="mt-4 flex-1 min-h-0 overflow-y-auto">
+              <div className="flex flex-col gap-4 pb-6">
+                {/* Toolbar */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
+                  <div className="relative flex-1 max-w-xs">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      value={search}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSearch(val);
+                        setEventPage(1);
+                        doFetchEvents({
+                          search: val,
+                          sort_by: eventSortBy,
+                          sort_order: eventSortDir,
+                          event_type: eventTypeFilter,
+                          page: 1,
+                        });
+                      }}
+                      placeholder="Search events…"
+                      className="pl-9 bg-muted/40 border-border text-foreground placeholder:text-muted-foreground"
+                    />
+                  </div>
+                  <Select
+                    value={eventTypeFilter}
+                    onValueChange={(val) => {
+                      setEventTypeFilter(val);
+                      setEventPage(1);
+                      doFetchEvents({
+                        search,
+                        sort_by: eventSortBy,
+                        sort_order: eventSortDir,
+                        event_type: val,
+                        page: 1,
+                      });
+                    }}
+                  >
+                    <SelectTrigger className="bg-muted/40 border-border text-foreground w-[180px]">
+                      <ListFilter className="h-4 w-4 mr-2" />
+                      <SelectValue placeholder="Event type" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
                       <SelectItem
-                        key={type}
-                        value={type}
+                        value="all"
                         className="text-foreground focus:bg-muted/50"
                       >
-                        {cfg.label}
+                        All types
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  onClick={() => setShowCreateEvent(true)}
-                  size="sm"
-                  className="bg-primary hover:bg-primary/90 text-primary-foreground ml-auto"
-                >
-                  <Plus className="h-4 w-4 mr-1" /> Add Event
-                </Button>
-                {!isPartner && (
-                  <Button
-                    onClick={handleSyncBirthdays}
-                    disabled={isSyncingBirthdays}
-                    size="sm"
-                    variant="outline"
-                    className="border-pink-500/40 text-pink-300 hover:bg-pink-500/10"
-                  >
-                    {isSyncingBirthdays ? (
-                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    ) : (
-                      <Cake className="h-4 w-4 mr-1" />
-                    )}
-                    Sync Birthdays
-                  </Button>
-                )}
-              </div>
-
-              {/* Type chips legend */}
-              <div className="flex flex-wrap gap-2">
-                {(
-                  Object.entries(EVENT_TYPE_CONFIG) as [
-                    CalendarEventType,
-                    (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
-                  ][]
-                ).map(([type, cfg]) => {
-                  const Icon = cfg.icon;
-                  const count = events.filter(
-                    (e) => e.event_type === type,
-                  ).length;
-                  return count > 0 ? (
-                    <button
-                      key={type}
-                      onClick={() =>
-                        setEventTypeFilter(
-                          eventTypeFilter === type ? "all" : type,
-                        )
-                      }
-                      className={cn(
-                        "inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all",
-                        eventTypeFilter === type
-                          ? cfg.color
-                          : "border-border/50 bg-muted/30 text-muted-foreground hover:border-border",
-                      )}
-                    >
-                      <Icon className="h-3 w-3" /> {cfg.label}{" "}
-                      <Badge className="ml-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px] bg-current/20">
-                        {count}
-                      </Badge>
-                    </button>
-                  ) : null;
-                })}
-              </div>
-
-              {isLoadingEvents ? (
-                <div className="flex items-center justify-center py-20">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                </div>
-              ) : filteredEvents.length === 0 ? (
-                <div className="text-center py-16 text-muted-foreground">
-                  <Sparkles className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                  <p className="font-medium">No events yet</p>
-                  <p className="text-sm mt-1 mb-4">
-                    Add birthdays, anniversaries, and important dates
-                  </p>
+                      {(
+                        Object.entries(EVENT_TYPE_CONFIG) as [
+                          CalendarEventType,
+                          (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
+                        ][]
+                      ).map(([type, cfg]) => (
+                        <SelectItem
+                          key={type}
+                          value={type}
+                          className="text-foreground focus:bg-muted/50"
+                        >
+                          {cfg.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Button
                     onClick={() => setShowCreateEvent(true)}
                     size="sm"
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground ml-auto"
                   >
-                    <Plus className="h-4 w-4 mr-1" /> Add First Event
+                    <Plus className="h-4 w-4 mr-1" /> Add Event
                   </Button>
+                  {!isPartner && (
+                    <Button
+                      onClick={handleSyncBirthdays}
+                      disabled={isSyncingBirthdays}
+                      size="sm"
+                      variant="outline"
+                      className="border-pink-500/40 text-pink-300 hover:bg-pink-500/10"
+                    >
+                      {isSyncingBirthdays ? (
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                      ) : (
+                        <Cake className="h-4 w-4 mr-1" />
+                      )}
+                      Sync Birthdays
+                    </Button>
+                  )}
                 </div>
-              ) : (
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filteredEvents.map((e) => (
-                    <EventCard
-                      key={e.id}
-                      event={e}
-                      onEdit={setEditingEvent}
-                      onDelete={setDeletingEvent}
-                    />
-                  ))}
+
+                {/* Type chips legend */}
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    Object.entries(EVENT_TYPE_CONFIG) as [
+                      CalendarEventType,
+                      (typeof EVENT_TYPE_CONFIG)[CalendarEventType],
+                    ][]
+                  ).map(([type, cfg]) => {
+                    const Icon = cfg.icon;
+                    const count = events.filter(
+                      (e) => e.event_type === type,
+                    ).length;
+                    return count > 0 ? (
+                      <button
+                        key={type}
+                        onClick={() => {
+                          const next = eventTypeFilter === type ? "all" : type;
+                          setEventTypeFilter(next);
+                          setEventPage(1);
+                          doFetchEvents({
+                            search,
+                            sort_by: eventSortBy,
+                            sort_order: eventSortDir,
+                            event_type: next,
+                            page: 1,
+                          });
+                        }}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all",
+                          eventTypeFilter === type
+                            ? cfg.color
+                            : "border-border/50 bg-muted/30 text-muted-foreground hover:border-border",
+                        )}
+                      >
+                        <Icon className="h-3 w-3" /> {cfg.label}{" "}
+                        <Badge className="ml-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px] bg-current/20">
+                          {count}
+                        </Badge>
+                      </button>
+                    ) : null;
+                  })}
                 </div>
-              )}
+
+                {/* Events DataGrid */}
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <DataGrid<CalendarEvent>
+                    data={filteredEvents}
+                    columns={[
+                      ...EVENTS_COLUMNS,
+                      {
+                        key: "actions",
+                        label: "",
+                        shrink: true,
+                        render: (e) => (
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                              onClick={() => setEditingEvent(e)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                              onClick={() => setDeletingEvent(e)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ),
+                      },
+                    ]}
+                    rowKey={(e) => e.id}
+                    sortBy={eventSortBy}
+                    sortDir={eventSortDir}
+                    onSort={(key) => {
+                      const newDir =
+                        eventSortBy === key && eventSortDir === "ASC"
+                          ? "DESC"
+                          : "ASC";
+                      setEventSortBy(key);
+                      setEventSortDir(newDir);
+                      setEventPage(1);
+                      doFetchEvents({
+                        search,
+                        sort_by: key,
+                        sort_order: newDir,
+                        event_type: eventTypeFilter,
+                        page: 1,
+                      });
+                    }}
+                    pagination={eventsPagination}
+                    onPageChange={(page) => {
+                      setEventPage(page);
+                      doFetchEvents({
+                        search,
+                        sort_by: eventSortBy,
+                        sort_order: eventSortDir,
+                        event_type: eventTypeFilter,
+                        page,
+                      });
+                    }}
+                    isLoading={isLoadingEvents}
+                    emptyMessage="No events found"
+                    colSpan={6}
+                    noBleeding
+                  />
+                </div>
+              </div>
             </div>
           )}
 

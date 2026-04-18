@@ -2220,6 +2220,7 @@ export interface GetCalendarEventsResponse {
   success: boolean;
   events: CalendarEvent[];
   total: number;
+  pagination: PaginationInfo;
 }
 
 export interface CreateCalendarEventRequest {

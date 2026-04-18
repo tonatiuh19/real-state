@@ -19397,11 +19397,42 @@ function createServer() {
         tenant_id: number;
         role: string;
       };
-      const { from, to, event_type } = req.query as {
+      const {
+        from,
+        to,
+        event_type,
+        search,
+        sort_by,
+        sort_order,
+        page,
+        limit,
+        calendar_month,
+      } = req.query as {
         from?: string;
         to?: string;
         event_type?: string;
+        search?: string;
+        sort_by?: string;
+        sort_order?: string;
+        page?: string;
+        limit?: string;
+        /** YYYY-MM — calendar view mode: returns all events visible in that month,
+         *  including yearly-recurrence events matched by month/day regardless of year.
+         *  When present, pagination is skipped (limit set to 1000). */
+        calendar_month?: string;
       };
+
+      // calendar_month mode: fetch all visible events for that month (no pagination)
+      const isCalendarView = !!(
+        calendar_month && /^\d{4}-\d{2}$/.test(calendar_month)
+      );
+      const pageNum = isCalendarView
+        ? 1
+        : Math.max(1, parseInt(page ?? "1", 10));
+      const limitNum = isCalendarView
+        ? 1000
+        : Math.min(100, Math.max(1, parseInt(limit ?? "25", 10)));
+      const offset = (pageNum - 1) * limitNum;
 
       const conditions: string[] = ["ce.tenant_id = ?"];
       const params: any[] = [broker.tenant_id];
@@ -19416,28 +19447,76 @@ function createServer() {
         params.push(broker.id, broker.tenant_id, broker.id);
       }
 
-      if (from) {
-        conditions.push("ce.event_date >= ?");
-        params.push(from);
-      }
-      if (to) {
-        conditions.push("ce.event_date <= ?");
-        params.push(to);
+      if (isCalendarView) {
+        // For the calendar grid: yearly-recurring events match by month only (projected
+        // to any year); non-recurring events must fall within the calendar month.
+        const [yyyy, mm] = calendar_month!.split("-");
+        const monthNum = parseInt(mm, 10);
+        const firstDay = `${yyyy}-${mm}-01`;
+        // Last day of month
+        const lastDay = new Date(parseInt(yyyy, 10), monthNum, 0)
+          .toISOString()
+          .slice(0, 10);
+        conditions.push(
+          `(
+            (ce.recurrence = 'yearly' AND MONTH(ce.event_date) = ?)
+            OR
+            (ce.recurrence != 'yearly' AND ce.event_date BETWEEN ? AND ?)
+          )`,
+        );
+        params.push(monthNum, firstDay, lastDay);
+      } else {
+        if (from) {
+          conditions.push("ce.event_date >= ?");
+          params.push(from);
+        }
+        if (to) {
+          conditions.push("ce.event_date <= ?");
+          params.push(to);
+        }
       }
       if (event_type && event_type !== "all") {
         conditions.push("ce.event_type = ?");
         params.push(event_type);
       }
+      if (search && search.trim()) {
+        conditions.push(
+          `(ce.title LIKE ? OR CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR ce.linked_person_name LIKE ?)`,
+        );
+        const like = `%${search.trim()}%`;
+        params.push(like, like, like);
+      }
+
+      const allowedSortColumns: Record<string, string> = {
+        event_date: "ce.event_date",
+        title: "ce.title",
+        event_type: "ce.event_type",
+        linked_client_name: "linked_client_name",
+        recurrence: "ce.recurrence",
+      };
+      const orderCol = allowedSortColumns[sort_by ?? ""] ?? "ce.event_date";
+      const orderDir = sort_order?.toUpperCase() === "DESC" ? "DESC" : "ASC";
 
       const where = conditions.join(" AND ");
+
+      // Total count (reuse same WHERE but no JOIN needed for count)
+      const [[{ total }]] = (await pool.query(
+        `SELECT COUNT(*) AS total
+         FROM calendar_events ce
+         LEFT JOIN clients c ON c.id = ce.linked_client_id
+         WHERE ${where}`,
+        params,
+      )) as any;
+
       const [rows] = await pool.query(
         `SELECT ce.*,
                 CONCAT(c.first_name, ' ', c.last_name) AS linked_client_name
          FROM calendar_events ce
          LEFT JOIN clients c ON c.id = ce.linked_client_id
          WHERE ${where}
-         ORDER BY ce.event_date ASC, ce.event_time ASC`,
-        params,
+         ORDER BY ${orderCol} ${orderDir}, ce.event_time ASC
+         LIMIT ? OFFSET ?`,
+        [...params, limitNum, offset],
       );
 
       const events = (rows as any[]).map((r) => ({
@@ -19445,7 +19524,17 @@ function createServer() {
         all_day: r.all_day === 1 || r.all_day === true,
       }));
 
-      res.json({ success: true, events, total: events.length });
+      res.json({
+        success: true,
+        events,
+        total: Number(total),
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: Number(total),
+          totalPages: Math.ceil(Number(total) / limitNum),
+        },
+      });
     } catch (err) {
       console.error("handleGetCalendarEvents error:", err);
       res.status(500).json({ success: false, error: "Internal server error" });
