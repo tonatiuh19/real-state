@@ -2117,10 +2117,35 @@ export interface BookMeetingResponse {
   broker_name: string;
 }
 
+export interface SchedulerBlockedRange {
+  id: number;
+  broker_id: number;
+  start_datetime: string; // ISO string "YYYY-MM-DDTHH:MM:SS"
+  end_datetime: string;
+  label: string | null;
+  created_at: string;
+}
+
 export interface GetSchedulerSettingsResponse {
   success: boolean;
   settings: SchedulerSettings;
   availability: SchedulerAvailability[];
+}
+
+export interface GetBlockedRangesResponse {
+  success: boolean;
+  blocked_ranges: SchedulerBlockedRange[];
+}
+
+export interface AddBlockedRangeRequest {
+  start_datetime: string; // "YYYY-MM-DDTHH:MM"
+  end_datetime: string;
+  label: string;
+}
+
+export interface AddBlockedRangeResponse {
+  success: boolean;
+  blocked_range: SchedulerBlockedRange;
 }
 
 export interface UpdateSchedulerSettingsRequest {

@@ -9,7 +9,11 @@ import type {
   SchedulerSettings,
   SchedulerAvailability,
   ScheduledMeeting,
+  SchedulerBlockedRange,
   GetSchedulerSettingsResponse,
+  GetBlockedRangesResponse,
+  AddBlockedRangeRequest,
+  AddBlockedRangeResponse,
   GetScheduledMeetingsResponse,
   UpdateSchedulerSettingsRequest,
   UpdateMeetingRequest,
@@ -34,6 +38,11 @@ interface SchedulerState {
   isCreatingMeeting: boolean;
   error: string | null;
 
+  // Blocked ranges
+  blockedRanges: SchedulerBlockedRange[];
+  isLoadingBlockedRanges: boolean;
+  isSavingBlockedRange: boolean;
+
   // Public booking flow
   publicBroker: PublicSchedulerBrokerInfo | null;
   availableDates: string[];
@@ -57,6 +66,10 @@ const initialState: SchedulerState = {
   isUpdatingMeeting: false,
   isCreatingMeeting: false,
   error: null,
+
+  blockedRanges: [],
+  isLoadingBlockedRanges: false,
+  isSavingBlockedRange: false,
 
   publicBroker: null,
   availableDates: [],
@@ -434,6 +447,43 @@ const schedulerSlice = createSlice({
         state.isCreatingMeeting = false;
         state.error = action.payload as string;
       });
+
+    // fetchBlockedRanges
+    builder
+      .addCase(fetchBlockedRanges.pending, (state) => {
+        state.isLoadingBlockedRanges = true;
+      })
+      .addCase(fetchBlockedRanges.fulfilled, (state, action) => {
+        state.isLoadingBlockedRanges = false;
+        state.blockedRanges = action.payload;
+      })
+      .addCase(fetchBlockedRanges.rejected, (state) => {
+        state.isLoadingBlockedRanges = false;
+      });
+
+    // addBlockedRange
+    builder
+      .addCase(addBlockedRange.pending, (state) => {
+        state.isSavingBlockedRange = true;
+      })
+      .addCase(addBlockedRange.fulfilled, (state, action) => {
+        state.isSavingBlockedRange = false;
+        state.blockedRanges = [...state.blockedRanges, action.payload].sort(
+          (a, b) =>
+            new Date(a.start_datetime).getTime() -
+            new Date(b.start_datetime).getTime(),
+        );
+      })
+      .addCase(addBlockedRange.rejected, (state) => {
+        state.isSavingBlockedRange = false;
+      });
+
+    // deleteBlockedRange
+    builder.addCase(deleteBlockedRange.fulfilled, (state, action) => {
+      state.blockedRanges = state.blockedRanges.filter(
+        (r) => r.id !== action.payload,
+      );
+    });
   },
 });
 
@@ -443,5 +493,66 @@ export const {
   clearPublicError,
   clearError,
 } = schedulerSlice.actions;
+
+// ---------------------------------------------------------------
+// Blocked ranges thunks
+// ---------------------------------------------------------------
+
+export const fetchBlockedRanges = createAsyncThunk(
+  "scheduler/fetchBlockedRanges",
+  async (_: void, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetBlockedRangesResponse>(
+        "/api/scheduler/blocked-ranges",
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data.blocked_ranges;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch blocked ranges",
+      );
+    }
+  },
+);
+
+export const addBlockedRange = createAsyncThunk(
+  "scheduler/addBlockedRange",
+  async (payload: AddBlockedRangeRequest, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<AddBlockedRangeResponse>(
+        "/api/scheduler/blocked-ranges",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data.blocked_range;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to add blocked range",
+      );
+    }
+  },
+);
+
+export const deleteBlockedRange = createAsyncThunk(
+  "scheduler/deleteBlockedRange",
+  async (id: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.delete(`/api/scheduler/blocked-ranges/${id}`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return id;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to delete blocked range",
+      );
+    }
+  },
+);
+
+// Patch blocked range reducers into the slice extraReducers
+// (attached below via the builder pattern in the slice definition)
 
 export default schedulerSlice.reducer;

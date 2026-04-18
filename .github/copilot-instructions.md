@@ -31,6 +31,46 @@
 - **If any database update is made based on schema.sql, generate a migration file** in `database/migrations/` with timestamp prefix (e.g., `YYYYMMDD_HHMMSS_description.sql`) for **TiDB Cloud Serverless** (MySQL 8.0 compatible)
 - **If a type issue is generated, fix it immediately** - ensure all TypeScript types are correct and consistent across client, api/index.ts, and shared
 
+### Running Migrations (TiDB Cloud)
+
+DB credentials are in `.env` at the project root. To apply a migration:
+
+```bash
+# 1. Check if already applied (table check example)
+DB_PASS=$(grep "^DB_PASSWORD" .env | cut -d'=' -f2-) && \
+DB_HOST=$(grep "^DB_HOST" .env | cut -d'=' -f2-) && \
+DB_PORT=$(grep "^DB_PORT" .env | cut -d'=' -f2-) && \
+DB_USER=$(grep "^DB_USER" .env | cut -d'=' -f2-) && \
+DB_NAME=$(grep "^DB_NAME" .env | cut -d'=' -f2-) && \
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  --ssl-mode=REQUIRED --protocol=TCP \
+  -e "SHOW TABLES LIKE 'your_table_name';" 2>&1
+
+# 2. Apply the migration
+DB_PASS=$(grep "^DB_PASSWORD" .env | cut -d'=' -f2-) && \
+DB_HOST=$(grep "^DB_HOST" .env | cut -d'=' -f2-) && \
+DB_PORT=$(grep "^DB_PORT" .env | cut -d'=' -f2-) && \
+DB_USER=$(grep "^DB_USER" .env | cut -d'=' -f2-) && \
+DB_NAME=$(grep "^DB_NAME" .env | cut -d'=' -f2-) && \
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  --ssl-mode=REQUIRED --protocol=TCP \
+  < database/migrations/YOUR_MIGRATION_FILE.sql 2>&1
+
+# 3. Verify
+DB_PASS=$(grep "^DB_PASSWORD" .env | cut -d'=' -f2-) && \
+DB_HOST=$(grep "^DB_HOST" .env | cut -d'=' -f2-) && \
+DB_PORT=$(grep "^DB_PORT" .env | cut -d'=' -f2-) && \
+DB_USER=$(grep "^DB_USER" .env | cut -d'=' -f2-) && \
+DB_NAME=$(grep "^DB_NAME" .env | cut -d'=' -f2-) && \
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  --ssl-mode=REQUIRED --protocol=TCP \
+  -e "DESCRIBE your_table_name;" 2>&1
+```
+
+- All DB connection values are in `.env` (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME)
+- Always use `--ssl-mode=REQUIRED --protocol=TCP`
+- After applying, **update `database/schema.sql`** to reflect the new table/column
+
 ## Project Structure
 
 ### Client (Frontend)

@@ -17782,6 +17782,15 @@ function createServer() {
       [brokerId, dateStr],
     );
 
+    // Fetch blocked ranges that overlap this date
+    const dayStart = `${dateStr} 00:00:00`;
+    const dayEnd = `${dateStr} 23:59:59`;
+    const [blockedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT start_datetime, end_datetime FROM scheduler_blocked_ranges
+       WHERE broker_id = ? AND start_datetime <= ? AND end_datetime >= ?`,
+      [brokerId, dayEnd, dayStart],
+    );
+
     const now = new Date();
     const minBookingMs = minBookingHours * 60 * 60 * 1000;
 
@@ -17818,10 +17827,33 @@ function createServer() {
           return cursor < bookedEnd && cursor + slotMinutes > bookedStart;
         });
 
+        // Check for conflict with broker-blocked ranges.
+        // mysql2 returns DATETIME columns as UTC Date objects (timezone: '+00:00'),
+        // so use getUTC* to recover the original stored hour/minute values.
+        const blocked = blockedRows.some((br) => {
+          const brStart =
+            br.start_datetime instanceof Date
+              ? br.start_datetime
+              : new Date(br.start_datetime as string);
+          const brEnd =
+            br.end_datetime instanceof Date
+              ? br.end_datetime
+              : new Date(br.end_datetime as string);
+          const brStartMin =
+            brStart.getUTCHours() * 60 + brStart.getUTCMinutes();
+          const brEndMin = brEnd.getUTCHours() * 60 + brEnd.getUTCMinutes();
+          // Treat as a whole-day block if it spans the entire calendar day
+          const isWholeDay =
+            brStart <= new Date(`${dateStr}T00:00:00.000Z`) &&
+            brEnd >= new Date(`${dateStr}T23:59:59.000Z`);
+          if (isWholeDay) return true;
+          return cursor < brEndMin && cursor + slotMinutes > brStartMin;
+        });
+
         slots.push({
           time: slotTime,
           end_time: slotEndTime,
-          available: !tooSoon && !conflict,
+          available: !tooSoon && !conflict && !blocked,
         });
 
         cursor += slotMinutes;
@@ -19216,6 +19248,144 @@ function createServer() {
     "/api/scheduler/meetings/:meetingId",
     verifyBrokerSession,
     handleUpdateScheduledMeeting,
+  );
+
+  // ─── Scheduler Blocked Ranges ─────────────────────────────────────────────
+
+  // mysql2 with timezone:'+00:00' returns DATETIME columns as UTC Date objects.
+  // Serialising them directly via res.json() appends a 'Z' suffix, which causes
+  // the client to shift the value by the user's UTC offset. Instead we return a
+  // plain local-time string (no 'Z'), so parseISO on the client treats it as
+  // local time and displays the value the broker originally entered.
+  const dtStr = (d: Date | string | null | undefined): string => {
+    if (!d) return "";
+    if (typeof d === "string") return d;
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  };
+
+  const serializeBlockedRange = (row: RowDataPacket) => ({
+    ...row,
+    start_datetime: dtStr(row.start_datetime as Date | string),
+    end_datetime: dtStr(row.end_datetime as Date | string),
+  });
+
+  const handleGetBlockedRanges: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as { id: number };
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, broker_id, start_datetime, end_datetime, label, created_at
+         FROM scheduler_blocked_ranges
+         WHERE broker_id = ? AND tenant_id = ?
+         ORDER BY start_datetime ASC`,
+        [broker.id, MORTGAGE_TENANT_ID],
+      );
+      return res.json({
+        success: true,
+        blocked_ranges: rows.map(serializeBlockedRange),
+      });
+    } catch (err) {
+      console.error("handleGetBlockedRanges error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleAddBlockedRange: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as { id: number };
+      const { start_datetime, end_datetime, label } = req.body as {
+        start_datetime: string;
+        end_datetime: string;
+        label: string;
+      };
+
+      if (!start_datetime || !end_datetime || !label?.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "start_datetime, end_datetime, and label are required",
+        });
+      }
+
+      if (new Date(end_datetime) <= new Date(start_datetime)) {
+        return res.status(400).json({
+          success: false,
+          error: "end_datetime must be after start_datetime",
+        });
+      }
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO scheduler_blocked_ranges
+           (tenant_id, broker_id, start_datetime, end_datetime, label)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          broker.id,
+          start_datetime,
+          end_datetime,
+          label || null,
+        ],
+      );
+
+      const [[newRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT id, broker_id, start_datetime, end_datetime, label, created_at
+         FROM scheduler_blocked_ranges WHERE id = ?`,
+        [result.insertId],
+      );
+
+      return res.json({
+        success: true,
+        blocked_range: serializeBlockedRange(newRow),
+      });
+    } catch (err) {
+      console.error("handleAddBlockedRange error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleDeleteBlockedRange: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as { id: number };
+      const { id } = req.params as { id: string };
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `DELETE FROM scheduler_blocked_ranges
+         WHERE id = ? AND broker_id = ? AND tenant_id = ?`,
+        [id, broker.id, MORTGAGE_TENANT_ID],
+      );
+
+      if (result.affectedRows === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Blocked range not found" });
+      }
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("handleDeleteBlockedRange error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  expressApp.get(
+    "/api/scheduler/blocked-ranges",
+    verifyBrokerSession,
+    handleGetBlockedRanges,
+  );
+  expressApp.post(
+    "/api/scheduler/blocked-ranges",
+    verifyBrokerSession,
+    handleAddBlockedRange,
+  );
+  expressApp.delete(
+    "/api/scheduler/blocked-ranges/:id",
+    verifyBrokerSession,
+    handleDeleteBlockedRange,
   );
 
   // ─── Calendar Events ─────────────────────────────────────────────────────

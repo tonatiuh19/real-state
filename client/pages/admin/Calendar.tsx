@@ -36,6 +36,9 @@ import {
   X,
   Lock,
   MapPin,
+  ChevronDown,
+  Info,
+  Dot,
 } from "lucide-react";
 import {
   format,
@@ -106,6 +109,9 @@ import {
   updateScheduledMeeting,
   createScheduledMeeting,
   clearError as clearSchedulerError,
+  fetchBlockedRanges,
+  addBlockedRange,
+  deleteBlockedRange,
 } from "@/store/slices/schedulerSlice";
 import {
   fetchCalendarEvents,
@@ -1904,20 +1910,32 @@ function CreateMeetingDialog({
 
 function SettingsPanel() {
   const dispatch = useAppDispatch();
-  const { settings, availability, isLoadingSettings, isSavingSettings } =
-    useAppSelector((s) => s.scheduler);
+  const {
+    settings,
+    availability,
+    isLoadingSettings,
+    isSavingSettings,
+    blockedRanges,
+    isLoadingBlockedRanges,
+    isSavingBlockedRange,
+  } = useAppSelector((s) => s.scheduler);
   const { user: authUser } = useAppSelector((s) => s.brokerAuth);
-  const { brokers } = useAppSelector((s) => s.brokers);
-  const isAdmin = authUser?.role === "admin";
   const [localAvailability, setLocalAvailability] = useState<
     SchedulerAvailability[]
   >([]);
   const [saved, setSaved] = useState(false);
-  const [copiedBrokerId, setCopiedBrokerId] = useState<number | null>(null);
+  const [availabilityDirty, setAvailabilityDirty] = useState(false);
+
+  // Blocked range form state
+  const [blockStart, setBlockStart] = useState("");
+  const [blockEnd, setBlockEnd] = useState("");
+  const [blockLabel, setBlockLabel] = useState("");
+  const [blockError, setBlockError] = useState<string | null>(null);
+  const [rulesInfoOpen, setRulesInfoOpen] = useState(false);
 
   useEffect(() => {
-    if (isAdmin && brokers.length === 0) dispatch(fetchBrokers({}));
-  }, [isAdmin]); // eslint-disable-line
+    dispatch(fetchBlockedRanges());
+  }, [dispatch]);
 
   useEffect(() => {
     setLocalAvailability(
@@ -1953,33 +1971,30 @@ function SettingsPanel() {
         }),
       );
       setSaved(true);
+      setAvailabilityDirty(false);
       setTimeout(() => setSaved(false), 2000);
       dispatch(fetchSchedulerSettings());
+      formik.resetForm({ values });
     },
   });
 
-  const toggleDay = (d: number) =>
+  const toggleDay = (d: number) => {
+    setAvailabilityDirty(true);
     setLocalAvailability((p) =>
       p.map((a) =>
         a.day_of_week === d ? { ...a, is_active: !a.is_active } : a,
       ),
     );
-  const updateDayTime = (d: number, f: "start_time" | "end_time", v: string) =>
+  };
+  const updateDayTime = (
+    d: number,
+    f: "start_time" | "end_time",
+    v: string,
+  ) => {
+    setAvailabilityDirty(true);
     setLocalAvailability((p) =>
       p.map((a) => (a.day_of_week === d ? { ...a, [f]: v + ":00" } : a)),
     );
-
-  const portalOrigin =
-    window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1"
-      ? window.location.origin
-      : `https://portal.encoremortgage.org`;
-
-  const handleCopyLink = (id: number, token: string | null | undefined) => {
-    if (!token) return;
-    navigator.clipboard.writeText(`${portalOrigin}/scheduler/${token}`);
-    setCopiedBrokerId(id);
-    setTimeout(() => setCopiedBrokerId(null), 2000);
   };
 
   if (isLoadingSettings)
@@ -1989,8 +2004,45 @@ function SettingsPanel() {
       </div>
     );
 
+  const isFormDirty = formik.dirty || availabilityDirty;
+
   return (
     <form onSubmit={formik.handleSubmit} className="space-y-6 max-w-2xl">
+      {/* ── Sticky save header ───────────────────────────────────────── */}
+      <div className="flex items-center justify-between pb-2 border-b border-border/50">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">
+            Scheduling Rules
+          </h2>
+          {isFormDirty && !saved && (
+            <p className="text-xs text-amber-500 mt-0.5">
+              You have unsaved changes
+            </p>
+          )}
+        </div>
+        <Button
+          type="submit"
+          disabled={isSavingSettings || !isFormDirty}
+          size="sm"
+          className="bg-primary hover:bg-primary/90 text-primary-foreground disabled:opacity-40"
+        >
+          {isSavingSettings ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Saving…
+            </>
+          ) : saved ? (
+            <>
+              <CheckCircle2 className="h-3.5 w-3.5 mr-1.5 text-green-400" />{" "}
+              Saved!
+            </>
+          ) : (
+            <>
+              <Save className="h-3.5 w-3.5 mr-1.5" /> Save Settings
+            </>
+          )}
+        </Button>
+      </div>
+
       {/* Enable */}
       <div className="rounded-xl border border-border/50 bg-muted/30 p-5">
         <div className="flex items-center justify-between">
@@ -2146,6 +2198,97 @@ function SettingsPanel() {
             </SelectContent>
           </Select>
         </div>
+
+        {/* Collapsible: how these settings affect client slot availability */}
+        <div className="rounded-lg border border-border/60 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setRulesInfoOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/40 transition-colors"
+          >
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              How do these rules affect client availability?
+            </span>
+            <ChevronDown
+              className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${
+                rulesInfoOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {rulesInfoOpen && (
+              <motion.div
+                key="info"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+                className="overflow-hidden"
+              >
+                <div className="px-4 pb-4 pt-1 space-y-3 text-xs text-muted-foreground border-t border-border/60 bg-muted/20">
+                  <ul className="space-y-2 list-none">
+                    <li className="flex gap-1.5">
+                      <Dot className="h-4 w-4 shrink-0 text-primary mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">
+                          Slot Duration
+                        </span>{" "}
+                        — each bookable time block shown to clients. E.g. 30 min
+                        → slots at 9:00, 9:30, 10:00…
+                      </span>
+                    </li>
+                    <li className="flex gap-1.5">
+                      <Dot className="h-4 w-4 shrink-0 text-primary mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">
+                          Buffer Between
+                        </span>{" "}
+                        — gap blocked before and after each confirmed meeting.
+                        E.g. 15 min buffer around a 2:00 PM meeting greys out
+                        1:30 PM and 2:30 PM for clients.
+                      </span>
+                    </li>
+                    <li className="flex gap-1.5">
+                      <Dot className="h-4 w-4 shrink-0 text-primary mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">
+                          Min Notice
+                        </span>{" "}
+                        — clients cannot book within this many hours from now.
+                        E.g. 2 hrs = nothing bookable in the next 2 hours.
+                      </span>
+                    </li>
+                    <li className="flex gap-1.5">
+                      <Dot className="h-4 w-4 shrink-0 text-primary mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">
+                          Advance Booking
+                        </span>{" "}
+                        — how many days ahead clients can see available dates.
+                      </span>
+                    </li>
+                  </ul>
+                  {formik.values.buffer_time_minutes > 0 &&
+                    formik.values.slot_duration_minutes > 0 && (
+                      <div className="rounded-md bg-primary/8 border border-primary/20 px-3 py-2 text-primary/80 font-medium">
+                        Your current settings: a{" "}
+                        {formik.values.slot_duration_minutes}-min meeting (+{" "}
+                        {formik.values.buffer_time_minutes} min buffer each
+                        side) reserves{" "}
+                        <span className="font-bold text-primary">
+                          {formik.values.slot_duration_minutes +
+                            formik.values.buffer_time_minutes * 2}{" "}
+                          min
+                        </span>{" "}
+                        of your calendar per booking.
+                      </div>
+                    )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       {/* Connection methods */}
@@ -2261,100 +2404,148 @@ function SettingsPanel() {
         </div>
       </div>
 
-      <Button
-        type="submit"
-        disabled={isSavingSettings}
-        className="bg-primary hover:bg-primary/90 text-primary-foreground px-8"
-      >
-        {isSavingSettings ? (
-          <>
-            <Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…
-          </>
-        ) : saved ? (
-          <>
-            <CheckCircle2 className="h-4 w-4 mr-2 text-green-400" /> Saved!
-          </>
-        ) : (
-          <>
-            <Save className="h-4 w-4 mr-2" /> Save Settings
-          </>
-        )}
-      </Button>
+      {/* ── Blocked Date/Time Ranges ─────────────────────────────────── */}
+      <div className="mt-8 pt-6 border-t border-border/50">
+        <h3 className="text-base font-semibold text-foreground mb-1 flex items-center gap-2">
+          <Lock className="h-4 w-4 text-primary" /> Blocked Date/Time Ranges
+        </h3>
+        <p className="text-muted-foreground text-sm mb-4">
+          Block specific date/time windows so clients cannot schedule in those
+          slots. Great for vacations, personal appointments, or other
+          commitments.
+        </p>
 
-      {/* Partner links — admin only */}
-      {isAdmin && (
-        <div className="mt-8 pt-6 border-t border-border/50">
-          <h3 className="text-base font-semibold text-foreground mb-1 flex items-center gap-2">
-            <User className="h-4 w-4 text-primary" /> Partner Booking Links
-          </h3>
-          <p className="text-muted-foreground text-sm mb-4">
-            Copy personalised booking links for active brokers.
-          </p>
-          <div className="space-y-2">
-            {brokers
-              .filter((b) => b.status === "active")
-              .map((b) => {
-                const link = b.public_token
-                  ? `${portalOrigin}/scheduler/${b.public_token}`
-                  : null;
-                const isCopied = copiedBrokerId === b.id;
-                return (
-                  <div
-                    key={b.id}
-                    className="flex items-center gap-3 rounded-lg border border-border/50 bg-muted/30 px-4 py-3"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">
-                        {b.first_name} {b.last_name}{" "}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {b.role === "broker" ? "Partner" : "Mortgage Banker"}
-                        </span>
-                      </p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {link ?? "No public token"}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={!link}
-                      onClick={() => handleCopyLink(b.id, b.public_token)}
-                      className={cn(
-                        "shrink-0 text-xs",
-                        isCopied
-                          ? "text-green-400"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {isCopied ? (
-                        <>
-                          <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Copied!
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5 mr-1" /> Copy
-                        </>
-                      )}
-                    </Button>
-                    {link && (
-                      <a href={link} target="_blank" rel="noopener noreferrer">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="shrink-0 text-muted-foreground hover:text-foreground text-xs"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5 mr-1" /> Preview
-                        </Button>
-                      </a>
-                    )}
-                  </div>
-                );
-              })}
+        {/* Add new block form */}
+        <div className="bg-muted/30 rounded-lg p-4 mb-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Start
+              </label>
+              <Input
+                type="datetime-local"
+                value={blockStart}
+                onChange={(e) => {
+                  setBlockStart(e.target.value);
+                  setBlockError(null);
+                }}
+                className="bg-muted/40 border-border text-foreground text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                End
+              </label>
+              <Input
+                type="datetime-local"
+                value={blockEnd}
+                onChange={(e) => {
+                  setBlockEnd(e.target.value);
+                  setBlockError(null);
+                }}
+                className="bg-muted/40 border-border text-foreground text-sm"
+              />
+            </div>
           </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Label
+            </label>
+            <Input
+              type="text"
+              placeholder="e.g. Vacation, Doctor Appointment…"
+              value={blockLabel}
+              onChange={(e) => setBlockLabel(e.target.value)}
+              required
+              className="bg-muted/40 border-border text-foreground text-sm"
+            />
+          </div>
+          {blockError && (
+            <p className="text-destructive text-xs flex items-center gap-1">
+              <AlertCircle className="h-3.5 w-3.5" /> {blockError}
+            </p>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            disabled={isSavingBlockedRange}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground"
+            onClick={async () => {
+              if (!blockStart || !blockEnd || !blockLabel.trim()) {
+                setBlockError("Please fill in start, end, and label.");
+                return;
+              }
+              if (new Date(blockEnd) <= new Date(blockStart)) {
+                setBlockError("End must be after start.");
+                return;
+              }
+              setBlockError(null);
+              await dispatch(
+                addBlockedRange({
+                  start_datetime: blockStart,
+                  end_datetime: blockEnd,
+                  label: blockLabel || undefined,
+                }),
+              );
+              setBlockStart("");
+              setBlockEnd("");
+              setBlockLabel("");
+            }}
+          >
+            {isSavingBlockedRange ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Plus className="h-4 w-4 mr-2" />
+            )}
+            Add Block
+          </Button>
         </div>
-      )}
+
+        {/* Existing blocked ranges list */}
+        {isLoadingBlockedRanges ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm py-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </div>
+        ) : blockedRanges.length === 0 ? (
+          <p className="text-muted-foreground text-sm italic">
+            No blocked ranges set.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {blockedRanges.map((br) => (
+              <div
+                key={br.id}
+                className="flex items-center justify-between bg-muted/20 border border-border/40 rounded-lg px-4 py-2.5 gap-3"
+              >
+                <div className="flex items-start gap-2 min-w-0">
+                  <Lock className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">
+                      {br.label || "Blocked"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {format(
+                        parseISO(br.start_datetime),
+                        "MMM d, yyyy h:mm a",
+                      )}{" "}
+                      &rarr;{" "}
+                      {format(parseISO(br.end_datetime), "MMM d, yyyy h:mm a")}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dispatch(deleteBlockedRange(br.id))}
+                  className="shrink-0 p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                  title="Remove block"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </form>
   );
 }
