@@ -297,7 +297,7 @@ const Clients = () => {
               <div className="relative w-full sm:max-w-xs">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search clients..."
+                  placeholder="Search by name, email, or phone..."
                   className="pl-9"
                   value={searchQuery}
                   onChange={(e) => handleSearch(e.target.value)}

@@ -92,6 +92,11 @@ const GlobalVoiceManager: React.FC = () => {
       device = new Device(token, {
         logLevel: 1,
         codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
+        closeProtection: true,
+        maxAverageBitrate: 40000,
+        enableImprovedSignalingErrorPrecision: true,
+        // Allow inbound ringing even while in an active call
+        allowIncomingWhileBusy: true,
       });
       deviceRef.current = device;
 

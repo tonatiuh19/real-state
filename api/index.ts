@@ -293,6 +293,8 @@ async function upsertConversationThread(params: {
          last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
          message_count        = message_count + 1,
          unread_count         = unread_count + ?,
+         client_id            = COALESCE(client_id, ?),
+         broker_id            = COALESCE(broker_id, ?),
          client_name          = COALESCE(client_name, ?),
          client_phone         = COALESCE(client_phone, ?),
          client_email         = COALESCE(client_email, ?),
@@ -316,6 +318,8 @@ async function upsertConversationThread(params: {
         preview,
         communicationType,
         unreadDelta,
+        resolvedClientId,
+        resolvedBrokerId,
         clientName,
         clientPhone,
         clientEmail,
@@ -323,7 +327,10 @@ async function upsertConversationThread(params: {
       ],
     );
   } catch (err) {
+    // Re-throw so callers know the upsert failed and can surface the error
+    // rather than silently returning a success response with no thread.
     console.error("upsertConversationThread error:", err);
+    throw err;
   }
 }
 
@@ -374,6 +381,7 @@ async function sendSMSMessage(
       body,
       to: normalizedPhone,
       from: from || process.env.TWILIO_PHONE_NUMBER,
+      statusCallback: `${getBaseUrl()}/api/webhooks/sms-status`,
       ...metadata,
     });
 
@@ -5514,7 +5522,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
     };
     const safeSortBy = SORT_MAP[sortBy] ?? "c.created_at";
 
-    const baseWhere = `WHERE c.tenant_id = ?${isAdmin ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)" : ""}`;
+    const baseWhere = `WHERE c.tenant_id = ?${isAdmin ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR REGEXP_REPLACE(c.phone, '[^0-9]', '') LIKE ?)" : ""}`;
 
     const filterParams: any[] = isAdmin
       ? [MORTGAGE_TENANT_ID]
@@ -5522,7 +5530,9 @@ const handleGetClients: RequestHandler = async (req, res) => {
     if (sourceFilter) filterParams.push(sourceFilter);
     if (search) {
       const like = `%${search}%`;
-      filterParams.push(like, like, like, like);
+      const digitsOnly = search.replace(/\D/g, "");
+      const digitsLike = digitsOnly ? `%${digitsOnly}%` : like;
+      filterParams.push(like, like, like, like, digitsLike);
     }
 
     const [[countRow]] = await pool.query<any[]>(
@@ -11735,20 +11745,27 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
       ],
     );
 
-    await upsertConversationThread({
-      tenantId: MORTGAGE_TENANT_ID,
-      commId: 0,
-      conversationId,
-      applicationId: applicationId || null,
-      leadId: leadId || null,
-      fromUserId: clientId || null,
-      fromBrokerId: null,
-      toUserId: null,
-      toBrokerId: brokerId || null,
-      communicationType: "email",
-      direction: "inbound",
-      body,
-    });
+    try {
+      await upsertConversationThread({
+        tenantId: MORTGAGE_TENANT_ID,
+        commId: 0,
+        conversationId,
+        applicationId: applicationId || null,
+        leadId: leadId || null,
+        fromUserId: clientId || null,
+        fromBrokerId: null,
+        toUserId: null,
+        toBrokerId: brokerId || null,
+        communicationType: "email",
+        direction: "inbound",
+        body,
+      });
+    } catch (upsertErr) {
+      console.error(
+        "⚠️  upsertConversationThread failed for inbound email:",
+        upsertErr,
+      );
+    }
 
     console.log(
       `📥 Inbound email stored: conv=${conversationId} from=${fromAddress}`,
@@ -11851,7 +11868,13 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     const toPhone = toRaw.replace(/[^\d+]/g, "") || null; // The Twilio number that received this SMS
 
     // ── Find the client by phone number ──────────────────────────────────────
-    // We try an exact match first, then strip country code (+1 prefix) as fallback.
+    // Strip ALL non-digit characters from both sides so any stored format
+    // ((323) 475-6240, 323-475-6240, 3234756240, +13234756240, etc.) all match.
+    const fromDigits = fromPhone.replace(/\D/g, ""); // e.g. "13234756240"
+    const fromDigits10 =
+      fromDigits.length === 11 && fromDigits.startsWith("1")
+        ? fromDigits.slice(1) // strip leading country code "1" → "3234756240"
+        : fromDigits;
     const [clientRows] = await pool.query<RowDataPacket[]>(
       `SELECT c.id, c.assigned_broker_id, la.id AS loan_id
        FROM clients c
@@ -11859,10 +11882,15 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
                                       AND la.tenant_id = c.tenant_id
                                       AND la.status NOT IN ('loan_funded', 'declined')
        WHERE c.tenant_id = ?
-         AND (c.phone = ? OR c.phone = ? OR REPLACE(REPLACE(REPLACE(c.phone, '-', ''), '(', ''), ')', '') = REPLACE(?, '+1', ''))
+         AND (
+           c.phone = ?
+           OR c.phone = ?
+           OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
+           OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
+         )
        ORDER BY la.created_at DESC
        LIMIT 1`,
-      [MORTGAGE_TENANT_ID, fromPhone, fromRaw, fromPhone],
+      [MORTGAGE_TENANT_ID, fromPhone, fromRaw, fromDigits, fromDigits10],
     );
 
     let clientId: number | null = null;
@@ -11960,21 +11988,29 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       ],
     );
 
-    await upsertConversationThread({
-      tenantId: MORTGAGE_TENANT_ID,
-      commId: 0,
-      conversationId,
-      applicationId: loanId ?? null,
-      leadId: null,
-      fromUserId: clientId ?? null,
-      fromBrokerId: null,
-      toUserId: null,
-      toBrokerId: brokerId ?? null,
-      communicationType: "sms",
-      direction: "inbound",
-      body: body.slice(0, 5000),
-      inboxNumber: toPhone,
-    });
+    try {
+      await upsertConversationThread({
+        tenantId: MORTGAGE_TENANT_ID,
+        commId: 0,
+        conversationId,
+        applicationId: loanId ?? null,
+        leadId: null,
+        fromUserId: clientId ?? null,
+        fromBrokerId: null,
+        toUserId: null,
+        toBrokerId: brokerId ?? null,
+        communicationType: "sms",
+        direction: "inbound",
+        body: body.slice(0, 5000),
+        inboxNumber: toPhone,
+      });
+    } catch (upsertErr) {
+      // Non-fatal for the webhook — Twilio must always receive a 200.
+      console.error(
+        "⚠️  upsertConversationThread failed for inbound SMS:",
+        upsertErr,
+      );
+    }
 
     // For unknown senders (no client record), persist the sender's phone on the
     // thread so brokers can reply without needing a client_id.
@@ -12073,11 +12109,18 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
 
     let whereConditions = [
       "ct.tenant_id = ?",
-      // Show threads assigned to this broker OR unassigned (shared inbox — broker_id IS NULL).
-      // Unassigned threads are visible to ALL brokers; the first to reply claims ownership.
-      "(ct.broker_id = ? OR ct.broker_id IS NULL)",
+      // Show threads:
+      //   a) assigned to this broker
+      //   b) unassigned (shared inbox — visible to all)
+      //   c) this broker has participated in (sent a message) — handles cross-broker messaging
+      `(ct.broker_id = ? OR ct.broker_id IS NULL OR EXISTS (
+         SELECT 1 FROM communications comm
+         WHERE comm.conversation_id = ct.conversation_id
+           AND comm.from_broker_id = ?
+           AND comm.tenant_id = ct.tenant_id
+       ))`,
     ];
-    let queryParams: any[] = [MORTGAGE_TENANT_ID, brokerId];
+    let queryParams: any[] = [MORTGAGE_TENANT_ID, brokerId, brokerId];
 
     if (status !== "all") {
       whereConditions.push("ct.status = ?");
@@ -12168,12 +12211,27 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-    // Verify broker has access to this conversation
-    // Unassigned threads (broker_id IS NULL) are visible to all brokers (shared inbox)
+    // Verify broker has access to this conversation:
+    // - thread is assigned to them, OR unassigned (shared inbox),
+    // - OR they have sent messages in this conversation
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       `SELECT id FROM conversation_threads 
-       WHERE conversation_id = ? AND (broker_id = ? OR broker_id IS NULL) AND tenant_id = ?`,
-      [conversationId, brokerId, MORTGAGE_TENANT_ID],
+       WHERE conversation_id = ? AND tenant_id = ?
+         AND (
+           broker_id = ? OR broker_id IS NULL
+           OR EXISTS (
+             SELECT 1 FROM communications
+             WHERE conversation_id = ? AND from_broker_id = ? AND tenant_id = ?
+           )
+         )`,
+      [
+        conversationId,
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        conversationId,
+        brokerId,
+        MORTGAGE_TENANT_ID,
+      ],
     );
 
     if (threadCheck.length === 0) {
@@ -12271,6 +12329,66 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       success: false,
       message: "Failed to fetch conversation messages",
     });
+  }
+};
+
+/**
+ * DELETE /api/conversations/:conversationId/messages/:messageId
+ * Delete a single message from a conversation (broker-only, own messages only)
+ */
+const handleDeleteConversationMessage: RequestHandler = async (req, res) => {
+  try {
+    const { conversationId, messageId } = req.params;
+    const brokerId = (req as any).brokerId;
+
+    // Only let the broker delete messages they sent (or any message if they own the thread)
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT c.id, c.from_broker_id, ct.broker_id AS thread_owner
+       FROM communications c
+       JOIN conversation_threads ct ON ct.conversation_id = c.conversation_id AND ct.tenant_id = c.tenant_id
+       WHERE c.id = ? AND c.conversation_id = ? AND c.tenant_id = ?`,
+      [messageId, conversationId, MORTGAGE_TENANT_ID],
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Message not found" });
+    }
+
+    const msg = rows[0];
+    const canDelete =
+      msg.from_broker_id === brokerId || msg.thread_owner === brokerId;
+    if (!canDelete) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to delete this message",
+      });
+    }
+
+    await pool.query(
+      `DELETE FROM communications WHERE id = ? AND tenant_id = ?`,
+      [messageId, MORTGAGE_TENANT_ID],
+    );
+
+    // Recount thread stats
+    await pool.query(
+      `UPDATE conversation_threads ct
+       SET
+         message_count = (SELECT COUNT(*) FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id),
+         last_message_at = (SELECT MAX(c.created_at) FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id),
+         last_message_preview = (SELECT c.body FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id ORDER BY c.created_at DESC LIMIT 1),
+         updated_at = NOW()
+       WHERE ct.conversation_id = ? AND ct.tenant_id = ?`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({ success: true, messageId });
+  } catch (error) {
+    console.error("Error deleting conversation message:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to delete message" });
   }
 };
 
@@ -12638,6 +12756,26 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         communication_id: communicationId,
         conversation_id: finalConversationId,
       });
+    }
+
+    // Notify connected browsers in real-time so the thread list and message panel
+    // update immediately without requiring a manual page refresh.
+    try {
+      await publishToAbly(
+        `conversation:${finalConversationId}`,
+        "new-message",
+        {
+          conversationId: finalConversationId,
+          direction: "outbound",
+          communicationType: communication_type,
+          body: processedBody.slice(0, 200),
+        },
+      );
+      await publishToAbly("conversations:all", "thread-updated", {
+        conversationId: finalConversationId,
+      });
+    } catch (ablyErr) {
+      console.warn("Ably publish failed (non-fatal):", ablyErr);
     }
 
     res.json({
@@ -13392,7 +13530,12 @@ const handleVoiceTwiml: RequestHandler = async (req, res) => {
     callerId,
     timeout: 30,
     record: "do-not-record",
+    // answerOnBridge: true keeps the ringing audio flowing until the callee answers,
+    // preventing a silent gap and ensuring early media (ringback) works correctly.
+    answerOnBridge: true,
   });
+  // Using <Number> with statusCallback lets Twilio send us call-status events.
+  // No codec attribute here — codec negotiation is handled by the SDK (Opus preferred).
   dial.number({}, To);
 
   return res.send(twiml.toString());
@@ -17008,6 +17151,43 @@ function createServer() {
   // Configure Twilio to POST to: https://yourdomain.com/api/webhooks/inbound-sms
   expressApp.post("/api/webhooks/inbound-sms", handleInboundSMS);
 
+  // SMS delivery status callback from Twilio — updates delivery_status on the communication record
+  expressApp.post("/api/webhooks/sms-status", async (req, res) => {
+    try {
+      const { MessageSid, MessageStatus, ErrorCode } = req.body;
+      if (!MessageSid) return res.sendStatus(204);
+
+      // Map Twilio statuses to our enum
+      const statusMap: Record<string, string> = {
+        sent: "sent",
+        delivered: "delivered",
+        read: "read",
+        failed: "failed",
+        undelivered: "failed",
+      };
+      const deliveryStatus = statusMap[MessageStatus] ?? null;
+      if (!deliveryStatus) return res.sendStatus(204);
+
+      await pool.query(
+        `UPDATE communications
+         SET delivery_status = ?, status = ?
+         WHERE external_id = ? AND tenant_id = ?`,
+        [deliveryStatus, deliveryStatus, MessageSid, MORTGAGE_TENANT_ID],
+      );
+
+      if (deliveryStatus === "failed" && ErrorCode) {
+        console.warn(
+          `[SMS status] ${MessageSid} failed — Twilio error ${ErrorCode}`,
+        );
+      }
+
+      return res.sendStatus(204);
+    } catch (err) {
+      console.error("[SMS status webhook] error:", err);
+      return res.sendStatus(500);
+    }
+  });
+
   // Inbound IMAP poll cron — called by Vercel Cron or HostGator cPanel cron via curl
   expressApp.get("/api/cron/poll-inbound-email", handlePollInboundEmail);
 
@@ -17028,6 +17208,11 @@ function createServer() {
     "/api/conversations/:conversationId/messages",
     verifyBrokerSession,
     handleGetConversationMessages,
+  );
+  expressApp.delete(
+    "/api/conversations/:conversationId/messages/:messageId",
+    verifyBrokerSession,
+    handleDeleteConversationMessage,
   );
   expressApp.post(
     "/api/conversations/send",

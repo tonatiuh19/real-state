@@ -225,10 +225,36 @@ export const sendMessage = createAsyncThunk(
           headers: { Authorization: `Bearer ${sessionToken}` },
         },
       );
-      return data;
+      // Attach the outgoing body so the reducer can update the thread preview
+      // optimistically without waiting for a re-fetch.
+      return { ...data, body: messageData.body ?? null };
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.message || "Failed to send message",
+      );
+    }
+  },
+);
+
+export const deleteMessage = createAsyncThunk(
+  "conversations/deleteMessage",
+  async (
+    {
+      conversationId,
+      messageId,
+    }: { conversationId: string; messageId: number | string },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.delete(
+        `/api/conversations/${conversationId}/messages/${messageId}`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { conversationId, messageId };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to delete message",
       );
     }
   },
@@ -581,14 +607,59 @@ const conversationsSlice = createSlice({
       .addCase(sendMessage.fulfilled, (state, action) => {
         state.isSendingMessage = false;
         state.error = null;
+        const convId = action.payload?.conversation_id;
+        const body = action.payload?.body ?? null;
+        const now = new Date().toISOString();
+        if (!convId) return;
 
-        // The new message will be added via real-time updates or next fetch
-        // For immediate feedback, we could add it optimistically here
+        const existing = state.threads.find(
+          (t) => t.conversation_id === convId,
+        );
+        if (existing) {
+          // Update preview / count on the existing thread immediately so the
+          // sidebar doesn't keep showing "No messages yet" until the next fetch.
+          existing.last_message_preview = body
+            ? body.slice(0, 200)
+            : existing.last_message_preview;
+          existing.last_message_at = now;
+          existing.message_count = (existing.message_count ?? 0) + 1;
+          // Bubble the thread to the top
+          state.threads = [
+            existing,
+            ...state.threads.filter((t) => t.conversation_id !== convId),
+          ];
+        } else {
+          // New thread — add a placeholder so it appears immediately while
+          // fetchConversationThreads runs (avoids TiDB replication lag gap).
+          const placeholder: ConversationThread = {
+            id: 0,
+            conversation_id: convId,
+            broker_id: null,
+            last_message_at: now,
+            last_message_preview: body ? body.slice(0, 200) : null,
+            last_message_type: "sms",
+            message_count: 1,
+            unread_count: 0,
+            priority: "normal",
+            status: "active",
+            created_at: now,
+            updated_at: now,
+          };
+          state.threads.unshift(placeholder);
+        }
       })
       .addCase(sendMessage.rejected, (state, action) => {
         state.isSendingMessage = false;
         state.error = action.payload as string;
       });
+
+    // Delete message
+    builder.addCase(deleteMessage.fulfilled, (state, action) => {
+      const { messageId } = action.payload;
+      state.messages = state.messages.filter(
+        (m) => String(m.id) !== String(messageId),
+      );
+    });
 
     // Update conversation
     builder

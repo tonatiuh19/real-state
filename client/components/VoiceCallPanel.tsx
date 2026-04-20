@@ -7,8 +7,12 @@ import {
   PhoneMissed,
   Mic,
   MicOff,
+  Volume2,
+  Volume1,
+  VolumeX,
   Settings2,
   X,
+  Radio,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -92,12 +96,65 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const [speakerDevices, setSpeakerDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("default");
   const [selectedSpeakerId, setSelectedSpeakerId] = useState("default");
+  const [micLevel, setMicLevel] = useState(0); // 0–100 for live mic meter
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micRafRef = useRef<number | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micAudioCtxRef = useRef<AudioContext | null>(null);
   const supportsSinkId =
     typeof (document.createElement("audio") as any).setSinkId === "function";
 
   const formattedDuration = `${String(Math.floor(duration / 60)).padStart(2, "0")}:${String(duration % 60).padStart(2, "0")}`;
 
-  // Resolve the active Twilio AudioHelper (inbound uses the passed prop; outbound uses its own device)
+  // Live microphone level meter — shows the broker whether their mic is picking up audio.
+  // Uses the Web Audio API to read RMS volume from the active input stream.
+  const stopMicMeter = useCallback(() => {
+    if (micRafRef.current) {
+      cancelAnimationFrame(micRafRef.current);
+      micRafRef.current = null;
+    }
+    micAnalyserRef.current = null;
+    // Stop all tracks so the browser releases the OS mic indicator
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
+    micAudioCtxRef.current?.close();
+    micAudioCtxRef.current = null;
+    setMicLevel(0);
+  }, []);
+
+  const startMicMeter = useCallback(
+    async (deviceId: string) => {
+      // Always stop the previous meter first so we don't leak streams
+      stopMicMeter();
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio:
+            deviceId !== "default" ? { deviceId: { exact: deviceId } } : true,
+        });
+        micStreamRef.current = stream;
+        const ctx = new AudioContext();
+        micAudioCtxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        micAnalyserRef.current = analyser;
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          analyser.getByteFrequencyData(data);
+          const rms = Math.sqrt(
+            data.reduce((s, v) => s + v * v, 0) / data.length,
+          );
+          setMicLevel(Math.min(100, Math.round((rms / 128) * 100)));
+          micRafRef.current = requestAnimationFrame(tick);
+        };
+        micRafRef.current = requestAnimationFrame(tick);
+      } catch {
+        // Mic meter is cosmetic — don't block the call
+      }
+    },
+    [stopMicMeter],
+  );
   const getAudioHelper = useCallback(
     () => deviceAudio ?? deviceRef.current?.audio ?? null,
     [deviceAudio],
@@ -133,14 +190,16 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     };
 
     enumerate();
+    startMicMeter(selectedMicId);
     navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
     return () => {
+      stopMicMeter();
       navigator.mediaDevices.removeEventListener(
         "devicechange",
         handleDeviceChange,
       );
     };
-  }, [callState, getAudioHelper, selectedMicId]);
+  }, [callState, getAudioHelper, selectedMicId, startMicMeter, stopMicMeter]);
 
   const handleMicChange = useCallback(
     async (deviceId: string) => {
@@ -149,11 +208,12 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       if (!audio) return;
       try {
         await audio.setInputDevice(deviceId);
+        startMicMeter(deviceId);
       } catch (e) {
         logger.error("[VoiceCallPanel] Failed to set input device:", e);
       }
     },
-    [getAudioHelper],
+    [getAudioHelper, startMicMeter],
   );
 
   const handleSpeakerChange = useCallback(
@@ -209,6 +269,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
   const cleanupDevice = useCallback(() => {
     stopTimer();
+    stopMicMeter();
     if (callRef.current) {
       callRef.current.removeAllListeners();
       callRef.current = null;
@@ -218,7 +279,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       deviceRef.current.destroy();
       deviceRef.current = null;
     }
-  }, [stopTimer]);
+  }, [stopTimer, stopMicMeter]);
 
   const handleHangUp = useCallback(
     (status = "completed") => {
@@ -250,10 +311,20 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       );
       if (!data.success || !data.token) throw new Error("Token fetch failed");
 
-      // 2. Create Device
+      // 2. Create Device with HD audio settings
       const device = new Device(data.token, {
         logLevel: 1,
+        // Opus first for HD wideband audio (~16 kHz), PCMU as PSTN fallback
         codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
+        // Keep the WebSocket alive during brief network drops (mobile switching
+        // from WiFi to cellular is the main cause of "low quality" reports)
+        closeProtection: true,
+        // Opus can use up to 40 kbps for wideband voice — big improvement over
+        // the 8 kbps PCMU default on poor connections
+        maxAverageBitrate: 40000,
+        // Surface precise error codes in the error handler so we can show
+        // actionable messages (e.g. mic blocked vs network error)
+        enableImprovedSignalingErrorPrecision: true,
       });
       deviceRef.current = device;
 
@@ -276,10 +347,44 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
       call.on("ringing", () => setCallState("ringing"));
 
-      call.on("accept", (c: Call) => {
+      call.on("accept", async (c: Call) => {
         setCallSid(c.parameters?.CallSid ?? null);
         setCallState("in-call");
         startTimer();
+
+        // Immediately enumerate and apply the best available audio devices.
+        // Without this, Twilio may use a low-quality or wrong device (e.g. the
+        // built-in laptop mic instead of a headset that was already plugged in).
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const mics = devices.filter((d) => d.kind === "audioinput");
+          const speakers = devices.filter((d) => d.kind === "audiooutput");
+          setMicDevices(mics);
+          setSpeakerDevices(speakers);
+
+          const audio = deviceRef.current?.audio ?? null;
+          if (audio) {
+            // Prefer a headset/external mic; fall back to "default"
+            const headsetMic = mics.find((d) =>
+              /headset|headphone|airpod|bluetooth|external/i.test(d.label),
+            );
+            const micId = headsetMic?.deviceId ?? "default";
+            setSelectedMicId(micId);
+            await audio.setInputDevice(micId).catch(() => {});
+
+            // Apply speaker too (only on browsers that support setSinkId)
+            if (supportsSinkId) {
+              const headsetSpeaker = speakers.find((d) =>
+                /headset|headphone|airpod|bluetooth|external/i.test(d.label),
+              );
+              const speakerId = headsetSpeaker?.deviceId ?? "default";
+              setSelectedSpeakerId(speakerId);
+              await audio.speakerDevices.set([speakerId]).catch(() => {});
+            }
+          }
+        } catch {
+          // Non-fatal — user can manually pick devices in the audio settings
+        }
       });
 
       call.on("disconnect", () => {
@@ -554,11 +659,15 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-10 w-10 rounded-full transition-colors"
+                className="h-10 w-10 rounded-full transition-colors relative"
                 title="Audio settings"
                 disabled={callState !== "in-call"}
               >
                 <Settings2 className="h-4 w-4" />
+                {/* Green dot when mic is picking up sound */}
+                {micLevel > 5 && (
+                  <span className="absolute top-0.5 right-0.5 h-2 w-2 rounded-full bg-green-500 border border-background" />
+                )}
               </Button>
             </PopoverTrigger>
             <PopoverContent
@@ -596,12 +705,41 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
                     )}
                   </SelectContent>
                 </Select>
+                {/* Live mic level bar */}
+                <div className="space-y-0.5">
+                  <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    {micLevel > 5 ? (
+                      <>
+                        <Mic className="h-2.5 w-2.5 text-green-500" /> Mic
+                        active
+                      </>
+                    ) : (
+                      <>
+                        <MicOff className="h-2.5 w-2.5 text-muted-foreground" />{" "}
+                        Speak to test
+                      </>
+                    )}
+                  </p>
+                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-75",
+                        micLevel > 60
+                          ? "bg-green-500"
+                          : micLevel > 20
+                            ? "bg-green-400"
+                            : "bg-muted-foreground/30",
+                      )}
+                      style={{ width: `${micLevel}%` }}
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Speaker */}
               <div className="space-y-1.5">
                 <Label className="text-xs flex items-center gap-1.5">
-                  <Settings2 className="h-3.5 w-3.5" />
+                  <Volume2 className="h-3.5 w-3.5" />
                   Speaker
                 </Label>
                 {supportsSinkId ? (
@@ -631,6 +769,13 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
                   </p>
                 )}
               </div>
+
+              {/* Quality hint */}
+              <p className="text-[10px] text-muted-foreground flex items-start gap-1.5 border-t pt-2">
+                <Radio className="h-3 w-3 mt-0.5 shrink-0 text-primary" />
+                For best quality, use a headset. Calls use HD Opus audio when
+                both sides support it.
+              </p>
             </PopoverContent>
           </Popover>
         </div>

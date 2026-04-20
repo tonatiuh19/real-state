@@ -40,6 +40,7 @@ import {
   CalendarPlus,
   Copy,
   CheckCheck,
+  Trash2,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -87,6 +88,7 @@ import {
   fetchConversationThreads,
   fetchConversationMessages,
   sendMessage,
+  deleteMessage,
   fetchConversationTemplates,
   fetchConversationStats,
   fetchCallHistory,
@@ -659,6 +661,24 @@ const Conversations = () => {
     dispatch(fetchConversationThreads({ ...threadsFilters, ...filters }));
   };
 
+  const handleDeleteMessage = async (messageId: number | string) => {
+    if (!currentThread) return;
+    try {
+      await dispatch(
+        deleteMessage({
+          conversationId: currentThread.conversation_id,
+          messageId,
+        }),
+      ).unwrap();
+    } catch {
+      toast({
+        title: "Error",
+        description: "Could not delete message",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!messageText.trim()) {
       toast({
@@ -724,8 +744,19 @@ const Conversations = () => {
     client_id?: number;
   }) => {
     try {
-      await dispatch(sendMessage(data)).unwrap();
+      const result = await dispatch(sendMessage(data)).unwrap();
+      const conversationId = result.conversation_id;
+
+      // Refresh thread list in background
       dispatch(fetchConversationThreads(threadsFilters));
+
+      // Immediately load the new conversation so the user sees it without
+      // having to manually find and click on it in the sidebar.
+      if (conversationId) {
+        await dispatch(fetchConversationMessages({ conversationId })).unwrap();
+        setMobilePanel("chat");
+      }
+
       toast({ title: "Success", description: "New conversation started" });
     } catch (error: any) {
       toast({
@@ -1475,10 +1506,22 @@ const Conversations = () => {
                             )}
                             <div
                               className={cn(
-                                "flex mb-2",
+                                "flex mb-2 group",
                                 isOutbound ? "justify-end" : "justify-start",
                               )}
                             >
+                              {/* Delete button — appears on hover, left of outbound bubbles */}
+                              {isOutbound && (
+                                <button
+                                  onClick={() =>
+                                    handleDeleteMessage(message.id)
+                                  }
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity mr-1.5 self-center p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                  title="Delete message"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                               <div
                                 className={cn(
                                   "max-w-[72%] px-3.5 py-2.5 rounded-2xl text-sm shadow-sm",
