@@ -273,6 +273,7 @@ interface EditableFieldProps {
   editing: boolean;
   icon?: React.ReactNode;
   placeholder?: string;
+  type?: string;
   /** Optional override for the read-only display node */
   renderValue?: (value: string) => React.ReactNode;
 }
@@ -285,6 +286,7 @@ function EditableField({
   editing,
   icon,
   placeholder = "—",
+  type = "text",
   renderValue,
 }: EditableFieldProps) {
   return (
@@ -294,6 +296,7 @@ function EditableField({
       </p>
       {editing ? (
         <Input
+          type={type}
           value={editValue}
           onChange={(e) => onEditChange(e.target.value)}
           className="h-8 text-sm"
@@ -782,7 +785,11 @@ export default function ClientDetailPanel({
             last_name: form.last_name || undefined,
             phone: form.phone || undefined,
             alternate_phone: form.alternate_phone || undefined,
-            date_of_birth: form.date_of_birth || undefined,
+            date_of_birth:
+              form.date_of_birth &&
+              /^\d{4}-\d{2}-\d{2}$/.test(form.date_of_birth)
+                ? form.date_of_birth
+                : undefined,
             address_street: form.address_street || undefined,
             address_city: form.address_city || undefined,
             address_state: form.address_state || undefined,
@@ -1224,6 +1231,7 @@ export default function ClientDetailPanel({
                         editValue={field("date_of_birth")}
                         onEditChange={(v) => setField("date_of_birth", v)}
                         editing={editing}
+                        type="date"
                         icon={<Calendar className="w-3.5 h-3.5" />}
                         placeholder="YYYY-MM-DD"
                       />

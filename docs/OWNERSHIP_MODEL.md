@@ -6,11 +6,11 @@ This document defines how data access is scoped to brokers across the API.
 
 ## Role Hierarchy
 
-| Role                      | Access Scope                                                                          |
-| ------------------------- | ------------------------------------------------------------------------------------- |
-| `superadmin`              | Full tenant-wide access — all clients, loans, tasks, threads                          |
-| `admin` (Mortgage Banker) | Tenant-wide access for most read operations; subject to ownership on write operations |
-| `broker` (Partner Broker) | Own data only — access via all three ownership paths below                            |
+| Role                      | Access Scope                                                            |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `superadmin`              | Full tenant-wide access — all clients, loans, tasks, threads            |
+| `admin` (Mortgage Banker) | Own data only — access via all three ownership paths (same as `broker`) |
+| `broker` (Partner Broker) | Own data only — access via all three ownership paths below              |
 
 ---
 
@@ -54,30 +54,30 @@ All queries are scoped to this tenant.
 
 ### READ Handlers
 
-| Handler                        | Route                            | Admin Access           | Partner Access                                                                     |
-| ------------------------------ | -------------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
-| `handleGetLoans`               | `GET /api/loans`                 | All tenant loans       | 3-path ownership JOIN                                                              |
-| `handleGetLoanDetails`         | `GET /api/loans/:loanId`         | Any loan in tenant     | 3-path ownership JOIN                                                              |
-| `handleGetClients`             | `GET /api/clients`               | All tenant clients     | 3-path ownership JOIN                                                              |
-| `handleGetClientDetailProfile` | `GET /api/clients/:clientId`     | Any client in tenant   | 3-path ownership subquery                                                          |
-| `handleGetDashboardStats`      | `GET /api/dashboard/stats`       | Tenant-wide aggregates | 3-path scoped aggregates                                                           |
-| `handleGetBrokerMetrics`       | `GET /api/broker/metrics`        | Tenant-wide            | `broker_user_id OR partner_broker_id` for loans; `assigned_broker_id` for leads    |
-| `handleGetAnnualMetrics`       | `GET /api/broker/annual-metrics` | Tenant-wide            | Same as metrics                                                                    |
-| `handleGetAllTaskDocuments`    | `GET /api/task-documents`        | All tenant docs        | 3-path ownership JOIN                                                              |
-| `handleGetConversationThreads` | `GET /api/conversations`         | All tenant threads     | Thread assigned to broker, unassigned, participated in, OR loan linked via 3 paths |
+| Handler                        | Route                            | Admin Access                                                                       | Partner Access                                                                     |
+| ------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `handleGetLoans`               | `GET /api/loans`                 | 3-path ownership JOIN                                                              | 3-path ownership JOIN                                                              |
+| `handleGetLoanDetails`         | `GET /api/loans/:loanId`         | 3-path ownership JOIN                                                              | 3-path ownership JOIN                                                              |
+| `handleGetClients`             | `GET /api/clients`               | 3-path ownership JOIN                                                              | 3-path ownership JOIN                                                              |
+| `handleGetClientDetailProfile` | `GET /api/clients/:clientId`     | 3-path ownership subquery                                                          | 3-path ownership subquery                                                          |
+| `handleGetDashboardStats`      | `GET /api/dashboard/stats`       | 3-path scoped aggregates                                                           | 3-path scoped aggregates                                                           |
+| `handleGetBrokerMetrics`       | `GET /api/broker/metrics`        | 3-path scoped                                                                      | 3-path scoped                                                                      |
+| `handleGetAnnualMetrics`       | `GET /api/broker/annual-metrics` | 3-path scoped                                                                      | 3-path scoped                                                                      |
+| `handleGetAllTaskDocuments`    | `GET /api/task-documents`        | 3-path ownership JOIN                                                              | 3-path ownership JOIN                                                              |
+| `handleGetConversationThreads` | `GET /api/conversations`         | Thread assigned to broker, unassigned, participated in, OR loan linked via 3 paths | Thread assigned to broker, unassigned, participated in, OR loan linked via 3 paths |
 
 ### WRITE / MUTATE Handlers
 
-| Handler                    | Route                             | Access Check                                                                                                   |
-| -------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `handleUpdateLoanStatus`   | `PATCH /api/loans/:loanId/status` | `superadmin` = open; `admin` = must own via any of 3 paths; `broker` = blocked by role gate (admin-only route) |
-| `handleUpdateLoanDetails`  | `PUT /api/loans/:loanId`          | 3-path ownership check                                                                                         |
-| `handleUpdateClient`       | `PUT /api/clients/:clientId`      | 3-path ownership subquery                                                                                      |
-| `handleDeleteClient`       | `DELETE /api/clients/:clientId`   | `superadmin` = open; others must own via 3-path OR subquery                                                    |
-| `handleUpdateTask`         | `PATCH /api/tasks/:taskId`        | `admin/superadmin` = open; `broker` = must own linked loan via 3 paths                                         |
-| `handleApproveTask`        | `POST /api/tasks/:taskId/approve` | `admin/superadmin` = open; `broker` = must own linked loan via 3 paths                                         |
-| `handleReopenTask`         | `POST /api/tasks/:taskId/reopen`  | `admin/superadmin` = open; `broker` = must own linked loan via 3 paths                                         |
-| `handleDeleteTaskInstance` | `DELETE /api/tasks/:taskId`       | `admin/superadmin` = open; `broker` = must own linked loan via 3 paths                                         |
+| Handler                    | Route                             | Access Check                                                           |
+| -------------------------- | --------------------------------- | ---------------------------------------------------------------------- |
+| `handleUpdateLoanStatus`   | `PATCH /api/loans/:loanId/status` | `superadmin` = open; `admin/broker` = must own via any of 3 paths      |
+| `handleUpdateLoanDetails`  | `PUT /api/loans/:loanId`          | 3-path ownership check                                                 |
+| `handleUpdateClient`       | `PUT /api/clients/:clientId`      | 3-path ownership subquery                                              |
+| `handleDeleteClient`       | `DELETE /api/clients/:clientId`   | `superadmin` = open; `admin/broker` = must own via 3-path              |
+| `handleUpdateTask`         | `PATCH /api/tasks/:taskId`        | `superadmin` = open; `admin/broker` = must own linked loan via 3 paths |
+| `handleApproveTask`        | `POST /api/tasks/:taskId/approve` | `superadmin` = open; `admin/broker` = must own linked loan via 3 paths |
+| `handleReopenTask`         | `POST /api/tasks/:taskId/reopen`  | `superadmin` = open; `admin/broker` = must own linked loan via 3 paths |
+| `handleDeleteTaskInstance` | `DELETE /api/tasks/:taskId`       | `superadmin` = open; `admin/broker` = must own linked loan via 3 paths |
 
 ### Correctly Unrestricted Handlers
 

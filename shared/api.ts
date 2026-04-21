@@ -1605,6 +1605,10 @@ export interface PreApprovalLetter {
   loan_type: string | null;
   fico_score: number | null;
   is_active: boolean;
+  purchase_property_address: string | null;
+  purchase_property_city: string | null;
+  purchase_property_state: string | null;
+  purchase_property_zip: string | null;
   created_by_broker_id: number;
   updated_by_broker_id: number | null;
   created_at: string;
@@ -1652,6 +1656,10 @@ export interface CreatePreApprovalLetterRequest {
   expires_at?: string | null;
   loan_type?: string;
   fico_score?: number | null;
+  purchase_property_address?: string | null;
+  purchase_property_city?: string | null;
+  purchase_property_state?: string | null;
+  purchase_property_zip?: string | null;
 }
 
 export interface CreatePreApprovalLetterResponse {

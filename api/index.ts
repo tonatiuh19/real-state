@@ -5823,6 +5823,17 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     }
     if (date_of_birth !== undefined) {
       updates.push("date_of_birth = ?");
+      // Validate YYYY-MM-DD format; reject malformed values to avoid MySQL errors
+      const isValidDate =
+        date_of_birth === null ||
+        date_of_birth === "" ||
+        /^\d{4}-\d{2}-\d{2}$/.test(date_of_birth);
+      if (!isValidDate) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid date format for date_of_birth: ${date_of_birth}`,
+        });
+      }
       values.push(date_of_birth || null);
     }
     if (address_street !== undefined) {
@@ -13819,11 +13830,12 @@ const handleDeleteConversation: RequestHandler = async (req, res) => {
     const { conversationId } = req.params;
     const brokerId = (req as any).brokerId;
 
-    // Verify broker has access
+    // Verify broker has access — owns the thread, or thread is unassigned (shared inbox)
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       `SELECT id FROM conversation_threads
-       WHERE conversation_id = ? AND broker_id = ? AND tenant_id = ?`,
-      [conversationId, brokerId, MORTGAGE_TENANT_ID],
+       WHERE conversation_id = ? AND tenant_id = ?
+         AND (broker_id = ? OR broker_id IS NULL)`,
+      [conversationId, MORTGAGE_TENANT_ID, brokerId],
     );
 
     if (threadCheck.length === 0) {
@@ -16591,10 +16603,14 @@ const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
           c.first_name  AS client_first_name,
           c.last_name   AS client_last_name,
           c.email       AS client_email,
-          la.property_address,
-          la.property_city,
-          la.property_state,
-          la.property_zip,
+          COALESCE(pal.purchase_property_address, la.property_address) AS property_address,
+          COALESCE(pal.purchase_property_city,    la.property_city)    AS property_city,
+          COALESCE(pal.purchase_property_state,   la.property_state)   AS property_state,
+          COALESCE(pal.purchase_property_zip,     la.property_zip)     AS property_zip,
+          pal.purchase_property_address,
+          pal.purchase_property_city,
+          pal.purchase_property_state,
+          pal.purchase_property_zip,
           la.application_number,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url'  AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'      AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_name,
@@ -16668,6 +16684,12 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       req.body.fico_score,
     ];
 
+    const purchase_property_address =
+      req.body.purchase_property_address || null;
+    const purchase_property_city = req.body.purchase_property_city || null;
+    const purchase_property_state = req.body.purchase_property_state || null;
+    const purchase_property_zip = req.body.purchase_property_zip || null;
+
     if (!approved_amount || isNaN(Number(approved_amount))) {
       return res
         .status(400)
@@ -16721,8 +16743,10 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
 
     const [result] = await pool.query<any>(
       `INSERT INTO pre_approval_letters
-         (tenant_id, application_id, approved_amount, max_approved_amount, html_content, letter_date, expires_at, loan_type, fico_score, is_active, created_by_broker_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+         (tenant_id, application_id, approved_amount, max_approved_amount, html_content, letter_date, expires_at, loan_type, fico_score,
+          purchase_property_address, purchase_property_city, purchase_property_state, purchase_property_zip,
+          is_active, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [
         loan.tenant_id,
         loanId,
@@ -16733,6 +16757,10 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
         expires_at || null,
         loan_type || null,
         fico_score ? Number(fico_score) : null,
+        purchase_property_address,
+        purchase_property_city,
+        purchase_property_state,
+        purchase_property_zip,
         brokerId,
       ],
     );
@@ -16775,7 +16803,11 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
           lb.email AS partner_email, lb.phone AS partner_phone,
           lb.license_number AS partner_license_number, lbp.avatar_url AS partner_photo_url,
           c.first_name AS client_first_name, c.last_name AS client_last_name, c.email AS client_email,
-          la.property_address, la.property_city, la.property_state, la.property_zip, la.application_number,
+          COALESCE(pal.purchase_property_address, la.property_address) AS property_address,
+          COALESCE(pal.purchase_property_city,    la.property_city)    AS property_city,
+          COALESCE(pal.purchase_property_state,   la.property_state)   AS property_state,
+          COALESCE(pal.purchase_property_zip,     la.property_zip)     AS property_zip,
+          la.application_number,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_logo_url' AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_logo_url,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_name'     AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_name,
           (SELECT setting_value FROM system_settings WHERE setting_key = 'company_address'  AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY tenant_id DESC LIMIT 1) AS company_address,

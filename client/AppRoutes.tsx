@@ -37,6 +37,7 @@ import SchedulerPage from "./pages/Scheduler";
 import SchedulerReschedule from "./pages/SchedulerReschedule";
 import AdminScheduler from "./pages/admin/Scheduler";
 import AdminCalendar from "./pages/admin/Calendar";
+import IncomeCalculator from "./pages/admin/IncomeCalculator";
 
 const AppRoutes = () => (
   <Routes>
@@ -319,6 +320,15 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <AdminCalendar />
+        </AdminLayout>
+      }
+    />
+
+    <Route
+      path="/admin/income-calculator"
+      element={
+        <AdminLayout>
+          <IncomeCalculator />
         </AdminLayout>
       }
     />

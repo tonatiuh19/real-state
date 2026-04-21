@@ -655,6 +655,9 @@ const Conversations = () => {
     setIsCallActive(false);
     setOptimisticMessages([]);
     setFailedText(null);
+    // Close any open contact detail panel so a stale profile isn't shown
+    setDetailClientId(null);
+    setDetailBrokerId(null);
 
     if (thread.unread_count > 0) {
       dispatch(markConversationAsRead(thread.conversation_id));
