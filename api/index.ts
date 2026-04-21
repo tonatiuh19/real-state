@@ -4701,7 +4701,7 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     }
 
     const [loanRows] = await pool.query<RowDataPacket[]>(
-      `SELECT la.id, la.status, c.assigned_broker_id
+      `SELECT la.id, la.status, la.broker_user_id, la.partner_broker_id, c.assigned_broker_id
        FROM loan_applications la
        INNER JOIN clients c ON c.id = la.client_user_id AND c.tenant_id = la.tenant_id
        WHERE la.id = ? AND la.tenant_id = ?`,
@@ -4715,14 +4715,20 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
       });
     }
 
-    if (!hasGlobalLoanAccess && loanRows[0].assigned_broker_id !== brokerId) {
+    const loan = loanRows[0];
+    const ownsLoan =
+      loan.broker_user_id === brokerId ||
+      loan.partner_broker_id === brokerId ||
+      loan.assigned_broker_id === brokerId;
+
+    if (!hasGlobalLoanAccess && !ownsLoan) {
       return res.status(403).json({
         success: false,
         error: "Access denied",
       });
     }
 
-    const fromStatus = loanRows[0].status;
+    const fromStatus = loan.status;
 
     if (fromStatus === newStatus) {
       return res.status(400).json({
@@ -4787,48 +4793,54 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole as string | undefined;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const isSuperAdmin = brokerRole === "superadmin";
 
-    // Build WHERE clause: admins see all tenant loans; partners see only their own
-    const scopeWhere = isAdmin
-      ? "tenant_id = ?"
-      : "(broker_user_id = ? OR partner_broker_id = ?) AND tenant_id = ?";
-    const scopeParams = isAdmin
+    // Build WHERE clause: superadmins see all tenant loans; everyone else (admin/broker) sees their own via all 3 ownership paths
+    const scopeJoin = isSuperAdmin
+      ? ""
+      : "LEFT JOIN clients c ON c.id = la.client_user_id";
+    const scopeWhere = isSuperAdmin
+      ? "la.tenant_id = ?"
+      : "(la.broker_user_id = ? OR la.partner_broker_id = ? OR c.assigned_broker_id = ?) AND la.tenant_id = ?";
+    const scopeParams = isSuperAdmin
       ? [MORTGAGE_TENANT_ID]
-      : [brokerId, brokerId, MORTGAGE_TENANT_ID];
+      : [brokerId, brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     // Get total pipeline value and active applications
     const [pipelineStats] = (await pool.query(
       `SELECT 
-        COALESCE(SUM(loan_amount), 0) as totalPipelineValue,
+        COALESCE(SUM(la.loan_amount), 0) as totalPipelineValue,
         COUNT(*) as activeApplications
-      FROM loan_applications
+      FROM loan_applications la
+      ${scopeJoin}
       WHERE ${scopeWhere}
-        AND status NOT IN ('denied', 'cancelled', 'closed')`,
+        AND la.status NOT IN ('denied', 'cancelled', 'closed')`,
       scopeParams,
     )) as [RowDataPacket[], any];
 
     // Get average closing days (from submitted to closed)
     const [closingStats] = (await pool.query(
       `SELECT 
-        COALESCE(AVG(DATEDIFF(actual_close_date, submitted_at)), 0) as avgClosingDays
-      FROM loan_applications
+        COALESCE(AVG(DATEDIFF(la.actual_close_date, la.submitted_at)), 0) as avgClosingDays
+      FROM loan_applications la
+      ${scopeJoin}
       WHERE ${scopeWhere}
-        AND status = 'closed'
-        AND actual_close_date IS NOT NULL
-        AND submitted_at IS NOT NULL
-        AND submitted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
+        AND la.status = 'closed'
+        AND la.actual_close_date IS NOT NULL
+        AND la.submitted_at IS NOT NULL
+        AND la.submitted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)`,
       scopeParams,
     )) as [RowDataPacket[], any];
 
     // Get closure rate (approved/closed vs denied/cancelled)
     const [closureRateStats] = (await pool.query(
       `SELECT 
-        COUNT(CASE WHEN status IN ('approved', 'closed') THEN 1 END) as successful,
-        COUNT(CASE WHEN status IN ('denied', 'cancelled') THEN 1 END) as unsuccessful
-      FROM loan_applications
+        COUNT(CASE WHEN la.status IN ('approved', 'closed') THEN 1 END) as successful,
+        COUNT(CASE WHEN la.status IN ('denied', 'cancelled') THEN 1 END) as unsuccessful
+      FROM loan_applications la
+      ${scopeJoin}
       WHERE ${scopeWhere}
-        AND status IN ('approved', 'closed', 'denied', 'cancelled')`,
+        AND la.status IN ('approved', 'closed', 'denied', 'cancelled')`,
       scopeParams,
     )) as [RowDataPacket[], any];
 
@@ -4840,26 +4852,28 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
     // Get weekly activity (last 7 days)
     const [weeklyActivity] = (await pool.query(
       `SELECT 
-        DATE(created_at) as date,
+        DATE(la.created_at) as date,
         COUNT(*) as applications,
-        COUNT(CASE WHEN status IN ('approved', 'closed') THEN 1 END) as closed
-      FROM loan_applications
+        COUNT(CASE WHEN la.status IN ('approved', 'closed') THEN 1 END) as closed
+      FROM loan_applications la
+      ${scopeJoin}
       WHERE ${scopeWhere}
-        AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-      GROUP BY DATE(created_at)
-      ORDER BY DATE(created_at) ASC`,
+        AND la.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+      GROUP BY DATE(la.created_at)
+      ORDER BY DATE(la.created_at) ASC`,
       scopeParams,
     )) as [RowDataPacket[], any];
 
     // Get status breakdown
     const [statusBreakdown] = (await pool.query(
       `SELECT 
-        status,
+        la.status,
         COUNT(*) as count
-      FROM loan_applications
+      FROM loan_applications la
+      ${scopeJoin}
       WHERE ${scopeWhere}
-        AND status NOT IN ('denied', 'cancelled')
-      GROUP BY status
+        AND la.status NOT IN ('denied', 'cancelled')
+      GROUP BY la.status
       ORDER BY count DESC`,
       scopeParams,
     )) as [RowDataPacket[], any];
@@ -4906,7 +4920,7 @@ const handleGetAnnualMetrics: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdmin = brokerRole === "superadmin";
 
     const now = new Date();
     const year = parseInt(
@@ -5025,14 +5039,15 @@ const handleGetAnnualMetrics: RequestHandler = async (req, res) => {
            GROUP BY source ORDER BY count DESC`
         : `SELECT COALESCE(c.source, 'other') as category, COUNT(*) as count
            FROM clients c
-           INNER JOIN loan_applications la ON la.client_user_id = c.id
-             AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?))
-           WHERE c.tenant_id = ? AND YEAR(c.created_at) = ?
+           LEFT JOIN loan_applications la ON la.client_user_id = c.id
+           WHERE c.tenant_id = ?
+             AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?) OR c.assigned_broker_id IN (?))
+             AND YEAR(c.created_at) = ?
              AND c.source IS NOT NULL
            GROUP BY c.source ORDER BY count DESC`,
       useGlobal
         ? [MORTGAGE_TENANT_ID, year]
-        : [scopedIds, scopedIds, MORTGAGE_TENANT_ID, year],
+        : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, scopedIds, year],
     )) as [RowDataPacket[], any];
 
     // Build monthly snapshots
@@ -5137,7 +5152,7 @@ const handleGetBrokerMetrics: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdmin = brokerRole === "superadmin";
 
     const now = new Date();
     const year = parseInt(
@@ -5268,14 +5283,15 @@ const handleGetBrokerMetrics: RequestHandler = async (req, res) => {
            GROUP BY source ORDER BY count DESC`
         : `SELECT COALESCE(c.source, 'other') as category, COUNT(*) as count
            FROM clients c
-           INNER JOIN loan_applications la ON la.client_user_id = c.id
-             AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?))
-           WHERE c.tenant_id = ? AND YEAR(c.created_at) = ? AND MONTH(c.created_at) = ?
+           LEFT JOIN loan_applications la ON la.client_user_id = c.id
+           WHERE c.tenant_id = ?
+             AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?) OR c.assigned_broker_id IN (?))
+             AND YEAR(c.created_at) = ? AND MONTH(c.created_at) = ?
              AND c.source IS NOT NULL
            GROUP BY c.source ORDER BY count DESC`,
       useGlobal
         ? [MORTGAGE_TENANT_ID, year, month]
-        : [scopedIds, scopedIds, MORTGAGE_TENANT_ID, year, month],
+        : [MORTGAGE_TENANT_ID, scopedIds, scopedIds, scopedIds, year, month],
     )) as [RowDataPacket[], any];
 
     const metrics = {
@@ -5322,7 +5338,7 @@ const handleUpdateBrokerMetrics: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdmin = brokerRole === "superadmin";
 
     const {
       year,
@@ -5909,11 +5925,20 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
        FROM clients c 
        LEFT JOIN loan_applications la ON c.id = la.client_user_id
        WHERE c.id = ? AND c.tenant_id = ?
-         ${hasGlobalClientAccess ? "" : "AND c.assigned_broker_id = ?"}
+         ${
+           hasGlobalClientAccess
+             ? ""
+             : `AND (c.assigned_broker_id = ? OR EXISTS (
+           SELECT 1 FROM loan_applications la2
+           WHERE la2.client_user_id = c.id
+             AND (la2.broker_user_id = ? OR la2.partner_broker_id = ?)
+             AND la2.tenant_id = c.tenant_id
+         ))`
+         }
        GROUP BY c.id`,
       hasGlobalClientAccess
         ? [clientId, MORTGAGE_TENANT_ID]
-        : [clientId, MORTGAGE_TENANT_ID, brokerId],
+        : [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
     );
 
     if (!Array.isArray(clientRows) || clientRows.length === 0) {
@@ -7221,7 +7246,12 @@ const handleUpdateTask: RequestHandler = async (req, res) => {
 
     // Get current task info for audit
     const [currentTaskRows] = (await pool.query(
-      "SELECT status, title, application_id FROM tasks WHERE id = ? AND tenant_id = ?",
+      `SELECT t.status, t.title, t.application_id,
+              la.broker_user_id, la.partner_broker_id, c.assigned_broker_id
+       FROM tasks t
+       INNER JOIN loan_applications la ON la.id = t.application_id
+       INNER JOIN clients c ON c.id = la.client_user_id
+       WHERE t.id = ? AND t.tenant_id = ?`,
       [taskId, tenantId],
     )) as [any[], any];
 
@@ -7233,6 +7263,19 @@ const handleUpdateTask: RequestHandler = async (req, res) => {
     }
 
     const currentTask = currentTaskRows[0];
+
+    // Ownership check: only superadmin has full access; everyone else restricted to their own loans
+    const brokerRole = (req as any).brokerRole;
+    const isAdmin = brokerRole === "superadmin";
+    if (!isAdmin) {
+      const owns =
+        currentTask.broker_user_id === brokerId ||
+        currentTask.partner_broker_id === brokerId ||
+        currentTask.assigned_broker_id === brokerId;
+      if (!owns) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+    }
     const completedAt = status === "completed" ? new Date() : null;
     const statusChangedAt =
       status && status !== currentTask.status ? new Date() : null;
@@ -7570,9 +7613,11 @@ const handleDeleteTaskInstance: RequestHandler = async (req, res) => {
 
     // Check if task exists and get its details
     const [taskRows] = await pool.query<RowDataPacket[]>(
-      `SELECT t.*, la.application_number, la.client_user_id 
+      `SELECT t.*, la.application_number, la.client_user_id,
+              la.broker_user_id, la.partner_broker_id, c.assigned_broker_id
        FROM tasks t 
        INNER JOIN loan_applications la ON t.application_id = la.id
+       INNER JOIN clients c ON c.id = la.client_user_id
        WHERE t.id = ? AND t.tenant_id = ?`,
       [taskId, MORTGAGE_TENANT_ID],
     );
@@ -7585,6 +7630,19 @@ const handleDeleteTaskInstance: RequestHandler = async (req, res) => {
     }
 
     const task = taskRows[0];
+
+    // Ownership check
+    const brokerRoleDelete = (req as any).brokerRole;
+    const isAdminDelete = brokerRoleDelete === "superadmin";
+    if (!isAdminDelete) {
+      const owns =
+        task.broker_user_id === brokerId ||
+        task.partner_broker_id === brokerId ||
+        task.assigned_broker_id === brokerId;
+      if (!owns) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+    }
 
     // GUARD 1: Check if task is in progress or completed - these might need special handling
     if (task.status === "in_progress") {
@@ -8624,7 +8682,8 @@ const handleApproveTask: RequestHandler = async (req, res) => {
 
     // Get task details
     const [taskRows] = await pool.query<RowDataPacket[]>(
-      `SELECT t.*, a.client_user_id, c.email as client_email, c.first_name, c.last_name
+      `SELECT t.*, a.client_user_id, a.broker_user_id, a.partner_broker_id,
+              c.email as client_email, c.first_name, c.last_name, c.assigned_broker_id
        FROM tasks t
        INNER JOIN loan_applications a ON t.application_id = a.id
        INNER JOIN clients c ON a.client_user_id = c.id
@@ -8640,6 +8699,19 @@ const handleApproveTask: RequestHandler = async (req, res) => {
     }
 
     const task = taskRows[0];
+
+    // Ownership check
+    const brokerRoleApprove = (req as any).brokerRole;
+    const isAdminApprove = brokerRoleApprove === "superadmin";
+    if (!isAdminApprove) {
+      const owns =
+        task.broker_user_id === brokerId ||
+        task.partner_broker_id === brokerId ||
+        task.assigned_broker_id === brokerId;
+      if (!owns) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+    }
 
     // Verify task is pending approval (client submitted it)
     if (!["completed", "pending_approval"].includes(task.status)) {
@@ -8730,7 +8802,8 @@ const handleReopenTask: RequestHandler = async (req, res) => {
 
     // Get task and client details
     const [taskRows] = await pool.query<RowDataPacket[]>(
-      `SELECT t.*, a.client_user_id, c.email as client_email, c.first_name, c.last_name
+      `SELECT t.*, a.client_user_id, a.broker_user_id, a.partner_broker_id,
+              c.email as client_email, c.first_name, c.last_name, c.assigned_broker_id
        FROM tasks t
        INNER JOIN loan_applications a ON t.application_id = a.id
        INNER JOIN clients c ON a.client_user_id = c.id
@@ -8746,6 +8819,19 @@ const handleReopenTask: RequestHandler = async (req, res) => {
     }
 
     const task = taskRows[0];
+
+    // Ownership check
+    const brokerRoleReopen = (req as any).brokerRole;
+    const isAdminReopen = brokerRoleReopen === "superadmin";
+    if (!isAdminReopen) {
+      const owns =
+        task.broker_user_id === brokerId ||
+        task.partner_broker_id === brokerId ||
+        task.assigned_broker_id === brokerId;
+      if (!owns) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+    }
 
     // Update task to reopened
     await pool.query(
@@ -12475,14 +12561,27 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       //   a) assigned to this broker
       //   b) unassigned (shared inbox — visible to all)
       //   c) this broker has participated in (sent a message) — handles cross-broker messaging
+      //   d) thread's loan is linked to this broker via broker_user_id, partner_broker_id, or assigned_broker_id
       `(ct.broker_id = ? OR ct.broker_id IS NULL OR EXISTS (
          SELECT 1 FROM communications comm
          WHERE comm.conversation_id = ct.conversation_id
            AND comm.from_broker_id = ?
            AND comm.tenant_id = ct.tenant_id
+       ) OR EXISTS (
+         SELECT 1 FROM loan_applications la2
+         LEFT JOIN clients cl2 ON cl2.id = la2.client_user_id
+         WHERE la2.id = ct.application_id
+           AND (la2.broker_user_id = ? OR la2.partner_broker_id = ? OR cl2.assigned_broker_id = ?)
        ))`,
     ];
-    let queryParams: any[] = [MORTGAGE_TENANT_ID, brokerId, brokerId];
+    let queryParams: any[] = [
+      MORTGAGE_TENANT_ID,
+      brokerId,
+      brokerId,
+      brokerId,
+      brokerId,
+      brokerId,
+    ];
 
     if (status !== "all") {
       whereConditions.push("ct.status = ?");

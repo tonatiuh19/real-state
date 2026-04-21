@@ -945,16 +945,16 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
                       <table className="w-full min-w-[360px] text-sm">
                         <thead>
                           <tr className="bg-muted/40 border-b border-border">
-                            <th className="px-3 py-2 text-left text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                            <th className="px-3 py-2 text-left text-[10px] font-bold text-muted-foreground uppercase tracking-widest whitespace-nowrap w-16">
                               Code
                             </th>
                             <th className="px-4 py-2 text-left text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
                               Source
                             </th>
-                            <th className="px-4 py-2 text-center text-[10px] font-bold text-muted-foreground uppercase tracking-widest w-16">
+                            <th className="px-3 py-2 text-center text-[10px] font-bold text-muted-foreground uppercase tracking-widest whitespace-nowrap w-16">
                               Count
                             </th>
-                            <th className="px-4 py-2 text-right text-[10px] font-bold text-muted-foreground uppercase tracking-widest w-14">
+                            <th className="px-3 py-2 text-right text-[10px] font-bold text-muted-foreground uppercase tracking-widest whitespace-nowrap w-16">
                               Share
                             </th>
                           </tr>
@@ -997,7 +997,7 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
                                 <td className="px-4 py-2.5 text-sm text-foreground/80">
                                   {SOURCE_LABELS[key]}
                                 </td>
-                                <td className="px-4 py-2.5 text-center">
+                                <td className="px-3 py-2.5 text-center">
                                   <span
                                     className={cn(
                                       "font-bold text-sm",
@@ -1009,7 +1009,7 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
                                     {count}
                                   </span>
                                 </td>
-                                <td className="px-4 py-2.5 text-right">
+                                <td className="px-3 py-2.5 text-right">
                                   {count > 0 ? (
                                     <span className="text-xs font-semibold text-primary">
                                       {share}%
