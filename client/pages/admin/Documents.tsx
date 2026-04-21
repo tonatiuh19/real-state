@@ -56,13 +56,18 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { useSortableData } from "@/hooks/use-sortable-data";
 
+const BASE_URL = "https://disruptinglabs.com/data/api";
+
+const toFullUrl = (path: string) =>
+  path ? (path.startsWith("http") ? path : `${BASE_URL}${path}`) : "";
+
 const Documents = () => {
   const dispatch = useAppDispatch();
   const { documents, isLoading, searchQuery, filterType, filterBroker } =
     useAppSelector((state) => state.documents);
   const { user } = useAppSelector((state) => state.brokerAuth);
 
-  const isAdmin = user?.role === "admin";
+  const hasGlobalDocumentAccess = user?.role === "superadmin";
 
   useEffect(() => {
     dispatch(fetchAllDocuments());
@@ -162,7 +167,7 @@ const Documents = () => {
           icon={<FileText className="h-7 w-7 text-primary" />}
           title="Documents"
           description={
-            isAdmin
+            hasGlobalDocumentAccess
               ? "View and manage all client documents"
               : "View and manage your client documents"
           }
@@ -219,7 +224,7 @@ const Documents = () => {
                   <SelectItem value="image">Images Only</SelectItem>
                 </SelectContent>
               </Select>
-              {isAdmin && uniqueBrokers.length > 0 && (
+              {hasGlobalDocumentAccess && uniqueBrokers.length > 0 && (
                 <Select
                   value={filterBroker?.toString() || "all"}
                   onValueChange={(value) =>
@@ -304,7 +309,7 @@ const Documents = () => {
                           className="h-7"
                         >
                           <a
-                            href={`https://disruptinglabs.com${doc.file_path}`}
+                            href={toFullUrl(doc.file_path)}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
@@ -408,7 +413,7 @@ const Documents = () => {
                             )}
                           </button>
                         </TableHead>
-                        {isAdmin && (
+                        {hasGlobalDocumentAccess && (
                           <TableHead className="w-[140px] whitespace-nowrap">
                             <button
                               type="button"
@@ -512,7 +517,7 @@ const Documents = () => {
                                 {doc.application_number}
                               </Badge>
                             </TableCell>
-                            {isAdmin && (
+                            {hasGlobalDocumentAccess && (
                               <TableCell>
                                 {doc.broker_first_name &&
                                 doc.broker_last_name ? (
@@ -537,7 +542,7 @@ const Documents = () => {
                               <div className="flex items-center justify-end gap-2">
                                 <Button variant="ghost" size="sm" asChild>
                                   <a
-                                    href={`https://disruptinglabs.com${doc.file_path}`}
+                                    href={toFullUrl(doc.file_path)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                   >

@@ -3953,6 +3953,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
+    const hasGlobalLoanAccess = brokerRole === "superadmin";
 
     // Extract query parameters for filtering
     const {
@@ -3967,17 +3968,14 @@ const handleGetLoans: RequestHandler = async (req, res) => {
       limit = "100",
     } = req.query;
 
-    // Build base WHERE clause for authorization
-    // Partners may appear as broker_user_id OR as partner_broker_id (share-link submissions)
-    let whereClause =
-      brokerRole === "admin"
-        ? "WHERE la.tenant_id = ?"
-        : "WHERE (la.broker_user_id = ? OR la.partner_broker_id = ?) AND la.tenant_id = ?";
+    // Scope loans to the client owner or any banker explicitly linked on the loan.
+    let whereClause = hasGlobalLoanAccess
+      ? "WHERE la.tenant_id = ?"
+      : "WHERE (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?) AND la.tenant_id = ?";
 
-    const baseParams =
-      brokerRole === "admin"
-        ? [MORTGAGE_TENANT_ID]
-        : [brokerId, brokerId, MORTGAGE_TENANT_ID];
+    const baseParams = hasGlobalLoanAccess
+      ? [MORTGAGE_TENANT_ID]
+      : [brokerId, brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     const subqueryParams = [
       MORTGAGE_TENANT_ID, // For first subquery (next_task)
@@ -4073,10 +4071,9 @@ const handleGetLoans: RequestHandler = async (req, res) => {
     const offset = (pageNum - 1) * limitNum;
 
     // Get total count for pagination
-    const countQueryParams =
-      brokerRole === "admin"
-        ? [MORTGAGE_TENANT_ID]
-        : [brokerId, brokerId, MORTGAGE_TENANT_ID];
+    const countQueryParams = hasGlobalLoanAccess
+      ? [MORTGAGE_TENANT_ID]
+      : [brokerId, brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     // Add filter parameters to count query
     if (status && status !== "all") {
@@ -4229,16 +4226,15 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
     const loanId = req.params.loanId;
+    const hasGlobalLoanAccess = brokerRole === "superadmin";
 
-    // Admins can view any loan, regular brokers only their own (via broker_user_id or partner_broker_id)
-    const whereClause =
-      brokerRole === "admin"
-        ? "WHERE la.id = ? AND la.tenant_id = ?"
-        : "WHERE la.id = ? AND (la.broker_user_id = ? OR la.partner_broker_id = ?) AND la.tenant_id = ?";
-    const queryParams =
-      brokerRole === "admin"
-        ? [loanId, MORTGAGE_TENANT_ID]
-        : [loanId, brokerId, brokerId, MORTGAGE_TENANT_ID];
+    // Scope loan detail to the client owner or any banker explicitly linked on the loan.
+    const whereClause = hasGlobalLoanAccess
+      ? "WHERE la.id = ? AND la.tenant_id = ?"
+      : "WHERE la.id = ? AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?) AND la.tenant_id = ?";
+    const queryParams = hasGlobalLoanAccess
+      ? [loanId, MORTGAGE_TENANT_ID]
+      : [loanId, brokerId, brokerId, brokerId, MORTGAGE_TENANT_ID];
 
     // Get loan details with client, broker, and partner broker info
     const [loans] = (await pool.query(
@@ -4325,6 +4321,7 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
+    const hasGlobalLoanAccess = brokerRole === "superadmin";
     const loanId = parseInt(req.params.loanId);
 
     if (isNaN(loanId)) {
@@ -4355,18 +4352,22 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
 
     // Verify the loan exists and broker has access
     const [[loan]] = await pool.query<RowDataPacket[]>(
-      `SELECT id, broker_user_id, partner_broker_id, status FROM loan_applications
-       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      `SELECT la.id, la.status, c.assigned_broker_id, la.broker_user_id, la.partner_broker_id
+       FROM loan_applications la
+       INNER JOIN clients c ON c.id = la.client_user_id AND c.tenant_id = la.tenant_id
+       WHERE la.id = ? AND la.tenant_id = ? LIMIT 1`,
       [loanId, MORTGAGE_TENANT_ID],
     );
     if (!loan) {
       return res.status(404).json({ success: false, error: "Loan not found" });
     }
 
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
-    const isAssigned =
-      loan.broker_user_id === brokerId || loan.partner_broker_id === brokerId;
-    if (!isAdmin && !isAssigned) {
+    const hasLoanAccess =
+      loan.assigned_broker_id === brokerId ||
+      loan.broker_user_id === brokerId ||
+      loan.partner_broker_id === brokerId;
+
+    if (!hasGlobalLoanAccess && !hasLoanAccess) {
       return res.status(403).json({ success: false, error: "Access denied" });
     }
 
@@ -4666,6 +4667,7 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
+    const hasGlobalLoanAccess = brokerRole === "superadmin";
     const loanId = parseInt(req.params.loanId);
     const { status: newStatus, notes } = req.body;
 
@@ -4690,26 +4692,33 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
       });
     }
 
-    // Only mortgage bankers (admin role) can manually move status
-    if (brokerRole !== "admin") {
+    // Only mortgage bankers can manually move status.
+    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
       return res.status(403).json({
         success: false,
         error: "Only mortgage bankers can update loan pipeline status.",
       });
     }
 
-    const whereClause = "WHERE id = ? AND tenant_id = ?";
-    const queryParams = [loanId, MORTGAGE_TENANT_ID];
-
     const [loanRows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, status FROM loan_applications ${whereClause}`,
-      queryParams,
+      `SELECT la.id, la.status, c.assigned_broker_id
+       FROM loan_applications la
+       INNER JOIN clients c ON c.id = la.client_user_id AND c.tenant_id = la.tenant_id
+       WHERE la.id = ? AND la.tenant_id = ?`,
+      [loanId, MORTGAGE_TENANT_ID],
     );
 
     if (loanRows.length === 0) {
       return res.status(404).json({
         success: false,
         error: "Loan not found",
+      });
+    }
+
+    if (!hasGlobalLoanAccess && loanRows[0].assigned_broker_id !== brokerId) {
+      return res.status(403).json({
+        success: false,
+        error: "Access denied",
       });
     }
 
@@ -5412,7 +5421,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "superadmin";
     const clientId = parseInt(req.params.clientId);
     if (isNaN(clientId)) {
       return res
@@ -5440,8 +5449,8 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
         .json({ success: false, error: "Client not found" });
     }
 
-    // Access control for non-admin
-    if (!isAdmin) {
+    // Access control for non-superadmins: client owner or any banker linked on one of the client's loans.
+    if (!hasGlobalClientAccess) {
       const [[access]] = await pool.query<RowDataPacket[]>(
         `SELECT 1 FROM loan_applications
          WHERE client_user_id = ? AND tenant_id = ?
@@ -5449,6 +5458,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
          LIMIT 1`,
         [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId],
       );
+
       if (!access && client.assigned_broker_id !== brokerId) {
         return res.status(403).json({ success: false, error: "Access denied" });
       }
@@ -5552,7 +5562,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "superadmin";
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(
@@ -5579,9 +5589,9 @@ const handleGetClients: RequestHandler = async (req, res) => {
     };
     const safeSortBy = SORT_MAP[sortBy] ?? "c.created_at";
 
-    const baseWhere = `WHERE c.tenant_id = ?${isAdmin ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR REGEXP_REPLACE(c.phone, '[^0-9]', '') LIKE ? OR RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10) LIKE ?)" : ""}`;
+    const baseWhere = `WHERE c.tenant_id = ?${hasGlobalClientAccess ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR REGEXP_REPLACE(c.phone, '[^0-9]', '') LIKE ? OR RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10) LIKE ?)" : ""}`;
 
-    const filterParams: any[] = isAdmin
+    const filterParams: any[] = hasGlobalClientAccess
       ? [MORTGAGE_TENANT_ID]
       : [MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId];
     if (sourceFilter) filterParams.push(sourceFilter);
@@ -5716,6 +5726,8 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
   try {
     const { clientId } = req.params;
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const hasGlobalClientAccess = brokerRole === "superadmin";
     const {
       first_name,
       last_name,
@@ -5752,13 +5764,26 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
 
     // Verify client belongs to this tenant
     const [[existing]] = await pool.query<any[]>(
-      "SELECT id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1",
+      "SELECT id, assigned_broker_id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1",
       [clientId, MORTGAGE_TENANT_ID],
     );
     if (!existing) {
       return res
         .status(404)
         .json({ success: false, error: "Client not found" });
+    }
+    if (!hasGlobalClientAccess) {
+      const [[access]] = await pool.query<RowDataPacket[]>(
+        `SELECT 1 FROM loan_applications
+         WHERE client_user_id = ? AND tenant_id = ?
+           AND (broker_user_id = ? OR partner_broker_id = ?)
+         LIMIT 1`,
+        [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId],
+      );
+
+      if (!access && existing.assigned_broker_id !== brokerId) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
     }
 
     const updates: string[] = [];
@@ -5832,8 +5857,9 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     }
 
     values.push(clientId);
+    values.push(MORTGAGE_TENANT_ID);
     await pool.query(
-      `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ?`,
+      `UPDATE clients SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ? AND tenant_id = ?`,
       values,
     );
 
@@ -5853,8 +5879,8 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
          SELECT client_id, COUNT(DISTINCT conversation_id) as total
          FROM conversation_threads GROUP BY client_id
        ) convs ON convs.client_id = c.id
-       WHERE c.id = ?`,
-      [clientId],
+       WHERE c.id = ? AND c.tenant_id = ?`,
+      [clientId, MORTGAGE_TENANT_ID],
     );
 
     return res.json({ success: true, client });
@@ -5875,7 +5901,7 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
     const { clientId } = req.params;
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "superadmin";
 
     // Check if client exists and belongs to this broker
     const [clientRows] = await pool.query<RowDataPacket[]>(
@@ -5883,11 +5909,11 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
        FROM clients c 
        LEFT JOIN loan_applications la ON c.id = la.client_user_id
        WHERE c.id = ? AND c.tenant_id = ?
-         ${isAdmin ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}
+         ${hasGlobalClientAccess ? "" : "AND c.assigned_broker_id = ?"}
        GROUP BY c.id`,
-      isAdmin
+      hasGlobalClientAccess
         ? [clientId, MORTGAGE_TENANT_ID]
-        : [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
+        : [clientId, MORTGAGE_TENANT_ID, brokerId],
     );
 
     if (!Array.isArray(clientRows) || clientRows.length === 0) {
@@ -8081,13 +8107,39 @@ const handleGetTaskFormResponses: RequestHandler = async (req, res) => {
 const handleGetTaskDocuments: RequestHandler = async (req, res) => {
   try {
     const { taskId } = req.params;
+    const brokerId = (req as any).brokerId as number | undefined;
+    const brokerRole = (req as any).brokerRole as string | undefined;
+    const clientId = (req as any).clientId as number | undefined;
+
+    if (clientId) {
+      const [documents] = await pool.query(
+        `SELECT td.* FROM task_documents td 
+         INNER JOIN tasks t ON td.task_id = t.id
+         INNER JOIN loan_applications la ON t.application_id = la.id
+         WHERE td.task_id = ? AND la.client_user_id = ? AND la.tenant_id = ?
+         ORDER BY td.uploaded_at DESC`,
+        [taskId, clientId, MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({
+        success: true,
+        documents: documents,
+      });
+    }
+
+    const hasGlobalDocumentAccess = brokerRole === "superadmin";
 
     const [documents] = await pool.query(
       `SELECT td.* FROM task_documents td 
-       INNER JOIN tasks t ON td.task_id = t.id 
-       WHERE td.task_id = ? AND t.tenant_id = ? 
+       INNER JOIN tasks t ON td.task_id = t.id
+       INNER JOIN loan_applications la ON t.application_id = la.id
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE td.task_id = ? AND t.tenant_id = ?
+         ${hasGlobalDocumentAccess ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}
        ORDER BY td.uploaded_at DESC`,
-      [taskId, MORTGAGE_TENANT_ID],
+      hasGlobalDocumentAccess
+        ? [taskId, MORTGAGE_TENANT_ID]
+        : [taskId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
     );
 
     res.json({
@@ -8109,6 +8161,58 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
 const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
+    const brokerId = (req as any).brokerId as number | undefined;
+    const brokerRole = (req as any).brokerRole as string | undefined;
+    const clientId = (req as any).clientId as number | undefined;
+
+    if (clientId) {
+      const [documentRows] = await pool.query<RowDataPacket[]>(
+        `SELECT td.id
+         FROM task_documents td
+         INNER JOIN tasks t ON td.task_id = t.id
+         INNER JOIN loan_applications la ON t.application_id = la.id
+         WHERE td.id = ? AND la.client_user_id = ? AND la.tenant_id = ?
+         LIMIT 1`,
+        [documentId, clientId, MORTGAGE_TENANT_ID],
+      );
+
+      if (documentRows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Document not found or not accessible",
+        });
+      }
+
+      await pool.query(`DELETE FROM task_documents WHERE id = ?`, [documentId]);
+
+      return res.json({
+        success: true,
+        message: "Document deleted successfully",
+      });
+    }
+
+    const hasGlobalDocumentAccess = brokerRole === "superadmin";
+
+    const [documentRows] = await pool.query<RowDataPacket[]>(
+      `SELECT td.id
+       FROM task_documents td
+       INNER JOIN tasks t ON td.task_id = t.id
+       INNER JOIN loan_applications la ON t.application_id = la.id
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE td.id = ? AND la.tenant_id = ?
+         ${hasGlobalDocumentAccess ? "" : "AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}
+       LIMIT 1`,
+      hasGlobalDocumentAccess
+        ? [documentId, MORTGAGE_TENANT_ID]
+        : [documentId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
+    );
+
+    if (documentRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Document not found or not accessible",
+      });
+    }
 
     await pool.query(`DELETE FROM task_documents WHERE id = ?`, [documentId]);
 
@@ -9064,6 +9168,7 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
+    const hasGlobalDocumentAccess = brokerRole === "superadmin";
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(
@@ -9092,9 +9197,14 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
     const conditions: string[] = [];
     const params: any[] = [];
 
-    if (brokerRole !== "admin") {
-      conditions.push("a.broker_user_id = ?");
-      params.push(brokerId);
+    conditions.push("a.tenant_id = ?");
+    params.push(MORTGAGE_TENANT_ID);
+
+    if (!hasGlobalDocumentAccess) {
+      conditions.push(
+        "(c.assigned_broker_id = ? OR a.broker_user_id = ? OR a.partner_broker_id = ?)",
+      );
+      params.push(brokerId, brokerId, brokerId);
     }
     if (search) {
       conditions.push(
