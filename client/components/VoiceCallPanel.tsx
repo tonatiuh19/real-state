@@ -13,6 +13,7 @@ import {
   Settings2,
   X,
   Radio,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { useAppSelector } from "@/store/hooks";
@@ -96,6 +103,11 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const [speakerDevices, setSpeakerDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("default");
   const [selectedSpeakerId, setSelectedSpeakerId] = useState("default");
+  // Speaker volume: 0–1, persisted in localStorage
+  const [speakerVolume, setSpeakerVolume] = useState<number>(() => {
+    const stored = localStorage.getItem("voice_speaker_volume");
+    return stored !== null ? parseFloat(stored) : 1;
+  });
   const [micLevel, setMicLevel] = useState(0); // 0–100 for live mic meter
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const micRafRef = useRef<number | null>(null);
@@ -129,7 +141,18 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio:
-            deviceId !== "default" ? { deviceId: { exact: deviceId } } : true,
+            deviceId !== "default"
+              ? {
+                  deviceId: { exact: deviceId },
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                }
+              : {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                },
         });
         micStreamRef.current = stream;
         const ctx = new AudioContext();
@@ -159,6 +182,28 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     () => deviceAudio ?? deviceRef.current?.audio ?? null,
     [deviceAudio],
   );
+
+  // Pre-call: enumerate audio devices and start mic meter preview for the settings screen.
+  // We run this once on mount for outbound calls so the user sees real device labels
+  // and a live mic level bar before clicking "Start Call".
+  useEffect(() => {
+    if (activeCall) return; // inbound calls skip the pre-call screen
+    const setup = async () => {
+      try {
+        // getUserMedia (inside startMicMeter) grants mic permission so that
+        // enumerateDevices returns real human-readable device labels.
+        await startMicMeter("default");
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+        setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
+      } catch {
+        // Mic permission denied — selectors will fall back to showing "Default"
+      }
+    };
+    setup();
+    return () => stopMicMeter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Enumerate available audio devices and keep the list live while the call is active.
   // Bluetooth devices (AirPods, etc.) fire a 'devicechange' event when they connect —
@@ -204,11 +249,13 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const handleMicChange = useCallback(
     async (deviceId: string) => {
       setSelectedMicId(deviceId);
+      // Always restart the mic meter so the level bar reflects the new device,
+      // both in the pre-call settings screen and during an active call.
+      startMicMeter(deviceId);
       const audio = getAudioHelper();
-      if (!audio) return;
+      if (!audio) return; // pre-call: no Twilio device yet, meter restart is enough
       try {
         await audio.setInputDevice(deviceId);
-        startMicMeter(deviceId);
       } catch (e) {
         logger.error("[VoiceCallPanel] Failed to set input device:", e);
       }
@@ -229,6 +276,33 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     },
     [getAudioHelper],
   );
+
+  // Apply speaker volume to all <audio> elements Twilio creates.
+  // Twilio injects hidden <audio> elements into the DOM for playback;
+  // setting .volume directly is the only reliable cross-browser way to boost them.
+  const applyVolumeToAudioElements = useCallback((vol: number) => {
+    document.querySelectorAll<HTMLAudioElement>("audio").forEach((el) => {
+      el.volume = vol;
+    });
+  }, []);
+
+  const handleSpeakerVolumeChange = useCallback(
+    (vol: number) => {
+      setSpeakerVolume(vol);
+      localStorage.setItem("voice_speaker_volume", String(vol));
+      applyVolumeToAudioElements(vol);
+    },
+    [applyVolumeToAudioElements],
+  );
+
+  // Re-apply stored volume whenever call becomes active
+  // (Twilio creates its audio elements at connection time)
+  useEffect(() => {
+    if (callState === "in-call") {
+      applyVolumeToAudioElements(speakerVolume);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callState]);
 
   // Log the call to the server after it ends
   const logCall = useCallback(
@@ -337,11 +411,34 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
       await device.register();
 
+      // Apply the devices the user pre-selected in the pre-call settings screen
+      // before the call is placed, so Twilio uses exactly those devices.
+      const preCallAudio = device.audio;
+      if (preCallAudio) {
+        if (selectedMicId !== "default") {
+          await preCallAudio.setInputDevice(selectedMicId).catch(() => {});
+        }
+        if (supportsSinkId && selectedSpeakerId !== "default") {
+          await preCallAudio.speakerDevices
+            .set([selectedSpeakerId])
+            .catch(() => {});
+        }
+      }
+
       setCallState("connecting");
 
-      // 3. Place call
+      // 3. Place call — rtcConstraints apply AGC/echo-cancellation to the actual
+      // WebRTC audio track sent to Twilio (and ultimately to the recipient).
+      // Without this they only apply to the mic-meter preview stream.
       const call = await device.connect({
         params: { To: phone },
+        rtcConstraints: {
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        },
       });
       callRef.current = call;
 
@@ -352,36 +449,12 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
         setCallState("in-call");
         startTimer();
 
-        // Immediately enumerate and apply the best available audio devices.
-        // Without this, Twilio may use a low-quality or wrong device (e.g. the
-        // built-in laptop mic instead of a headset that was already plugged in).
+        // Re-enumerate so the in-call audio settings picker has up-to-date labels.
+        // We keep whatever the user already picked in the pre-call settings screen.
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
-          const mics = devices.filter((d) => d.kind === "audioinput");
-          const speakers = devices.filter((d) => d.kind === "audiooutput");
-          setMicDevices(mics);
-          setSpeakerDevices(speakers);
-
-          const audio = deviceRef.current?.audio ?? null;
-          if (audio) {
-            // Prefer a headset/external mic; fall back to "default"
-            const headsetMic = mics.find((d) =>
-              /headset|headphone|airpod|bluetooth|external/i.test(d.label),
-            );
-            const micId = headsetMic?.deviceId ?? "default";
-            setSelectedMicId(micId);
-            await audio.setInputDevice(micId).catch(() => {});
-
-            // Apply speaker too (only on browsers that support setSinkId)
-            if (supportsSinkId) {
-              const headsetSpeaker = speakers.find((d) =>
-                /headset|headphone|airpod|bluetooth|external/i.test(d.label),
-              );
-              const speakerId = headsetSpeaker?.deviceId ?? "default";
-              setSelectedSpeakerId(speakerId);
-              await audio.speakerDevices.set([speakerId]).catch(() => {});
-            }
-          }
+          setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+          setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
         } catch {
           // Non-fatal — user can manually pick devices in the audio settings
         }
@@ -464,7 +537,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       };
     }
 
-    initiateCall();
+    // Outbound: stay in the pre-call settings screen. User clicks "Start Call" to dial.
     return () => {
       cleanupDevice();
     };
@@ -523,7 +596,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   };
 
   const stateColor: Record<CallState, string> = {
-    idle: "bg-muted",
+    idle: "bg-background",
     initializing: "bg-amber-50 border-amber-200",
     connecting: "bg-amber-50 border-amber-200",
     ringing: "bg-amber-50 border-amber-200",
@@ -532,6 +605,14 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     ended: "bg-muted border-border",
     error: "bg-red-50 border-red-200",
   };
+
+  // Resolved display labels for the currently selected devices
+  const selectedMicLabel =
+    micDevices.find((d) => d.deviceId === selectedMicId)?.label ||
+    "System Default";
+  const selectedSpeakerLabel =
+    speakerDevices.find((d) => d.deviceId === selectedSpeakerId)?.label ||
+    "System Default";
 
   return (
     <div
@@ -595,27 +676,210 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
         </Button>
       </div>
 
-      {/* Status label */}
-      <div className="flex items-center justify-center py-2">
-        <Badge
-          variant="outline"
-          className={cn(
-            "text-sm px-4 py-1 font-mono",
-            callState === "in-call" &&
-              "bg-green-100 text-green-700 border-green-300",
-            callState === "error" && "bg-red-100 text-red-600 border-red-200",
-            (callState === "connecting" || callState === "ringing") &&
-              "bg-amber-100 text-amber-700 border-amber-300",
-          )}
-        >
-          {getStateLabel()}
-        </Badge>
-      </div>
+      {/* Status label — hidden in idle (pre-call) state */}
+      {callState !== "idle" && (
+        <div className="flex items-center justify-center py-2">
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-sm px-4 py-1 font-mono",
+              callState === "in-call" &&
+                "bg-green-100 text-green-700 border-green-300",
+              callState === "error" && "bg-red-100 text-red-600 border-red-200",
+              (callState === "connecting" || callState === "ringing") &&
+                "bg-amber-100 text-amber-700 border-amber-300",
+            )}
+          >
+            {getStateLabel()}
+          </Badge>
+        </div>
+      )}
 
       {errorMsg && (
         <p className="text-xs text-red-600 text-center bg-red-50 rounded px-3 py-2">
           {errorMsg}
         </p>
+      )}
+
+      {/* Pre-call settings screen (Teams-style) */}
+      {callState === "idle" && (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-3">
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+              <Settings2 className="h-3 w-3" />
+              Audio Settings
+            </p>
+
+            {/* Microphone */}
+            <div className="space-y-1.5">
+              <Label className="text-xs flex items-center gap-1.5">
+                <Mic className="h-3.5 w-3.5" />
+                Microphone
+              </Label>
+              <Select value={selectedMicId} onValueChange={handleMicChange}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="System Default" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">System Default</SelectItem>
+                  {micDevices
+                    .filter((d) => d.deviceId !== "default")
+                    .map((d) => (
+                      <SelectItem key={d.deviceId} value={d.deviceId}>
+                        {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              {/* Live mic level bar */}
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                  {micLevel > 5 ? (
+                    <>
+                      <Mic className="h-2.5 w-2.5 text-green-500" /> Mic active
+                    </>
+                  ) : (
+                    <>
+                      <MicOff className="h-2.5 w-2.5 text-muted-foreground" />{" "}
+                      Speak to test
+                    </>
+                  )}
+                </p>
+                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-75",
+                      micLevel > 60
+                        ? "bg-green-500"
+                        : micLevel > 20
+                          ? "bg-green-400"
+                          : "bg-muted-foreground/30",
+                    )}
+                    style={{ width: `${micLevel}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Speaker */}
+            <div className="space-y-1.5">
+              <Label className="text-xs flex items-center gap-1.5">
+                <Volume2 className="h-3.5 w-3.5" />
+                Speaker
+              </Label>
+              {supportsSinkId ? (
+                <Select
+                  value={selectedSpeakerId}
+                  onValueChange={handleSpeakerChange}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="System Default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">System Default</SelectItem>
+                    {speakerDevices
+                      .filter((d) => d.deviceId !== "default")
+                      .map((d) => (
+                        <SelectItem key={d.deviceId} value={d.deviceId}>
+                          {d.label || `Speaker ${d.deviceId.slice(0, 6)}`}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Speaker selection not supported in this browser.
+                </p>
+              )}
+              {/* Volume slider */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    {speakerVolume === 0 ? (
+                      <VolumeX className="h-3 w-3" />
+                    ) : speakerVolume < 0.5 ? (
+                      <Volume1 className="h-3 w-3" />
+                    ) : (
+                      <Volume2 className="h-3 w-3" />
+                    )}
+                    Volume
+                  </Label>
+                  <span className="text-[10px] text-muted-foreground">
+                    {Math.round(speakerVolume * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={speakerVolume}
+                  onChange={(e) =>
+                    handleSpeakerVolumeChange(parseFloat(e.target.value))
+                  }
+                  className="w-full h-1.5 accent-primary cursor-pointer"
+                />
+                {speakerVolume < 0.5 && speakerVolume > 0 && (
+                  <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                    <Volume1 className="h-3 w-3" />
+                    Volume is low
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Quality indicator badges */}
+            <div className="flex items-center gap-3 border-t pt-2 flex-wrap">
+              <span className="text-[10px] flex items-center gap-1 text-green-600">
+                <CheckCircle2 className="h-3 w-3" /> HD Audio
+              </span>
+              <span className="text-[10px] flex items-center gap-1 text-green-600">
+                <CheckCircle2 className="h-3 w-3" /> Echo Cancel
+              </span>
+              <span className="text-[10px] flex items-center gap-1 text-green-600">
+                <CheckCircle2 className="h-3 w-3" /> Noise Reduction
+              </span>
+            </div>
+          </div>
+
+          {/* Call button with settings summary tooltip */}
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  className="w-full bg-green-600 hover:bg-green-700 text-white gap-2 h-10"
+                  onClick={initiateCall}
+                >
+                  <Phone className="h-4 w-4" />
+                  Start Call
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                align="center"
+                className="max-w-[220px] p-3"
+              >
+                <div className="space-y-1.5 text-xs">
+                  <p className="flex items-center gap-2">
+                    <Mic className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{selectedMicLabel}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <Volume2 className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{selectedSpeakerLabel}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      · {Math.round(speakerVolume * 100)}%
+                    </span>
+                  </p>
+                  <p className="flex items-center gap-1.5 text-green-500 border-t pt-1.5">
+                    <CheckCircle2 className="h-3 w-3 shrink-0" />
+                    HD · Echo Cancel · Noise Reduction
+                  </p>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       )}
 
       {/* Controls */}
@@ -766,6 +1030,42 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
                 ) : (
                   <p className="text-xs text-muted-foreground">
                     Speaker selection not supported in this browser.
+                  </p>
+                )}
+              </div>
+
+              {/* Speaker volume slider */}
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    {speakerVolume === 0 ? (
+                      <VolumeX className="h-3.5 w-3.5" />
+                    ) : speakerVolume < 0.5 ? (
+                      <Volume1 className="h-3.5 w-3.5" />
+                    ) : (
+                      <Volume2 className="h-3.5 w-3.5" />
+                    )}
+                    Speaker Volume
+                  </span>
+                  <span className="text-muted-foreground font-normal">
+                    {Math.round(speakerVolume * 100)}%
+                  </span>
+                </Label>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={speakerVolume}
+                  onChange={(e) =>
+                    handleSpeakerVolumeChange(parseFloat(e.target.value))
+                  }
+                  className="w-full h-1.5 accent-primary cursor-pointer"
+                />
+                {speakerVolume < 0.5 && (
+                  <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                    <Volume1 className="h-3 w-3" />
+                    Volume is low — try raising it or check your OS settings
                   </p>
                 )}
               </div>

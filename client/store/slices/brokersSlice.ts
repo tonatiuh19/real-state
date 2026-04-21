@@ -12,6 +12,8 @@ import type {
   UpdateBrokerProfileRequest,
   UpdateBrokerProfileResponse,
   AdminBrokerShareLinkResponse,
+  ConvertBrokerToClientRequest,
+  ConvertBrokerToClientResponse,
   PaginationInfo,
 } from "@shared/api";
 import type { RootState } from "../index";
@@ -261,6 +263,31 @@ export const fetchBrokerShareLink = createAsyncThunk(
   },
 );
 
+export const convertBrokerToClient = createAsyncThunk(
+  "brokers/convertBrokerToClient",
+  async (
+    {
+      brokerId,
+      payload,
+    }: { brokerId: number; payload: ConvertBrokerToClientRequest },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<ConvertBrokerToClientResponse>(
+        `/api/brokers/${brokerId}/convert-to-client`,
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { brokerId, ...data };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to convert broker to client",
+      );
+    }
+  },
+);
+
 const brokersSlice = createSlice({
   name: "brokers",
   initialState,
@@ -399,6 +426,16 @@ const brokersSlice = createSlice({
       })
       .addCase(fetchMyShareLink.rejected, (state) => {
         state.shareLinkLoading = false;
+      })
+      // Convert broker to client
+      .addCase(convertBrokerToClient.fulfilled, (state, action) => {
+        // Remove the converted (now inactive) broker from the list
+        state.brokers = state.brokers.filter(
+          (b) => b.id !== action.payload.brokerId,
+        );
+        if (state.selectedBrokerProfile?.id === action.payload.brokerId) {
+          state.selectedBrokerProfile = null;
+        }
       });
   },
 });

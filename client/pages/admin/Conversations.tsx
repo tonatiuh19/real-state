@@ -21,9 +21,12 @@ import {
   AlertCircle,
   CheckCircle,
   Archive,
+  ArchiveRestore,
   Star,
   Tag,
   ChevronLeft,
+  ChevronDown,
+  FileText,
   Hash,
   Calendar,
   ExternalLink,
@@ -39,17 +42,48 @@ import {
   Lock,
   CalendarPlus,
   Copy,
+  Check,
   CheckCheck,
   Trash2,
+  BookmarkPlus,
+  Info,
+  Eye,
+  EyeOff,
+  Sparkles,
+  CircleCheck,
+  CircleAlert,
+  X,
+  Download,
+  Play,
+  Pause,
+  Paperclip,
+  ImageIcon,
+  Film,
+  FileAudio,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
+import { uploadMMSMedia } from "@/lib/cdn-upload";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import ClientDetailPanel from "@/components/ClientDetailPanel";
+import BrokerDetailPanel from "@/components/BrokerDetailPanel";
+import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
+import PhoneNumbersPanel from "@/components/PhoneNumbersPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
 import NewConversationWizard from "@/components/NewConversationWizard";
-import VoiceCallPanel from "@/components/VoiceCallPanel";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import { adminPageMeta } from "@/lib/seo-helpers";
+import {
+  buildVarMap,
+  resolveVars,
+  getVarStatus,
+  getTemplateCompatibility,
+  sortTemplatesSmart,
+  recordTemplateUsed,
+  getRecentTemplateIds,
+  ALL_VARIABLES,
+  CATEGORY_LABELS,
+} from "@/lib/template-utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -80,7 +114,27 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "@/components/ui/command";
 import { Label } from "@/components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
@@ -98,8 +152,14 @@ import {
   checkWhatsAppAvailability,
   removeThread,
   saveContactFromConversation,
+  updateConversation,
+  deleteConversation,
+  patchMessageRecording,
 } from "@/store/slices/conversationsSlice";
-import { setVoiceAvailable } from "@/store/slices/voiceSlice";
+import {
+  setVoiceAvailable,
+  startOutboundCall,
+} from "@/store/slices/voiceSlice";
 import type { DeviceStatus } from "@/store/slices/voiceSlice";
 import { cn } from "@/lib/utils";
 import type {
@@ -169,6 +229,62 @@ const Conversations = () => {
   // Selected call record for detail view
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [isCallDetailDialing, setIsCallDetailDialing] = useState(false);
+
+  // Client detail panel
+  const [detailClientId, setDetailClientId] = useState<number | null>(null);
+  // Broker detail panel (for realtor contacts)
+  const [detailBrokerId, setDetailBrokerId] = useState<number | null>(null);
+  // Save-as-template dialog
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+
+  // Thread-level archive / delete actions
+  // confirmDeleteId: the conversation_id that is in "confirm delete?" state
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // threadMenuOpenId: which thread's mobile ⋮ dropdown is open
+  const [threadMenuOpenId, setThreadMenuOpenId] = useState<string | null>(null);
+  // undoArchive: the thread that was just archived, waiting for undo window
+  const undoArchiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [undoArchiveThread, setUndoArchiveThread] =
+    useState<ConversationThread | null>(null);
+
+  // Smart compose: live preview + variable autocomplete
+  const [showPreview, setShowPreview] = useState(false);
+  const [varAutocomplete, setVarAutocomplete] = useState(false);
+  const [varAutocompleteFilter, setVarAutocompleteFilter] = useState("");
+  const [recentTemplateIds, setRecentTemplateIds] = useState<number[]>(() =>
+    getRecentTemplateIds(),
+  );
+  const composeTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Optimistic messages: show immediately while API is in-flight
+  type OptimisticMsg = {
+    tempId: string;
+    body: string;
+    subject?: string;
+    type: "email" | "sms" | "whatsapp";
+    status: "sending" | "sent" | "failed";
+    ts: Date;
+    /** DB id returned by the send API — used to suppress the optimistic once the real message arrives */
+    communicationId?: number;
+  };
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMsg[]>(
+    [],
+  );
+  const [failedText, setFailedText] = useState<string | null>(null);
+  // MMS attachment state (SMS only)
+  const [mmsAttachment, setMmsAttachment] = useState<{
+    file: File;
+    previewUrl: string;
+    contentType: string;
+  } | null>(null);
+  const [isUploadingMMS, setIsUploadingMMS] = useState(false);
+  const mmsFileInputRef = useRef<HTMLInputElement>(null);
+  // Track whether this thread has had its messages loaded at least once
+  // so background refreshes don't flash the full-area spinner.
+  const initialLoadedThreadRef = useRef<string | null>(null);
 
   // Save unknown contact state
   const [isSaveContactOpen, setIsSaveContactOpen] = useState(false);
@@ -316,164 +432,12 @@ const Conversations = () => {
   const { sessionToken, user: currentUser } = useAppSelector(
     (s) => s.brokerAuth,
   );
+  const varMap = buildVarMap(currentThread, currentUser);
   const isAvailable = useAppSelector((s) => s.voice.isAvailable);
   const deviceStatus = useAppSelector((s) => s.voice.deviceStatus);
 
   // Phone numbers management
   const [isPhoneNumbersOpen, setIsPhoneNumbersOpen] = useState(false);
-  type PhoneNumberEntry = {
-    sid: string;
-    phoneNumber: string;
-    friendlyName: string;
-    voiceUrl: string;
-    smsUrl: string;
-    configured: boolean;
-    smsConfigured: boolean;
-    capabilities: { voice: boolean; sms: boolean; mms: boolean };
-    assignedBrokerId: number | null;
-    assignedBrokerName: string | null;
-  };
-  type BrokerOption = { id: number; name: string };
-  const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumberEntry[]>([]);
-  const [brokerOptions, setBrokerOptions] = useState<BrokerOption[]>([]);
-  const [isLoadingNumbers, setIsLoadingNumbers] = useState(false);
-  const [isConfiguringAll, setIsConfiguringAll] = useState(false);
-  const [configuringSid, setConfiguringSid] = useState<string | null>(null);
-  const [assigningSid, setAssigningSid] = useState<string | null>(null);
-  const [isSyncingCallSetup, setIsSyncingCallSetup] = useState(false);
-  const [callSetupStatus, setCallSetupStatus] = useState<{
-    twimlAppSid?: string;
-    voiceUrl?: string;
-  } | null>(null);
-
-  const assignNumber = async (sid: string, brokerId: number | null) => {
-    setAssigningSid(sid);
-    try {
-      const res = await fetch(`/api/voice/phone-numbers/${sid}/assign`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({ brokerId }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast({
-          title: "Assigned",
-          description: brokerId
-            ? `Number assigned successfully`
-            : "Number unassigned",
-        });
-        await fetchPhoneNumbers();
-      } else {
-        toast({
-          title: "Error",
-          description: data.error || "Failed to assign",
-          variant: "destructive",
-        });
-      }
-    } catch {
-      toast({
-        title: "Error",
-        description: "Failed to assign number",
-        variant: "destructive",
-      });
-    } finally {
-      setAssigningSid(null);
-    }
-  };
-
-  const fetchPhoneNumbers = async () => {
-    setIsLoadingNumbers(true);
-    try {
-      const res = await fetch("/api/voice/phone-numbers", {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPhoneNumbers(data.numbers);
-        if (data.brokers) setBrokerOptions(data.brokers);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setIsLoadingNumbers(false);
-    }
-  };
-
-  const configureNumber = async (sid: string) => {
-    const key = sid === "all" ? "all" : sid;
-    if (sid === "all") setIsConfiguringAll(true);
-    else setConfiguringSid(sid);
-    try {
-      const res = await fetch(`/api/voice/phone-numbers/${sid}/configure`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast({
-          title: "Configured",
-          description:
-            sid === "all"
-              ? `All ${data.updated} numbers configured`
-              : "Number configured for incoming calls",
-        });
-        await fetchPhoneNumbers();
-      }
-    } catch {
-      toast({
-        title: "Error",
-        description: "Failed to configure number",
-        variant: "destructive",
-      });
-    } finally {
-      setIsConfiguringAll(false);
-      setConfiguringSid(null);
-    }
-  };
-
-  useEffect(() => {
-    if (isPhoneNumbersOpen) fetchPhoneNumbers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPhoneNumbersOpen]);
-
-  const syncCallSetup = async () => {
-    setIsSyncingCallSetup(true);
-    setCallSetupStatus(null);
-    try {
-      const res = await fetch("/api/voice/fix-call-setup", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCallSetupStatus({
-          twimlAppSid: data.twimlAppSid,
-          voiceUrl: data.voiceUrl,
-        });
-        toast({
-          title: "Outbound calls ready",
-          description: "Voice configuration synced — outbound calls are ready.",
-        });
-      } else {
-        toast({
-          title: "Error",
-          description: data.error || "Failed to sync voice configuration",
-          variant: "destructive",
-        });
-      }
-    } catch {
-      toast({
-        title: "Error",
-        description: "Failed to sync voice configuration",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSyncingCallSetup(false);
-    }
-  };
 
   // Client-side channel filtering
   const filteredThreads =
@@ -484,10 +448,10 @@ const Conversations = () => {
   // Show all messages regardless of channel — channel tabs only filter the thread list
   const filteredMessages = messages;
 
-  // Auto-scroll to bottom when messages update
+  // Auto-scroll to bottom when messages or optimistic messages update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [filteredMessages]);
+  }, [filteredMessages, optimisticMessages]);
 
   // Auto-populate message when template is selected
   useEffect(() => {
@@ -617,13 +581,80 @@ const Conversations = () => {
     };
   }, [currentThread?.conversation_id, dispatch]);
 
+  // Poll for recording URLs on call messages that are still processing.
+  // Twilio takes ~30s–2min after a call ends to transcode and deliver the recording.
+  // We poll every 10s for up to 3 minutes, then give up gracefully.
+  useEffect(() => {
+    const POLL_INTERVAL_MS = 10_000;
+    const MAX_POLLS = 18; // 18 × 10s = 3 minutes
+
+    // Find call messages that have a CallSid but no recording URL yet
+    const pending = messages.filter(
+      (m) =>
+        m.communication_type === "call" &&
+        m.external_id &&
+        !(m as any).recording_url,
+    );
+
+    if (pending.length === 0) return;
+
+    const pollCounts: Record<string, number> = {};
+    pending.forEach((m) => {
+      pollCounts[m.external_id!] = 0;
+    });
+
+    const timer = setInterval(async () => {
+      const sidsToCheck = Object.keys(pollCounts).filter(
+        (sid) => pollCounts[sid] < MAX_POLLS,
+      );
+      if (sidsToCheck.length === 0) {
+        clearInterval(timer);
+        return;
+      }
+
+      await Promise.all(
+        sidsToCheck.map(async (sid) => {
+          pollCounts[sid]++;
+          try {
+            const res = await fetch(`/api/voice/recording-check/${sid}`, {
+              headers: { Authorization: `Bearer ${sessionToken}` },
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.ready && data.recording_url) {
+              dispatch(
+                patchMessageRecording({
+                  external_id: sid,
+                  recording_url: data.recording_url,
+                  recording_duration: data.recording_duration ?? null,
+                }),
+              );
+              // Remove from polling once resolved
+              delete pollCounts[sid];
+            }
+          } catch {
+            // Silently ignore network errors — will retry on next tick
+          }
+        }),
+      );
+    }, POLL_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [messages, sessionToken, dispatch]);
+
   const handleSelectThread = (thread: ConversationThread) => {
+    // Reset initial-load tracker so the new thread shows its spinner
+    initialLoadedThreadRef.current = null;
     dispatch(setCurrentThread(thread));
     dispatch(
       fetchConversationMessages({ conversationId: thread.conversation_id }),
-    );
+    ).finally(() => {
+      initialLoadedThreadRef.current = thread.conversation_id;
+    });
     setMobilePanel("chat");
     setIsCallActive(false);
+    setOptimisticMessages([]);
+    setFailedText(null);
 
     if (thread.unread_count > 0) {
       dispatch(markConversationAsRead(thread.conversation_id));
@@ -647,11 +678,98 @@ const Conversations = () => {
     dispatch(fetchConversationThreads({ ...threadsFilters, search: query }));
   };
 
+  const handleArchiveThread = (
+    thread: ConversationThread,
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    // Optimistically remove from active list
+    dispatch(removeThread(thread.conversation_id));
+    if (currentThread?.conversation_id === thread.conversation_id) {
+      setMobilePanel("list");
+    }
+    // Persist archive in background
+    dispatch(
+      updateConversation({
+        conversationId: thread.conversation_id,
+        updates: {
+          conversation_id: thread.conversation_id,
+          status: "archived",
+        },
+      }),
+    );
+    // Set up undo
+    setUndoArchiveThread(thread);
+    if (undoArchiveTimerRef.current) clearTimeout(undoArchiveTimerRef.current);
+    undoArchiveTimerRef.current = setTimeout(() => {
+      setUndoArchiveThread(null);
+    }, 6000);
+  };
+
+  const handleUnarchiveThread = (
+    thread: ConversationThread,
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    dispatch(removeThread(thread.conversation_id));
+    dispatch(
+      updateConversation({
+        conversationId: thread.conversation_id,
+        updates: { conversation_id: thread.conversation_id, status: "active" },
+      }),
+    ).then(() => {
+      // Refresh active list so it shows up when user switches back
+      dispatch(
+        fetchConversationThreads({ ...threadsFilters, status: undefined }),
+      );
+    });
+  };
+
+  const handleUndoArchive = () => {
+    if (!undoArchiveThread) return;
+    if (undoArchiveTimerRef.current) clearTimeout(undoArchiveTimerRef.current);
+    setUndoArchiveThread(null);
+    dispatch(
+      updateConversation({
+        conversationId: undoArchiveThread.conversation_id,
+        updates: {
+          conversation_id: undoArchiveThread.conversation_id,
+          status: "active",
+        },
+      }),
+    ).then(() => dispatch(fetchConversationThreads(threadsFilters)));
+  };
+
+  const handleDeleteThread = async (
+    conversationId: string,
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    setConfirmDeleteId(null);
+    dispatch(removeThread(conversationId)); // optimistic
+    try {
+      await dispatch(deleteConversation(conversationId)).unwrap();
+    } catch {
+      // On failure, refresh list to restore the thread
+      dispatch(fetchConversationThreads(threadsFilters));
+      toast({
+        title: "Error",
+        description: "Could not delete conversation",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleStatusFilter = (status: string) => {
     setSelectedStatus(status);
     const filters = status === "all" ? {} : { status };
     dispatch(setThreadsFilters(filters));
-    dispatch(fetchConversationThreads({ ...threadsFilters, ...filters }));
+    // Explicitly omit any previous status so "all" truly clears it
+    const { status: _removed, ...restFilters } = threadsFilters as Record<
+      string,
+      unknown
+    >;
+    dispatch(fetchConversationThreads({ ...restFilters, ...filters }));
   };
 
   const handlePriorityFilter = (priority: string) => {
@@ -680,17 +798,59 @@ const Conversations = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!messageText.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a message",
-        variant: "destructive",
-      });
-      return;
+    const text = messageText.trim();
+    if (!text && !mmsAttachment) return;
+
+    const sentTemplateId =
+      selectedTemplate && selectedTemplate !== "none"
+        ? parseInt(selectedTemplate)
+        : null;
+
+    // 1. Upload MMS attachment first if present (so we have the public URL)
+    let uploadedMediaUrl: string | undefined;
+    if (mmsAttachment && messageType === "sms") {
+      setIsUploadingMMS(true);
+      try {
+        const result = await uploadMMSMedia(
+          mmsAttachment.file,
+          sessionToken ?? "",
+        );
+        uploadedMediaUrl = result.url;
+      } catch (err) {
+        setIsUploadingMMS(false);
+        setFailedText(text || null);
+        return;
+      }
+      setIsUploadingMMS(false);
+    }
+
+    // 2. Optimistically add message to the UI immediately
+    const tempId = `opt-${Date.now()}`;
+    const optimistic: OptimisticMsg = {
+      tempId,
+      body: text,
+      subject: messageType === "email" ? messageSubject : undefined,
+      type: messageType,
+      status: "sending",
+      ts: new Date(),
+    };
+    setOptimisticMessages((prev) => [...prev, optimistic]);
+    setFailedText(null);
+
+    // 3. Clear compose immediately — feels instant
+    setMessageText("");
+    setMessageSubject("");
+    setSelectedTemplate("");
+    setShowPreview(false);
+    setMmsAttachment(null);
+
+    if (sentTemplateId) {
+      recordTemplateUsed(sentTemplateId);
+      setRecentTemplateIds(getRecentTemplateIds());
     }
 
     try {
-      await dispatch(
+      const result = await dispatch(
         sendMessage({
           conversation_id: currentThread?.conversation_id,
           application_id: currentThread?.application_id || undefined,
@@ -698,35 +858,51 @@ const Conversations = () => {
           communication_type: messageType,
           recipient_phone: currentThread?.client_phone || undefined,
           recipient_email: currentThread?.client_email || undefined,
-          subject: messageType === "email" ? messageSubject : undefined,
-          body: messageText,
-          message_type:
-            selectedTemplate && selectedTemplate !== "none"
-              ? "template"
-              : "text",
-          template_id:
-            selectedTemplate && selectedTemplate !== "none"
-              ? parseInt(selectedTemplate)
-              : undefined,
+          subject: messageType === "email" ? optimistic.subject : undefined,
+          body: text,
+          message_type: sentTemplateId ? "template" : "text",
+          template_id: sentTemplateId ?? undefined,
+          media_url: uploadedMediaUrl,
         }),
       ).unwrap();
 
-      setMessageText("");
-      setMessageSubject("");
-      setSelectedTemplate("");
+      // 3. Mark as sent and store the real DB id so we can suppress the
+      //    optimistic bubble the moment the real message arrives in Redux state.
+      setOptimisticMessages((prev) =>
+        prev.map((m) =>
+          m.tempId === tempId
+            ? { ...m, status: "sent", communicationId: result.communication_id }
+            : m,
+        ),
+      );
 
       if (currentThread) {
         dispatch(
           fetchConversationMessages({
             conversationId: currentThread.conversation_id,
           }),
+        ).finally(() => {
+          // Remove only after the real message is in Redux state.
+          // The render-time deduplication below (communicationId check) prevents
+          // the double-flash; this is just a cleanup step.
+          setOptimisticMessages((prev) =>
+            prev.filter((m) => m.tempId !== tempId),
+          );
+        });
+      } else {
+        setOptimisticMessages((prev) =>
+          prev.filter((m) => m.tempId !== tempId),
         );
       }
       dispatch(fetchConversationThreads(threadsFilters));
-      toast({ title: "Success", description: "Message sent successfully" });
     } catch (error: any) {
+      // 5. Mark as failed and restore the text so the user can retry
+      setOptimisticMessages((prev) =>
+        prev.map((m) => (m.tempId === tempId ? { ...m, status: "failed" } : m)),
+      );
+      setFailedText(text);
       toast({
-        title: "Error",
+        title: "Message failed",
         description: error || "Failed to send message",
         variant: "destructive",
       });
@@ -1036,7 +1212,7 @@ const Conversations = () => {
                     <DropdownMenuContent align="end" className="w-48">
                       <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
                       <DropdownMenuSeparator />
-                      {["all", "active", "archived", "closed"].map((s) => (
+                      {["all", "active", "closed"].map((s) => (
                         <DropdownMenuItem
                           key={s}
                           onClick={() => handleStatusFilter(s)}
@@ -1234,101 +1410,375 @@ const Conversations = () => {
                   <div className="text-center py-12 text-muted-foreground">
                     <MessageCircle className="h-10 w-10 mx-auto mb-2 opacity-30" />
                     <p className="text-sm">
-                      No{" "}
-                      {channelFilter !== "all"
-                        ? channelFilter.toUpperCase()
-                        : ""}{" "}
-                      conversations
+                      {selectedStatus === "archived"
+                        ? "No archived conversations"
+                        : `No ${
+                            channelFilter !== "all"
+                              ? channelFilter.toUpperCase() + " "
+                              : ""
+                          }conversations`}
                     </p>
+                    {selectedStatus === "archived" && (
+                      <button
+                        type="button"
+                        onClick={() => handleStatusFilter("all")}
+                        className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                      >
+                        <Archive className="h-3.5 w-3.5" />← Back to
+                        conversations
+                      </button>
+                    )}
                   </div>
                 ) : (
-                  filteredThreads.map((thread) => (
-                    <div
-                      key={thread.id}
-                      onClick={() => handleSelectThread(thread)}
-                      className={cn(
-                        "p-3 rounded-lg cursor-pointer transition-all duration-150 group",
+                  <TooltipProvider delayDuration={400}>
+                    {/* Archived-mode banner */}
+                    {selectedStatus === "archived" && (
+                      <div className="flex items-center gap-2 px-3 py-2 mb-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700">
+                        <Archive className="h-3.5 w-3.5 shrink-0" />
+                        <p className="text-xs flex-1 font-medium">
+                          Archived conversations
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleStatusFilter("all")}
+                          className="text-xs font-semibold hover:underline shrink-0"
+                        >
+                          ← Back
+                        </button>
+                      </div>
+                    )}
+                    {filteredThreads.map((thread) => {
+                      const isConfirmingDelete =
+                        confirmDeleteId === thread.conversation_id;
+                      const isActive =
                         currentThread?.conversation_id ===
-                          thread.conversation_id
-                          ? "bg-primary/10 border border-primary/30"
-                          : "hover:bg-muted border border-transparent hover:border-border",
-                      )}
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <Avatar className="h-9 w-9 flex-shrink-0">
-                          <AvatarFallback
-                            className={cn(
-                              "text-xs font-semibold",
-                              currentThread?.conversation_id ===
-                                thread.conversation_id
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-secondary text-secondary-foreground",
-                            )}
+                        thread.conversation_id;
+
+                      // ── Confirm-delete mode ────────────────────────────────
+                      if (isConfirmingDelete) {
+                        return (
+                          <div
+                            key={thread.id}
+                            className="p-3 rounded-lg border border-destructive/40 bg-destructive/5 animate-in fade-in-0 slide-in-from-left-1"
                           >
-                            {getInitials(thread.client_name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          {/* Row 1: name + badges */}
-                          <div className="flex items-center justify-between gap-1">
-                            <p className="text-sm font-semibold text-foreground truncate">
-                              {thread.client_name || "Unknown Client"}
-                            </p>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              {!thread.broker_id && (
-                                <span className="bg-amber-100 text-amber-700 text-[10px] rounded px-1.5 py-0.5 font-semibold leading-none border border-amber-300">
-                                  Unassigned
-                                </span>
-                              )}
-                              {thread.unread_count > 0 && (
-                                <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
-                                  {thread.unread_count}
-                                </span>
-                              )}
-                              {(thread.priority === "urgent" ||
-                                thread.priority === "high") && (
-                                <Badge
-                                  variant="outline"
+                            <div className="flex items-center gap-2">
+                              <Trash2 className="h-4 w-4 text-destructive shrink-0" />
+                              <p className="text-xs text-foreground flex-1 min-w-0 truncate">
+                                Delete{" "}
+                                <span className="font-semibold">
+                                  {thread.client_name || "this conversation"}
+                                </span>{" "}
+                                forever?
+                              </p>
+                            </div>
+                            <div className="flex gap-2 mt-2">
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                className="h-7 text-xs flex-1"
+                                onClick={(e) =>
+                                  handleDeleteThread(thread.conversation_id, e)
+                                }
+                              >
+                                Delete forever
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDeleteId(null);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // ── Normal thread row ──────────────────────────────────
+                      return (
+                        <div
+                          key={thread.id}
+                          onClick={() => handleSelectThread(thread)}
+                          className={cn(
+                            "p-3 rounded-lg cursor-pointer transition-all duration-150 group relative",
+                            isActive
+                              ? "bg-primary/10 border border-primary/30"
+                              : "hover:bg-muted border border-transparent hover:border-border",
+                          )}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <Avatar className="h-9 w-9 flex-shrink-0">
+                              <AvatarFallback
+                                className={cn(
+                                  "text-xs font-semibold",
+                                  isActive
+                                    ? "bg-primary text-primary-foreground"
+                                    : "bg-secondary text-secondary-foreground",
+                                )}
+                              >
+                                {getInitials(thread.client_name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1 min-w-0">
+                              {/* Row 1: name + badges / actions */}
+                              <div className="flex items-center justify-between gap-1">
+                                <p className="text-sm font-semibold text-foreground truncate">
+                                  {thread.client_name || "Unknown Client"}
+                                </p>
+
+                                {/* ── Desktop: badges hidden on hover, action icons shown on hover ── */}
+                                <div className="hidden md:flex items-center gap-1 flex-shrink-0">
+                                  {/* Badges — hidden on group-hover */}
+                                  <div className="flex items-center gap-1 group-hover:hidden">
+                                    {!thread.broker_id && (
+                                      <span className="bg-amber-100 text-amber-700 text-[10px] rounded px-1.5 py-0.5 font-semibold leading-none border border-amber-300">
+                                        Unassigned
+                                      </span>
+                                    )}
+                                    {thread.unread_count > 0 && (
+                                      <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
+                                        {thread.unread_count}
+                                      </span>
+                                    )}
+                                    {(thread.priority === "urgent" ||
+                                      thread.priority === "high") && (
+                                      <Badge
+                                        variant="outline"
+                                        className={cn(
+                                          "text-[10px] py-0 px-1 leading-none",
+                                          getPriorityColor(thread.priority),
+                                        )}
+                                      >
+                                        {thread.priority}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  {/* Action icons — shown on group-hover */}
+                                  <div className="hidden group-hover:flex items-center gap-0.5">
+                                    {selectedStatus === "archived" ? (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <button
+                                            type="button"
+                                            onClick={(e) =>
+                                              handleUnarchiveThread(thread, e)
+                                            }
+                                            className="p-1 rounded-md text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                          >
+                                            <ArchiveRestore className="h-3.5 w-3.5" />
+                                          </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top">
+                                          Unarchive
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    ) : (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <button
+                                            type="button"
+                                            onClick={(e) =>
+                                              handleArchiveThread(thread, e)
+                                            }
+                                            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
+                                          >
+                                            <Archive className="h-3.5 w-3.5" />
+                                          </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent
+                                          side="top"
+                                          className="max-w-[180px] text-center"
+                                        >
+                                          Archive — auto-deleted after 7 days
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    )}
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setConfirmDeleteId(
+                                              thread.conversation_id,
+                                            );
+                                          }}
+                                          className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="top">
+                                        Delete forever
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+
+                                {/* ── Mobile: badges + permanent ⋮ dropdown ── */}
+                                <div className="flex md:hidden items-center gap-1 flex-shrink-0">
+                                  {!thread.broker_id && (
+                                    <span className="bg-amber-100 text-amber-700 text-[10px] rounded px-1.5 py-0.5 font-semibold leading-none border border-amber-300">
+                                      Unassigned
+                                    </span>
+                                  )}
+                                  {thread.unread_count > 0 && (
+                                    <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
+                                      {thread.unread_count}
+                                    </span>
+                                  )}
+                                  {(thread.priority === "urgent" ||
+                                    thread.priority === "high") && (
+                                    <Badge
+                                      variant="outline"
+                                      className={cn(
+                                        "text-[10px] py-0 px-1 leading-none",
+                                        getPriorityColor(thread.priority),
+                                      )}
+                                    >
+                                      {thread.priority}
+                                    </Badge>
+                                  )}
+                                  <DropdownMenu
+                                    open={
+                                      threadMenuOpenId ===
+                                      thread.conversation_id
+                                    }
+                                    onOpenChange={(open) =>
+                                      setThreadMenuOpenId(
+                                        open ? thread.conversation_id : null,
+                                      )
+                                    }
+                                  >
+                                    <DropdownMenuTrigger asChild>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                                      >
+                                        <MoreVertical className="h-3.5 w-3.5" />
+                                      </button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent
+                                      align="end"
+                                      className="w-44"
+                                    >
+                                      {selectedStatus === "archived" ? (
+                                        <DropdownMenuItem
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setThreadMenuOpenId(null);
+                                            handleUnarchiveThread(thread, e);
+                                          }}
+                                          className="gap-2 text-sm text-emerald-700 focus:text-emerald-700"
+                                        >
+                                          <ArchiveRestore className="h-4 w-4" />
+                                          Unarchive
+                                        </DropdownMenuItem>
+                                      ) : (
+                                        <DropdownMenuItem
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setThreadMenuOpenId(null);
+                                            handleArchiveThread(thread, e);
+                                          }}
+                                          className="gap-2 text-sm"
+                                        >
+                                          <Archive className="h-4 w-4 text-muted-foreground" />
+                                          Archive
+                                        </DropdownMenuItem>
+                                      )}
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setThreadMenuOpenId(null);
+                                          setConfirmDeleteId(
+                                            thread.conversation_id,
+                                          );
+                                        }}
+                                        className="gap-2 text-sm text-destructive focus:text-destructive"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                        Delete forever
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </div>
+                              </div>
+                              {/* Row 2: channel icon + preview */}
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span
                                   className={cn(
-                                    "text-[10px] py-0 px-1 leading-none",
-                                    getPriorityColor(thread.priority),
+                                    "flex-shrink-0",
+                                    getChannelColor(thread.last_message_type),
                                   )}
                                 >
-                                  {thread.priority}
-                                </Badge>
+                                  {getChannelIcon(
+                                    thread.last_message_type,
+                                    "h-3 w-3",
+                                  )}
+                                </span>
+                                <p className="text-xs text-muted-foreground line-clamp-1 flex-1 leading-snug">
+                                  {thread.last_message_preview ||
+                                    "No messages yet"}
+                                </p>
+                              </div>
+                              {/* Row 3: timestamp */}
+                              {thread.last_message_at && (
+                                <p className="text-[10px] text-muted-foreground/70 mt-0.5">
+                                  {formatTime(thread.last_message_at)}
+                                </p>
                               )}
                             </div>
                           </div>
-                          {/* Row 2: channel icon + preview (1 line, hard truncated) */}
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span
-                              className={cn(
-                                "flex-shrink-0",
-                                getChannelColor(thread.last_message_type),
-                              )}
-                            >
-                              {getChannelIcon(
-                                thread.last_message_type,
-                                "h-3 w-3",
-                              )}
-                            </span>
-                            <p className="text-xs text-muted-foreground line-clamp-1 flex-1 leading-snug">
-                              {thread.last_message_preview || "No messages yet"}
-                            </p>
-                          </div>
-                          {/* Row 3: timestamp */}
-                          {thread.last_message_at && (
-                            <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                              {formatTime(thread.last_message_at)}
-                            </p>
-                          )}
                         </div>
-                      </div>
-                    </div>
-                  ))
+                      );
+                    })}
+                  </TooltipProvider>
                 )}
               </div>
             </ScrollArea>
+
+            {/* Archive toggle footer */}
+            {selectedStatus !== "archived" && (
+              <div className="border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => handleStatusFilter("archived")}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                  <span>View archived conversations</span>
+                </button>
+              </div>
+            )}
+
+            {/* Undo archive toast (floating, bottom of sidebar) */}
+            {undoArchiveThread && (
+              <div className="absolute bottom-3 left-3 right-3 z-20 animate-in slide-in-from-bottom-2 fade-in-0">
+                <div className="flex items-center gap-3 rounded-lg border border-border bg-card shadow-lg px-3 py-2.5">
+                  <Archive className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <p className="text-xs text-foreground flex-1 truncate">
+                    <span className="font-medium">
+                      {undoArchiveThread.client_name || "Conversation"}
+                    </span>{" "}
+                    archived
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleUndoArchive}
+                    className="text-xs font-semibold text-primary hover:underline shrink-0"
+                  >
+                    Undo
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           {/* end flex flex-col h-full */}
 
@@ -1448,25 +1898,32 @@ const Conversations = () => {
               </div>
 
               {/* Active call panel */}
-              {isCallActive && currentThread.client_phone && (
-                <div className="px-4 py-2 border-b border-border bg-card flex-shrink-0">
-                  <VoiceCallPanel
-                    phone={currentThread.client_phone}
-                    clientName={currentThread.client_name}
-                    clientId={currentThread.client_id ?? undefined}
-                    applicationId={currentThread.application_id ?? undefined}
-                    onClose={() => setIsCallActive(false)}
-                  />
-                </div>
-              )}
+              {isCallActive &&
+                currentThread.client_phone &&
+                (() => {
+                  // Delegate to GlobalVoiceManager's persistent panel and dismiss local flag
+                  dispatch(
+                    startOutboundCall({
+                      phone: currentThread.client_phone,
+                      clientName: currentThread.client_name,
+                      clientId: currentThread.client_id ?? undefined,
+                      applicationId: currentThread.application_id ?? undefined,
+                    }),
+                  );
+                  setIsCallActive(false);
+                  return null;
+                })()}
 
               {/* Messages */}
               <ScrollArea className="flex-1 px-4 py-4">
-                {isLoadingMessages ? (
+                {isLoadingMessages &&
+                initialLoadedThreadRef.current !==
+                  currentThread.conversation_id ? (
                   <div className="flex items-center justify-center h-32">
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
                   </div>
-                ) : filteredMessages.length === 0 ? (
+                ) : filteredMessages.length === 0 &&
+                  optimisticMessages.length === 0 ? (
                   <div className="text-center py-12 text-muted-foreground">
                     <MessageCircle className="h-10 w-10 mx-auto mb-2 opacity-30" />
                     <p className="text-sm">
@@ -1493,6 +1950,28 @@ const Conversations = () => {
                             new Date(msgDate).toDateString() !==
                               new Date(prevDate).toDateString());
                         const isOutbound = message.direction === "outbound";
+
+                        // Delivery tick helper
+                        const DeliveryTick = () => {
+                          if (!isOutbound) return null;
+                          const ds = message.delivery_status;
+                          if (ds === "read") {
+                            return (
+                              <CheckCheck className="h-3 w-3 text-sky-400" />
+                            );
+                          }
+                          if (ds === "delivered") {
+                            return (
+                              <CheckCheck className="h-3 w-3 text-white/60" />
+                            );
+                          }
+                          if (ds === "failed" || ds === "rejected") {
+                            return <X className="h-3 w-3 text-red-400" />;
+                          }
+                          // sent / pending
+                          return <Check className="h-3 w-3 text-white/50" />;
+                        };
+
                         return (
                           <React.Fragment key={message.id}>
                             {showDateSep && msgDate && (
@@ -1510,7 +1989,6 @@ const Conversations = () => {
                                 isOutbound ? "justify-end" : "justify-start",
                               )}
                             >
-                              {/* Delete button — appears on hover, left of outbound bubbles */}
                               {isOutbound && (
                                 <button
                                   onClick={() =>
@@ -1561,22 +2039,171 @@ const Conversations = () => {
                                     {message.subject}
                                   </p>
                                 )}
-                                <p className="leading-relaxed">
-                                  {message.body}
-                                </p>
-                                {message.status && (
-                                  <div
-                                    className={cn(
-                                      "flex items-center gap-1 mt-1",
-                                      isOutbound
-                                        ? "text-white/50"
-                                        : "text-muted-foreground",
-                                    )}
-                                  >
-                                    <CheckCircle className="h-3 w-3" />
-                                    <span className="text-xs capitalize">
-                                      {message.status}
-                                    </span>
+                                {/* Call recordings get an inline audio player + download */}
+                                {message.communication_type === "call" &&
+                                message.recording_url &&
+                                message.external_id ? (
+                                  /* ✅ Recording is ready */
+                                  <div className="flex flex-col gap-2 min-w-[220px]">
+                                    <p className="leading-relaxed text-sm">
+                                      {message.body}
+                                    </p>
+                                    {/* token query param required — <audio> can't send Authorization header */}
+                                    <audio
+                                      controls
+                                      preload="metadata"
+                                      className="w-full h-8 rounded"
+                                      style={{
+                                        colorScheme: isOutbound
+                                          ? "dark"
+                                          : "light",
+                                      }}
+                                      src={`/api/voice/recording/${message.external_id}?token=${encodeURIComponent(sessionToken ?? "")}`}
+                                    />
+                                    <a
+                                      href={`/api/voice/recording/${message.external_id}?download=1&token=${encodeURIComponent(sessionToken ?? "")}`}
+                                      download={`call-${message.external_id}.mp3`}
+                                      className={cn(
+                                        "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
+                                        isOutbound
+                                          ? "bg-white/10 text-white/80 hover:bg-white/20"
+                                          : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
+                                      )}
+                                    >
+                                      <Download className="h-3.5 w-3.5" />
+                                      Download recording
+                                    </a>
+                                  </div>
+                                ) : message.communication_type === "call" &&
+                                  message.external_id &&
+                                  !(message as any).recording_url ? (
+                                  /* ⏳ Call ended but recording still processing */
+                                  <div className="flex flex-col gap-1.5 min-w-[200px]">
+                                    <p className="leading-relaxed text-sm">
+                                      {message.body}
+                                    </p>
+                                    <div
+                                      className={cn(
+                                        "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
+                                        isOutbound
+                                          ? "bg-white/10 text-white/50"
+                                          : "bg-muted-foreground/10 text-muted-foreground",
+                                      )}
+                                    >
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      Recording processing…
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    {/* MMS media attachment */}
+                                    {(message as any).media_url &&
+                                      (() => {
+                                        const rawUrl: string = (message as any)
+                                          .media_url;
+                                        const contentType: string =
+                                          (message as any).media_content_type ??
+                                          "";
+                                        // Support JSON array (multiple attachments) or single URL
+                                        let urls: string[];
+                                        try {
+                                          urls = JSON.parse(rawUrl);
+                                        } catch {
+                                          urls = [rawUrl];
+                                        }
+                                        const proxyUrl = (u: string) =>
+                                          // CDN URLs are already public — serve directly
+                                          // Twilio media URLs need our auth proxy
+                                          u.startsWith(
+                                            "https://disruptinglabs.com/",
+                                          )
+                                            ? u
+                                            : `/api/sms/media?url=${encodeURIComponent(u)}&token=${encodeURIComponent(sessionToken ?? "")}`;
+                                        return urls.map((u, i) => {
+                                          const ct = i === 0 ? contentType : "";
+                                          if (
+                                            ct.startsWith("image/") ||
+                                            (!ct &&
+                                              /\.(jpe?g|png|gif|webp|heic)$/i.test(
+                                                u,
+                                              ))
+                                          ) {
+                                            return (
+                                              <a
+                                                key={i}
+                                                href={proxyUrl(u)}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                              >
+                                                <img
+                                                  src={proxyUrl(u)}
+                                                  alt="MMS attachment"
+                                                  className="rounded-xl max-w-[260px] max-h-[320px] object-cover border border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
+                                                  loading="lazy"
+                                                />
+                                              </a>
+                                            );
+                                          }
+                                          if (ct.startsWith("video/")) {
+                                            return (
+                                              <video
+                                                key={i}
+                                                controls
+                                                className="rounded-xl max-w-[260px]"
+                                                preload="metadata"
+                                              >
+                                                <source
+                                                  src={proxyUrl(u)}
+                                                  type={ct}
+                                                />
+                                              </video>
+                                            );
+                                          }
+                                          if (ct.startsWith("audio/")) {
+                                            return (
+                                              <audio
+                                                key={i}
+                                                controls
+                                                preload="metadata"
+                                                className="w-full h-8 rounded"
+                                              >
+                                                <source
+                                                  src={proxyUrl(u)}
+                                                  type={ct}
+                                                />
+                                              </audio>
+                                            );
+                                          }
+                                          return (
+                                            <a
+                                              key={i}
+                                              href={proxyUrl(u)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className={cn(
+                                                "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
+                                                isOutbound
+                                                  ? "bg-white/10 text-white/80 hover:bg-white/20"
+                                                  : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
+                                              )}
+                                            >
+                                              <Download className="h-3.5 w-3.5" />
+                                              Download attachment
+                                            </a>
+                                          );
+                                        });
+                                      })()}
+                                    {/* Text body (may be empty for image-only MMS) */}
+                                    {message.body ? (
+                                      <p className="leading-relaxed">
+                                        {message.body}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                )}
+                                {isOutbound && (
+                                  <div className="flex justify-end mt-1">
+                                    <DeliveryTick />
                                   </div>
                                 )}
                               </div>
@@ -1584,6 +2211,60 @@ const Conversations = () => {
                           </React.Fragment>
                         );
                       })}
+
+                    {/* Optimistic (in-flight / just-sent) bubbles.
+                         Skip any whose real message has already arrived in Redux
+                         state — identified by communicationId — to avoid a
+                         double-flash while the .finally() cleanup runs. */}
+                    {optimisticMessages
+                      .filter(
+                        (opt) =>
+                          !opt.communicationId ||
+                          !messages.some((m) => m.id === opt.communicationId),
+                      )
+                      .map((opt) => (
+                        <div key={opt.tempId} className="flex mb-2 justify-end">
+                          <div
+                            className={cn(
+                              "max-w-[72%] px-3.5 py-2.5 rounded-2xl text-sm shadow-sm rounded-br-sm transition-opacity",
+                              opt.status === "failed"
+                                ? "bg-red-900/80 text-white/80"
+                                : "bg-slate-800 text-white",
+                              opt.status === "sending" && "opacity-70",
+                            )}
+                          >
+                            <div className="flex items-center gap-1.5 mb-1 text-white/60">
+                              <span className="text-white/70">
+                                {getChannelIcon(opt.type, "h-3 w-3")}
+                              </span>
+                              <span className="text-xs">
+                                {opt.ts.toLocaleTimeString("en-US", {
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                  hour12: true,
+                                })}
+                              </span>
+                            </div>
+                            {opt.subject && (
+                              <p className="font-semibold text-xs mb-1 opacity-90">
+                                {opt.subject}
+                              </p>
+                            )}
+                            <p className="leading-relaxed">{opt.body}</p>
+                            <div className="flex justify-end mt-1">
+                              {opt.status === "sending" && (
+                                <Check className="h-3 w-3 text-white/30" />
+                              )}
+                              {opt.status === "sent" && (
+                                <CheckCheck className="h-3 w-3 text-white/60 animate-in fade-in-0 zoom-in-75 duration-300" />
+                              )}
+                              {opt.status === "failed" && (
+                                <X className="h-3 w-3 text-red-400" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                   </div>
                 )}
                 <div ref={messagesEndRef} />
@@ -1591,6 +2272,7 @@ const Conversations = () => {
 
               {/* Composer */}
               <div className="p-3 border-t border-border bg-card flex-shrink-0">
+                {/* Row 1: Channel + Smart Template picker */}
                 <div className="flex items-center gap-2 mb-2">
                   <Select
                     value={messageType}
@@ -1645,47 +2327,184 @@ const Conversations = () => {
                     </SelectContent>
                   </Select>
 
-                  {templates && templates.length > 0 && (
-                    <Select
-                      value={selectedTemplate}
-                      onValueChange={(value) => {
-                        setSelectedTemplate(value);
-                        if (value && value !== "none") {
-                          const t = templates.find(
-                            (tmpl) => tmpl.id.toString() === value,
-                          );
-                          if (t) {
-                            setMessageText(t.body || "");
-                            if (t.subject && messageType === "email")
-                              setMessageSubject(t.subject);
-                          }
-                        } else {
-                          setMessageText("");
-                          setMessageSubject("");
-                        }
-                      }}
-                    >
-                      <SelectTrigger className="h-8 text-sm flex-1">
-                        <SelectValue placeholder="Use template…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">
-                          <span className="text-muted-foreground">
-                            No template
+                  {/* Smart template picker */}
+                  <Popover
+                    open={templatePickerOpen}
+                    onOpenChange={setTemplatePickerOpen}
+                  >
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-sm flex-1 justify-between font-normal"
+                      >
+                        <span className="flex items-center gap-1.5 truncate">
+                          <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          <span className="truncate">
+                            {selectedTemplate && selectedTemplate !== "none"
+                              ? (templates?.find(
+                                  (t) => t.id.toString() === selectedTemplate,
+                                )?.name ?? "Use template…")
+                              : "Use template…"}
                           </span>
-                        </SelectItem>
-                        {templates
-                          .filter((t) => t.template_type === messageType)
-                          .map((t) => (
-                            <SelectItem key={t.id} value={t.id.toString()}>
-                              {t.name}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      className="w-80 p-0"
+                      sideOffset={4}
+                    >
+                      <Command>
+                        <CommandInput
+                          placeholder="Search templates…"
+                          className="h-8"
+                        />
+                        <CommandList className="max-h-72">
+                          <CommandEmpty>No templates found.</CommandEmpty>
+
+                          {/* Clear current selection */}
+                          {selectedTemplate && selectedTemplate !== "none" && (
+                            <CommandGroup>
+                              <CommandItem
+                                value="__clear__"
+                                onSelect={() => {
+                                  setSelectedTemplate("");
+                                  setMessageText("");
+                                  setMessageSubject("");
+                                  setTemplatePickerOpen(false);
+                                }}
+                                className="text-muted-foreground italic text-xs"
+                              >
+                                ✕ Clear template
+                              </CommandItem>
+                            </CommandGroup>
+                          )}
+
+                          {/* Smart-sorted, category-grouped templates */}
+                          {(() => {
+                            const channelTemplates = (templates ?? []).filter(
+                              (t) => t.template_type === messageType,
+                            );
+                            const sorted = sortTemplatesSmart(
+                              channelTemplates,
+                              varMap,
+                              recentTemplateIds,
+                            );
+                            const recentSet = new Set(recentTemplateIds);
+                            const recent = sorted.filter((t) =>
+                              recentSet.has(t.id),
+                            );
+                            const rest = sorted.filter(
+                              (t) => !recentSet.has(t.id),
+                            );
+
+                            // Group remaining by category
+                            const byCategory: Record<string, typeof rest> = {};
+                            for (const t of rest) {
+                              if (!byCategory[t.category])
+                                byCategory[t.category] = [];
+                              byCategory[t.category].push(t);
+                            }
+
+                            const renderItem = (t: (typeof sorted)[0]) => {
+                              const { resolved, total, score } =
+                                getTemplateCompatibility(t, varMap);
+                              const hasVars = total > 0;
+                              return (
+                                <CommandItem
+                                  key={t.id}
+                                  value={`${t.name} ${t.body.slice(0, 40)}`}
+                                  onSelect={() => {
+                                    setSelectedTemplate(t.id.toString());
+                                    setMessageText(t.body || "");
+                                    if (t.subject && messageType === "email")
+                                      setMessageSubject(t.subject);
+                                    setTemplatePickerOpen(false);
+                                  }}
+                                  className="flex items-start gap-2 cursor-pointer py-2"
+                                >
+                                  <div className="mt-0.5 shrink-0">
+                                    {hasVars ? (
+                                      score >= 1 ? (
+                                        <CircleCheck className="h-3.5 w-3.5 text-green-500" />
+                                      ) : (
+                                        <CircleAlert className="h-3.5 w-3.5 text-amber-500" />
+                                      )
+                                    ) : (
+                                      <CircleCheck className="h-3.5 w-3.5 text-muted-foreground/30" />
+                                    )}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[13px] font-medium truncate">
+                                        {t.name}
+                                      </span>
+                                      {(t.usage_count ?? 0) > 0 && (
+                                        <span className="text-[10px] text-muted-foreground shrink-0">
+                                          ×{t.usage_count}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-[11px] text-muted-foreground line-clamp-1">
+                                      {t.body.substring(0, 60)}
+                                      {t.body.length > 60 ? "…" : ""}
+                                    </span>
+                                    {hasVars && score < 1 && (
+                                      <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                                        {resolved}/{total} vars resolve
+                                      </span>
+                                    )}
+                                  </div>
+                                </CommandItem>
+                              );
+                            };
+
+                            return (
+                              <>
+                                {recent.length > 0 && (
+                                  <CommandGroup heading="Recently Used">
+                                    {recent.map(renderItem)}
+                                  </CommandGroup>
+                                )}
+                                {Object.entries(byCategory).map(
+                                  ([cat, catTemplates]) => (
+                                    <CommandGroup
+                                      key={cat}
+                                      heading={CATEGORY_LABELS[cat] ?? cat}
+                                    >
+                                      {catTemplates.map(renderItem)}
+                                    </CommandGroup>
+                                  ),
+                                )}
+                              </>
+                            );
+                          })()}
+
+                          <CommandSeparator />
+                          <CommandGroup>
+                            <CommandItem
+                              value="__save_as_template__"
+                              disabled={!messageText.trim()}
+                              onSelect={() => {
+                                if (!messageText.trim()) return;
+                                setTemplatePickerOpen(false);
+                                setSaveTemplateOpen(true);
+                              }}
+                              className="gap-2 text-primary data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed"
+                            >
+                              <BookmarkPlus className="h-4 w-4" />
+                              Save current message as template
+                            </CommandItem>
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
+                {/* Email subject */}
                 {messageType === "email" && (
                   <Input
                     placeholder="Subject"
@@ -1695,31 +2514,288 @@ const Conversations = () => {
                   />
                 )}
 
-                <div className="flex items-end gap-2">
-                  <Textarea
-                    placeholder="Type your message…"
-                    value={messageText}
-                    onChange={(e) => setMessageText(e.target.value)}
-                    className="flex-1 min-h-[72px] resize-none text-sm"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendMessage();
-                      }
-                    }}
-                  />
-                  <Button
-                    onClick={handleSendMessage}
-                    disabled={isSendingMessage || !messageText.trim()}
-                    className="bg-primary hover:bg-primary/90 h-10 w-10 p-0"
-                  >
-                    {isSendingMessage ? (
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground" />
-                    ) : (
-                      <Send className="h-4 w-4" />
+                {/* Smart variable preview banner */}
+                {(() => {
+                  const varStatuses = getVarStatus(messageText, varMap);
+                  if (varStatuses.length === 0) return null;
+                  return (
+                    <div className="rounded-md border border-border bg-card px-3 py-2 mb-1.5">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <Sparkles className="h-3 w-3 text-primary shrink-0" />
+                        <span className="text-[11px] font-medium text-foreground">
+                          Variable preview
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {varStatuses.map(({ name, value, resolved }) => (
+                          <span
+                            key={name}
+                            className={cn(
+                              "inline-flex items-center gap-1 text-[10px] rounded-full px-2 py-0.5 font-mono border",
+                              resolved
+                                ? "bg-green-50 border-green-200 text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300"
+                                : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300",
+                            )}
+                          >
+                            {resolved ? (
+                              <CircleCheck className="h-2.5 w-2.5 shrink-0" />
+                            ) : (
+                              <CircleAlert className="h-2.5 w-2.5 shrink-0" />
+                            )}
+                            {`{{${name}}}`}
+                            {resolved && (
+                              <>
+                                <span className="opacity-40 mx-0.5">→</span>
+                                <span className="font-sans font-medium">
+                                  {value}
+                                </span>
+                              </>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Variable autocomplete dropdown */}
+                {varAutocomplete && (
+                  <div className="mb-1.5 rounded-md border border-border bg-popover shadow-md p-1 animate-in fade-in-0 slide-in-from-bottom-1">
+                    <p className="text-[10px] text-muted-foreground px-2 py-1 font-medium uppercase tracking-wide">
+                      Insert variable
+                    </p>
+                    <div className="flex flex-wrap gap-1 px-1 pb-1">
+                      {ALL_VARIABLES.filter((v) =>
+                        v.name
+                          .toLowerCase()
+                          .startsWith(varAutocompleteFilter.toLowerCase()),
+                      ).map((v) => (
+                        <button
+                          key={v.name}
+                          type="button"
+                          onClick={() => {
+                            const el = composeTextareaRef.current;
+                            if (!el) return;
+                            const cur = el.selectionStart ?? messageText.length;
+                            const before = messageText.slice(0, cur);
+                            const braceIdx = before.lastIndexOf("{{");
+                            const newText =
+                              messageText.slice(0, braceIdx) +
+                              `{{${v.name}}}` +
+                              messageText.slice(cur);
+                            setMessageText(newText);
+                            setVarAutocomplete(false);
+                            requestAnimationFrame(() => {
+                              el.focus();
+                              const pos = braceIdx + v.name.length + 4;
+                              el.setSelectionRange(pos, pos);
+                            });
+                          }}
+                          className="text-[11px] font-mono px-2 py-0.5 rounded bg-muted hover:bg-primary/10 hover:text-primary border border-transparent hover:border-primary/20 transition-colors"
+                          title={v.label}
+                        >
+                          {`{{${v.name}}}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Textarea + send button */}
+                <div className="flex flex-col gap-2">
+                  {/* MMS attachment preview (SMS only) */}
+                  {messageType === "sms" && mmsAttachment && (
+                    <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+                      {mmsAttachment.contentType.startsWith("image/") ? (
+                        <img
+                          src={mmsAttachment.previewUrl}
+                          alt="attachment"
+                          className="h-12 w-12 rounded object-cover border border-border"
+                        />
+                      ) : mmsAttachment.contentType.startsWith("video/") ? (
+                        <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
+                          <Film className="h-5 w-5 text-muted-foreground" />
+                        </div>
+                      ) : mmsAttachment.contentType.startsWith("audio/") ? (
+                        <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
+                          <FileAudio className="h-5 w-5 text-muted-foreground" />
+                        </div>
+                      ) : (
+                        <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
+                          <FileText className="h-5 w-5 text-muted-foreground" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">
+                          {mmsAttachment.file.name}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {(mmsAttachment.file.size / 1024).toFixed(0)} KB
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          URL.revokeObjectURL(mmsAttachment.previewUrl);
+                          setMmsAttachment(null);
+                        }}
+                        className="shrink-0 rounded-full p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                        aria-label="Remove attachment"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex items-end gap-2">
+                    {/* Hidden file input */}
+                    {messageType === "sms" && (
+                      <input
+                        ref={mmsFileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/3gpp,video/quicktime,audio/mpeg,audio/ogg,audio/wav,application/pdf"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (!f) return;
+                          const previewUrl = f.type.startsWith("image/")
+                            ? URL.createObjectURL(f)
+                            : "";
+                          setMmsAttachment({
+                            file: f,
+                            previewUrl,
+                            contentType: f.type,
+                          });
+                          e.target.value = "";
+                        }}
+                      />
                     )}
-                  </Button>
+                    {/* Paperclip button — SMS only */}
+                    {messageType === "sms" && (
+                      <button
+                        type="button"
+                        onClick={() => mmsFileInputRef.current?.click()}
+                        disabled={isUploadingMMS}
+                        className="shrink-0 flex h-10 w-10 items-center justify-center rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
+                        title="Attach image, video, audio, or PDF (MMS)"
+                        aria-label="Attach media"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                      </button>
+                    )}
+                    <Textarea
+                      ref={composeTextareaRef}
+                      placeholder="Type your message… (type {{ to insert a variable)"
+                      value={messageText}
+                      onChange={(e) => {
+                        const newText = e.target.value;
+                        setMessageText(newText);
+
+                        // Decouple from template if the body was edited
+                        if (
+                          selectedTemplate &&
+                          selectedTemplate !== "none" &&
+                          newText !==
+                            (templates?.find(
+                              (t) => t.id.toString() === selectedTemplate,
+                            )?.body ?? "")
+                        ) {
+                          setSelectedTemplate("");
+                        }
+
+                        // Variable autocomplete: trigger when "{{" appears before cursor
+                        const cur = e.target.selectionStart ?? newText.length;
+                        const before = newText.slice(0, cur);
+                        const lastBrace = before.lastIndexOf("{{");
+                        if (
+                          lastBrace !== -1 &&
+                          !before.slice(lastBrace).includes("}}")
+                        ) {
+                          setVarAutocompleteFilter(before.slice(lastBrace + 2));
+                          setVarAutocomplete(true);
+                        } else {
+                          setVarAutocomplete(false);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          setVarAutocomplete(false);
+                          return;
+                        }
+                        if (
+                          e.key === "Enter" &&
+                          !e.shiftKey &&
+                          !varAutocomplete
+                        ) {
+                          e.preventDefault();
+                          handleSendMessage();
+                        }
+                      }}
+                      className="flex-1 min-h-[72px] resize-none text-sm"
+                    />
+                    <Button
+                      onClick={handleSendMessage}
+                      disabled={
+                        (!messageText.trim() && !mmsAttachment) ||
+                        isUploadingMMS
+                      }
+                      className="bg-primary hover:bg-primary/90 h-10 w-10 p-0 transition-transform active:scale-90"
+                    >
+                      {isUploadingMMS ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
+
+                {/* Live resolved preview toggle */}
+                {/* Failed message restore banner */}
+                {failedText && (
+                  <div className="mt-1.5 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+                    <X className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                    <p className="text-[11px] text-destructive flex-1 truncate">
+                      Failed to send — message restored
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMessageText(failedText);
+                        setFailedText(null);
+                        setOptimisticMessages([]);
+                        requestAnimationFrame(() =>
+                          composeTextareaRef.current?.focus(),
+                        );
+                      }}
+                      className="text-[11px] font-medium text-destructive underline shrink-0"
+                    >
+                      Restore
+                    </button>
+                  </div>
+                )}
+
+                {messageText.trim() && (
+                  <div className="mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowPreview((p) => !p)}
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showPreview ? (
+                        <EyeOff className="h-3 w-3" />
+                      ) : (
+                        <Eye className="h-3 w-3" />
+                      )}
+                      {showPreview ? "Hide preview" : "Show resolved preview"}
+                    </button>
+                    {showPreview && (
+                      <div className="mt-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed text-foreground">
+                        {resolveVars(messageText, varMap)}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           ) : channelFilter === "calls" && selectedCall ? (
@@ -1860,12 +2936,17 @@ const Conversations = () => {
                   {/* Call back button */}
                   {selectedCall.client_phone &&
                     (isCallDetailDialing ? (
-                      <VoiceCallPanel
-                        phone={selectedCall.client_phone}
-                        clientName={selectedCall.client_name || undefined}
-                        clientId={selectedCall.client_id ?? undefined}
-                        onClose={() => setIsCallDetailDialing(false)}
-                      />
+                      (() => {
+                        dispatch(
+                          startOutboundCall({
+                            phone: selectedCall.client_phone!,
+                            clientName: selectedCall.client_name || undefined,
+                            clientId: selectedCall.client_id ?? undefined,
+                          }),
+                        );
+                        setIsCallDetailDialing(false);
+                        return null;
+                      })()
                     ) : (
                       <Button
                         className="w-full gap-2"
@@ -1913,46 +2994,92 @@ const Conversations = () => {
               <div className="p-4 space-y-5">
                 {/* Avatar + name */}
                 <div className="flex flex-col items-center text-center gap-2">
-                  <Avatar className="h-16 w-16">
+                  <Avatar
+                    className={cn(
+                      "h-16 w-16",
+                      (currentThread.client_id ||
+                        currentThread.contact_broker_id) &&
+                        "cursor-pointer ring-2 ring-transparent hover:ring-primary transition-all",
+                    )}
+                    onClick={() => {
+                      if (currentThread.contact_broker_id) {
+                        setDetailBrokerId(currentThread.contact_broker_id);
+                      } else if (currentThread.client_id) {
+                        setDetailClientId(currentThread.client_id);
+                      }
+                    }}
+                    title={
+                      currentThread.contact_broker_id
+                        ? "View realtor profile"
+                        : currentThread.client_id
+                          ? "View client profile"
+                          : undefined
+                    }
+                  >
                     <AvatarFallback className="bg-primary/10 text-primary text-xl font-bold">
                       {getInitials(currentThread.client_name)}
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <p className="font-semibold text-foreground">
+                    <p
+                      className={cn(
+                        "font-semibold text-foreground",
+                        (currentThread.client_id ||
+                          currentThread.contact_broker_id) &&
+                          "cursor-pointer hover:text-primary hover:underline transition-colors",
+                      )}
+                      onClick={() => {
+                        if (currentThread.contact_broker_id) {
+                          setDetailBrokerId(currentThread.contact_broker_id);
+                        } else if (currentThread.client_id) {
+                          setDetailClientId(currentThread.client_id);
+                        }
+                      }}
+                    >
                       {currentThread.client_name || "Unknown"}
                     </p>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "text-xs mt-0.5",
-                        getPriorityColor(currentThread.priority),
+                    <div className="flex items-center justify-center gap-1 mt-0.5">
+                      {currentThread.contact_broker_id && (
+                        <Badge
+                          variant="outline"
+                          className="text-xs bg-violet-50 text-violet-700 border-violet-200"
+                        >
+                          Realtor
+                        </Badge>
                       )}
-                    >
-                      {currentThread.priority}
-                    </Badge>
-                  </div>
-                  {/* Add as Contact — shown only for unknown senders */}
-                  {!currentThread.client_id && (
-                    <>
-                      <Button
-                        size="sm"
+                      <Badge
                         variant="outline"
-                        className="gap-1.5 text-xs h-7 border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:border-primary"
-                        onClick={() => {
-                          saveContactFormik.resetForm();
-                          setIsSaveContactOpen(true);
-                        }}
+                        className={cn(
+                          "text-xs",
+                          getPriorityColor(currentThread.priority),
+                        )}
                       >
-                        <UserPlus className="h-3.5 w-3.5" />
-                        Add as Contact
-                      </Button>
-                      <p className="text-xs text-muted-foreground text-center leading-snug px-1">
-                        Save this sender as a client to track them in the
-                        pipeline.
-                      </p>
-                    </>
-                  )}
+                        {currentThread.priority}
+                      </Badge>
+                    </div>
+                  </div>
+                  {/* Add as Contact — shown only for unknown senders without any link */}
+                  {!currentThread.client_id &&
+                    !currentThread.contact_broker_id && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 text-xs h-7 border-dashed border-primary/50 text-primary hover:bg-primary/5 hover:border-primary"
+                          onClick={() => {
+                            saveContactFormik.resetForm();
+                            setIsSaveContactOpen(true);
+                          }}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          Add as Contact
+                        </Button>
+                        <p className="text-xs text-muted-foreground text-center leading-snug px-1">
+                          Save this sender as a client to track them in the
+                          pipeline.
+                        </p>
+                      </>
+                    )}
                 </div>
 
                 <Separator />
@@ -2769,15 +3896,15 @@ const Conversations = () => {
       {isDialerOpen && (
         <div className="fixed bottom-6 right-6 z-50 w-80 animate-in slide-in-from-bottom-4 duration-300">
           {isDialerCallActive && dialerNumber ? (
-            <VoiceCallPanel
-              phone={dialerNumber}
-              clientName={null}
-              onClose={() => {
-                setIsDialerCallActive(false);
-                setIsDialerOpen(false);
-                setDialerNumber("");
-              }}
-            />
+            (() => {
+              dispatch(
+                startOutboundCall({ phone: dialerNumber, clientName: null }),
+              );
+              setIsDialerCallActive(false);
+              setIsDialerOpen(false);
+              setDialerNumber("");
+              return null;
+            })()
           ) : (
             <div className="bg-card border border-border shadow-2xl rounded-2xl overflow-hidden">
               {/* Header */}
@@ -2911,244 +4038,35 @@ const Conversations = () => {
         </div>
       )}
 
-      {/* ── Phone Numbers Management Modal ── */}
-      <Dialog open={isPhoneNumbersOpen} onOpenChange={setIsPhoneNumbersOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Phone className="h-5 w-5 text-primary" />
-              Phone Numbers
-            </DialogTitle>
-          </DialogHeader>
+      {/* ── Phone Numbers Management Panel ── */}
+      <PhoneNumbersPanel
+        isOpen={isPhoneNumbersOpen}
+        onClose={() => setIsPhoneNumbersOpen(false)}
+        sessionToken={sessionToken}
+      />
 
-          {/* Outbound call sync section */}
-          <div className="rounded-lg border border-border p-3 space-y-2">
-            <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-              <Phone className="h-3.5 w-3.5 text-primary" />
-              Outbound Call Configuration
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Sync the voice configuration to ensure outbound calls from the CRM
-              are routed correctly through your Twilio application.
-            </p>
-            {callSetupStatus && (
-              <div className="bg-green-50 border border-green-200 rounded p-2 text-xs text-green-700 font-mono break-all space-y-0.5">
-                <p>
-                  <span className="font-sans font-semibold">App SID:</span>{" "}
-                  {callSetupStatus.twimlAppSid}
-                </p>
-                <p>
-                  <span className="font-sans font-semibold">Voice URL:</span>{" "}
-                  {callSetupStatus.voiceUrl}
-                </p>
-              </div>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1.5 text-xs w-full"
-              onClick={syncCallSetup}
-              disabled={isSyncingCallSetup}
-            >
-              {isSyncingCallSetup ? (
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Zap className="h-3.5 w-3.5 text-primary" />
-              )}
-              {isSyncingCallSetup ? "Syncing…" : "Sync Voice Configuration"}
-            </Button>
-          </div>
+      {/* Client detail panel — slides in from the right when a known client name is clicked */}
+      <ClientDetailPanel
+        isOpen={detailClientId !== null}
+        onClose={() => setDetailClientId(null)}
+        clientId={detailClientId}
+      />
 
-          {/* Actions row */}
-          <div className="flex items-center justify-between">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 text-xs"
-              onClick={fetchPhoneNumbers}
-              disabled={isLoadingNumbers}
-            >
-              <RefreshCw
-                className={cn(
-                  "h-3.5 w-3.5",
-                  isLoadingNumbers && "animate-spin",
-                )}
-              />
-              Refresh
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90"
-              onClick={() => configureNumber("all")}
-              disabled={isConfiguringAll || isLoadingNumbers}
-            >
-              {isConfiguringAll ? (
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Zap className="h-3.5 w-3.5" />
-              )}
-              Configure All
-            </Button>
-          </div>
+      {/* Broker/Realtor detail panel — slides in when the contact is a realtor */}
+      <BrokerDetailPanel
+        isOpen={detailBrokerId !== null}
+        onClose={() => setDetailBrokerId(null)}
+        brokerId={detailBrokerId}
+      />
 
-          {/* Numbers list */}
-          <ScrollArea className="max-h-[420px]">
-            {isLoadingNumbers ? (
-              <div className="flex items-center justify-center py-10">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
-              </div>
-            ) : phoneNumbers.length === 0 ? (
-              <div className="text-center py-10 text-muted-foreground text-sm">
-                No phone numbers found on your Twilio account.
-              </div>
-            ) : (
-              <div className="space-y-2 pr-1">
-                {phoneNumbers.map((num) => (
-                  <div
-                    key={num.sid}
-                    className="rounded-lg border border-border bg-card overflow-hidden"
-                  >
-                    {/* Top row: icon + number info + webhook status */}
-                    <div className="flex items-center gap-3 p-3">
-                      <div
-                        className={cn(
-                          "p-2 rounded-full flex-shrink-0",
-                          num.configured && num.smsConfigured
-                            ? "bg-green-100"
-                            : "bg-amber-100",
-                        )}
-                      >
-                        {num.configured && num.smsConfigured ? (
-                          <Wifi className="h-4 w-4 text-green-600" />
-                        ) : (
-                          <WifiOff className="h-4 w-4 text-amber-600" />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-foreground">
-                          {num.phoneNumber}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {num.friendlyName}
-                        </p>
-                        {/* Webhook status badges */}
-                        <div className="flex flex-wrap gap-1.5 mt-1.5">
-                          {num.capabilities.voice && (
-                            <span
-                              className={cn(
-                                "text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5",
-                                num.configured
-                                  ? "bg-green-50 text-green-700"
-                                  : "bg-amber-50 text-amber-700",
-                              )}
-                            >
-                              <Phone className="h-2.5 w-2.5" />
-                              Voice {num.configured ? "✓" : "not set"}
-                            </span>
-                          )}
-                          {num.capabilities.sms && (
-                            <span
-                              className={cn(
-                                "text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5",
-                                num.smsConfigured
-                                  ? "bg-green-50 text-green-700"
-                                  : "bg-amber-50 text-amber-700",
-                              )}
-                            >
-                              <MessageSquare className="h-2.5 w-2.5" />
-                              SMS {num.smsConfigured ? "✓" : "not set"}
-                            </span>
-                          )}
-                          {num.capabilities.mms && (
-                            <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium">
-                              MMS
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex-shrink-0">
-                        {num.configured && num.smsConfigured ? (
-                          <span className="text-xs text-green-600 font-medium flex items-center gap-1">
-                            <CheckCircle className="h-3.5 w-3.5" />
-                            Ready
-                          </span>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs gap-1"
-                            onClick={() => configureNumber(num.sid)}
-                            disabled={configuringSid === num.sid}
-                          >
-                            {configuringSid === num.sid ? (
-                              <RefreshCw className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Zap className="h-3 w-3" />
-                            )}
-                            Configure
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Bottom row: banker assignment */}
-                    <div className="px-3 pb-3 flex items-center gap-2 border-t border-border/50 pt-2.5">
-                      <Users className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                      <span className="text-xs text-muted-foreground flex-shrink-0">
-                        Assigned to
-                      </span>
-                      <Select
-                        value={num.assignedBrokerId?.toString() ?? "unassigned"}
-                        onValueChange={(val) =>
-                          assignNumber(
-                            num.sid,
-                            val === "unassigned" ? null : parseInt(val, 10),
-                          )
-                        }
-                        disabled={assigningSid === num.sid}
-                      >
-                        <SelectTrigger className="h-7 text-xs flex-1 max-w-[200px]">
-                          <SelectValue placeholder="Unassigned (shared)">
-                            {assigningSid === num.sid ? (
-                              <span className="flex items-center gap-1.5">
-                                <RefreshCw className="h-3 w-3 animate-spin" />
-                                Saving…
-                              </span>
-                            ) : num.assignedBrokerName ? (
-                              num.assignedBrokerName
-                            ) : (
-                              <span className="text-muted-foreground">
-                                Unassigned (shared)
-                              </span>
-                            )}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="unassigned">
-                            <span className="text-muted-foreground">
-                              Unassigned (shared)
-                            </span>
-                          </SelectItem>
-                          {brokerOptions.map((b) => (
-                            <SelectItem key={b.id} value={b.id.toString()}>
-                              {b.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {num.assignedBrokerName && (
-                        <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium flex-shrink-0">
-                          rings first on inbound
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
+      {/* Save message as reusable template */}
+      <SaveAsTemplateDialog
+        isOpen={saveTemplateOpen}
+        onClose={() => setSaveTemplateOpen(false)}
+        channelType={messageType}
+        defaultBody={messageText}
+        defaultSubject={messageSubject}
+      />
     </div>
   );
 };

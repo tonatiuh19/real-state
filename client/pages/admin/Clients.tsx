@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Users, Search, Mail, Phone, Trash2, Plus, Pencil } from "lucide-react";
+import { Users, Search, Phone, Trash2, Plus } from "lucide-react";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import ClientFormDialog from "@/components/ClientFormDialog";
@@ -53,7 +53,6 @@ const Clients = () => {
   const [sortBy, setSortBy] = useState("first_name");
   const [sortDir, setSortDir] = useState<"ASC" | "DESC">("ASC");
   const [formOpen, setFormOpen] = useState(false);
-  const [clientToEdit, setClientToEdit] = useState<ClientRow | null>(null);
   const [detailClientId, setDetailClientId] = useState<number | null>(null);
 
   const doFetch = useCallback(
@@ -235,19 +234,6 @@ const Clients = () => {
             render: (client: ClientRow) => (
               <div className="flex items-center gap-1">
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setClientToEdit(client);
-                    setFormOpen(true);
-                  }}
-                  className="h-7 text-xs gap-1"
-                >
-                  <Pencil className="h-3 w-3" />
-                  Edit
-                </Button>
-                <Button
                   variant="outline"
                   size="sm"
                   onClick={(e) => {
@@ -306,7 +292,6 @@ const Clients = () => {
               {!isPartner && (
                 <Button
                   onClick={() => {
-                    setClientToEdit(null);
                     setFormOpen(true);
                   }}
                   className="gap-1.5 whitespace-nowrap"
@@ -412,17 +397,6 @@ const Clients = () => {
                       {!isPartner && (
                         <div className="flex justify-end gap-1 pt-1">
                           <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setClientToEdit(client);
-                              setFormOpen(true);
-                            }}
-                            className="h-7 text-xs gap-1"
-                          >
-                            <Pencil className="h-3 w-3" /> Edit
-                          </Button>
-                          <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleDeleteClick(client)}
@@ -441,14 +415,11 @@ const Clients = () => {
           </div>
         )}
 
-        {/* Create / Edit Client Dialog */}
+        {/* Create Client Dialog */}
         <ClientFormDialog
           open={formOpen}
-          onClose={() => {
-            setFormOpen(false);
-            setClientToEdit(null);
-          }}
-          client={clientToEdit}
+          onClose={() => setFormOpen(false)}
+          client={null}
         />
 
         {/* Client Detail Panel */}

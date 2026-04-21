@@ -7,6 +7,8 @@ import type {
   CreateClientResponse,
   UpdateClientRequest,
   UpdateClientResponse,
+  ConvertClientToBrokerRequest,
+  ConvertClientToBrokerResponse,
   PaginationInfo,
 } from "@shared/api";
 import { logger } from "@/lib/logger";
@@ -115,6 +117,31 @@ export const updateClient = createAsyncThunk(
   },
 );
 
+export const convertClientToBroker = createAsyncThunk(
+  "clients/convertClientToBroker",
+  async (
+    {
+      clientId,
+      payload,
+    }: { clientId: number; payload: ConvertClientToBrokerRequest },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<ConvertClientToBrokerResponse>(
+        `/api/clients/${clientId}/convert-to-broker`,
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { clientId, ...data };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to convert client to broker",
+      );
+    }
+  },
+);
+
 const clientsSlice = createSlice({
   name: "clients",
   initialState,
@@ -153,6 +180,12 @@ const clientsSlice = createSlice({
         if (idx !== -1) {
           state.clients[idx] = { ...state.clients[idx], ...updated };
         }
+      })
+      .addCase(convertClientToBroker.fulfilled, (state, action) => {
+        // Remove the converted (now inactive) client from the list
+        state.clients = state.clients.filter(
+          (c) => c.id !== action.payload.clientId,
+        );
       });
   },
 });

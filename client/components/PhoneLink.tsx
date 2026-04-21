@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { Phone, PhoneCall, ExternalLink } from "lucide-react";
 import {
   DropdownMenu,
@@ -6,7 +6,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import VoiceCallPanel from "@/components/VoiceCallPanel";
+import { useAppDispatch } from "@/store/hooks";
+import { startOutboundCall } from "@/store/slices/voiceSlice";
 
 interface PhoneLinkProps {
   /** Phone number to display and call */
@@ -34,7 +35,7 @@ const PhoneLink: React.FC<PhoneLinkProps> = ({
   className = "",
   noIcon = false,
 }) => {
-  const [callOpen, setCallOpen] = useState(false);
+  const dispatch = useAppDispatch();
 
   return (
     <>
@@ -48,7 +49,11 @@ const PhoneLink: React.FC<PhoneLinkProps> = ({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
-          <DropdownMenuItem onClick={() => setCallOpen(true)}>
+          <DropdownMenuItem
+            onClick={() =>
+              dispatch(startOutboundCall({ phone, clientName, clientId }))
+            }
+          >
             <PhoneCall className="h-3.5 w-3.5 mr-2 text-primary" />
             Call from CRM
           </DropdownMenuItem>
@@ -60,17 +65,6 @@ const PhoneLink: React.FC<PhoneLinkProps> = ({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      {callOpen && (
-        <div className="fixed bottom-6 right-6 z-50 w-80 shadow-2xl rounded-xl overflow-hidden">
-          <VoiceCallPanel
-            phone={phone}
-            clientName={clientName}
-            clientId={clientId}
-            onClose={() => setCallOpen(false)}
-          />
-        </div>
-      )}
     </>
   );
 };

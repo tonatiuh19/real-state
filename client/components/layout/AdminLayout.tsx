@@ -159,6 +159,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       hidden: isPartner,
     },
     {
+      id: "communication-templates",
+      label: "Message Templates",
+      icon: <FileText className="h-4 w-4" />,
+      path: "/admin/communication-templates",
+      hidden: isPartner,
+    },
+    {
       id: "reports",
       label: "Reports & Analytics",
       icon: <TrendingUp className="h-4 w-4" />,

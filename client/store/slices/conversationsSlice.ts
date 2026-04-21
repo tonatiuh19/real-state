@@ -225,9 +225,13 @@ export const sendMessage = createAsyncThunk(
           headers: { Authorization: `Bearer ${sessionToken}` },
         },
       );
-      // Attach the outgoing body so the reducer can update the thread preview
-      // optimistically without waiting for a re-fetch.
-      return { ...data, body: messageData.body ?? null };
+      // Attach the outgoing body and media_url so the reducer can update the
+      // thread preview optimistically without waiting for a re-fetch.
+      return {
+        ...data,
+        body: messageData.body ?? null,
+        media_url: messageData.media_url ?? null,
+      };
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.message || "Failed to send message",
@@ -285,6 +289,23 @@ export const updateConversation = createAsyncThunk(
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.message || "Failed to update conversation",
+      );
+    }
+  },
+);
+
+export const deleteConversation = createAsyncThunk(
+  "conversations/deleteConversation",
+  async (conversationId: string, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.delete(`/api/conversations/${conversationId}`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return conversationId;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to delete conversation",
       );
     }
   },
@@ -474,6 +495,30 @@ const conversationsSlice = createSlice({
       };
     },
 
+    // Patch recording_url + recording_duration on a single call message once ready
+    patchMessageRecording: (
+      state,
+      action: {
+        payload: {
+          external_id: string;
+          recording_url: string;
+          recording_duration?: number | null;
+        };
+      },
+    ) => {
+      const idx = state.messages.findIndex(
+        (m) => m.external_id === action.payload.external_id,
+      );
+      if (idx !== -1) {
+        (state.messages[idx] as any).recording_url =
+          action.payload.recording_url;
+        if (action.payload.recording_duration != null) {
+          (state.messages[idx] as any).recording_duration =
+            action.payload.recording_duration;
+        }
+      }
+    },
+
     // Error handling
     clearError: (state) => {
       state.error = null;
@@ -661,6 +706,18 @@ const conversationsSlice = createSlice({
       );
     });
 
+    // Delete conversation (permanent)
+    builder.addCase(deleteConversation.fulfilled, (state, action) => {
+      const conversationId = action.payload;
+      state.threads = state.threads.filter(
+        (t) => t.conversation_id !== conversationId,
+      );
+      if (state.currentThread?.conversation_id === conversationId) {
+        state.currentThread = null;
+        state.messages = [];
+      }
+    });
+
     // Update conversation
     builder
       .addCase(updateConversation.pending, (state) => {
@@ -760,24 +817,33 @@ const conversationsSlice = createSlice({
       });
 
     builder.addCase(saveContactFromConversation.fulfilled, (state, action) => {
-      const { conversationId, client_id, client_name, client_email } =
-        action.payload;
-      // Update the thread in the list
+      const {
+        conversationId: originalConvId,
+        conversation_id: finalConvId,
+        client_id,
+        client_name,
+        client_email,
+      } = action.payload;
+
+      // The API may have renamed the thread to conv_client_{id}
+      const changed = finalConvId && finalConvId !== originalConvId;
+
       const thread = state.threads.find(
-        (t) => t.conversation_id === conversationId,
+        (t) => t.conversation_id === originalConvId,
       );
       if (thread) {
         thread.client_id = client_id;
         thread.client_name = client_name;
         if (client_email) thread.client_email = client_email;
+        if (changed) thread.conversation_id = finalConvId;
       }
-      // Update currentThread if it matches
-      if (state.currentThread?.conversation_id === conversationId) {
+      if (state.currentThread?.conversation_id === originalConvId) {
         state.currentThread = {
           ...state.currentThread,
           client_id,
           client_name,
           ...(client_email ? { client_email } : {}),
+          ...(changed ? { conversation_id: finalConvId } : {}),
         };
       }
     });
@@ -793,6 +859,7 @@ export const {
   addNewMessage,
   markConversationAsRead,
   removeThread,
+  patchMessageRecording,
 } = conversationsSlice.actions;
 
 export default conversationsSlice.reducer;

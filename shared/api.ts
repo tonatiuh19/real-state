@@ -1159,6 +1159,8 @@ export interface ConversationThread {
   lead_id?: number | null;
   client_id?: number | null;
   broker_id: number | null;
+  /** Broker/realtor who is the *contact* in this thread (not the CRM handler) */
+  contact_broker_id?: number | null;
   client_name?: string | null;
   client_phone?: string | null;
   client_email?: string | null;
@@ -1188,6 +1190,14 @@ export interface Communication {
   body: string;
   status: "pending" | "sent" | "delivered" | "failed" | "read";
   external_id?: string | null;
+  /** Twilio MP3 recording URL for call communications — populated by recording-status webhook */
+  recording_url?: string | null;
+  /** Recording duration in seconds */
+  recording_duration?: number | null;
+  /** MMS media attachment URL(s) — single URL string or JSON array for multiple items */
+  media_url?: string | null;
+  /** MIME type of the primary media attachment (e.g. image/jpeg, video/mp4) */
+  media_content_type?: string | null;
   conversation_id?: string | null;
   /** ID of the reminder_flow_execution that sent this message (null = manual send) */
   source_execution_id?: number | null;
@@ -1264,6 +1274,8 @@ export interface SendMessageRequest {
   template_id?: number;
   message_type?: "text" | "template";
   scheduled_at?: string;
+  /** Public URL of an MMS media attachment (image, video, document) */
+  media_url?: string;
 }
 
 export interface SendMessageResponse {
@@ -1290,6 +1302,7 @@ export interface UpdateConversationResponse {
 export interface ConversationTemplate {
   id: number;
   name: string;
+  description?: string;
   template_type: "email" | "sms" | "whatsapp";
   subject?: string;
   body: string;
@@ -1303,6 +1316,7 @@ export interface ConversationTemplate {
     | "marketing"
     | "system";
   variables: string[];
+  usage_count?: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -1540,6 +1554,27 @@ export interface UpdateBrokerProfileResponse {
 export interface UpdateBrokerAvatarResponse {
   success: boolean;
   avatar_url: string;
+}
+
+// Conversion between client <-> broker
+export interface ConvertClientToBrokerRequest {
+  /** Mortgage Banker (admin) to assign this new partner to */
+  created_by_broker_id?: number | null;
+}
+export interface ConvertClientToBrokerResponse {
+  success: boolean;
+  broker_id: number;
+  message: string;
+}
+export interface ConvertBrokerToClientRequest {
+  /** New source for the client (must NOT be 'realtor') */
+  source: string;
+  assigned_broker_id?: number | null;
+}
+export interface ConvertBrokerToClientResponse {
+  success: boolean;
+  client_id: number;
+  message: string;
 }
 
 // Admin manages any broker's profile/avatar/share-link

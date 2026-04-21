@@ -30,8 +30,8 @@ import BrokerSchedulerLinkModal from "@/components/BrokerSchedulerLinkModal";
 import { DataGrid, type DataGridColumn } from "@/components/ui/data-grid";
 import {
   UserCog,
+  User,
   Plus,
-  Pencil,
   Trash2,
   Search,
   Mail,
@@ -45,6 +45,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
+import BrokerDetailPanel from "@/components/BrokerDetailPanel";
 
 export default function Brokers() {
   const dispatch = useAppDispatch();
@@ -71,6 +72,13 @@ export default function Brokers() {
   const [schedulerLinkModalOpen, setSchedulerLinkModalOpen] = useState(false);
   const [brokerForSchedulerLink, setBrokerForSchedulerLink] =
     useState<Broker | null>(null);
+  const [detailBrokerId, setDetailBrokerId] = useState<number | null>(null);
+  const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+
+  const handleOpenDetail = (b: Broker) => {
+    setDetailBrokerId(b.id);
+    setDetailPanelOpen(true);
+  };
 
   const handleOpenSchedulerLink = (b: Broker) => {
     setBrokerForSchedulerLink(b);
@@ -365,9 +373,12 @@ export default function Brokers() {
                 sortable: true,
                 className: "min-w-[140px]",
                 render: (b) => (
-                  <span className="font-medium truncate block">
+                  <button
+                    className="font-medium truncate block text-left hover:text-primary hover:underline transition-colors"
+                    onClick={() => handleOpenDetail(b)}
+                  >
                     {b.first_name} {b.last_name}
-                  </span>
+                  </button>
                 ),
               },
               {
@@ -528,9 +539,18 @@ export default function Brokers() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            title="View profile"
+                            onClick={() => handleOpenDetail(b)}
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                          >
+                            <User className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             title="Copy scheduler link"
                             onClick={() => handleOpenSchedulerLink(b)}
-                            className="h-8 w-8 p-0 text-violet-600 hover:text-violet-700 hover:bg-violet-50"
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                           >
                             <CalendarDays className="h-4 w-4" />
                           </Button>
@@ -542,14 +562,6 @@ export default function Brokers() {
                             className="h-8 w-8 p-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                           >
                             <Link2 className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditBroker(b)}
-                            className="h-8 w-8 p-0"
-                          >
-                            <Pencil className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -635,14 +647,6 @@ export default function Brokers() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleEditBroker(broker)}
-                      className="h-8"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
                       onClick={() => handleDeleteClick(broker)}
                       className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
                       disabled={broker.id === currentBroker?.id}
@@ -712,6 +716,23 @@ export default function Brokers() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Broker Detail Panel */}
+        <BrokerDetailPanel
+          isOpen={detailPanelOpen}
+          onClose={() => {
+            setDetailPanelOpen(false);
+            setDetailBrokerId(null);
+            // Refresh list in case of conversion
+            doFetch({
+              page: 1,
+              sortBy,
+              sortOrder: sortDir,
+              search: searchQuery || undefined,
+            });
+          }}
+          brokerId={detailBrokerId}
+        />
       </div>
     </>
   );

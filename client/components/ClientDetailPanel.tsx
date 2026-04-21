@@ -42,7 +42,10 @@ import {
   FileText,
   CalendarPlus,
   Copy,
+  BookmarkPlus,
+  Info,
 } from "lucide-react";
+import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
@@ -73,6 +76,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
 } from "@/components/ui/command";
 import {
   Tooltip,
@@ -92,6 +96,7 @@ import {
   fetchConversationTemplates,
   sendMessage,
 } from "@/store/slices/conversationsSlice";
+import { convertClientToBroker } from "@/store/slices/clientsSlice";
 import { useToast } from "@/hooks/use-toast";
 import { logger } from "@/lib/logger";
 import {
@@ -351,6 +356,7 @@ interface ComposeBoxProps {
   onSend: () => void;
   onCancel: () => void;
   compact?: boolean;
+  onSaveAsTemplate?: () => void;
   templates?: {
     id: number;
     name: string;
@@ -373,6 +379,7 @@ function ComposeBox({
   onSend,
   onCancel,
   compact,
+  onSaveAsTemplate,
   templates = [],
 }: ComposeBoxProps) {
   const [templateOpen, setTemplateOpen] = React.useState(false);
@@ -427,8 +434,8 @@ function ComposeBox({
           );
         })}
 
-        {/* Templates picker */}
-        {templates.length > 0 && (
+        {/* Templates picker — always visible; includes "Save as template" at bottom */}
+        {(templates.length > 0 || onSaveAsTemplate) && (
           <Popover open={templateOpen} onOpenChange={setTemplateOpen}>
             <PopoverTrigger asChild>
               <button className="ml-auto flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors font-medium">
@@ -440,32 +447,58 @@ function ComposeBox({
             <PopoverContent align="end" className="w-72 p-0" sideOffset={6}>
               <Command>
                 <CommandInput placeholder="Search templates…" />
-                <CommandList className="max-h-52">
-                  <CommandEmpty>No templates found.</CommandEmpty>
-                  <CommandGroup>
-                    {(relevantTemplates.length > 0
-                      ? relevantTemplates
-                      : templates
-                    ).map((tmpl) => (
-                      <CommandItem
-                        key={tmpl.id}
-                        value={tmpl.name}
-                        onSelect={() => {
-                          onBodyChange(tmpl.body);
-                          if (tmpl.subject) onSubjectChange(tmpl.subject);
-                          setTemplateOpen(false);
-                        }}
-                        className="flex flex-col items-start gap-0.5 cursor-pointer"
-                      >
-                        <span className="text-[13px] font-medium">
-                          {tmpl.name}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground truncate w-full">
-                          {tmpl.body.substring(0, 60)}…
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
+                <CommandList className="max-h-56">
+                  {templates.length > 0 ? (
+                    <>
+                      <CommandEmpty>No templates found.</CommandEmpty>
+                      <CommandGroup>
+                        {(relevantTemplates.length > 0
+                          ? relevantTemplates
+                          : templates
+                        ).map((tmpl) => (
+                          <CommandItem
+                            key={tmpl.id}
+                            value={tmpl.name}
+                            onSelect={() => {
+                              onBodyChange(tmpl.body);
+                              if (tmpl.subject) onSubjectChange(tmpl.subject);
+                              setTemplateOpen(false);
+                            }}
+                            className="flex flex-col items-start gap-0.5 cursor-pointer"
+                          >
+                            <span className="text-[13px] font-medium">
+                              {tmpl.name}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground truncate w-full">
+                              {tmpl.body.substring(0, 60)}…
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </>
+                  ) : (
+                    <CommandEmpty>No templates yet.</CommandEmpty>
+                  )}
+                  {onSaveAsTemplate && (
+                    <>
+                      <CommandSeparator />
+                      <CommandGroup>
+                        <CommandItem
+                          value="__save_as_template__"
+                          disabled={!composeBody.trim()}
+                          onSelect={() => {
+                            if (!composeBody.trim()) return;
+                            setTemplateOpen(false);
+                            onSaveAsTemplate();
+                          }}
+                          className="gap-2 text-primary data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed"
+                        >
+                          <BookmarkPlus className="w-4 h-4" />
+                          Save current message as template
+                        </CommandItem>
+                      </CommandGroup>
+                    </>
+                  )}
                 </CommandList>
               </Command>
             </PopoverContent>
@@ -491,6 +524,33 @@ function ComposeBox({
           className="h-8 text-sm"
         />
       )}
+
+      {/* Template variable hint */}
+      {(() => {
+        const vars = Array.from(
+          new Set(
+            [...(composeBody.matchAll(/\{\{([^}]+)\}\}/g) || [])].map(
+              (m) => m[1],
+            ),
+          ),
+        );
+        if (vars.length === 0) return null;
+        return (
+          <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
+            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="text-[11px] leading-snug text-amber-800 dark:text-amber-300">
+              Variables{" "}
+              {vars.map((v, i) => (
+                <span key={v}>
+                  <code className="font-mono bg-amber-100 dark:bg-amber-900 px-0.5 rounded">{`{{${v}}}`}</code>
+                  {i < vars.length - 1 ? ", " : ""}
+                </span>
+              ))}{" "}
+              will be auto-filled from this client's profile when sent.
+            </p>
+          </div>
+        );
+      })()}
 
       {/* body */}
       <div className="relative">
@@ -558,6 +618,32 @@ export default function ClientDetailPanel({
   });
   const [isSavingMeeting, setIsSavingMeeting] = useState(false);
 
+  /* ── convert to broker ── */
+  const [convertToRealtorOpen, setConvertToRealtorOpen] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
+
+  const handleConvertToRealtor = async () => {
+    if (!clientId) return;
+    setIsConverting(true);
+    try {
+      await dispatch(convertClientToBroker({ clientId, payload: {} })).unwrap();
+      toast({
+        title: "Converted",
+        description: `${client?.first_name} ${client?.last_name} is now a partner realtor`,
+      });
+      setConvertToRealtorOpen(false);
+      onClose();
+    } catch (err: any) {
+      toast({
+        title: "Error",
+        description: String(err) || "Conversion failed",
+        variant: "destructive",
+      });
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
 
@@ -574,6 +660,7 @@ export default function ClientDetailPanel({
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const openThread = async (conversationId: string) => {
@@ -891,6 +978,16 @@ export default function ClientDetailPanel({
                       <Tag className="w-3 h-3" />
                       {LEAD_SOURCE_LABEL[client.source] ?? client.source}
                     </span>
+                  )}
+                  {/* Convert to realtor CTA when source is realtor */}
+                  {client.source === "realtor" && !editing && (
+                    <button
+                      onClick={() => setConvertToRealtorOpen(true)}
+                      className="text-xs text-violet-600 hover:text-violet-800 flex items-center gap-1 font-medium underline underline-offset-2"
+                    >
+                      <ArrowUpRight className="w-3 h-3" />
+                      Convert to Partner Realtor
+                    </button>
                   )}
                 </div>
               </div>
@@ -1518,6 +1615,7 @@ export default function ClientDetailPanel({
                       onBodyChange={setComposeBody}
                       onSend={handleSendMessage}
                       onCancel={() => setComposeOpen(false)}
+                      onSaveAsTemplate={() => setSaveTemplateOpen(true)}
                       templates={convTemplates}
                     />
                   )}
@@ -1781,6 +1879,7 @@ export default function ClientDetailPanel({
                       onSend={handleSendMessage}
                       onCancel={() => setComposeOpen(false)}
                       compact
+                      onSaveAsTemplate={() => setSaveTemplateOpen(true)}
                       templates={convTemplates}
                     />
                   )}
@@ -2076,6 +2175,61 @@ export default function ClientDetailPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Convert to Realtor Confirmation ─────────────────────────────── */}
+      <Dialog
+        open={convertToRealtorOpen}
+        onOpenChange={setConvertToRealtorOpen}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowUpRight className="h-5 w-5 text-violet-500" />
+              Convert to Partner Realtor
+            </DialogTitle>
+            <DialogDescription>
+              {client?.first_name} {client?.last_name} will be deactivated as a
+              client and added as a Partner Realtor. Their conversation history
+              will be re-linked.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg bg-violet-50 border border-violet-200 p-3 flex items-start gap-2 text-violet-800 text-xs leading-snug">
+            <Shield className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            This action preserves conversation history. The client account will
+            be set to inactive (not deleted) so loan history remains intact.
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConvertToRealtorOpen(false)}
+              disabled={isConverting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleConvertToRealtor}
+              disabled={isConverting}
+              className="bg-violet-600 hover:bg-violet-700 text-white gap-2"
+            >
+              {isConverting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowUpRight className="h-4 w-4" />
+              )}
+              Convert to Realtor
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save message as reusable template */}
+      <SaveAsTemplateDialog
+        isOpen={saveTemplateOpen}
+        onClose={() => setSaveTemplateOpen(false)}
+        channelType={composeType}
+        defaultBody={composeBody}
+        defaultSubject={composeSubject}
+      />
     </Sheet>
   );
 }

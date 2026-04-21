@@ -4,7 +4,11 @@ import * as AblyLib from "ably";
 import { Phone, PhoneOff, PhoneIncoming } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { setDeviceStatus } from "@/store/slices/voiceSlice";
+import {
+  setDeviceStatus,
+  endOutboundCall,
+  resolveOutboundCallName,
+} from "@/store/slices/voiceSlice";
 import VoiceCallPanel from "@/components/VoiceCallPanel";
 import { logger } from "@/lib/logger";
 
@@ -17,6 +21,7 @@ const GlobalVoiceManager: React.FC = () => {
   const dispatch = useAppDispatch();
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
   const isAvailable = useAppSelector((s) => s.voice.isAvailable);
+  const outboundCall = useAppSelector((s) => s.voice.outboundCall);
 
   const deviceRef = useRef<Device | null>(null);
   // Prevents the [isAvailable] effect from calling register() before setup() completes.
@@ -71,6 +76,29 @@ const GlobalVoiceManager: React.FC = () => {
     }
   }, [sessionToken]);
 
+  // When an outbound call is dispatched without a client name (e.g. from the dialpad),
+  // look up the phone number so the panel shows the real name instead of the raw number.
+  useEffect(() => {
+    if (!outboundCall || outboundCall.clientName || !sessionToken) return;
+    const { phone } = outboundCall;
+    fetch(
+      `/api/conversations/lookup-contact?phone=${encodeURIComponent(phone)}`,
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.found) {
+          dispatch(
+            resolveOutboundCallName({
+              clientName: data.client_name ?? null,
+              clientId: data.client_id ?? null,
+            }),
+          );
+        }
+      })
+      .catch(() => {});
+  }, [outboundCall?.phone, sessionToken, dispatch]);
+
   // Create the Device once per session token.
   useEffect(() => {
     if (!sessionToken) return;
@@ -97,7 +125,7 @@ const GlobalVoiceManager: React.FC = () => {
         enableImprovedSignalingErrorPrecision: true,
         // Allow inbound ringing even while in an active call
         allowIncomingWhileBusy: true,
-      });
+      } as ConstructorParameters<typeof Device>[1]);
       deviceRef.current = device;
 
       // Expose audio helper for device selection in inbound call panels
@@ -299,7 +327,17 @@ const GlobalVoiceManager: React.FC = () => {
     if (!ringingCall) return;
     // Grab SID before clearing refs
     const sid = ringingCallSidRef.current;
-    ringingCall.accept();
+    // Pass rtcConstraints so echo-cancellation / noise-suppression / AGC apply
+    // to the actual WebRTC audio track the recipient hears, not just the meter.
+    ringingCall.accept({
+      rtcConstraints: {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      },
+    });
     setActiveIncomingCall(ringingCall);
     ringingCallRef.current = null;
     ringingCallSidRef.current = null;
@@ -401,6 +439,19 @@ const GlobalVoiceManager: React.FC = () => {
             direction="inbound"
             deviceAudio={deviceAudio}
             onClose={handleCloseActive}
+          />
+        </div>
+      )}
+
+      {/* Persistent outbound call panel — rendered here so it survives page navigation */}
+      {outboundCall && (
+        <div className="fixed bottom-6 right-6 z-50 w-80 shadow-2xl rounded-xl overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
+          <VoiceCallPanel
+            phone={outboundCall.phone}
+            clientName={outboundCall.clientName}
+            clientId={outboundCall.clientId}
+            applicationId={outboundCall.applicationId}
+            onClose={() => dispatch(endOutboundCall())}
           />
         </div>
       )}
