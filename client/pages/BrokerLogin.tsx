@@ -8,6 +8,7 @@ import {
   Sparkles,
   TrendingUp,
   MessageSquare,
+  Phone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,9 +44,9 @@ export default function BrokerLogin() {
   const [success, setSuccess] = useState("");
   const [emailError, setEmailError] = useState("");
   const [isSendingCode, setIsSendingCode] = useState(false);
-  const [deliveryMethod, setDeliveryMethod] = useState<"email" | "sms">(
-    "email",
-  );
+  const [deliveryMethod, setDeliveryMethod] = useState<
+    "email" | "sms" | "call"
+  >("email");
 
   const validateEmail = (email: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -78,7 +79,9 @@ export default function BrokerLogin() {
       setSuccess(
         deliveryMethod === "sms"
           ? "Verification code sent to your phone"
-          : "Verification code sent to your email",
+          : deliveryMethod === "call"
+            ? "We're calling your registered phone number now"
+            : "Verification code sent to your email",
       );
       setStep("code");
     }
@@ -99,7 +102,9 @@ export default function BrokerLogin() {
       setSuccess(
         deliveryMethod === "sms"
           ? "Code resent to your phone"
-          : "Code resent to your email",
+          : deliveryMethod === "call"
+            ? "Calling your phone again now"
+            : "Code resent to your email",
       );
     }
   };
@@ -268,18 +273,19 @@ export default function BrokerLogin() {
               <Alert variant="destructive" className="mb-6">
                 <AlertDescription className="flex flex-col gap-2">
                   <span>{error}</span>
-                  {deliveryMethod === "sms" && step === "email" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeliveryMethod("email");
-                        dispatch(clearError());
-                      }}
-                      className="mt-1 self-start text-xs font-semibold underline underline-offset-2 hover:opacity-80"
-                    >
-                      Try with email instead →
-                    </button>
-                  )}
+                  {(deliveryMethod === "sms" || deliveryMethod === "call") &&
+                    step === "email" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeliveryMethod("email");
+                          dispatch(clearError());
+                        }}
+                        className="mt-1 self-start text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+                      >
+                        Try with email instead →
+                      </button>
+                    )}
                 </AlertDescription>
               </Alert>
             )}
@@ -333,7 +339,7 @@ export default function BrokerLogin() {
                   <p className="text-sm font-semibold text-gray-700">
                     Send code via
                   </p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <button
                       type="button"
                       onClick={() => setDeliveryMethod("email")}
@@ -358,10 +364,27 @@ export default function BrokerLogin() {
                       <MessageSquare className="h-4 w-4" />
                       SMS
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("call")}
+                      className={`flex items-center justify-center gap-2 h-11 rounded-lg border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "call"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-gray-200 text-gray-500 hover:border-gray-300"
+                      }`}
+                    >
+                      <Phone className="h-4 w-4" />
+                      Call
+                    </button>
                   </div>
                   {deliveryMethod === "sms" && (
                     <p className="text-xs text-gray-500">
                       Code will be sent to your registered phone number.
+                    </p>
+                  )}
+                  {deliveryMethod === "call" && (
+                    <p className="text-xs text-gray-500">
+                      We'll call your registered phone and read the code aloud.
                     </p>
                   )}
                 </div>
@@ -423,9 +446,12 @@ export default function BrokerLogin() {
                   <p className="text-xs text-gray-500 text-center pt-1">
                     Code sent to your{" "}
                     <span className="font-semibold text-gray-700">
-                      {deliveryMethod === "sms" ? "phone" : "email"}
+                      {deliveryMethod === "sms" || deliveryMethod === "call"
+                        ? "phone"
+                        : "email"}
                     </span>
                     {deliveryMethod === "email" && <> ({email})</>}
+                    {deliveryMethod === "call" && <> via voice call</>}
                   </p>
                 </div>
 
@@ -434,7 +460,7 @@ export default function BrokerLogin() {
                   <p className="text-xs font-semibold text-gray-500 text-center">
                     Didn't receive it? Try a different method:
                   </p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <button
                       type="button"
                       onClick={() => setDeliveryMethod("email")}
@@ -458,6 +484,18 @@ export default function BrokerLogin() {
                     >
                       <MessageSquare className="h-4 w-4" />
                       SMS
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("call")}
+                      className={`flex items-center justify-center gap-2 h-10 rounded-lg border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "call"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-gray-200 text-gray-500 hover:border-gray-300"
+                      }`}
+                    >
+                      <Phone className="h-4 w-4" />
+                      Call
                     </button>
                   </div>
                   <ResendCodeButton

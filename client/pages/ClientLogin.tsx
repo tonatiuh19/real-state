@@ -14,6 +14,7 @@ import {
   Home,
   X,
   MessageSquare,
+  Phone,
 } from "lucide-react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
@@ -44,9 +45,9 @@ const ClientLogin = () => {
 
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
-  const [deliveryMethod, setDeliveryMethod] = useState<"email" | "sms">(
-    "email",
-  );
+  const [deliveryMethod, setDeliveryMethod] = useState<
+    "email" | "sms" | "call"
+  >("email");
 
   // Redirect authenticated users to portal
   useEffect(() => {
@@ -348,7 +349,9 @@ const ClientLogin = () => {
                 ? "Enter your email to access your loan applications"
                 : deliveryMethod === "sms"
                   ? "We've sent a code to your phone"
-                  : "We've sent a code to protect your account"}
+                  : deliveryMethod === "call"
+                    ? "We're calling your registered phone number now"
+                    : "We've sent a code to protect your account"}
             </p>
 
             {/* Feature Pills */}
@@ -422,7 +425,7 @@ const ClientLogin = () => {
                   <p className="text-sm font-semibold flex items-center gap-2">
                     Send code via
                   </p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <button
                       type="button"
                       onClick={() => setDeliveryMethod("email")}
@@ -447,10 +450,27 @@ const ClientLogin = () => {
                       <MessageSquare className="h-4 w-4" />
                       SMS
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryMethod("call")}
+                      className={`flex items-center justify-center gap-2 h-11 rounded-xl border-2 text-sm font-medium transition-all ${
+                        deliveryMethod === "call"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border/50 text-muted-foreground hover:border-border"
+                      }`}
+                    >
+                      <Phone className="h-4 w-4" />
+                      Call
+                    </button>
                   </div>
                   {deliveryMethod === "sms" && (
                     <p className="text-xs text-muted-foreground">
                       Code will be sent to your registered phone number.
+                    </p>
+                  )}
+                  {deliveryMethod === "call" && (
+                    <p className="text-xs text-muted-foreground">
+                      We'll call your registered phone and read the code aloud.
                     </p>
                   )}
                 </div>
@@ -469,7 +489,8 @@ const ClientLogin = () => {
                           <div className="h-1.5 w-1.5 rounded-full bg-destructive animate-pulse shrink-0" />
                           {error}
                         </div>
-                        {deliveryMethod === "sms" && (
+                        {(deliveryMethod === "sms" ||
+                          deliveryMethod === "call") && (
                           <button
                             type="button"
                             onClick={() => {
@@ -582,15 +603,23 @@ const ClientLogin = () => {
                         <Sparkles className="h-4 w-4 text-primary" />
                       </p>
                       <p className="text-muted-foreground leading-relaxed">
-                        We sent a 6-digit verification code to your{" "}
-                        {deliveryMethod === "sms" ? (
-                          <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
-                            phone
-                          </span>
+                        {deliveryMethod === "call" ? (
+                          <>
+                            We're calling your registered phone with the code.
+                          </>
                         ) : (
-                          <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
-                            {email}
-                          </span>
+                          <>
+                            We sent a 6-digit verification code to your{" "}
+                            {deliveryMethod === "sms" ? (
+                              <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
+                                phone
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-foreground px-1.5 py-0.5 rounded bg-primary/10">
+                                {email}
+                              </span>
+                            )}
+                          </>
                         )}
                       </p>
                       <p className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
@@ -688,7 +717,7 @@ const ClientLogin = () => {
                     <p className="text-xs text-muted-foreground text-center font-medium">
                       Didn't receive it? Try a different method:
                     </p>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-3">
                       <button
                         type="button"
                         onClick={() => setDeliveryMethod("email")}
@@ -712,6 +741,18 @@ const ClientLogin = () => {
                       >
                         <MessageSquare className="h-4 w-4" />
                         SMS
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeliveryMethod("call")}
+                        className={`flex items-center justify-center gap-2 h-10 rounded-xl border-2 text-sm font-medium transition-all ${
+                          deliveryMethod === "call"
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border/50 text-muted-foreground hover:border-border"
+                        }`}
+                      >
+                        <Phone className="h-4 w-4" />
+                        Call
                       </button>
                     </div>
                     <ResendCodeButton

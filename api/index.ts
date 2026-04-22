@@ -469,6 +469,88 @@ async function sendSMSMessage(
 }
 
 /**
+ * Send OTP via voice call using Twilio — reads the code aloud using TwiML <Say>.
+ * Dynamically picks the first voice-capable "All Mortgage Bankers" number (i.e. a
+ * Twilio number that is NOT exclusively assigned to any individual broker).
+ */
+async function getSharedVoiceNumber(): Promise<string | null> {
+  if (!twilioClient) return null;
+  try {
+    // Collect all SIDs that are exclusively assigned to individual brokers
+    const [assignedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT twilio_phone_sid FROM brokers
+       WHERE tenant_id = ? AND twilio_phone_sid IS NOT NULL AND twilio_phone_sid != ''`,
+      [MORTGAGE_TENANT_ID],
+    );
+    const assignedSids = new Set(
+      (assignedRows as RowDataPacket[]).map(
+        (r) => r.twilio_phone_sid as string,
+      ),
+    );
+
+    // List all Twilio numbers and return the first voice-capable unassigned one
+    const numbers = await twilioClient.incomingPhoneNumbers.list({ limit: 50 });
+    const shared = numbers.find(
+      (n: any) => n.capabilities?.voice && !assignedSids.has(n.sid),
+    );
+    return shared?.phoneNumber ?? null;
+  } catch (err) {
+    console.error("❌ getSharedVoiceNumber failed:", err);
+    return null;
+  }
+}
+
+async function sendVoiceOTP(
+  to: string,
+  code: number,
+): Promise<{ success: boolean; error?: string }> {
+  if (!twilioClient) {
+    return { success: false, error: "Twilio not configured" };
+  }
+
+  const fromNumber = await getSharedVoiceNumber();
+  if (!fromNumber) {
+    return {
+      success: false,
+      error:
+        "No shared voice number available. Please use email or SMS verification.",
+    };
+  }
+
+  // Normalise to E.164
+  const digits = to.replace(/\D/g, "");
+  let normalizedPhone: string;
+  if (to.startsWith("+")) {
+    normalizedPhone = to;
+  } else if (digits.length === 11 && digits.startsWith("1")) {
+    normalizedPhone = `+${digits}`;
+  } else if (digits.length === 10) {
+    normalizedPhone = `+1${digits}`;
+  } else {
+    normalizedPhone = `+${digits}`;
+  }
+
+  // Spell out each digit with pauses for clarity
+  const spokenCode = String(code).split("").join(". ");
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna" language="en-US">Hello! Your Encore Mortgage verification code is: ${spokenCode}. I repeat: ${spokenCode}. Goodbye.</Say>
+</Response>`;
+
+  try {
+    await twilioClient.calls.create({
+      to: normalizedPhone,
+      from: fromNumber,
+      twiml,
+    });
+    return { success: true };
+  } catch (error: any) {
+    console.error("❌ Voice OTP call failed:", error);
+    return { success: false, error: error.message || "Failed to place call" };
+  }
+}
+
+/**
  * Send WhatsApp message via Twilio
  */
 async function sendWhatsAppMessage(
@@ -1662,8 +1744,8 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
 
     const broker = brokers[0];
 
-    // If SMS requested, ensure broker has a phone number on file
-    if (delivery_method === "sms") {
+    // If SMS or call requested, ensure broker has a phone number on file
+    if (delivery_method === "sms" || delivery_method === "call") {
       if (!broker.phone) {
         return res.status(400).json({
           success: false,
@@ -1705,6 +1787,18 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
             "Failed to send SMS. Please try again or use email.",
         });
       }
+    } else if (delivery_method === "call") {
+      // Place a voice call that reads the code aloud
+      const callResult = await sendVoiceOTP(broker.phone, code);
+      if (!callResult.success) {
+        console.error("Failed to place voice OTP call:", callResult.error);
+        return res.status(500).json({
+          success: false,
+          message:
+            callResult.error ||
+            "Failed to place call. Please try again or use email.",
+        });
+      }
     } else {
       // Send email with code
       try {
@@ -1724,7 +1818,9 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
       message:
         delivery_method === "sms"
           ? "Verification code sent to your phone"
-          : "Verification code sent to your email",
+          : delivery_method === "call"
+            ? "We're calling your registered phone number now"
+            : "Verification code sent to your email",
       debug_code: process.env.NODE_ENV === "development" ? code : undefined,
     });
   } catch (error) {
@@ -2012,8 +2108,8 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
 
     const client = clients[0];
 
-    // If SMS requested, ensure client has a phone number on file
-    if (delivery_method === "sms") {
+    // If SMS or call requested, ensure client has a phone number on file
+    if (delivery_method === "sms" || delivery_method === "call") {
       if (!client.phone) {
         return res.status(400).json({
           success: false,
@@ -2053,6 +2149,18 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
             "Failed to send SMS. Please try again or use email.",
         });
       }
+    } else if (delivery_method === "call") {
+      // Place a voice call that reads the code aloud
+      const callResult = await sendVoiceOTP(client.phone, code);
+      if (!callResult.success) {
+        console.error("Failed to place voice OTP call:", callResult.error);
+        return res.status(500).json({
+          success: false,
+          message:
+            callResult.error ||
+            "Failed to place call. Please try again or use email.",
+        });
+      }
     } else {
       // Send email with code
       await sendClientVerificationEmail(
@@ -2067,7 +2175,9 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
       message:
         delivery_method === "sms"
           ? "Verification code sent to your phone"
-          : "Verification code sent to your email",
+          : delivery_method === "call"
+            ? "We're calling your registered phone number now"
+            : "Verification code sent to your email",
       debug_code: process.env.NODE_ENV === "development" ? code : undefined,
     });
   } catch (error) {
@@ -2536,7 +2646,7 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
     const [rows] = await pool.query<any[]>(
       `SELECT
         b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
-        b.license_number, b.specializations, b.timezone,
+        b.license_number, b.specializations, b.timezone, b.created_by_broker_id,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
         bp.office_state, bp.office_zip, bp.years_experience, COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
         bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
@@ -5890,6 +6000,17 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
       values,
     );
 
+    // Sync denormalized client_name in conversation_threads when name changes
+    if (first_name !== undefined || last_name !== undefined) {
+      await pool.query(
+        `UPDATE conversation_threads ct
+         JOIN clients c ON c.id = ct.client_id AND c.tenant_id = ct.tenant_id
+         SET ct.client_name = CONCAT(c.first_name, ' ', c.last_name)
+         WHERE ct.client_id = ? AND ct.tenant_id = ?`,
+        [clientId, MORTGAGE_TENANT_ID],
+      );
+    }
+
     const [[client]] = await pool.query<any[]>(
       `SELECT c.id, c.email, c.first_name, c.last_name, c.phone, c.date_of_birth,
               c.address_street, c.address_city, c.address_state, c.address_zip,
@@ -6745,7 +6866,7 @@ const handleGetBrokerProfileByAdmin: RequestHandler = async (req, res) => {
 
     const [rows] = await pool.query<any[]>(
       `SELECT b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
-              b.license_number, b.specializations,
+              b.license_number, b.specializations, b.created_by_broker_id,
               bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
               bp.office_state, bp.office_zip, bp.years_experience,
               COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
@@ -12556,6 +12677,8 @@ const handleAblyToken: RequestHandler = async (req, res) => {
 const handleGetConversationThreads: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const isSuperAdmin = brokerRole === "superadmin";
     const {
       page = 1,
       limit = 20,
@@ -12594,6 +12717,29 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       brokerId,
     ];
 
+    // For non-superadmins: if the thread has a known client_id, only show it
+    // if this broker owns that client via the 3-path ownership model.
+    // Threads with no client_id (unknown callers) are always shown.
+    if (!isSuperAdmin) {
+      whereConditions.push(
+        `(ct.client_id IS NULL OR EXISTS (
+           SELECT 1 FROM clients cl_own
+           WHERE cl_own.id = ct.client_id
+             AND cl_own.tenant_id = ct.tenant_id
+             AND (
+               cl_own.assigned_broker_id = ?
+               OR EXISTS (
+                 SELECT 1 FROM loan_applications la_own
+                 WHERE la_own.client_user_id = ct.client_id
+                   AND la_own.tenant_id = ct.tenant_id
+                   AND (la_own.broker_user_id = ? OR la_own.partner_broker_id = ?)
+               )
+             )
+         ))`,
+      );
+      queryParams.push(brokerId, brokerId, brokerId);
+    }
+
     if (status !== "all") {
       whereConditions.push("ct.status = ?");
       queryParams.push(status);
@@ -12624,7 +12770,8 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
         la.application_number,
         CONCAT(c.first_name, ' ', c.last_name) as client_full_name,
         c.email as client_email_current,
-        c.phone as client_phone_current
+        c.phone as client_phone_current,
+        CASE WHEN ct.client_id IS NOT NULL THEN 1 ELSE 0 END AS can_view_client
       FROM conversation_threads ct
       LEFT JOIN loan_applications la ON ct.application_id = la.id
       LEFT JOIN clients c ON ct.client_id = c.id
@@ -12657,6 +12804,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       threads: threads.map((thread) => ({
         ...thread,
         tags: thread.tags ? JSON.parse(thread.tags) : [],
+        can_view_client: !!thread.can_view_client,
       })),
       pagination: {
         page: parseInt(page as string),
@@ -17801,6 +17949,8 @@ const handleToggleReminderFlow: RequestHandler = async (req, res) => {
 const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole as string | undefined;
+    const isSuperAdmin = brokerRole === "superadmin";
     const { status, flow_id } = req.query;
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -17841,6 +17991,26 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
     if (flow_id) {
       conditions.push("rfe.flow_id = ?");
       params.push(flow_id);
+    }
+
+    // Ownership filter: non-superadmin brokers only see executions for clients they own (3-path)
+    if (!isSuperAdmin) {
+      conditions.push(`(
+        rfe.client_id IS NULL
+        OR EXISTS (
+          SELECT 1 FROM clients cl_own
+          WHERE cl_own.id = rfe.client_id
+            AND (
+              cl_own.assigned_broker_id = ?
+              OR EXISTS (
+                SELECT 1 FROM loan_applications la_own
+                WHERE la_own.client_user_id = rfe.client_id
+                  AND (la_own.broker_user_id = ? OR la_own.partner_broker_id = ?)
+              )
+            )
+        )
+      )`);
+      params.push(brokerId, brokerId, brokerId);
     }
 
     const whereClause = `WHERE ${conditions.join(" AND ")}`;

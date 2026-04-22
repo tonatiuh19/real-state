@@ -619,6 +619,13 @@ const conversationsSlice = createSlice({
         state.threads = action.payload.threads;
         state.threadsPagination = action.payload.pagination;
         state.error = null;
+        // Keep currentThread in sync so the right panel shows updated data
+        if (state.currentThread) {
+          const fresh = action.payload.threads.find(
+            (t) => t.conversation_id === state.currentThread!.conversation_id,
+          );
+          if (fresh) state.currentThread = fresh;
+        }
       })
       .addCase(fetchConversationThreads.rejected, (state, action) => {
         state.isLoadingThreads = false;

@@ -1132,6 +1132,31 @@ export default function BrokerDetailPanel({
                           </div>
                         </div>
 
+                        {/* Assigned Mortgage Banker — view mode */}
+                        {isPartner &&
+                          (profile as any).created_by_broker_id &&
+                          (() => {
+                            const mb = mortgageBankers.find(
+                              (m) =>
+                                m.id === (profile as any).created_by_broker_id,
+                            );
+                            return mb ? (
+                              <div className="flex items-center gap-3">
+                                <div className="p-1.5 bg-primary/10 rounded-md flex-shrink-0">
+                                  <Building2 className="h-3.5 w-3.5 text-primary" />
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground font-medium">
+                                    Assigned Mortgage Banker
+                                  </p>
+                                  <p className="text-sm text-foreground font-medium">
+                                    {mb.first_name} {mb.last_name}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : null;
+                          })()}
+
                         {/* Source note for realtor */}
                         {isPartner && (
                           <div className="rounded-xl bg-accent border border-border p-4 space-y-1">

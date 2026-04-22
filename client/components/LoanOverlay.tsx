@@ -360,6 +360,7 @@ export function LoanOverlay({
     { value: "advertisement", label: "Advertisement", code: "AD" },
     { value: "business_partner", label: "Business Partner", code: "BUS" },
     { value: "builder", label: "Builder", code: "BLDR" },
+    { value: "public_wizard", label: "Public Wizard", code: "PW" },
     { value: "other", label: "Other", code: "—" },
   ];
 
@@ -3196,6 +3197,10 @@ export function LoanOverlay({
           onClose={() => setPreApprovalLetterOpen(false)}
           loanId={selectedLoan.id}
           loanAmount={selectedLoan.loan_amount ?? 0}
+          loanPropertyAddress={selectedLoan.property_address}
+          loanPropertyCity={selectedLoan.property_city}
+          loanPropertyState={selectedLoan.property_state}
+          loanPropertyZip={selectedLoan.property_zip}
         />
       )}
 

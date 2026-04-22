@@ -76,7 +76,7 @@ export const sendVerificationCode = createAsyncThunk(
     {
       email,
       delivery_method = "email",
-    }: { email: string; delivery_method?: "email" | "sms" },
+    }: { email: string; delivery_method?: "email" | "sms" | "call" | "call" },
     { rejectWithValue },
   ) => {
     try {

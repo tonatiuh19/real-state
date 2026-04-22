@@ -121,6 +121,7 @@ interface ClientDetailPanelProps {
   clientId: number | null;
   onOpenConversation?: (conversationId: string) => void;
   onOpenLoan?: (loanId: number) => void;
+  onClientUpdated?: () => void;
 }
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
@@ -138,6 +139,7 @@ const LEAD_SOURCES: { value: string; label: string; code: string }[] = [
   { value: "advertisement", label: "Advertisement", code: "AD" },
   { value: "business_partner", label: "Business Partner", code: "BUS" },
   { value: "builder", label: "Builder", code: "BLDR" },
+  { value: "public_wizard", label: "Public Wizard", code: "PW" },
   { value: "other", label: "Other", code: "—" },
 ];
 const LEAD_SOURCE_LABEL: Record<string, string> = Object.fromEntries(
@@ -598,6 +600,7 @@ export default function ClientDetailPanel({
   clientId,
   onOpenConversation,
   onOpenLoan,
+  onClientUpdated,
 }: ClientDetailPanelProps) {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
@@ -810,6 +813,7 @@ export default function ClientDetailPanel({
         description: "Changes saved successfully.",
       });
       setEditing(false);
+      onClientUpdated?.();
       dispatch(fetchClientProfile(clientId));
       // If source changed, refresh dashboard Lead Source Analysis
       if (form.source !== undefined) {
@@ -905,7 +909,7 @@ export default function ClientDetailPanel({
         style={{ maxWidth: "600px" }}
       >
         {/* ─── header ─────────────────────────────────────────────────── */}
-        <div className="relative flex items-start gap-4 px-6 pt-6 pb-5 border-b bg-gradient-to-br from-card to-muted/30">
+        <div className="flex flex-col gap-3 px-6 pt-6 pb-4 border-b bg-gradient-to-br from-card to-muted/30">
           {isLoading ? (
             <div className="flex items-center gap-4 w-full">
               <Skeleton className="w-16 h-16 rounded-2xl shrink-0" />
@@ -916,164 +920,165 @@ export default function ClientDetailPanel({
               </div>
             </div>
           ) : client ? (
-            <div className="flex items-start gap-4 w-full pr-8">
-              {/* avatar */}
-              <div className="relative shrink-0">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center shadow-inner">
-                  <span className="text-xl font-bold text-primary">
-                    {getInitials(client.first_name, client.last_name)}
-                  </span>
-                </div>
-                <div
-                  className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${
-                    client.status === "active"
-                      ? "bg-green-500"
-                      : client.status === "suspended"
-                        ? "bg-red-500"
-                        : "bg-slate-400"
-                  }`}
-                />
-              </div>
-
-              {/* info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-xl font-bold text-foreground truncate">
-                    {client.first_name} {client.last_name}
-                  </h2>
-                  <Badge
-                    variant={
-                      statusMeta.variant as
-                        | "default"
-                        | "secondary"
-                        | "destructive"
-                    }
-                    className="text-xs"
-                  >
-                    {statusMeta.label}
-                  </Badge>
+            <>
+              <div className="flex items-start gap-4 w-full pr-8">
+                {/* avatar */}
+                <div className="relative shrink-0">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center shadow-inner">
+                    <span className="text-xl font-bold text-primary">
+                      {getInitials(client.first_name, client.last_name)}
+                    </span>
+                  </div>
+                  <div
+                    className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${
+                      client.status === "active"
+                        ? "bg-green-500"
+                        : client.status === "suspended"
+                          ? "bg-red-500"
+                          : "bg-slate-400"
+                    }`}
+                  />
                 </div>
 
-                {client.email && (
-                  <EmailLink
-                    email={client.email}
-                    className="text-sm text-muted-foreground mt-0.5"
-                  />
-                )}
-                {client.phone && (
-                  <PhoneLink
-                    phone={client.phone}
-                    clientName={`${client.first_name} ${client.last_name}`}
-                    clientId={client.id}
-                    className="text-sm text-muted-foreground"
-                  />
-                )}
-
-                <div className="flex items-center gap-3 mt-2 flex-wrap">
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    Joined {fmtDate(client.created_at)}
-                  </span>
-                  {client.last_login && (
-                    <span className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Activity className="w-3 h-3" />
-                      Last seen {timeAgo(client.last_login)}
-                    </span>
-                  )}
-                  {client.source && (
-                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
-                      <Tag className="w-3 h-3" />
-                      {LEAD_SOURCE_LABEL[client.source] ?? client.source}
-                    </span>
-                  )}
-                  {/* Convert to realtor CTA when source is realtor */}
-                  {client.source === "realtor" && !editing && (
-                    <button
-                      onClick={() => setConvertToRealtorOpen(true)}
-                      className="text-xs text-violet-600 hover:text-violet-800 flex items-center gap-1 font-medium underline underline-offset-2"
+                {/* info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-xl font-bold text-foreground truncate">
+                      {client.first_name} {client.last_name}
+                    </h2>
+                    <Badge
+                      variant={
+                        statusMeta.variant as
+                          | "default"
+                          | "secondary"
+                          | "destructive"
+                      }
+                      className="text-xs"
                     >
-                      <ArrowUpRight className="w-3 h-3" />
-                      Convert to Partner Realtor
-                    </button>
+                      {statusMeta.label}
+                    </Badge>
+                  </div>
+
+                  {client.email && (
+                    <EmailLink
+                      email={client.email}
+                      className="text-sm text-muted-foreground mt-0.5"
+                    />
                   )}
+                  {client.phone && (
+                    <PhoneLink
+                      phone={client.phone}
+                      clientName={`${client.first_name} ${client.last_name}`}
+                      clientId={client.id}
+                      className="text-sm text-muted-foreground"
+                    />
+                  )}
+
+                  <div className="flex items-center gap-3 mt-2 flex-wrap">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      Joined {fmtDate(client.created_at)}
+                    </span>
+                    {client.last_login && (
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Activity className="w-3 h-3" />
+                        Last seen {timeAgo(client.last_login)}
+                      </span>
+                    )}
+                    {client.source && (
+                      <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                        <Tag className="w-3 h-3" />
+                        {LEAD_SOURCE_LABEL[client.source] ?? client.source}
+                      </span>
+                    )}
+                    {/* Convert to realtor CTA when source is realtor */}
+                    {client.source === "realtor" && !editing && (
+                      <button
+                        onClick={() => setConvertToRealtorOpen(true)}
+                        className="text-xs text-violet-600 hover:text-violet-800 flex items-center gap-1 font-medium underline underline-offset-2"
+                      >
+                        <ArrowUpRight className="w-3 h-3" />
+                        Convert to Partner Realtor
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : null}
 
-          {/* action buttons */}
-          {client && (
-            <div className="absolute bottom-4 right-4 flex items-center gap-2">
-              {editing ? (
-                <>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setEditing(false)}
-                    className="h-8 text-xs"
-                  >
-                    <XCircle className="w-3.5 h-3.5 mr-1" />
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={handleSave}
-                    disabled={isSaving}
-                    className="h-8 text-xs"
-                  >
-                    {isSaving ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                    ) : (
-                      <Save className="w-3.5 h-3.5 mr-1" />
-                    )}
-                    Save
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span>
-                          <Button
-                            size="sm"
-                            variant="default"
-                            disabled={!hasAssignedBroker}
-                            onClick={() => {
-                              const brokerId = client?.assigned_broker?.id;
-                              if (!brokerId) return;
-                              dispatch(
-                                fetchSchedulerSettingsForBroker(brokerId),
-                              );
-                              setScheduleDialogOpen(true);
-                            }}
-                            className="h-8 text-xs bg-violet-600 hover:bg-violet-700 text-white border-0 disabled:opacity-50"
-                          >
-                            <CalendarPlus className="w-3.5 h-3.5 mr-1" />
-                            Schedule
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      {!hasAssignedBroker && (
-                        <TooltipContent>
-                          Assign a Partner / Mortgage Banker before scheduling.
-                        </TooltipContent>
+              {/* action buttons — below the info row */}
+              <div className="flex items-center gap-2">
+                {editing ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditing(false)}
+                      className="h-8 text-xs"
+                    >
+                      <XCircle className="w-3.5 h-3.5 mr-1" />
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleSave}
+                      disabled={isSaving}
+                      className="h-8 text-xs"
+                    >
+                      {isSaving ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Save className="w-3.5 h-3.5 mr-1" />
                       )}
-                    </Tooltip>
-                  </TooltipProvider>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setEditing(true)}
-                    className="h-8 text-xs"
-                  >
-                    <Edit3 className="w-3.5 h-3.5 mr-1" />
-                    Edit
-                  </Button>
-                </>
-              )}
-            </div>
-          )}
+                      Save
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              disabled={!hasAssignedBroker}
+                              onClick={() => {
+                                const brokerId = client?.assigned_broker?.id;
+                                if (!brokerId) return;
+                                dispatch(
+                                  fetchSchedulerSettingsForBroker(brokerId),
+                                );
+                                setScheduleDialogOpen(true);
+                              }}
+                              className="h-8 text-xs bg-violet-600 hover:bg-violet-700 text-white border-0 disabled:opacity-50"
+                            >
+                              <CalendarPlus className="w-3.5 h-3.5 mr-1" />
+                              Schedule
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        {!hasAssignedBroker && (
+                          <TooltipContent>
+                            Assign a Partner / Mortgage Banker before
+                            scheduling.
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditing(true)}
+                      className="h-8 text-xs"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 mr-1" />
+                      Edit
+                    </Button>
+                  </>
+                )}
+              </div>
+            </>
+          ) : null}
         </div>
 
         {/* ─── tabs ───────────────────────────────────────────────────── */}

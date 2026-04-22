@@ -4053,6 +4053,9 @@ const Conversations = () => {
         isOpen={detailClientId !== null}
         onClose={() => setDetailClientId(null)}
         clientId={detailClientId}
+        onClientUpdated={() =>
+          dispatch(fetchConversationThreads(threadsFilters))
+        }
       />
 
       {/* Broker/Realtor detail panel — slides in when the contact is a realtor */}

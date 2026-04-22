@@ -242,6 +242,10 @@ interface PreApprovalLetterModalProps {
   onClose: () => void;
   loanId: number;
   loanAmount: number;
+  loanPropertyAddress?: string | null;
+  loanPropertyCity?: string | null;
+  loanPropertyState?: string | null;
+  loanPropertyZip?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +257,10 @@ export function PreApprovalLetterModal({
   onClose,
   loanId,
   loanAmount,
+  loanPropertyAddress,
+  loanPropertyCity,
+  loanPropertyState,
+  loanPropertyZip,
 }: PreApprovalLetterModalProps) {
   const dispatch = useAppDispatch();
   const { user, sessionToken } = useAppSelector((state) => state.brokerAuth);
@@ -397,7 +405,9 @@ export function PreApprovalLetterModal({
       .required("FICO score is required"),
     letter_date: Yup.string().required("Letter date is required"),
     expires_at: Yup.string().required("Expiry date is required"),
-    purchase_property_address: Yup.string().nullable(),
+    purchase_property_address: Yup.string().required(
+      "Street address is required",
+    ),
     purchase_property_city: Yup.string().nullable(),
     purchase_property_state: Yup.string().nullable(),
     purchase_property_zip: Yup.string().nullable(),
@@ -413,10 +423,10 @@ export function PreApprovalLetterModal({
       fico_score: "",
       letter_date: "",
       expires_at: "",
-      purchase_property_address: "",
-      purchase_property_city: "",
-      purchase_property_state: "",
-      purchase_property_zip: "",
+      purchase_property_address: loanPropertyAddress ?? "",
+      purchase_property_city: loanPropertyCity ?? "",
+      purchase_property_state: loanPropertyState ?? "",
+      purchase_property_zip: loanPropertyZip ?? "",
     },
     validationSchema: createSchema,
     validateOnMount: true,
@@ -939,8 +949,8 @@ export function PreApprovalLetterModal({
                         <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
                           Purchase Property Address
                         </span>
-                        <span className="text-xs text-muted-foreground/60 font-normal normal-case tracking-normal">
-                          — optional
+                        <span className="text-xs text-destructive font-semibold">
+                          *
                         </span>
                       </div>
                       <div className="space-y-2">
@@ -950,7 +960,18 @@ export function PreApprovalLetterModal({
                             "purchase_property_address",
                           )}
                           placeholder="Street address of property to purchase"
+                          className={cn(
+                            createFormik.touched.purchase_property_address &&
+                              createFormik.errors.purchase_property_address &&
+                              "border-destructive focus-visible:ring-destructive",
+                          )}
                         />
+                        {createFormik.touched.purchase_property_address &&
+                          createFormik.errors.purchase_property_address && (
+                            <p className="text-xs text-destructive">
+                              {createFormik.errors.purchase_property_address}
+                            </p>
+                          )}
                         <div className="grid grid-cols-3 gap-2">
                           <Input
                             id="purchase_property_city"
@@ -975,8 +996,8 @@ export function PreApprovalLetterModal({
                           />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          Overrides the loan's registered address on the letter.
-                          Leave blank to use "Property Address TBD".
+                          Pre-filled from the loan's registered property
+                          address.
                         </p>
                       </div>
                     </div>

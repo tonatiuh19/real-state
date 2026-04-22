@@ -139,7 +139,7 @@ export interface GetLoanDetailsResponse {
  */
 export interface ClientSendCodeRequest {
   email: string;
-  delivery_method?: "email" | "sms";
+  delivery_method?: "email" | "sms" | "call";
 }
 
 export interface ClientSendCodeResponse {
@@ -528,6 +528,7 @@ export type LeadSourceCategory =
   | "advertisement"
   | "business_partner"
   | "builder"
+  | "public_wizard"
   | "other";
 
 export interface BrokerMonthlyMetrics {
@@ -1164,6 +1165,8 @@ export interface ConversationThread {
   client_name?: string | null;
   client_phone?: string | null;
   client_email?: string | null;
+  /** Whether the current broker has ownership of this client (3-path check). Only true when client_id is set and broker owns the client. */
+  can_view_client?: boolean;
   last_message_at: string;
   last_message_preview?: string | null;
   last_message_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";

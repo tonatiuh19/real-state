@@ -111,6 +111,7 @@ const SOURCE_LABELS: Record<string, string> = {
   advertisement: "Advertisement",
   business_partner: "Business Partner",
   builder: "Builder",
+  public_wizard: "Public Wizard",
   other: "Other",
 };
 const SOURCE_CODES: Record<string, string> = {
@@ -122,6 +123,7 @@ const SOURCE_CODES: Record<string, string> = {
   advertisement: "AD",
   business_partner: "BUS",
   builder: "BLDR",
+  public_wizard: "PW",
   other: "—",
 };
 const ALL_SOURCES = Object.keys(SOURCE_LABELS);
