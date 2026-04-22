@@ -27,6 +27,8 @@ import {
   X,
   MoveRight,
   Monitor,
+  Users,
+  ChevronDown,
 } from "lucide-react";
 import { FaSms } from "react-icons/fa";
 import {
@@ -101,6 +103,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -126,17 +136,42 @@ import type {
 // Constants & helpers
 // ─────────────────────────────────────────────────────────────────
 
-const TRIGGER_EVENT_OPTIONS: { value: ReminderTriggerEvent; label: string }[] =
-  [
-    { value: "application_received", label: "Application Received" },
-    { value: "task_pending", label: "Task Pending" },
-    { value: "task_in_progress", label: "Task In Progress" },
-    { value: "task_overdue", label: "Task Overdue" },
-    { value: "no_activity", label: "No Activity" },
-    { value: "approved_with_conditions", label: "Loan Approved" },
-    { value: "docs_out", label: "Documents Pending" },
-    { value: "manual", label: "Manual Trigger" },
-  ];
+type FlowCategory = "loan" | "realtor_prospecting";
+
+const LOAN_TRIGGER_EVENT_OPTIONS: {
+  value: ReminderTriggerEvent;
+  label: string;
+}[] = [
+  { value: "application_received", label: "Application Received" },
+  { value: "task_pending", label: "Task Pending" },
+  { value: "task_in_progress", label: "Task In Progress" },
+  { value: "task_overdue", label: "Task Overdue" },
+  { value: "no_activity", label: "No Activity" },
+  { value: "approved_with_conditions", label: "Loan Approved" },
+  { value: "docs_out", label: "Documents Pending" },
+  { value: "manual", label: "Manual Trigger" },
+];
+
+const REALTOR_TRIGGER_EVENT_OPTIONS: {
+  value: ReminderTriggerEvent;
+  label: string;
+}[] = [
+  { value: "prospect_contact_attempted", label: "Contact Attempted" },
+  { value: "prospect_contacted", label: "Contacted" },
+  { value: "prospect_appt_set", label: "Appointment Set" },
+  { value: "prospect_waiting_for_1st_deal", label: "Waiting for 1st Deal" },
+  { value: "prospect_first_deal_funded", label: "First Deal Funded" },
+  { value: "prospect_second_deal_funded", label: "2nd Deal Funded" },
+  { value: "prospect_top_agent_whale", label: "Top Agent (Whale)" },
+  { value: "no_activity", label: "No Activity" },
+  { value: "manual", label: "Manual Trigger" },
+];
+
+// Combined for label lookup
+const TRIGGER_EVENT_OPTIONS = [
+  ...LOAN_TRIGGER_EVENT_OPTIONS,
+  ...REALTOR_TRIGGER_EVENT_OPTIONS,
+];
 
 const triggerLabel = (event: ReminderTriggerEvent) =>
   TRIGGER_EVENT_OPTIONS.find((o) => o.value === event)?.label ?? event;
@@ -1822,6 +1857,8 @@ const ReminderFlows = () => {
     pagination: execPagination,
   } = useAppSelector((s) => s.reminderFlows);
 
+  const [activeCategory, setActiveCategory] = useState<FlowCategory>("loan");
+
   const [execSortBy, setExecSortBy] = useState("flow_name");
   const [execSortDir, setExecSortDir] = useState<"ASC" | "DESC">("ASC");
 
@@ -1830,6 +1867,7 @@ const ReminderFlows = () => {
       page?: number;
       sortBy?: string;
       sortOrder?: "ASC" | "DESC";
+      flow_category?: "loan" | "realtor_prospecting";
     }) => {
       dispatch(fetchReminderFlowExecutions({ limit: 30, ...params }));
     },
@@ -1841,7 +1879,12 @@ const ReminderFlows = () => {
       execSortBy === field && execSortDir === "ASC" ? "DESC" : "ASC";
     setExecSortBy(field);
     setExecSortDir(newDir);
-    doFetchExec({ page: 1, sortBy: field, sortOrder: newDir });
+    doFetchExec({
+      page: 1,
+      sortBy: field,
+      sortOrder: newDir,
+      flow_category: activeCategory,
+    });
   };
 
   const [view, setView] = useState<"list" | "editor">("list");
@@ -1857,9 +1900,36 @@ const ReminderFlows = () => {
   );
   const [newDelay, setNewDelay] = useState(0);
 
+  // Which trigger options to show in the create modal
+  const activeTriggerOptions =
+    activeCategory === "realtor_prospecting"
+      ? REALTOR_TRIGGER_EVENT_OPTIONS
+      : LOAN_TRIGGER_EVENT_OPTIONS;
+
+  const handleCategoryChange = (category: FlowCategory) => {
+    setActiveCategory(category);
+    // Reset trigger to first option for the new category
+    if (category === "realtor_prospecting") {
+      setNewTrigger("prospect_contact_attempted");
+    } else {
+      setNewTrigger("application_received");
+    }
+    dispatch(fetchReminderFlows(category));
+    doFetchExec({
+      page: 1,
+      sortBy: execSortBy,
+      sortOrder: execSortDir,
+      flow_category: category,
+    });
+  };
+
   useEffect(() => {
-    dispatch(fetchReminderFlows());
-    doFetchExec({ sortBy: execSortBy, sortOrder: execSortDir });
+    dispatch(fetchReminderFlows(activeCategory));
+    doFetchExec({
+      sortBy: execSortBy,
+      sortOrder: execSortDir,
+      flow_category: activeCategory,
+    });
   }, [dispatch]);
 
   const handleEditFlow = async (flowId: number) => {
@@ -1870,7 +1940,7 @@ const ReminderFlows = () => {
   const handleBackToList = () => {
     setView("list");
     dispatch(clearSelectedFlow());
-    dispatch(fetchReminderFlows());
+    dispatch(fetchReminderFlows(activeCategory));
   };
 
   const handleCreateFlow = async () => {
@@ -1881,6 +1951,7 @@ const ReminderFlows = () => {
         description: newDesc.trim() || undefined,
         trigger_event: newTrigger,
         trigger_delay_days: newDelay,
+        flow_category: activeCategory,
       }),
     );
 
@@ -1894,8 +1965,7 @@ const ReminderFlows = () => {
       setNewDesc("");
       setNewTrigger("application_received");
       setNewDelay(0);
-      dispatch(fetchReminderFlows());
-      // Immediately open editor
+      dispatch(fetchReminderFlows(activeCategory));
       const flowId = (result.payload as any).flow_id;
       if (flowId) {
         await dispatch(fetchReminderFlow(flowId));
@@ -2043,8 +2113,52 @@ const ReminderFlows = () => {
         {/* Header */}
         <PageHeader
           icon={<AlarmClock className="h-7 w-7 text-primary" />}
-          title="Reminder Flows"
-          description="Build visual automation flows to keep clients engaged and on track with their tasks"
+          title={
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none">
+                  <span>
+                    {activeCategory === "loan"
+                      ? "Reminder Flows"
+                      : "Realtor Prospecting Flows"}
+                  </span>
+                  <ChevronDown className="h-5 w-5 text-gray-400" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuLabel className="text-xs text-gray-500">
+                  Select Pipeline
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => handleCategoryChange("loan")}
+                  className={cn(
+                    "gap-2",
+                    activeCategory === "loan" && "bg-primary/5 text-primary",
+                  )}
+                >
+                  <AlarmClock className="h-4 w-4" />
+                  Loan Pipeline Flows
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleCategoryChange("realtor_prospecting")}
+                  className={cn(
+                    "gap-2",
+                    activeCategory === "realtor_prospecting" &&
+                      "bg-primary/5 text-primary",
+                  )}
+                >
+                  <Users className="h-4 w-4" />
+                  Realtor Prospecting Flows
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          }
+          description={
+            activeCategory === "loan"
+              ? "Build visual automation flows to keep clients engaged and on track with their tasks"
+              : "Automate outreach and follow-ups for each realtor prospecting stage"
+          }
           actions={
             <Button
               className="gap-2 self-start md:self-auto"
@@ -2100,14 +2214,21 @@ const ReminderFlows = () => {
             ) : flows.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div className="p-5 rounded-2xl bg-primary/5 mb-4">
-                  <AlarmClock className="h-10 w-10 text-primary/60" />
+                  {activeCategory === "loan" ? (
+                    <AlarmClock className="h-10 w-10 text-primary/60" />
+                  ) : (
+                    <Users className="h-10 w-10 text-primary/60" />
+                  )}
                 </div>
                 <h3 className="text-lg font-semibold mb-1">
-                  No reminder flows yet
+                  {activeCategory === "loan"
+                    ? "No reminder flows yet"
+                    : "No realtor prospecting flows yet"}
                 </h3>
                 <p className="text-sm text-muted-foreground max-w-sm">
-                  Create your first flow to start automating client reminders
-                  based on pipeline events.
+                  {activeCategory === "loan"
+                    ? "Create your first flow to start automating client reminders based on pipeline events."
+                    : "Create your first flow to automate outreach when a realtor prospect moves through each stage."}
                 </p>
                 <Button
                   className="mt-6 gap-2"
@@ -2153,7 +2274,9 @@ const ReminderFlows = () => {
                   Flow Executions
                 </CardTitle>
                 <CardDescription>
-                  Active and historical reminder flow executions per loan
+                  {activeCategory === "loan"
+                    ? "Active and historical reminder flow executions per loan"
+                    : "Active and historical realtor prospecting flow executions"}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -2170,10 +2293,15 @@ const ReminderFlows = () => {
                       page,
                       sortBy: execSortBy,
                       sortOrder: execSortDir,
+                      flow_category: activeCategory,
                     })
                   }
                   isLoading={isLoading}
-                  emptyMessage="No executions yet. Executions will appear here when flows start running for loans."
+                  emptyMessage={
+                    activeCategory === "loan"
+                      ? "No executions yet. Executions will appear here when flows start running for loans."
+                      : "No executions yet. Executions will appear here when realtor prospecting flows start running."
+                  }
                   mobileCard={(ex) => (
                     <div
                       key={ex.id}
@@ -2226,12 +2354,20 @@ const ReminderFlows = () => {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlarmClock className="h-5 w-5 text-primary" />
-              Create Reminder Flow
+              {activeCategory === "loan" ? (
+                <AlarmClock className="h-5 w-5 text-primary" />
+              ) : (
+                <Users className="h-5 w-5 text-primary" />
+              )}
+              Create{" "}
+              {activeCategory === "loan"
+                ? "Reminder Flow"
+                : "Realtor Prospecting Flow"}
             </DialogTitle>
             <DialogDescription>
-              Set up a new automated reminder flow. You can add steps in the
-              visual editor after creation.
+              {activeCategory === "loan"
+                ? "Set up a new automated reminder flow. You can add steps in the visual editor after creation."
+                : "Set up a new flow to automate outreach when a realtor prospect moves to a stage."}
             </DialogDescription>
           </DialogHeader>
 
@@ -2241,7 +2377,11 @@ const ReminderFlows = () => {
               <Input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Post-Application Follow-up"
+                placeholder={
+                  activeCategory === "loan"
+                    ? "e.g. Post-Application Follow-up"
+                    : "e.g. Contact Attempted Outreach"
+                }
               />
             </div>
 
@@ -2265,7 +2405,7 @@ const ReminderFlows = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {TRIGGER_EVENT_OPTIONS.map((o) => (
+                  {activeTriggerOptions.map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
                     </SelectItem>

@@ -4665,3 +4665,131 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  # ─── Realtor Prospecting Pipeline ─────────────────────────────────────────
+  /realtor-prospects:
+    get:
+      tags: [Realtor Prospecting]
+      summary: List realtor prospects
+      description: >
+        Returns all realtor prospect opportunities for the logged-in broker.
+        Superadmins see all; others see only their own (created or owned).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: stage
+          schema:
+            type: string
+            enum: [contact_attempted,contacted,appt_set,waiting_for_1st_deal,first_deal_funded,second_deal_funded,top_agent_whale]
+        - in: query
+          name: status
+          schema: { type: string, enum: [open, won, lost] }
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: owner_broker_id
+          schema: { type: integer }
+      responses:
+        "200":
+          description: List of realtor prospects
+    post:
+      tags: [Realtor Prospecting]
+      summary: Create a realtor prospect opportunity
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [opportunity_name]
+              properties:
+                opportunity_name: { type: string }
+                stage: { type: string, enum: [contact_attempted,contacted,appt_set,waiting_for_1st_deal,first_deal_funded,second_deal_funded,top_agent_whale] }
+                status: { type: string, enum: [open, won, lost] }
+                opportunity_value: { type: number }
+                contact_name: { type: string }
+                contact_email: { type: string }
+                contact_phone: { type: string }
+                business_name: { type: string }
+                opportunity_source: { type: string }
+                tags: { type: array, items: { type: string } }
+                notes: { type: string }
+                owner_broker_id: { type: integer, nullable: true }
+                followers: { type: array, items: { type: integer } }
+                progress_report: { type: string, enum: [ready_to_send, sent], nullable: true }
+                add_to_refi_rates_dropped: { type: boolean }
+      responses:
+        "201":
+          description: Realtor prospect created
+  /realtor-prospects/{id}:
+    get:
+      tags: [Realtor Prospecting]
+      summary: Get a single realtor prospect
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Realtor prospect details
+    patch:
+      tags: [Realtor Prospecting]
+      summary: Update a realtor prospect
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Updated prospect
+    delete:
+      tags: [Realtor Prospecting]
+      summary: Delete a realtor prospect
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+  /realtor-prospects/{id}/stage:
+    patch:
+      tags: [Realtor Prospecting]
+      summary: Update the stage of a realtor prospect (drag & drop)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string, enum: [contact_attempted,contacted,appt_set,waiting_for_1st_deal,first_deal_funded,second_deal_funded,top_agent_whale] }
+      responses:
+        "200":
+          description: Stage updated

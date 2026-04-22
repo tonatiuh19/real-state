@@ -1168,11 +1168,12 @@ CREATE TABLE `reminder_flows` (
   `tenant_id` int NOT NULL DEFAULT '1',
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `trigger_event` enum('app_sent','application_received','prequalified','preapproved','under_contract_loan_setup','submitted_to_underwriting','approved_with_conditions','clear_to_close','docs_out','loan_funded','task_pending','task_in_progress','task_overdue','no_activity','manual') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'app_sent',
+  `trigger_event` enum('app_sent','application_received','prequalified','preapproved','under_contract_loan_setup','submitted_to_underwriting','approved_with_conditions','clear_to_close','docs_out','loan_funded','task_pending','task_in_progress','task_overdue','no_activity','manual','prospect_contact_attempted','prospect_contacted','prospect_appt_set','prospect_waiting_for_1st_deal','prospect_first_deal_funded','prospect_second_deal_funded','prospect_top_agent_whale') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'app_sent',
   `trigger_delay_days` int NOT NULL DEFAULT '0' COMMENT 'Days after trigger event to start flow',
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `apply_to_all_loans` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'When true, applies to all current and future loans',
   `loan_type_filter` enum('all','purchase','refinance') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'all' COMMENT 'Restrict this flow to a specific loan type or all',
+  `flow_category` enum('loan','realtor_prospecting') NOT NULL DEFAULT 'loan',
   `created_by_broker_id` int DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1180,7 +1181,8 @@ CREATE TABLE `reminder_flows` (
   KEY `idx_reminder_flows_tenant` (`tenant_id`),
   KEY `idx_reminder_flows_active` (`is_active`),
   KEY `fk_reminder_flows_broker` (`created_by_broker_id`),
-  KEY `idx_reminder_flows_trigger_loantype` (`trigger_event`,`loan_type_filter`,`is_active`)
+  KEY `idx_reminder_flows_trigger_loantype` (`trigger_event`,`loan_type_filter`,`is_active`),
+  KEY `idx_reminder_flows_category` (`flow_category`,`is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=30004;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -1823,6 +1825,48 @@ CREATE TABLE `user_sessions` (
 /*!40000 ALTER TABLE `user_sessions` DISABLE KEYS */;
 INSERT INTO `user_sessions` VALUES (60023,180015,337954,1,NULL,NULL,'2026-04-01 20:18:53','2026-04-01 20:03:53'),(90025,450015,547064,1,NULL,NULL,'2026-04-20 22:48:31','2026-04-20 22:33:31');
 /*!40000 ALTER TABLE `user_sessions` ENABLE KEYS */;
+
+--
+-- Table structure for table `realtor_prospects`
+--
+
+DROP TABLE IF EXISTS `realtor_prospects`;
+CREATE TABLE `realtor_prospects` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tenant_id` int NOT NULL DEFAULT '1',
+  `stage` enum('contact_attempted','contacted','appt_set','waiting_for_1st_deal','first_deal_funded','second_deal_funded','top_agent_whale') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'contact_attempted',
+  `status` enum('open','won','lost') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'open',
+  `opportunity_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `opportunity_value` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `contact_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `contact_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `contact_phone` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `business_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `opportunity_source` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `tags` json DEFAULT NULL,
+  `notes` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `owner_broker_id` int DEFAULT NULL,
+  `followers` json DEFAULT NULL,
+  `progress_report` enum('ready_to_send','sent') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `add_to_refi_rates_dropped` tinyint(1) NOT NULL DEFAULT '0',
+  `created_by_broker_id` int NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_realtor_prospects_tenant` (`tenant_id`),
+  KEY `idx_realtor_prospects_stage` (`stage`),
+  KEY `idx_realtor_prospects_status` (`status`),
+  KEY `idx_realtor_prospects_owner` (`owner_broker_id`),
+  KEY `idx_realtor_prospects_created_by` (`created_by_broker_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `realtor_prospects`
+--
+
+/*!40000 ALTER TABLE `realtor_prospects` DISABLE KEYS */;
+/*!40000 ALTER TABLE `realtor_prospects` ENABLE KEYS */;
+
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;

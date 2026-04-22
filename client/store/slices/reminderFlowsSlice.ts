@@ -40,6 +40,7 @@ const initialState: ReminderFlowsState = {
 interface FetchReminderFlowExecutionsParams {
   status?: string;
   flow_id?: number;
+  flow_category?: "loan" | "realtor_prospecting";
   page?: number;
   limit?: number;
   sortBy?: string;
@@ -52,11 +53,15 @@ interface FetchReminderFlowExecutionsParams {
 
 export const fetchReminderFlows = createAsyncThunk(
   "reminderFlows/fetchAll",
-  async (_, { getState, rejectWithValue }) => {
+  async (
+    flow_category?: "loan" | "realtor_prospecting",
+    { getState, rejectWithValue }: any = {},
+  ) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
+      const params = flow_category ? `?flow_category=${flow_category}` : "";
       const { data } = await axios.get<GetReminderFlowsResponse>(
-        "/api/reminder-flows",
+        `/api/reminder-flows${params}`,
         { headers: { Authorization: `Bearer ${sessionToken}` } },
       );
       return data.flows;
@@ -95,6 +100,7 @@ export const createReminderFlow = createAsyncThunk(
       trigger_event: string;
       trigger_delay_days?: number;
       loan_type_filter?: "all" | "purchase" | "refinance";
+      flow_category?: "loan" | "realtor_prospecting";
     },
     { getState, rejectWithValue },
   ) => {

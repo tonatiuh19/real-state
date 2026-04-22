@@ -1004,6 +1004,196 @@ async function sendClientLoanWelcomeEmail(
 }
 
 /**
+ * Send a welcome email when a client is manually added by a broker.
+ */
+async function sendClientManualWelcomeEmail(
+  email: string,
+  firstName: string,
+  lastName: string,
+  brokerName: string,
+): Promise<void> {
+  try {
+    console.log(`📧 Sending manual client welcome email to ${email}`);
+    const loginUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login`;
+    await sendViaResend({
+      to: email,
+      subject: `Welcome to Encore Mortgage, ${firstName}!`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Welcome to Encore Mortgage</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Welcome, ${firstName} ${lastName}! 🏡</h2>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">You've been added to the Encore Mortgage client portal by <strong>${brokerName}</strong>. You can now log in to view your applications, tasks, and communicate with your loan officer.</p>
+                    <!-- INFO BOX -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#fff0f2;border:1px solid #fecdd3;border-radius:12px;padding:18px;">
+                          <p style="margin:0 0 10px 0;color:#e8192c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;">Your Account</p>
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Email:</strong> ${email}</p>
+                          <p style="margin:0;color:#475569;font-size:13px;">Use your email address to verify your identity when you first log in.</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- HOW IT WORKS -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:16px 18px;">
+                          <p style="margin:0 0 8px 0;color:#0f172a;font-size:14px;font-weight:700;">📋 What you can do in the portal:</p>
+                          <p style="margin:0 0 4px 0;color:#475569;font-size:13px;line-height:1.6;">• View and track your loan applications</p>
+                          <p style="margin:0 0 4px 0;color:#475569;font-size:13px;line-height:1.6;">• Complete required tasks and upload documents</p>
+                          <p style="margin:0 0 4px 0;color:#475569;font-size:13px;line-height:1.6;">• Communicate directly with your loan officer</p>
+                          <p style="margin:0;color:#475569;font-size:13px;line-height:1.6;">• Stay updated on your application status</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:32px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Log In to Your Portal</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">Questions? Reply to this email or contact your loan officer directly.</p>
+                  </td>
+                </tr>
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">Your partner on the path to your new home</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+    console.log("✅ Manual client welcome email sent!");
+  } catch (error) {
+    console.error("❌ Error sending manual client welcome email:", error);
+    // Non-throwing — don't fail the create operation if email fails
+  }
+}
+
+/**
+ * Send a welcome email when a broker (mortgage banker / partner) is manually created.
+ */
+async function sendBrokerManualWelcomeEmail(
+  email: string,
+  firstName: string,
+  lastName: string,
+  role: string,
+): Promise<void> {
+  try {
+    console.log(`📧 Sending broker welcome email to ${email}`);
+    const loginUrl = `${process.env.BASE_URL || "https://app.encoremortgage.org"}/broker-login`;
+    const roleLabel =
+      role === "admin"
+        ? "Mortgage Banker"
+        : role === "broker"
+          ? "Partner Broker"
+          : "Team Member";
+    await sendViaResend({
+      to: email,
+      subject: `Welcome to Encore Mortgage — Your account is ready, ${firstName}!`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Welcome to Encore Mortgage</title>
+        </head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <!-- LOGO HEADER -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <!-- BODY -->
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">Welcome, ${firstName} ${lastName}!</h2>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">Your <strong>${roleLabel}</strong> account has been created on the Encore Mortgage platform. You can now log in to the admin panel to get started.</p>
+                    <!-- ROLE BOX -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#fff0f2;border:1px solid #fecdd3;border-radius:12px;padding:18px;">
+                          <p style="margin:0 0 10px 0;color:#e8192c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;">Account Details</p>
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Email:</strong> ${email}</p>
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Role:</strong> ${roleLabel}</p>
+                          <p style="margin:0;color:#475569;font-size:13px;">Use your email to receive a one-time verification code when you log in.</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- HOW TO LOGIN -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:16px 18px;">
+                          <p style="margin:0 0 8px 0;color:#0f172a;font-size:14px;font-weight:700;">🔐 How to log in:</p>
+                          <p style="margin:0 0 4px 0;color:#475569;font-size:13px;line-height:1.6;">1. Click the button below to go to the admin panel login</p>
+                          <p style="margin:0 0 4px 0;color:#475569;font-size:13px;line-height:1.6;">2. Enter your email address</p>
+                          <p style="margin:0;color:#475569;font-size:13px;line-height:1.6;">3. Check your inbox for a one-time verification code</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <!-- CTA -->
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:32px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;letter-spacing:0.3px;">Log In to Admin Panel</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">If you have any questions, contact your administrator.</p>
+                  </td>
+                </tr>
+                <!-- FOOTER -->
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">Encore Mortgage</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">Admin Panel</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+    console.log("✅ Broker welcome email sent!");
+  } catch (error) {
+    console.error("❌ Error sending broker welcome email:", error);
+    // Non-throwing — don't fail the create operation if email fails
+  }
+}
+
+/**
  * Send confirmation email to a user who just submitted via the public wizard.
  * No broker or tasks yet — just confirms receipt and sets expectations.
  */
@@ -5835,6 +6025,23 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       [newClientId],
     );
 
+    // Fetch creating broker's name for the welcome email
+    const [[creatingBroker]] = await pool.query<any[]>(
+      "SELECT first_name, last_name FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    const brokerFullName = creatingBroker
+      ? `${creatingBroker.first_name} ${creatingBroker.last_name}`.trim()
+      : "Your Loan Officer";
+
+    // Send welcome email (non-blocking — failure won't abort the response)
+    sendClientManualWelcomeEmail(
+      client.email,
+      client.first_name,
+      client.last_name,
+      brokerFullName,
+    ).catch(() => {});
+
     return res.status(201).json({ success: true, client });
   } catch (error) {
     console.error("Error creating client:", error);
@@ -6520,6 +6727,14 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
       "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
       [result.insertId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
+
+    // Send welcome email (non-blocking — failure won't abort the response)
+    sendBrokerManualWelcomeEmail(
+      newBroker[0].email,
+      newBroker[0].first_name,
+      newBroker[0].last_name,
+      newBroker[0].role,
+    ).catch(() => {});
 
     res.json({
       success: true,
@@ -11013,12 +11228,15 @@ async function triggerReminderFlows(
     const loanType: string = loan.loan_type || "purchase";
 
     // Find active flows matching this trigger_event and loan_type_filter
+    // IMPORTANT: filter by flow_category = 'loan' so realtor prospecting flows
+    // (which share no_activity/manual trigger names) are never fired here.
     const [flows] = await pool.query<RowDataPacket[]>(
       `SELECT rf.id, rf.trigger_delay_days, rf.loan_type_filter
        FROM reminder_flows rf
        WHERE rf.tenant_id = ?
          AND rf.trigger_event = ?
          AND rf.is_active = 1
+         AND rf.flow_category = 'loan'
          AND (rf.loan_type_filter = 'all' OR rf.loan_type_filter = ?)`,
       [tenantId, newStatus, loanType],
     );
@@ -17571,19 +17789,28 @@ const handleDeletePreApprovalLetter: RequestHandler = async (req, res) => {
 const handleGetReminderFlows: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const { flow_category } = req.query as { flow_category?: string };
+
     const [tenantRows] = await pool.query<RowDataPacket[]>(
       "SELECT tenant_id FROM brokers WHERE id = ?",
       [brokerId],
     );
     const tenantId = tenantRows[0]?.tenant_id;
 
+    const validCategories = ["loan", "realtor_prospecting"];
+    const categoryFilter =
+      flow_category && validCategories.includes(flow_category)
+        ? flow_category
+        : null;
+
     const [flows] = await pool.query<RowDataPacket[]>(
       `SELECT rf.*,
         (SELECT COUNT(*) FROM reminder_flow_executions rfe WHERE rfe.flow_id = rf.id AND rfe.status = 'active') AS active_executions_count
        FROM reminder_flows rf
        WHERE rf.tenant_id = ?
+       ${categoryFilter ? "AND rf.flow_category = ?" : ""}
        ORDER BY rf.created_at DESC`,
-      [tenantId],
+      categoryFilter ? [tenantId, categoryFilter] : [tenantId],
     );
 
     return res.json({ success: true, flows });
@@ -17610,6 +17837,7 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
       is_active = true,
       apply_to_all_loans = true,
       loan_type_filter = "all",
+      flow_category = "loan",
     } = req.body;
 
     if (!name || !trigger_event) {
@@ -17625,8 +17853,8 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [result] = await pool.query<ResultSetHeader>(
-      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, loan_type_filter, created_by_broker_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, loan_type_filter, flow_category, created_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         tenantId,
         name,
@@ -17638,6 +17866,9 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
         ["all", "purchase", "refinance"].includes(loan_type_filter)
           ? loan_type_filter
           : "all",
+        ["loan", "realtor_prospecting"].includes(flow_category)
+          ? flow_category
+          : "loan",
         brokerId,
       ],
     );
@@ -17951,7 +18182,7 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole as string | undefined;
     const isSuperAdmin = brokerRole === "superadmin";
-    const { status, flow_id } = req.query;
+    const { status, flow_id, flow_category } = req.query;
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(
@@ -17991,6 +18222,11 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
     if (flow_id) {
       conditions.push("rfe.flow_id = ?");
       params.push(flow_id);
+    }
+    const validCategories = ["loan", "realtor_prospecting"];
+    if (flow_category && validCategories.includes(flow_category as string)) {
+      conditions.push("rf.flow_category = ?");
+      params.push(flow_category);
     }
 
     // Ownership filter: non-superadmin brokers only see executions for clients they own (3-path)
@@ -21637,6 +21873,559 @@ function createServer() {
     "/api/contact",
     verifyBrokerSession,
     handleGetContactSubmissions,
+  );
+
+  // ─── Realtor Prospecting Pipeline ────────────────────────────────────────
+
+  /**
+   * GET /api/realtor-prospects
+   * List all realtor prospects for the tenant, filterable by stage/status/search/owner.
+   * Returns results scoped to the logged-in broker unless they're superadmin.
+   */
+  const handleGetRealtorProspects: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const {
+        stage,
+        status,
+        search,
+        owner_broker_id,
+        page = "1",
+        limit = "200",
+      } = req.query as Record<string, string>;
+
+      const conditions: string[] = ["rp.tenant_id = ?"];
+      const params: any[] = [MORTGAGE_TENANT_ID];
+
+      // Non-superadmin sees only their own or prospects they own / created
+      if (brokerRole !== "superadmin") {
+        conditions.push(
+          "(rp.created_by_broker_id = ? OR rp.owner_broker_id = ?)",
+        );
+        params.push(brokerId, brokerId);
+      }
+
+      if (stage) {
+        conditions.push("rp.stage = ?");
+        params.push(stage);
+      }
+      if (status) {
+        conditions.push("rp.status = ?");
+        params.push(status);
+      }
+      if (owner_broker_id) {
+        conditions.push("rp.owner_broker_id = ?");
+        params.push(parseInt(owner_broker_id));
+      }
+      if (search) {
+        conditions.push(
+          "(rp.opportunity_name LIKE ? OR rp.contact_name LIKE ? OR rp.contact_email LIKE ? OR rp.business_name LIKE ?)",
+        );
+        const s = `%${search}%`;
+        params.push(s, s, s, s);
+      }
+
+      const whereClause = conditions.join(" AND ");
+      const pageNum = Math.max(1, parseInt(page));
+      const limitNum = Math.min(500, Math.max(1, parseInt(limit)));
+      const offset = (pageNum - 1) * limitNum;
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT rp.*,
+                ob.first_name AS owner_first_name,
+                ob.last_name  AS owner_last_name,
+                cb.first_name AS creator_first_name,
+                cb.last_name  AS creator_last_name
+         FROM realtor_prospects rp
+         LEFT JOIN brokers ob ON ob.id = rp.owner_broker_id AND ob.tenant_id = rp.tenant_id
+         LEFT JOIN brokers cb ON cb.id = rp.created_by_broker_id AND cb.tenant_id = rp.tenant_id
+         WHERE ${whereClause}
+         ORDER BY rp.created_at DESC
+         LIMIT ? OFFSET ?`,
+        [...params, limitNum, offset],
+      );
+
+      const [countRows] = await pool.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS total FROM realtor_prospects rp WHERE ${whereClause}`,
+        params,
+      );
+      const total = (countRows[0]?.total as number) || 0;
+
+      res.json({
+        success: true,
+        prospects: rows.map((r) => ({
+          ...r,
+          tags: r.tags ?? [],
+          followers: r.followers ?? [],
+          add_to_refi_rates_dropped: Boolean(r.add_to_refi_rates_dropped),
+        })),
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching realtor prospects:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch realtor prospects" });
+    }
+  };
+
+  /**
+   * POST /api/realtor-prospects
+   * Create a new realtor prospect opportunity.
+   */
+  const handleCreateRealtorProspect: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const {
+        opportunity_name,
+        stage = "contact_attempted",
+        status = "open",
+        opportunity_value = 0,
+        contact_name,
+        contact_email,
+        contact_phone,
+        business_name,
+        opportunity_source,
+        tags,
+        notes,
+        owner_broker_id,
+        followers,
+        progress_report,
+        add_to_refi_rates_dropped = false,
+      } = req.body;
+
+      if (!opportunity_name?.trim()) {
+        return res
+          .status(400)
+          .json({ success: false, error: "opportunity_name is required" });
+      }
+
+      const VALID_STAGES = [
+        "contact_attempted",
+        "contacted",
+        "appt_set",
+        "waiting_for_1st_deal",
+        "first_deal_funded",
+        "second_deal_funded",
+        "top_agent_whale",
+      ];
+      if (!VALID_STAGES.includes(stage)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid stage value" });
+      }
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO realtor_prospects
+           (tenant_id, stage, status, opportunity_name, opportunity_value,
+            contact_name, contact_email, contact_phone, business_name,
+            opportunity_source, tags, notes, owner_broker_id, followers,
+            progress_report, add_to_refi_rates_dropped, created_by_broker_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          stage,
+          status,
+          opportunity_name.trim(),
+          opportunity_value || 0,
+          contact_name || null,
+          contact_email || null,
+          contact_phone || null,
+          business_name || null,
+          opportunity_source || null,
+          tags ? JSON.stringify(tags) : null,
+          notes || null,
+          owner_broker_id || null,
+          followers ? JSON.stringify(followers) : null,
+          progress_report || null,
+          add_to_refi_rates_dropped ? 1 : 0,
+          brokerId,
+        ],
+      );
+
+      const [newRows] = await pool.query<RowDataPacket[]>(
+        `SELECT rp.*,
+                ob.first_name AS owner_first_name, ob.last_name AS owner_last_name,
+                cb.first_name AS creator_first_name, cb.last_name AS creator_last_name
+         FROM realtor_prospects rp
+         LEFT JOIN brokers ob ON ob.id = rp.owner_broker_id AND ob.tenant_id = rp.tenant_id
+         LEFT JOIN brokers cb ON cb.id = rp.created_by_broker_id AND cb.tenant_id = rp.tenant_id
+         WHERE rp.id = ?`,
+        [result.insertId],
+      );
+
+      const prospect = newRows[0];
+      res.status(201).json({
+        success: true,
+        prospect: {
+          ...prospect,
+          tags: prospect.tags ?? [],
+          followers: prospect.followers ?? [],
+          add_to_refi_rates_dropped: Boolean(
+            prospect.add_to_refi_rates_dropped,
+          ),
+        },
+        message: "Realtor prospect created successfully",
+      });
+    } catch (error) {
+      console.error("Error creating realtor prospect:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to create realtor prospect" });
+    }
+  };
+
+  /**
+   * GET /api/realtor-prospects/:id
+   * Get a single realtor prospect by ID.
+   */
+  const handleGetRealtorProspect: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const id = parseInt(req.params.id);
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT rp.*,
+                ob.first_name AS owner_first_name, ob.last_name AS owner_last_name,
+                cb.first_name AS creator_first_name, cb.last_name AS creator_last_name
+         FROM realtor_prospects rp
+         LEFT JOIN brokers ob ON ob.id = rp.owner_broker_id AND ob.tenant_id = rp.tenant_id
+         LEFT JOIN brokers cb ON cb.id = rp.created_by_broker_id AND cb.tenant_id = rp.tenant_id
+         WHERE rp.id = ? AND rp.tenant_id = ?`,
+        [id, MORTGAGE_TENANT_ID],
+      );
+
+      if (rows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Prospect not found" });
+      }
+
+      const prospect = rows[0];
+      if (
+        brokerRole !== "superadmin" &&
+        prospect.created_by_broker_id !== brokerId &&
+        prospect.owner_broker_id !== brokerId
+      ) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      res.json({
+        success: true,
+        prospect: {
+          ...prospect,
+          tags: prospect.tags ?? [],
+          followers: prospect.followers ?? [],
+          add_to_refi_rates_dropped: Boolean(
+            prospect.add_to_refi_rates_dropped,
+          ),
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching realtor prospect:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch realtor prospect" });
+    }
+  };
+
+  /**
+   * PATCH /api/realtor-prospects/:id/stage
+   * Update only the stage of a realtor prospect (for drag-and-drop).
+   */
+  const handleUpdateRealtorProspectStage: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const id = parseInt(req.params.id);
+      const { stage } = req.body;
+
+      const VALID_STAGES = [
+        "contact_attempted",
+        "contacted",
+        "appt_set",
+        "waiting_for_1st_deal",
+        "first_deal_funded",
+        "second_deal_funded",
+        "top_agent_whale",
+      ];
+      if (!stage || !VALID_STAGES.includes(stage)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid stage value" });
+      }
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        "SELECT id, created_by_broker_id, owner_broker_id FROM realtor_prospects WHERE id = ? AND tenant_id = ?",
+        [id, MORTGAGE_TENANT_ID],
+      );
+
+      if (rows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Prospect not found" });
+      }
+
+      const prospect = rows[0];
+      if (
+        brokerRole !== "superadmin" &&
+        prospect.created_by_broker_id !== brokerId &&
+        prospect.owner_broker_id !== brokerId
+      ) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      await pool.query(
+        "UPDATE realtor_prospects SET stage = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?",
+        [stage, id, MORTGAGE_TENANT_ID],
+      );
+
+      res.json({
+        success: true,
+        id,
+        stage,
+        message: "Stage updated successfully",
+      });
+    } catch (error) {
+      console.error("Error updating realtor prospect stage:", error);
+      res.status(500).json({ success: false, error: "Failed to update stage" });
+    }
+  };
+
+  /**
+   * PATCH /api/realtor-prospects/:id
+   * Update a realtor prospect's details.
+   */
+  const handleUpdateRealtorProspect: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const id = parseInt(req.params.id);
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        "SELECT id, created_by_broker_id, owner_broker_id FROM realtor_prospects WHERE id = ? AND tenant_id = ?",
+        [id, MORTGAGE_TENANT_ID],
+      );
+
+      if (rows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Prospect not found" });
+      }
+
+      const prospect = rows[0];
+      if (
+        brokerRole !== "superadmin" &&
+        prospect.created_by_broker_id !== brokerId &&
+        prospect.owner_broker_id !== brokerId
+      ) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const {
+        opportunity_name,
+        stage,
+        status,
+        opportunity_value,
+        contact_name,
+        contact_email,
+        contact_phone,
+        business_name,
+        opportunity_source,
+        tags,
+        notes,
+        owner_broker_id,
+        followers,
+        progress_report,
+        add_to_refi_rates_dropped,
+      } = req.body;
+
+      const updates: string[] = [];
+      const updateParams: any[] = [];
+
+      if (opportunity_name !== undefined) {
+        updates.push("opportunity_name = ?");
+        updateParams.push(opportunity_name);
+      }
+      if (stage !== undefined) {
+        updates.push("stage = ?");
+        updateParams.push(stage);
+      }
+      if (status !== undefined) {
+        updates.push("status = ?");
+        updateParams.push(status);
+      }
+      if (opportunity_value !== undefined) {
+        updates.push("opportunity_value = ?");
+        updateParams.push(opportunity_value);
+      }
+      if (contact_name !== undefined) {
+        updates.push("contact_name = ?");
+        updateParams.push(contact_name || null);
+      }
+      if (contact_email !== undefined) {
+        updates.push("contact_email = ?");
+        updateParams.push(contact_email || null);
+      }
+      if (contact_phone !== undefined) {
+        updates.push("contact_phone = ?");
+        updateParams.push(contact_phone || null);
+      }
+      if (business_name !== undefined) {
+        updates.push("business_name = ?");
+        updateParams.push(business_name || null);
+      }
+      if (opportunity_source !== undefined) {
+        updates.push("opportunity_source = ?");
+        updateParams.push(opportunity_source || null);
+      }
+      if (tags !== undefined) {
+        updates.push("tags = ?");
+        updateParams.push(tags ? JSON.stringify(tags) : null);
+      }
+      if (notes !== undefined) {
+        updates.push("notes = ?");
+        updateParams.push(notes || null);
+      }
+      if (owner_broker_id !== undefined) {
+        updates.push("owner_broker_id = ?");
+        updateParams.push(owner_broker_id || null);
+      }
+      if (followers !== undefined) {
+        updates.push("followers = ?");
+        updateParams.push(followers ? JSON.stringify(followers) : null);
+      }
+      if (progress_report !== undefined) {
+        updates.push("progress_report = ?");
+        updateParams.push(progress_report || null);
+      }
+      if (add_to_refi_rates_dropped !== undefined) {
+        updates.push("add_to_refi_rates_dropped = ?");
+        updateParams.push(add_to_refi_rates_dropped ? 1 : 0);
+      }
+
+      if (updates.length === 0) {
+        return res
+          .status(400)
+          .json({ success: false, error: "No fields to update" });
+      }
+
+      updates.push("updated_at = NOW()");
+      await pool.query(
+        `UPDATE realtor_prospects SET ${updates.join(", ")} WHERE id = ? AND tenant_id = ?`,
+        [...updateParams, id, MORTGAGE_TENANT_ID],
+      );
+
+      const [updatedRows] = await pool.query<RowDataPacket[]>(
+        `SELECT rp.*,
+                ob.first_name AS owner_first_name, ob.last_name AS owner_last_name,
+                cb.first_name AS creator_first_name, cb.last_name AS creator_last_name
+         FROM realtor_prospects rp
+         LEFT JOIN brokers ob ON ob.id = rp.owner_broker_id AND ob.tenant_id = rp.tenant_id
+         LEFT JOIN brokers cb ON cb.id = rp.created_by_broker_id AND cb.tenant_id = rp.tenant_id
+         WHERE rp.id = ?`,
+        [id],
+      );
+
+      const updated = updatedRows[0];
+      res.json({
+        success: true,
+        prospect: {
+          ...updated,
+          tags: updated.tags ?? [],
+          followers: updated.followers ?? [],
+          add_to_refi_rates_dropped: Boolean(updated.add_to_refi_rates_dropped),
+        },
+        message: "Prospect updated successfully",
+      });
+    } catch (error) {
+      console.error("Error updating realtor prospect:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to update realtor prospect" });
+    }
+  };
+
+  /**
+   * DELETE /api/realtor-prospects/:id
+   * Delete a realtor prospect.
+   */
+  const handleDeleteRealtorProspect: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const id = parseInt(req.params.id);
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        "SELECT id, created_by_broker_id, owner_broker_id FROM realtor_prospects WHERE id = ? AND tenant_id = ?",
+        [id, MORTGAGE_TENANT_ID],
+      );
+
+      if (rows.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Prospect not found" });
+      }
+
+      const prospect = rows[0];
+      if (
+        brokerRole !== "superadmin" &&
+        prospect.created_by_broker_id !== brokerId &&
+        prospect.owner_broker_id !== brokerId
+      ) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      await pool.query(
+        "DELETE FROM realtor_prospects WHERE id = ? AND tenant_id = ?",
+        [id, MORTGAGE_TENANT_ID],
+      );
+
+      res.json({ success: true, message: "Prospect deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting realtor prospect:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to delete realtor prospect" });
+    }
+  };
+
+  expressApp.get(
+    "/api/realtor-prospects",
+    verifyBrokerSession,
+    handleGetRealtorProspects,
+  );
+  expressApp.post(
+    "/api/realtor-prospects",
+    verifyBrokerSession,
+    handleCreateRealtorProspect,
+  );
+  expressApp.get(
+    "/api/realtor-prospects/:id",
+    verifyBrokerSession,
+    handleGetRealtorProspect,
+  );
+  expressApp.patch(
+    "/api/realtor-prospects/:id/stage",
+    verifyBrokerSession,
+    handleUpdateRealtorProspectStage,
+  );
+  expressApp.patch(
+    "/api/realtor-prospects/:id",
+    verifyBrokerSession,
+    handleUpdateRealtorProspect,
+  );
+  expressApp.delete(
+    "/api/realtor-prospects/:id",
+    verifyBrokerSession,
+    handleDeleteRealtorProspect,
   );
 
   // 404 handler - only for API routes

@@ -14,6 +14,7 @@
 - **if any revelant change update DESIGN_SYSTEM.md**
 - **Always think about mobile responsiveness and cool, engaging UI/UX when making frontend changes**
 - **if there is an opportunity to add reusable components or utilities, do it immediately to avoid technical debt**
+- **Avoid any breaking changes**
 - **NO EXCEPTIONS to these rules**
 
 ### Package Manager

@@ -25,6 +25,7 @@ import schedulerReducer from "./slices/schedulerSlice";
 import calendarEventsReducer from "./slices/calendarEventsSlice";
 import clientDetailReducer from "./slices/clientDetailSlice";
 import voiceReducer from "./slices/voiceSlice";
+import realtorProspectingReducer from "./slices/realtorProspectingSlice";
 
 export const store = configureStore({
   reducer: {
@@ -54,6 +55,7 @@ export const store = configureStore({
     calendarEvents: calendarEventsReducer,
     voice: voiceReducer,
     clientDetail: clientDetailReducer,
+    realtorProspecting: realtorProspectingReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

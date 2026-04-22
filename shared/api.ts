@@ -1744,7 +1744,15 @@ export type ReminderTriggerEvent =
   | "task_in_progress"
   | "task_overdue"
   | "no_activity"
-  | "manual";
+  | "manual"
+  // Realtor prospecting stage triggers
+  | "prospect_contact_attempted"
+  | "prospect_contacted"
+  | "prospect_appt_set"
+  | "prospect_waiting_for_1st_deal"
+  | "prospect_first_deal_funded"
+  | "prospect_second_deal_funded"
+  | "prospect_top_agent_whale";
 
 export type ReminderStepType =
   | "trigger"
@@ -1833,6 +1841,8 @@ export interface ReminderFlow {
   apply_to_all_loans: boolean;
   /** Restricts which loan types trigger this flow. 'all' means both purchase and refinance. */
   loan_type_filter: "all" | "purchase" | "refinance";
+  /** Whether this flow belongs to the loan pipeline or realtor prospecting pipeline. */
+  flow_category: "loan" | "realtor_prospecting";
   created_by_broker_id: number | null;
   created_at: string;
   updated_at: string;
@@ -1882,6 +1892,7 @@ export interface CreateReminderFlowRequest {
   is_active?: boolean;
   apply_to_all_loans?: boolean;
   loan_type_filter?: "all" | "purchase" | "refinance";
+  flow_category?: "loan" | "realtor_prospecting";
 }
 
 export interface UpdateReminderFlowRequest {
@@ -1892,6 +1903,7 @@ export interface UpdateReminderFlowRequest {
   is_active?: boolean;
   apply_to_all_loans?: boolean;
   loan_type_filter?: "all" | "purchase" | "refinance";
+  flow_category?: "loan" | "realtor_prospecting";
   steps?: SaveReminderFlowStep[];
   connections?: SaveReminderFlowConnection[];
 }
@@ -2299,4 +2311,104 @@ export interface SyncBirthdaysResponse {
   success: boolean;
   created: number;
   updated: number;
+}
+
+// ─── Realtor Prospecting Pipeline Types ──────────────────────────────────────
+
+export type RealtorProspectStage =
+  | "contact_attempted"
+  | "contacted"
+  | "appt_set"
+  | "waiting_for_1st_deal"
+  | "first_deal_funded"
+  | "second_deal_funded"
+  | "top_agent_whale";
+
+export type RealtorProspectStatus = "open" | "won" | "lost";
+
+export type RealtorProgressReport = "ready_to_send" | "sent";
+
+export interface RealtorProspect {
+  id: number;
+  tenant_id: number;
+  stage: RealtorProspectStage;
+  status: RealtorProspectStatus;
+  opportunity_name: string;
+  opportunity_value: number;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  business_name: string | null;
+  opportunity_source: string | null;
+  tags: string[];
+  notes: string | null;
+  owner_broker_id: number | null;
+  owner_first_name?: string | null;
+  owner_last_name?: string | null;
+  followers: number[];
+  progress_report: RealtorProgressReport | null;
+  add_to_refi_rates_dropped: boolean;
+  created_by_broker_id: number;
+  creator_first_name?: string | null;
+  creator_last_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetRealtorProspectsResponse {
+  success: boolean;
+  prospects: RealtorProspect[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface GetRealtorProspectResponse {
+  success: boolean;
+  prospect: RealtorProspect;
+}
+
+export interface CreateRealtorProspectRequest {
+  opportunity_name: string;
+  stage?: RealtorProspectStage;
+  status?: RealtorProspectStatus;
+  opportunity_value?: number;
+  contact_name?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  business_name?: string;
+  opportunity_source?: string;
+  tags?: string[];
+  notes?: string;
+  owner_broker_id?: number | null;
+  followers?: number[];
+  progress_report?: RealtorProgressReport | null;
+  add_to_refi_rates_dropped?: boolean;
+}
+
+export interface CreateRealtorProspectResponse {
+  success: boolean;
+  prospect: RealtorProspect;
+  message?: string;
+}
+
+export interface UpdateRealtorProspectStageResponse {
+  success: boolean;
+  id: number;
+  stage: RealtorProspectStage;
+  message?: string;
+}
+
+export interface UpdateRealtorProspectResponse {
+  success: boolean;
+  prospect: RealtorProspect;
+  message?: string;
+}
+
+export interface DeleteRealtorProspectResponse {
+  success: boolean;
+  message?: string;
 }
