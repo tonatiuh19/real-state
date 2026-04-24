@@ -66,14 +66,14 @@ interface FetchTasksParams {
 
 export const fetchTasks = createAsyncThunk(
   "tasks/fetchAll",
-  async (params: FetchTasksParams = {}, { getState, rejectWithValue }) => {
+  async (params: FetchTasksParams | void, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.get<
         GetTasksResponse & { pagination: PaginationInfo }
       >("/api/tasks", {
         headers: { Authorization: `Bearer ${sessionToken}` },
-        params,
+        params: params ?? {},
       });
       return { tasks: data.tasks, pagination: data.pagination };
     } catch (error: any) {

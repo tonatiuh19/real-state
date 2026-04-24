@@ -84,7 +84,7 @@ The platform is **multi-tenant** — a single codebase and database serves multi
 | Frontend       | React 18, TypeScript, Vite, TailwindCSS 3, Redux Toolkit, React Router v6, Framer Motion |
 | Backend        | Node.js, Express (single `api/index.ts` file, ~15k lines), JWT auth                      |
 | Database       | MySQL 5.7 / 8.0 (hosted on HostGator cPanel), 38+ tables                                 |
-| Communications | Nodemailer (email), Twilio (SMS + WhatsApp)                                              |
+| Communications | Resend + Office365 (email), Twilio (SMS + WhatsApp), IMAP/Graph inbound sync             |
 | Storage/CDN    | disruptinglabs.com CDN for profile images and documents                                  |
 | Video Meetings | Zoom API (for video meeting type in Scheduler)                                           |
 | Deployment     | Vercel (serverless functions) + HostGator MySQL                                          |
@@ -152,47 +152,48 @@ loan_funded
 
 ### Database Tables (38 tables)
 
-| Table                        | Purpose                                                    |
-| ---------------------------- | ---------------------------------------------------------- |
-| `tenants`                    | Multi-tenant company records with branding config          |
-| `brokers`                    | All broker accounts (admin + partner roles)                |
-| `broker_profiles`            | Extended profile info (bio, office, social links, avatar)  |
-| `broker_monthly_metrics`     | Monthly performance goals and actuals per broker           |
-| `broker_sessions`            | OTP session tokens for broker auth                         |
-| `clients`                    | Client/borrower accounts                                   |
-| `user_profiles`              | Extended client profile (income, employment, credit score) |
-| `user_sessions`              | OTP session tokens for client auth                         |
-| `loan_applications`          | Core loan record with full pipeline status                 |
-| `application_status_history` | Immutable log of every loan status change                  |
-| `tasks`                      | Task instances linked to a loan + client                   |
-| `task_templates`             | Reusable task definitions (form, document, sign)           |
-| `task_form_fields`           | Field definitions for form-type tasks                      |
-| `task_form_responses`        | Client-submitted form responses                            |
-| `task_documents`             | Documents uploaded against a task                          |
-| `task_sign_documents`        | PDF + signature zone config for sign tasks                 |
-| `task_signatures`            | Collected client signatures                                |
-| `documents`                  | Global document records                                    |
-| `templates`                  | Email/SMS/WhatsApp message templates with variable support |
-| `pipeline_step_templates`    | Maps templates to pipeline stages and channels             |
-| `pre_approval_letters`       | HTML pre-approval letters per loan                         |
-| `conversation_threads`       | Per-client message threads                                 |
-| `communications`             | Individual messages within threads                         |
-| `reminder_flows`             | Visual reminder flow definitions                           |
-| `reminder_flow_steps`        | Step nodes within a flow                                   |
-| `reminder_flow_connections`  | Edge connections between flow steps                        |
-| `reminder_flow_executions`   | Active flow runs per client/loan                           |
-| `leads`                      | Pre-application lead captures                              |
-| `lead_activities`            | Activity history per lead                                  |
-| `notifications`              | In-app notifications for clients                           |
-| `campaigns`                  | Bulk communication campaigns                               |
-| `campaign_recipients`        | Per-recipient status for campaigns                         |
-| `audit_logs`                 | Full broker+client action history                          |
-| `admin_section_controls`     | Per-tenant sidebar section disable toggles                 |
-| `system_settings`            | Tenant-level configuration key-value store                 |
-| `compliance_checklists`      | Compliance requirement checklists                          |
-| `compliance_checklist_items` | Individual checklist items                                 |
-| `contact_submissions`        | Public contact form submissions                            |
-| `environment_keys`           | Stored per-tenant service credentials                      |
+| Table                          | Purpose                                                     |
+| ------------------------------ | ----------------------------------------------------------- |
+| `tenants`                      | Multi-tenant company records with branding config           |
+| `brokers`                      | All broker accounts (admin + partner roles)                 |
+| `broker_profiles`              | Extended profile info (bio, office, social links, avatar)   |
+| `broker_monthly_metrics`       | Monthly performance goals and actuals per broker            |
+| `broker_sessions`              | OTP session tokens for broker auth                          |
+| `clients`                      | Client/borrower accounts                                    |
+| `user_profiles`                | Extended client profile (income, employment, credit score)  |
+| `user_sessions`                | OTP session tokens for client auth                          |
+| `loan_applications`            | Core loan record with full pipeline status                  |
+| `application_status_history`   | Immutable log of every loan status change                   |
+| `tasks`                        | Task instances linked to a loan + client                    |
+| `task_templates`               | Reusable task definitions (form, document, sign)            |
+| `task_form_fields`             | Field definitions for form-type tasks                       |
+| `task_form_responses`          | Client-submitted form responses                             |
+| `task_documents`               | Documents uploaded against a task                           |
+| `task_sign_documents`          | PDF + signature zone config for sign tasks                  |
+| `task_signatures`              | Collected client signatures                                 |
+| `documents`                    | Global document records                                     |
+| `templates`                    | Email/SMS/WhatsApp message templates with variable support  |
+| `pipeline_step_templates`      | Maps templates to pipeline stages and channels              |
+| `pre_approval_letters`         | HTML pre-approval letters per loan                          |
+| `conversation_threads`         | Per-client message threads                                  |
+| `communications`               | Individual messages within threads                          |
+| `conversation_email_mailboxes` | Configured shared/personal inbox providers (Office365/IMAP) |
+| `reminder_flows`               | Visual reminder flow definitions                            |
+| `reminder_flow_steps`          | Step nodes within a flow                                    |
+| `reminder_flow_connections`    | Edge connections between flow steps                         |
+| `reminder_flow_executions`     | Active flow runs per client/loan                            |
+| `leads`                        | Pre-application lead captures                               |
+| `lead_activities`              | Activity history per lead                                   |
+| `notifications`                | In-app notifications for clients                            |
+| `campaigns`                    | Bulk communication campaigns                                |
+| `campaign_recipients`          | Per-recipient status for campaigns                          |
+| `audit_logs`                   | Full broker+client action history                           |
+| `admin_section_controls`       | Per-tenant sidebar section disable toggles                  |
+| `system_settings`              | Tenant-level configuration key-value store                  |
+| `compliance_checklists`        | Compliance requirement checklists                           |
+| `compliance_checklist_items`   | Individual checklist items                                  |
+| `contact_submissions`          | Public contact form submissions                             |
+| `environment_keys`             | Stored per-tenant service credentials                       |
 
 ---
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import * as AblyLib from "ably";
 import { useFormik } from "formik";
 import * as Yup from "yup";
+import { useLocation } from "react-router-dom";
 import {
   MessageCircle,
   Phone,
@@ -20,7 +21,6 @@ import {
   Clock,
   AlertCircle,
   CheckCircle,
-  Archive,
   ArchiveRestore,
   Star,
   Tag,
@@ -155,10 +155,17 @@ import {
   updateConversation,
   deleteConversation,
   patchMessageRecording,
+  fetchConversationMailboxes,
+  connectOffice365Mailbox,
+  syncConversationMailbox,
+  assignConversationMailbox,
 } from "@/store/slices/conversationsSlice";
+import { fetchBrokers } from "@/store/slices/brokersSlice";
 import {
   setVoiceAvailable,
   startOutboundCall,
+  fetchAblyToken,
+  checkRecordingUrl,
 } from "@/store/slices/voiceSlice";
 import type { DeviceStatus } from "@/store/slices/voiceSlice";
 import { cn } from "@/lib/utils";
@@ -166,6 +173,7 @@ import type {
   ConversationThread,
   Communication,
   CallRecord,
+  Broker,
 } from "@shared/api";
 
 type ChannelFilter = "all" | "sms" | "whatsapp" | "email" | "calls";
@@ -180,6 +188,7 @@ const CHANNEL_TABS: { key: ChannelFilter; label: string }[] = [
 
 const Conversations = () => {
   const dispatch = useAppDispatch();
+  const location = useLocation();
   const {
     threads,
     currentThread,
@@ -194,7 +203,15 @@ const Conversations = () => {
     threadsFilters,
     callHistory,
     isLoadingCallHistory,
+    mailboxes,
+    isLoadingMailboxes,
+    isConnectingMailbox,
+    isAssigningMailbox,
   } = useAppSelector((state) => state.conversations);
+
+  const brokerList = useAppSelector((state) =>
+    (state.brokers.brokers as Broker[]).filter((b) => b.status === "active"),
+  );
 
   const currentPhone = currentThread?.client_phone ?? null;
   const whatsappStatus: boolean | null = currentPhone
@@ -205,6 +222,13 @@ const Conversations = () => {
 
   const { toast } = useToast();
   const isMobile = useIsMobile();
+
+  // Office365 mailbox state
+  const [selectedMailboxId, setSelectedMailboxId] = useState<number | null>(
+    null,
+  );
+  const [isMailboxConnectOpen, setIsMailboxConnectOpen] = useState(false);
+  const [mailboxEmailInput, setMailboxEmailInput] = useState("");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPriority, setSelectedPriority] = useState("");
@@ -238,17 +262,11 @@ const Conversations = () => {
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
 
-  // Thread-level archive / delete actions
-  // confirmDeleteId: the conversation_id that is in "confirm delete?" state
+  // Thread-level close / delete actions
+  // confirmDeleteId: the conversation_id that is in "confirm close?" state
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // threadMenuOpenId: which thread's mobile ⋮ dropdown is open
   const [threadMenuOpenId, setThreadMenuOpenId] = useState<string | null>(null);
-  // undoArchive: the thread that was just archived, waiting for undo window
-  const undoArchiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-  const [undoArchiveThread, setUndoArchiveThread] =
-    useState<ConversationThread | null>(null);
 
   // Smart compose: live preview + variable autocomplete
   const [showPreview, setShowPreview] = useState(false);
@@ -480,7 +498,44 @@ const Conversations = () => {
     dispatch(fetchConversationThreads(threadsFilters));
     dispatch(fetchConversationTemplates(undefined));
     dispatch(fetchConversationStats());
+    dispatch(fetchConversationMailboxes());
+    dispatch(fetchBrokers());
   }, [dispatch]);
+
+  // Auto-select default mailbox once mailboxes load
+  useEffect(() => {
+    if (mailboxes.length > 0 && selectedMailboxId === null) {
+      const defaultMb =
+        mailboxes.find((m) => m.is_default && m.status === "active") ??
+        mailboxes.find((m) => m.status === "active") ??
+        null;
+      if (defaultMb) setSelectedMailboxId(defaultMb.id);
+    }
+  }, [mailboxes, selectedMailboxId]);
+
+  // Handle OAuth callback result: ?office365=connected or ?office365=error
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const result = params.get("office365");
+    if (!result) return;
+    if (result === "connected") {
+      toast({
+        title: "Mailbox connected",
+        description:
+          "Office365 mailbox is now active and will sync inbound emails.",
+      });
+      dispatch(fetchConversationMailboxes());
+    } else if (result === "error") {
+      const reason = params.get("reason") || "unknown_error";
+      toast({
+        title: "Mailbox connection failed",
+        description: `Could not connect the Office365 mailbox: ${reason.replace(/_/g, " ")}.`,
+        variant: "destructive",
+      });
+    }
+    // Remove the query params from the URL without a full navigation
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [location.search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load call history when "calls" tab is selected
   useEffect(() => {
@@ -495,15 +550,7 @@ const Conversations = () => {
 
     const connect = async () => {
       try {
-        const token = localStorage.getItem("broker_session");
-        const res = await fetch("/api/conversations/ably-token", {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (!res.ok) return;
-        const tokenRequest = await res.json();
+        const tokenRequest = await dispatch(fetchAblyToken()).unwrap();
 
         realtimeClient = new AblyLib.Realtime({
           authCallback: (_tokenParams, callback) =>
@@ -553,12 +600,7 @@ const Conversations = () => {
 
     const subscribe = async () => {
       try {
-        const token = localStorage.getItem("broker_session");
-        const res = await fetch("/api/conversations/ably-token", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) return;
-        const tokenRequest = await res.json();
+        const tokenRequest = await dispatch(fetchAblyToken()).unwrap();
 
         realtimeClient = new AblyLib.Realtime({
           authCallback: (_tokenParams, callback) =>
@@ -616,11 +658,7 @@ const Conversations = () => {
         sidsToCheck.map(async (sid) => {
           pollCounts[sid]++;
           try {
-            const res = await fetch(`/api/voice/recording-check/${sid}`, {
-              headers: { Authorization: `Bearer ${sessionToken}` },
-            });
-            if (!res.ok) return;
-            const data = await res.json();
+            const data = await dispatch(checkRecordingUrl(sid)).unwrap();
             if (data.ready && data.recording_url) {
               dispatch(
                 patchMessageRecording({
@@ -640,7 +678,7 @@ const Conversations = () => {
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [messages, sessionToken, dispatch]);
+  }, [messages, dispatch]);
 
   const handleSelectThread = (thread: ConversationThread) => {
     // Reset initial-load tracker so the new thread shows its spinner
@@ -681,35 +719,104 @@ const Conversations = () => {
     dispatch(fetchConversationThreads({ ...threadsFilters, search: query }));
   };
 
-  const handleArchiveThread = (
+  const handleConnectMailbox = async () => {
+    const email = mailboxEmailInput.trim().toLowerCase();
+    if (!email || !email.includes("@")) return;
+    try {
+      const result = await dispatch(
+        connectOffice365Mailbox({ mailbox_email: email, is_shared: true }),
+      ).unwrap();
+      if (result.auth_url) {
+        window.location.href = result.auth_url;
+      }
+    } catch (err: any) {
+      toast({
+        title: "Connection failed",
+        description: err || "Could not start Office365 authentication",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSyncMailbox = async (mailboxId: number) => {
+    try {
+      const result = await dispatch(
+        syncConversationMailbox(mailboxId),
+      ).unwrap();
+      toast({
+        title: "Sync complete",
+        description: `Processed ${result.processed} new message(s).`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Sync failed",
+        description: err || "Could not sync mailbox",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleAssignMailbox = async (
+    mailboxId: number,
+    brokerId: number | null,
+  ) => {
+    try {
+      await dispatch(
+        assignConversationMailbox({
+          mailboxId,
+          assigned_broker_id: brokerId,
+          is_shared: brokerId === null,
+        }),
+      ).unwrap();
+      toast({
+        title: "Assignment updated",
+        description:
+          brokerId === null
+            ? "Mailbox set to shared (all bankers)"
+            : "Mailbox assigned to banker",
+      });
+      dispatch(fetchConversationMailboxes());
+    } catch (err: any) {
+      toast({
+        title: "Assignment failed",
+        description: err || "Could not update assignment",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCloseThread = (
     thread: ConversationThread,
     e: React.MouseEvent,
   ) => {
     e.stopPropagation();
-    // Optimistically remove from active list
     dispatch(removeThread(thread.conversation_id));
     if (currentThread?.conversation_id === thread.conversation_id) {
       setMobilePanel("list");
     }
-    // Persist archive in background
     dispatch(
       updateConversation({
         conversationId: thread.conversation_id,
         updates: {
           conversation_id: thread.conversation_id,
-          status: "archived",
+          status: "closed",
         },
       }),
-    );
-    // Set up undo
-    setUndoArchiveThread(thread);
-    if (undoArchiveTimerRef.current) clearTimeout(undoArchiveTimerRef.current);
-    undoArchiveTimerRef.current = setTimeout(() => {
-      setUndoArchiveThread(null);
-    }, 6000);
+    ).then(() => {
+      // If user is already viewing closed conversations, refresh the list
+      if (selectedStatus === "closed") {
+        dispatch(
+          fetchConversationThreads({ ...threadsFilters, status: "closed" }),
+        );
+      }
+    });
+    toast({
+      title: "Conversation closed",
+      description: "You can view it in 'Closed conversations'.",
+    });
   };
 
-  const handleUnarchiveThread = (
+  const handleReopenThread = (
     thread: ConversationThread,
     e: React.MouseEvent,
   ) => {
@@ -721,26 +828,12 @@ const Conversations = () => {
         updates: { conversation_id: thread.conversation_id, status: "active" },
       }),
     ).then(() => {
-      // Refresh active list so it shows up when user switches back
-      dispatch(
-        fetchConversationThreads({ ...threadsFilters, status: undefined }),
-      );
+      // Reset view back to active conversations
+      setSelectedStatus("all");
+      dispatch(setThreadsFilters({}));
+      dispatch(fetchConversationThreads({}));
     });
-  };
-
-  const handleUndoArchive = () => {
-    if (!undoArchiveThread) return;
-    if (undoArchiveTimerRef.current) clearTimeout(undoArchiveTimerRef.current);
-    setUndoArchiveThread(null);
-    dispatch(
-      updateConversation({
-        conversationId: undoArchiveThread.conversation_id,
-        updates: {
-          conversation_id: undoArchiveThread.conversation_id,
-          status: "active",
-        },
-      }),
-    ).then(() => dispatch(fetchConversationThreads(threadsFilters)));
+    toast({ title: "Conversation reopened" });
   };
 
   const handleDeleteThread = async (
@@ -866,6 +959,10 @@ const Conversations = () => {
           message_type: sentTemplateId ? "template" : "text",
           template_id: sentTemplateId ?? undefined,
           media_url: uploadedMediaUrl,
+          mailbox_id:
+            messageType === "email" && selectedMailboxId
+              ? selectedMailboxId
+              : undefined,
         }),
       ).unwrap();
 
@@ -1413,33 +1510,33 @@ const Conversations = () => {
                   <div className="text-center py-12 text-muted-foreground">
                     <MessageCircle className="h-10 w-10 mx-auto mb-2 opacity-30" />
                     <p className="text-sm">
-                      {selectedStatus === "archived"
-                        ? "No archived conversations"
+                      {selectedStatus === "closed"
+                        ? "No closed conversations"
                         : `No ${
                             channelFilter !== "all"
                               ? channelFilter.toUpperCase() + " "
                               : ""
                           }conversations`}
                     </p>
-                    {selectedStatus === "archived" && (
+                    {selectedStatus === "closed" && (
                       <button
                         type="button"
                         onClick={() => handleStatusFilter("all")}
                         className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                       >
-                        <Archive className="h-3.5 w-3.5" />← Back to
+                        <CircleCheck className="h-3.5 w-3.5" />← Back to
                         conversations
                       </button>
                     )}
                   </div>
                 ) : (
                   <TooltipProvider delayDuration={400}>
-                    {/* Archived-mode banner */}
-                    {selectedStatus === "archived" && (
-                      <div className="flex items-center gap-2 px-3 py-2 mb-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700">
-                        <Archive className="h-3.5 w-3.5 shrink-0" />
+                    {/* Closed-mode banner */}
+                    {selectedStatus === "closed" && (
+                      <div className="flex items-center gap-2 px-3 py-2 mb-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-700">
+                        <CircleCheck className="h-3.5 w-3.5 shrink-0" />
                         <p className="text-xs flex-1 font-medium">
-                          Archived conversations
+                          Closed conversations
                         </p>
                         <button
                           type="button"
@@ -1457,33 +1554,33 @@ const Conversations = () => {
                         currentThread?.conversation_id ===
                         thread.conversation_id;
 
-                      // ── Confirm-delete mode ────────────────────────────────
+                      // ── Confirm-close mode ────────────────────────────────
                       if (isConfirmingDelete) {
                         return (
                           <div
                             key={thread.id}
-                            className="p-3 rounded-lg border border-destructive/40 bg-destructive/5 animate-in fade-in-0 slide-in-from-left-1"
+                            className="p-3 rounded-lg border border-blue-200 bg-blue-50 animate-in fade-in-0 slide-in-from-left-1"
                           >
                             <div className="flex items-center gap-2">
-                              <Trash2 className="h-4 w-4 text-destructive shrink-0" />
+                              <CircleCheck className="h-4 w-4 text-blue-600 shrink-0" />
                               <p className="text-xs text-foreground flex-1 min-w-0 truncate">
-                                Delete{" "}
+                                Close conversation with{" "}
                                 <span className="font-semibold">
-                                  {thread.client_name || "this conversation"}
-                                </span>{" "}
-                                forever?
+                                  {thread.client_name || "this contact"}
+                                </span>
+                                ?
                               </p>
                             </div>
                             <div className="flex gap-2 mt-2">
                               <Button
                                 size="sm"
-                                variant="destructive"
-                                className="h-7 text-xs flex-1"
-                                onClick={(e) =>
-                                  handleDeleteThread(thread.conversation_id, e)
-                                }
+                                className="h-7 text-xs flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                                onClick={(e) => {
+                                  setConfirmDeleteId(null);
+                                  handleCloseThread(thread, e);
+                                }}
                               >
-                                Delete forever
+                                Close conversation
                               </Button>
                               <Button
                                 size="sm"
@@ -1562,13 +1659,13 @@ const Conversations = () => {
                                   </div>
                                   {/* Action icons — shown on group-hover */}
                                   <div className="hidden group-hover:flex items-center gap-0.5">
-                                    {selectedStatus === "archived" ? (
+                                    {selectedStatus === "closed" ? (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
                                             type="button"
                                             onClick={(e) =>
-                                              handleUnarchiveThread(thread, e)
+                                              handleReopenThread(thread, e)
                                             }
                                             className="p-1 rounded-md text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
                                           >
@@ -1576,30 +1673,10 @@ const Conversations = () => {
                                           </button>
                                         </TooltipTrigger>
                                         <TooltipContent side="top">
-                                          Unarchive
+                                          Reopen
                                         </TooltipContent>
                                       </Tooltip>
-                                    ) : (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            type="button"
-                                            onClick={(e) =>
-                                              handleArchiveThread(thread, e)
-                                            }
-                                            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
-                                          >
-                                            <Archive className="h-3.5 w-3.5" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent
-                                          side="top"
-                                          className="max-w-[180px] text-center"
-                                        >
-                                          Archive — auto-deleted after 7 days
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    )}
+                                    ) : null}
                                     <Tooltip>
                                       <TooltipTrigger asChild>
                                         <button
@@ -1610,13 +1687,13 @@ const Conversations = () => {
                                               thread.conversation_id,
                                             );
                                           }}
-                                          className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                                          className="p-1 rounded-md text-muted-foreground hover:text-blue-600 hover:bg-blue-50 transition-colors"
                                         >
-                                          <Trash2 className="h-3.5 w-3.5" />
+                                          <X className="h-3.5 w-3.5" />
                                         </button>
                                       </TooltipTrigger>
                                       <TooltipContent side="top">
-                                        Delete forever
+                                        Close conversation
                                       </TooltipContent>
                                     </Tooltip>
                                   </div>
@@ -1670,45 +1747,33 @@ const Conversations = () => {
                                       align="end"
                                       className="w-44"
                                     >
-                                      {selectedStatus === "archived" ? (
+                                      {selectedStatus === "closed" ? (
                                         <DropdownMenuItem
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             setThreadMenuOpenId(null);
-                                            handleUnarchiveThread(thread, e);
+                                            handleReopenThread(thread, e);
                                           }}
                                           className="gap-2 text-sm text-emerald-700 focus:text-emerald-700"
                                         >
                                           <ArchiveRestore className="h-4 w-4" />
-                                          Unarchive
+                                          Reopen
                                         </DropdownMenuItem>
                                       ) : (
                                         <DropdownMenuItem
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             setThreadMenuOpenId(null);
-                                            handleArchiveThread(thread, e);
+                                            setConfirmDeleteId(
+                                              thread.conversation_id,
+                                            );
                                           }}
-                                          className="gap-2 text-sm"
+                                          className="gap-2 text-sm text-blue-700 focus:text-blue-700"
                                         >
-                                          <Archive className="h-4 w-4 text-muted-foreground" />
-                                          Archive
+                                          <X className="h-4 w-4" />
+                                          Close conversation
                                         </DropdownMenuItem>
                                       )}
-                                      <DropdownMenuSeparator />
-                                      <DropdownMenuItem
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setThreadMenuOpenId(null);
-                                          setConfirmDeleteId(
-                                            thread.conversation_id,
-                                          );
-                                        }}
-                                        className="gap-2 text-sm text-destructive focus:text-destructive"
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                        Delete forever
-                                      </DropdownMenuItem>
                                     </DropdownMenuContent>
                                   </DropdownMenu>
                                 </div>
@@ -1747,39 +1812,17 @@ const Conversations = () => {
               </div>
             </ScrollArea>
 
-            {/* Archive toggle footer */}
-            {selectedStatus !== "archived" && (
+            {/* Closed conversations toggle footer */}
+            {selectedStatus !== "closed" && (
               <div className="border-t border-border">
                 <button
                   type="button"
-                  onClick={() => handleStatusFilter("archived")}
-                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  onClick={() => handleStatusFilter("closed")}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 >
-                  <Archive className="h-3.5 w-3.5" />
-                  <span>View archived conversations</span>
+                  <CircleCheck className="h-3.5 w-3.5" />
+                  <span>View closed conversations</span>
                 </button>
-              </div>
-            )}
-
-            {/* Undo archive toast (floating, bottom of sidebar) */}
-            {undoArchiveThread && (
-              <div className="absolute bottom-3 left-3 right-3 z-20 animate-in slide-in-from-bottom-2 fade-in-0">
-                <div className="flex items-center gap-3 rounded-lg border border-border bg-card shadow-lg px-3 py-2.5">
-                  <Archive className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <p className="text-xs text-foreground flex-1 truncate">
-                    <span className="font-medium">
-                      {undoArchiveThread.client_name || "Conversation"}
-                    </span>{" "}
-                    archived
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleUndoArchive}
-                    className="text-xs font-semibold text-primary hover:underline shrink-0"
-                  >
-                    Undo
-                  </button>
-                </div>
               </div>
             )}
           </div>
@@ -1885,10 +1928,6 @@ const Conversations = () => {
                         <DropdownMenuItem>
                           <Star className="h-4 w-4 mr-2" />
                           Mark as Important
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
-                          <Archive className="h-4 w-4 mr-2" />
-                          Archive Thread
                         </DropdownMenuItem>
                         <DropdownMenuItem>
                           <Tag className="h-4 w-4 mr-2" />
@@ -2507,14 +2546,112 @@ const Conversations = () => {
                   </Popover>
                 </div>
 
-                {/* Email subject */}
+                {/* Email: From mailbox selector + Subject */}
                 {messageType === "email" && (
-                  <Input
-                    placeholder="Subject"
-                    value={messageSubject}
-                    onChange={(e) => setMessageSubject(e.target.value)}
-                    className="mb-2 h-8 text-sm"
-                  />
+                  <>
+                    {/* From: mailbox row */}
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-[11px] text-muted-foreground shrink-0 w-10 text-right">
+                        From:
+                      </span>
+                      {isLoadingMailboxes ? (
+                        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Loading mailboxes…
+                        </div>
+                      ) : mailboxes.filter((m) => m.status === "active")
+                          .length === 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setIsMailboxConnectOpen(true)}
+                          className="flex items-center gap-1.5 text-[11px] text-primary hover:underline"
+                        >
+                          <Plus className="h-3 w-3" />
+                          Connect Office365 mailbox
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <Select
+                            value={
+                              selectedMailboxId ? String(selectedMailboxId) : ""
+                            }
+                            onValueChange={(v) =>
+                              setSelectedMailboxId(Number(v))
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
+                              <SelectValue placeholder="Choose mailbox…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {mailboxes
+                                .filter((m) => m.status === "active")
+                                .map((m) => (
+                                  <SelectItem key={m.id} value={String(m.id)}>
+                                    <div className="flex items-center gap-2">
+                                      <Mail className="h-3 w-3 text-blue-500 shrink-0" />
+                                      <span className="truncate">
+                                        {m.display_name
+                                          ? `${m.display_name} <${m.mailbox_email}>`
+                                          : m.mailbox_email}
+                                      </span>
+                                      {m.is_default && (
+                                        <span className="text-[10px] bg-primary/10 text-primary rounded px-1 shrink-0">
+                                          default
+                                        </span>
+                                      )}
+                                    </div>
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    selectedMailboxId &&
+                                    handleSyncMailbox(selectedMailboxId)
+                                  }
+                                  disabled={!selectedMailboxId}
+                                  className="shrink-0 rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                                >
+                                  <RefreshCw className="h-3 w-3" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="text-xs">
+                                Sync inbox now
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsMailboxConnectOpen(true)}
+                                  className="shrink-0 rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="text-xs">
+                                Connect another mailbox
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Subject */}
+                    <Input
+                      placeholder="Subject"
+                      value={messageSubject}
+                      onChange={(e) => setMessageSubject(e.target.value)}
+                      className="mb-2 h-8 text-sm"
+                    />
+                  </>
                 )}
 
                 {/* Smart variable preview banner */}
@@ -3251,9 +3388,7 @@ const Conversations = () => {
                       "text-sm",
                       currentThread.status === "active"
                         ? "bg-green-50 text-green-700 border-green-200"
-                        : currentThread.status === "archived"
-                          ? "bg-muted text-muted-foreground"
-                          : "bg-red-50 text-red-700 border-red-200",
+                        : "bg-blue-50 text-blue-700 border-blue-200",
                     )}
                   >
                     {currentThread.status}
@@ -4041,11 +4176,188 @@ const Conversations = () => {
         </div>
       )}
 
+      {/* ── Connect Office365 Mailbox Dialog ── */}
+      <Dialog
+        open={isMailboxConnectOpen}
+        onOpenChange={setIsMailboxConnectOpen}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5 text-blue-500" />
+              Connect Office365 Mailbox
+            </DialogTitle>
+            <DialogDescription>
+              Enter the shared mailbox email address hosted on Microsoft 365
+              (e.g. teamdc@encoremortgage.org). You'll be redirected to
+              Microsoft to authorize access.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Existing mailboxes */}
+            {mailboxes.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Connected mailboxes
+                </Label>
+                <div className="rounded-lg border border-border divide-y divide-border">
+                  {mailboxes.map((mb) => (
+                    <div key={mb.id} className="px-3 py-2.5 space-y-2">
+                      {/* Row 1: status dot + email + status badge + sync */}
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={cn(
+                            "h-2 w-2 rounded-full shrink-0",
+                            mb.status === "active"
+                              ? "bg-green-500"
+                              : mb.status === "pending"
+                                ? "bg-yellow-400"
+                                : mb.status === "error"
+                                  ? "bg-red-500"
+                                  : "bg-muted-foreground",
+                          )}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">
+                            {mb.display_name || mb.mailbox_email}
+                          </p>
+                          {mb.display_name && (
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              {mb.mailbox_email}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "text-[10px] px-1.5 py-0",
+                              mb.status === "active"
+                                ? "border-green-300 text-green-700 bg-green-50"
+                                : mb.status === "pending"
+                                  ? "border-yellow-300 text-yellow-700 bg-yellow-50"
+                                  : mb.status === "error"
+                                    ? "border-red-300 text-red-700 bg-red-50"
+                                    : "",
+                            )}
+                          >
+                            {mb.status}
+                          </Badge>
+                          {mb.status === "active" && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSyncMailbox(mb.id)}
+                                    className="rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    <RefreshCw className="h-3 w-3" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent className="text-xs">
+                                  Sync inbox
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Row 2: broker assignment dropdown */}
+                      <div className="flex items-center gap-2 pl-5">
+                        <span className="text-[11px] text-muted-foreground shrink-0">
+                          Assigned to:
+                        </span>
+                        <Select
+                          value={
+                            mb.assigned_broker_id
+                              ? String(mb.assigned_broker_id)
+                              : "shared"
+                          }
+                          onValueChange={(val) =>
+                            handleAssignMailbox(
+                              mb.id,
+                              val === "shared" ? null : Number(val),
+                            )
+                          }
+                          disabled={isAssigningMailbox}
+                        >
+                          <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
+                            <SelectValue placeholder="Shared (all bankers)" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="shared" className="text-xs">
+                              Shared — all bankers
+                            </SelectItem>
+                            {brokerList.map((b) => (
+                              <SelectItem
+                                key={b.id}
+                                value={String(b.id)}
+                                className="text-xs"
+                              >
+                                {b.first_name} {b.last_name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Connect new mailbox form */}
+            <div className="space-y-2">
+              <Label
+                htmlFor="mailbox-email-input"
+                className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                Add mailbox
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="mailbox-email-input"
+                  type="email"
+                  placeholder="teamdc@yourdomain.com"
+                  value={mailboxEmailInput}
+                  onChange={(e) => setMailboxEmailInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleConnectMailbox();
+                  }}
+                  className="h-9 text-sm"
+                />
+                <Button
+                  onClick={handleConnectMailbox}
+                  disabled={
+                    isConnectingMailbox ||
+                    !mailboxEmailInput.trim().includes("@")
+                  }
+                  size="sm"
+                  className="h-9 px-4 shrink-0"
+                >
+                  {isConnectingMailbox ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    "Authorize"
+                  )}
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                You'll be redirected to Microsoft to sign in and grant access.
+                Make sure the mailbox is a valid Office 365 account.
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Phone Numbers Management Panel ── */}
       <PhoneNumbersPanel
         isOpen={isPhoneNumbersOpen}
         onClose={() => setIsPhoneNumbersOpen(false)}
-        sessionToken={sessionToken}
       />
 
       {/* Client detail panel — slides in from the right when a known client name is clicked */}

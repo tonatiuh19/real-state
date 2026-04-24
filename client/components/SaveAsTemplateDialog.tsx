@@ -80,7 +80,6 @@ const SaveAsTemplateDialog = ({
     validationSchema,
     validateOnBlur: true,
     validateOnChange: false,
-    context: { isEmail: channelType === "email" },
     onSubmit: async (values, { setSubmitting, resetForm }) => {
       try {
         if (channelType === "email") {

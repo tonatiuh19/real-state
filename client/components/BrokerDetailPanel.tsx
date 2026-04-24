@@ -35,6 +35,7 @@ import {
   Camera,
   X,
   BookmarkPlus,
+  RefreshCw,
 } from "lucide-react";
 import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -98,6 +99,9 @@ import {
   fetchConversationMessages,
   fetchConversationTemplates,
   sendMessage,
+  fetchConversationMailboxes,
+  connectOffice365Mailbox,
+  syncConversationMailbox,
 } from "@/store/slices/conversationsSlice";
 import { useToast } from "@/hooks/use-toast";
 import { logger } from "@/lib/logger";
@@ -222,6 +226,20 @@ export default function BrokerDetailPanel({
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
   const [convertSource, setConvertSource] = useState("");
   const [converting, setConverting] = useState(false);
+
+  // ── email mailbox (admin view) ──────────────────────────────────────────────
+  const { mailboxes, isLoadingMailboxes, isConnectingMailbox } = useAppSelector(
+    (s) => s.conversations,
+  );
+  const brokerMailbox = (mailboxes as any[]).find(
+    (m) => m.assigned_broker_id === brokerId,
+  ) as (typeof mailboxes)[0] | undefined;
+  const [mailboxEmailInput, setMailboxEmailInput] = useState("");
+  const [isSyncingBrokerMailbox, setIsSyncingBrokerMailbox] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) dispatch(fetchConversationMailboxes());
+  }, [isOpen, dispatch]);
 
   // ── load profile & templates ────────────────────────────────────────────────
   useEffect(() => {
@@ -359,13 +377,12 @@ export default function BrokerDetailPanel({
     try {
       await dispatch(
         sendMessage({
-          conversationId,
-          type: composeType,
+          conversation_id: `conv_broker_${brokerId}`,
+          communication_type: composeType,
           body: composeBody,
           subject: composeType === "email" ? composeSubject : undefined,
-          to: composeType === "email" ? (email ?? "") : (phone ?? ""),
-          clientName: `${selectedBrokerProfile.first_name} ${selectedBrokerProfile.last_name}`,
-          contact_broker_id: brokerId ?? undefined,
+          recipient_email: composeType === "email" ? (email ?? "") : undefined,
+          recipient_phone: composeType !== "email" ? (phone ?? "") : undefined,
         }),
       ).unwrap();
       setComposing(false);
@@ -407,6 +424,48 @@ export default function BrokerDetailPanel({
       });
     } finally {
       setConverting(false);
+    }
+  };
+
+  const handleConnectBrokerMailbox = async () => {
+    const email = mailboxEmailInput.trim();
+    if (!email.includes("@") || !brokerId) return;
+    try {
+      const result = await dispatch(
+        connectOffice365Mailbox({
+          mailbox_email: email,
+          is_shared: false,
+          target_broker_id: brokerId,
+        }),
+      ).unwrap();
+      if (result.auth_url) window.location.href = result.auth_url;
+    } catch (err: any) {
+      toast({
+        title: "Connection failed",
+        description: err || "Could not start Office365 authentication",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSyncBrokerMailbox = async (mailboxId: number) => {
+    setIsSyncingBrokerMailbox(true);
+    try {
+      const result = await dispatch(
+        syncConversationMailbox(mailboxId),
+      ).unwrap();
+      toast({
+        title: "Sync complete",
+        description: `Processed ${result.processed} new message(s).`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Sync failed",
+        description: err || "Could not sync mailbox",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSyncingBrokerMailbox(false);
     }
   };
 
@@ -730,6 +789,9 @@ export default function BrokerDetailPanel({
               </TabsTrigger>
               <TabsTrigger value="social" className="text-xs h-8 px-3">
                 Social
+              </TabsTrigger>
+              <TabsTrigger value="email" className="text-xs h-8 px-3">
+                Email
               </TabsTrigger>
             </TabsList>
 
@@ -1393,6 +1455,121 @@ export default function BrokerDetailPanel({
                       )}
                   </div>
                 ) : null}
+              </TabsContent>
+
+              {/* ── Email tab ─────────────────────────────────────────────── */}
+              <TabsContent value="email" className="mt-0 p-5 space-y-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Email Inbox</p>
+                  <p className="text-xs text-muted-foreground">
+                    Connect an Office 365 mailbox for this broker. They'll be
+                    able to send and receive emails through Conversations.
+                  </p>
+                </div>
+
+                {isLoadingMailboxes ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading…
+                  </div>
+                ) : brokerMailbox ? (
+                  <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3">
+                    <div
+                      className={cn(
+                        "h-2.5 w-2.5 rounded-full shrink-0",
+                        brokerMailbox.status === "active"
+                          ? "bg-green-500"
+                          : brokerMailbox.status === "error"
+                            ? "bg-red-500"
+                            : "bg-yellow-400",
+                      )}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {brokerMailbox.mailbox_email}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground capitalize">
+                        {brokerMailbox.status === "active"
+                          ? brokerMailbox.last_sync_at
+                            ? `Last synced ${new Date(brokerMailbox.last_sync_at).toLocaleString()}`
+                            : "Connected — not yet synced"
+                          : brokerMailbox.status === "error"
+                            ? brokerMailbox.last_sync_error || "Sync error"
+                            : "Pending authorization"}
+                      </p>
+                    </div>
+                    {brokerMailbox.status === "active" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs shrink-0"
+                        onClick={() =>
+                          handleSyncBrokerMailbox(brokerMailbox.id)
+                        }
+                        disabled={isSyncingBrokerMailbox}
+                      >
+                        <Loader2
+                          className={cn(
+                            "h-3.5 w-3.5",
+                            isSyncingBrokerMailbox ? "animate-spin" : "hidden",
+                          )}
+                        />
+                        {!isSyncingBrokerMailbox && (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
+                        Sync now
+                      </Button>
+                    )}
+                    {brokerMailbox.status !== "active" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs shrink-0"
+                        onClick={() => {
+                          setMailboxEmailInput(brokerMailbox.mailbox_email);
+                          handleConnectBrokerMailbox();
+                        }}
+                        disabled={isConnectingMailbox}
+                      >
+                        Re-authorize
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex gap-2">
+                      <Input
+                        type="email"
+                        placeholder="broker@encoremortgage.org"
+                        value={mailboxEmailInput}
+                        onChange={(e) => setMailboxEmailInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleConnectBrokerMailbox();
+                        }}
+                        className="h-9 text-sm"
+                      />
+                      <Button
+                        size="sm"
+                        className="h-9 shrink-0"
+                        onClick={handleConnectBrokerMailbox}
+                        disabled={
+                          isConnectingMailbox ||
+                          !mailboxEmailInput.trim().includes("@")
+                        }
+                      >
+                        {isConnectingMailbox ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          "Connect"
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      You'll be redirected to Microsoft to authorize access on
+                      behalf of this broker.
+                    </p>
+                  </div>
+                )}
               </TabsContent>
             </ScrollArea>
           </Tabs>

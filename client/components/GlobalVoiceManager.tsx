@@ -8,6 +8,10 @@ import {
   setDeviceStatus,
   endOutboundCall,
   resolveOutboundCallName,
+  fetchVoiceToken,
+  fetchAblyToken,
+  updateVoiceAvailability,
+  lookupContact,
 } from "@/store/slices/voiceSlice";
 import VoiceCallPanel from "@/components/VoiceCallPanel";
 import { logger } from "@/lib/logger";
@@ -46,46 +50,26 @@ const GlobalVoiceManager: React.FC = () => {
   // POST /api/voice/availability — called ONLY from registered/unregistered events.
   const reportAvailability = useCallback(
     (available: boolean) => {
-      if (!sessionToken) return;
-      fetch("/api/voice/availability", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({ available }),
-      }).catch(() => {});
+      dispatch(updateVoiceAvailability(available));
     },
-    [sessionToken],
+    [dispatch],
   );
 
   const fetchToken = useCallback(async (): Promise<string | null> => {
     try {
-      const res = await fetch("/api/voice/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-      });
-      if (!res.ok) return null;
-      const { token } = await res.json();
-      return token || null;
+      return await dispatch(fetchVoiceToken()).unwrap();
     } catch {
       return null;
     }
-  }, [sessionToken]);
+  }, [dispatch]);
 
   // When an outbound call is dispatched without a client name (e.g. from the dialpad),
   // look up the phone number so the panel shows the real name instead of the raw number.
   useEffect(() => {
-    if (!outboundCall || outboundCall.clientName || !sessionToken) return;
+    if (!outboundCall || outboundCall.clientName) return;
     const { phone } = outboundCall;
-    fetch(
-      `/api/conversations/lookup-contact?phone=${encodeURIComponent(phone)}`,
-      { headers: { Authorization: `Bearer ${sessionToken}` } },
-    )
-      .then((r) => r.json())
+    dispatch(lookupContact(phone))
+      .unwrap()
       .then((data) => {
         if (data.found) {
           dispatch(
@@ -97,7 +81,7 @@ const GlobalVoiceManager: React.FC = () => {
         }
       })
       .catch(() => {});
-  }, [outboundCall?.phone, sessionToken, dispatch]);
+  }, [outboundCall?.phone, dispatch]);
 
   // Create the Device once per session token.
   useEffect(() => {
@@ -278,11 +262,7 @@ const GlobalVoiceManager: React.FC = () => {
 
     const connect = async () => {
       try {
-        const res = await fetch("/api/conversations/ably-token", {
-          headers: { Authorization: `Bearer ${sessionToken}` },
-        });
-        if (!res.ok) return;
-        const tokenRequest = await res.json();
+        const tokenRequest = await dispatch(fetchAblyToken()).unwrap();
 
         ablyClient = new AblyLib.Realtime({
           authCallback: (_tokenParams, callback) =>

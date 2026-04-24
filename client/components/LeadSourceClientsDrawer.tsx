@@ -196,7 +196,7 @@ const LeadSourceClientsDrawer: React.FC<LeadSourceClientsDrawerProps> = ({
             <DataGrid<ClientRow>
               columns={columns}
               data={clients}
-              loading={isLoading}
+              isLoading={isLoading}
               sortBy={sortBy}
               sortDir={sortDir}
               onSort={handleSort}

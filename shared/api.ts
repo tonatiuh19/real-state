@@ -1160,6 +1160,7 @@ export interface ConversationThread {
   lead_id?: number | null;
   client_id?: number | null;
   broker_id: number | null;
+  mailbox_id?: number | null;
   /** Broker/realtor who is the *contact* in this thread (not the CRM handler) */
   contact_broker_id?: number | null;
   client_name?: string | null;
@@ -1173,7 +1174,7 @@ export interface ConversationThread {
   message_count: number;
   unread_count: number;
   priority: "low" | "normal" | "high" | "urgent";
-  status: "active" | "archived" | "closed";
+  status: "active" | "closed";
   tags?: string[] | null;
   created_at: string;
   updated_at: string;
@@ -1202,6 +1203,7 @@ export interface Communication {
   /** MIME type of the primary media attachment (e.g. image/jpeg, video/mp4) */
   media_content_type?: string | null;
   conversation_id?: string | null;
+  mailbox_id?: number | null;
   /** ID of the reminder_flow_execution that sent this message (null = manual send) */
   source_execution_id?: number | null;
   thread_id?: string | null;
@@ -1230,7 +1232,7 @@ export interface Communication {
 export interface GetConversationThreadsRequest {
   page?: number;
   limit?: number;
-  status?: "active" | "archived" | "closed" | "all";
+  status?: "active" | "closed" | "all";
   priority?: "low" | "normal" | "high" | "urgent";
   search?: string;
 }
@@ -1269,6 +1271,7 @@ export interface SendMessageRequest {
   application_id?: number;
   lead_id?: number;
   client_id?: number;
+  mailbox_id?: number;
   communication_type: "email" | "sms" | "whatsapp";
   recipient_phone?: string;
   recipient_email?: string;
@@ -1290,9 +1293,63 @@ export interface SendMessageResponse {
   cost?: number;
 }
 
+export interface ConversationMailbox {
+  id: number;
+  provider: "office365" | "imap";
+  mailbox_email: string;
+  display_name?: string | null;
+  is_shared: boolean;
+  assigned_broker_id?: number | null;
+  assigned_broker_name?: string | null;
+  status: "pending" | "active" | "disabled" | "error";
+  is_default: boolean;
+  last_sync_at?: string | null;
+  last_sync_status?: "ok" | "error" | null;
+  last_sync_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssignConversationMailboxRequest {
+  assigned_broker_id: number | null;
+  is_shared: boolean;
+  is_default?: boolean;
+}
+
+export interface AssignConversationMailboxResponse {
+  success: boolean;
+  mailbox_id: number;
+}
+
+export interface GetConversationMailboxesResponse {
+  success: boolean;
+  mailboxes: ConversationMailbox[];
+}
+
+export interface ConnectOffice365MailboxRequest {
+  mailbox_email: string;
+  display_name?: string;
+  is_shared?: boolean;
+  /** Admin only — assign mailbox to a different broker */
+  target_broker_id?: number;
+}
+
+export interface ConnectOffice365MailboxResponse {
+  success: boolean;
+  mailbox_id: number;
+  auth_url: string;
+}
+
+export interface SyncConversationMailboxResponse {
+  success: boolean;
+  mailbox_id: number;
+  processed: number;
+  errors: number;
+}
+
 export interface UpdateConversationRequest {
   conversation_id: string;
-  status?: "active" | "archived" | "closed";
+  status?: "active" | "closed";
   priority?: "low" | "normal" | "high" | "urgent";
   tags?: string[];
 }

@@ -3,6 +3,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import express, { type RequestHandler } from "express";
 import cors from "cors";
 import multer from "multer";
+import axios from "axios";
 import mysql, {
   type ResultSetHeader,
   type RowDataPacket,
@@ -129,6 +130,412 @@ async function sendViaResend(options: {
   });
   if (error) throw new Error(error.message);
   return { messageId: data?.id };
+}
+
+type ConversationMailboxRow = RowDataPacket & {
+  id: number;
+  tenant_id: number;
+  provider: "office365" | "imap";
+  mailbox_email: string;
+  display_name: string | null;
+  is_shared: number;
+  assigned_broker_id: number | null;
+  status: "pending" | "active" | "disabled" | "error";
+  is_default: number;
+  office365_tenant_id: string | null;
+  office365_client_id: string | null;
+  oauth_access_token: string | null;
+  oauth_refresh_token: string | null;
+  oauth_expires_at: string | null;
+};
+
+const OFFICE365_SCOPES = [
+  "offline_access",
+  "Mail.Read",
+  "Mail.Send",
+  "User.Read",
+];
+
+const getOffice365OAuthConfig = () => {
+  const tenantId = process.env.OFFICE365_TENANT_ID;
+  const clientId = process.env.OFFICE365_CLIENT_ID;
+  const clientSecret = process.env.OFFICE365_CLIENT_SECRET;
+  const redirectUri =
+    process.env.OFFICE365_REDIRECT_URI ||
+    `${getBaseUrl()}/api/conversations/mailboxes/office365/callback`;
+  return { tenantId, clientId, clientSecret, redirectUri };
+};
+
+const signOffice365State = (payload: string) =>
+  crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("hex");
+
+function createOffice365State(brokerId: number, mailboxId: number): string {
+  const ts = Date.now();
+  const nonce = crypto.randomBytes(8).toString("hex");
+  const payload = `${brokerId}.${mailboxId}.${ts}.${nonce}`;
+  const sig = signOffice365State(payload);
+  return `${payload}.${sig}`;
+}
+
+function verifyOffice365State(stateRaw: string): {
+  valid: boolean;
+  brokerId?: number;
+  mailboxId?: number;
+} {
+  const parts = stateRaw.split(".");
+  if (parts.length !== 5) return { valid: false };
+
+  const [brokerIdRaw, mailboxIdRaw, tsRaw, nonce, sig] = parts;
+  const payload = `${brokerIdRaw}.${mailboxIdRaw}.${tsRaw}.${nonce}`;
+  const expected = signOffice365State(payload);
+  if (sig !== expected) return { valid: false };
+
+  const ts = Number(tsRaw);
+  if (!Number.isFinite(ts)) return { valid: false };
+  // 15-minute state validity
+  if (Date.now() - ts > 15 * 60 * 1000) return { valid: false };
+
+  const brokerId = Number(brokerIdRaw);
+  const mailboxId = Number(mailboxIdRaw);
+  if (!Number.isFinite(brokerId) || !Number.isFinite(mailboxId)) {
+    return { valid: false };
+  }
+
+  return { valid: true, brokerId, mailboxId };
+}
+
+const stripHtmlForStorage = (html: string) =>
+  html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+async function refreshOffice365Token(mailbox: ConversationMailboxRow) {
+  const { tenantId, clientId, clientSecret, redirectUri } =
+    getOffice365OAuthConfig();
+  const refreshToken = mailbox.oauth_refresh_token;
+  if (!tenantId || !clientId || !clientSecret || !refreshToken) {
+    throw new Error("Office365 OAuth config is incomplete");
+  }
+
+  const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+  const params = new URLSearchParams();
+  params.set("grant_type", "refresh_token");
+  params.set("client_id", clientId);
+  params.set("client_secret", clientSecret);
+  params.set("refresh_token", refreshToken);
+  params.set("scope", OFFICE365_SCOPES.join(" "));
+  params.set("redirect_uri", redirectUri);
+
+  const { data } = await axios.post(tokenUrl, params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+
+  const expiresIn = Number(data.expires_in || 3600);
+  const expiresAt = new Date(Date.now() + Math.max(300, expiresIn - 120) * 1000)
+    .toISOString()
+    .slice(0, 19)
+    .replace("T", " ");
+
+  await pool.query(
+    `UPDATE conversation_email_mailboxes
+     SET oauth_access_token = ?,
+         oauth_refresh_token = ?,
+         oauth_expires_at = ?,
+         status = 'active',
+         updated_at = NOW()
+     WHERE id = ? AND tenant_id = ?`,
+    [
+      String(data.access_token || ""),
+      String(data.refresh_token || refreshToken),
+      expiresAt,
+      mailbox.id,
+      MORTGAGE_TENANT_ID,
+    ],
+  );
+
+  return String(data.access_token || "");
+}
+
+async function getOffice365AccessToken(mailbox: ConversationMailboxRow) {
+  if (!mailbox.oauth_access_token) {
+    return refreshOffice365Token(mailbox);
+  }
+
+  if (!mailbox.oauth_expires_at) return mailbox.oauth_access_token;
+  const expiresAtMs = new Date(mailbox.oauth_expires_at).getTime();
+  const remaining = expiresAtMs - Date.now();
+  if (remaining > 2 * 60 * 1000) return mailbox.oauth_access_token;
+
+  return refreshOffice365Token(mailbox);
+}
+
+async function sendEmailMessageViaOffice365(options: {
+  mailboxId: number;
+  to: string;
+  subject: string;
+  body: string;
+  isHtml: boolean;
+  conversationId?: string;
+}): Promise<{
+  success: boolean;
+  external_id?: string;
+  error?: string;
+  provider_response?: any;
+}> {
+  try {
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ? AND provider = 'office365' AND status = 'active'
+       LIMIT 1`,
+      [options.mailboxId, MORTGAGE_TENANT_ID],
+    );
+
+    if (rows.length === 0) {
+      return {
+        success: false,
+        error: "Office365 mailbox not found or inactive",
+      };
+    }
+
+    const mailbox = rows[0];
+    const accessToken = await getOffice365AccessToken(mailbox);
+
+    const headers: Array<{ name: string; value: string }> = [];
+    if (options.conversationId) {
+      const domain = mailbox.mailbox_email.split("@")[1] || "example.com";
+      headers.push({
+        name: "X-Conversation-Id",
+        value: options.conversationId,
+      });
+      headers.push({
+        name: "Message-ID",
+        value: `<enc-${options.conversationId}-${Date.now()}@${domain}>`,
+      });
+    }
+
+    await axios.post(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}/sendMail`,
+      {
+        message: {
+          subject: options.subject,
+          body: {
+            contentType: options.isHtml ? "HTML" : "Text",
+            content: options.body,
+          },
+          toRecipients: [{ emailAddress: { address: options.to } }],
+          replyTo: [{ emailAddress: { address: mailbox.mailbox_email } }],
+          internetMessageHeaders: headers,
+        },
+        saveToSentItems: true,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+
+    return {
+      success: true,
+      provider_response: {
+        provider: "office365",
+        mailbox_id: mailbox.id,
+        mailbox_email: mailbox.mailbox_email,
+      },
+    };
+  } catch (error: any) {
+    const detail =
+      error?.response?.data?.error?.message ||
+      error?.message ||
+      "Office365 send failed";
+    return {
+      success: false,
+      error: detail,
+      provider_response: error?.response?.data,
+    };
+  }
+}
+
+async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
+  processed: number;
+  errors: number;
+}> {
+  let processed = 0;
+  let errors = 0;
+
+  const accessToken = await getOffice365AccessToken(mailbox);
+  const { data } = await axios.get(
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}/mailFolders/Inbox/messages`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: {
+        $top: 50,
+        $orderby: "receivedDateTime desc",
+        $select:
+          "id,subject,from,toRecipients,internetMessageId,inReplyTo,conversationId,receivedDateTime,bodyPreview,body,internetMessageHeaders",
+      },
+    },
+  );
+
+  const messages: any[] = Array.isArray(data?.value) ? data.value : [];
+  messages.reverse();
+
+  for (const msg of messages) {
+    try {
+      const graphId = String(msg?.id || "");
+      if (!graphId) continue;
+
+      const [existing] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM communications WHERE tenant_id = ? AND external_id = ? LIMIT 1`,
+        [MORTGAGE_TENANT_ID, graphId],
+      );
+      if (existing.length > 0) continue;
+
+      const fromEmail =
+        msg?.from?.emailAddress?.address?.toLowerCase?.() ||
+        msg?.from?.emailAddress?.address ||
+        "";
+      const subject = String(msg?.subject || "(no subject)");
+
+      const headerMap: Record<string, string> = {};
+      const rawHeaders = Array.isArray(msg?.internetMessageHeaders)
+        ? msg.internetMessageHeaders
+        : [];
+      for (const h of rawHeaders) {
+        const key = String(h?.name || "").toLowerCase();
+        const value = String(h?.value || "");
+        if (key) headerMap[key] = value;
+      }
+
+      let conversationId: string | null =
+        headerMap["x-conversation-id"]?.trim() || null;
+      if (!conversationId) {
+        const combined = [
+          msg?.inReplyTo,
+          headerMap["references"],
+          msg?.internetMessageId,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const match = combined.match(/<enc-([^-]+(?:-[^-]+)*)-\d+@/);
+        if (match) conversationId = match[1];
+      }
+      if (!conversationId) {
+        const fallbackKey =
+          msg?.conversationId ||
+          crypto
+            .createHash("md5")
+            .update(`${fromEmail}:${subject}`)
+            .digest("hex")
+            .slice(0, 20);
+        conversationId = `conv_o365_${mailbox.id}_${fallbackKey}`;
+      }
+
+      const bodyPreview = String(msg?.bodyPreview || "").trim();
+      const bodyContent = String(msg?.body?.content || "").trim();
+      const bodyType = String(msg?.body?.contentType || "").toLowerCase();
+      const cleanBody =
+        bodyPreview ||
+        (bodyType === "html"
+          ? stripHtmlForStorage(bodyContent)
+          : bodyContent) ||
+        "(empty reply)";
+
+      const [threadRows] = await pool.query<RowDataPacket[]>(
+        `SELECT broker_id, client_id, application_id, lead_id
+         FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ?
+         LIMIT 1`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+
+      let brokerId: number | null = null;
+      let clientId: number | null = null;
+      let applicationId: number | null = null;
+      let leadId: number | null = null;
+
+      if (threadRows.length > 0) {
+        brokerId = threadRows[0].broker_id ?? null;
+        clientId = threadRows[0].client_id ?? null;
+        applicationId = threadRows[0].application_id ?? null;
+        leadId = threadRows[0].lead_id ?? null;
+      } else if (fromEmail) {
+        const [clientRows] = await pool.query<RowDataPacket[]>(
+          `SELECT id, assigned_broker_id FROM clients
+           WHERE tenant_id = ? AND LOWER(email) = ?
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, String(fromEmail).toLowerCase()],
+        );
+        if (clientRows.length > 0) {
+          clientId = clientRows[0].id ?? null;
+          brokerId = clientRows[0].assigned_broker_id ?? null;
+        }
+      }
+
+      const [insertResult] = (await pool.query(
+        `INSERT INTO communications (
+          tenant_id, application_id, lead_id,
+          from_user_id, to_broker_id,
+          communication_type, direction,
+          subject, body, status,
+          conversation_id, message_type,
+          delivery_status, external_id,
+          metadata,
+          sent_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'email', 'inbound', ?, ?, 'delivered', ?, 'text', 'delivered', ?, ?, NOW(), NOW())`,
+        [
+          MORTGAGE_TENANT_ID,
+          applicationId,
+          leadId,
+          clientId,
+          brokerId,
+          subject,
+          cleanBody,
+          conversationId,
+          graphId,
+          JSON.stringify({
+            mailbox_id: mailbox.id,
+            mailbox_email: mailbox.mailbox_email,
+            provider: "office365",
+            internet_message_id: msg?.internetMessageId || null,
+            graph_conversation_id: msg?.conversationId || null,
+          }),
+        ],
+      )) as [ResultSetHeader, any];
+
+      await upsertConversationThread({
+        tenantId: MORTGAGE_TENANT_ID,
+        commId: insertResult.insertId,
+        conversationId,
+        applicationId,
+        leadId,
+        fromUserId: clientId,
+        fromBrokerId: null,
+        toUserId: null,
+        toBrokerId: brokerId,
+        communicationType: "email",
+        direction: "inbound",
+        body: cleanBody,
+        recipientEmail: fromEmail || null,
+      });
+
+      await markExecutionsRespondedForConversation(
+        conversationId,
+        MORTGAGE_TENANT_ID,
+      );
+
+      processed++;
+    } catch (err) {
+      errors++;
+      console.error("Office365 sync message error:", err);
+    }
+  }
+
+  return { processed, errors };
 }
 
 // Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
@@ -12096,6 +12503,472 @@ const handleMarkFlowExecutionResponded: RequestHandler = async (req, res) => {
 };
 
 /**
+ * POST /api/conversations/mailboxes/office365/connect
+ *
+ * Creates/updates a mailbox record and returns a Microsoft OAuth consent URL.
+ */
+const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const {
+      mailbox_email,
+      display_name,
+      is_shared = true,
+      target_broker_id,
+    } = req.body || {};
+
+    // Admin can assign to another broker; otherwise use self
+    const assignedBrokerId =
+      !is_shared &&
+      target_broker_id &&
+      (brokerRole === "admin" || brokerRole === "mortgage_banker")
+        ? Number(target_broker_id)
+        : brokerId;
+
+    if (!mailbox_email || !String(mailbox_email).includes("@")) {
+      return res.status(400).json({
+        success: false,
+        message: "mailbox_email is required",
+      });
+    }
+
+    const { tenantId, clientId, clientSecret, redirectUri } =
+      getOffice365OAuthConfig();
+    if (!tenantId || !clientId || !clientSecret) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Office365 OAuth env is missing. Set OFFICE365_TENANT_ID, OFFICE365_CLIENT_ID, OFFICE365_CLIENT_SECRET",
+      });
+    }
+
+    await pool.query(
+      `INSERT INTO conversation_email_mailboxes (
+         tenant_id, provider, mailbox_email, display_name, is_shared,
+         assigned_broker_id, status, office365_tenant_id, office365_client_id,
+         created_by_broker_id, created_at, updated_at
+       ) VALUES (?, 'office365', ?, ?, ?, ?, 'pending', ?, ?, ?, NOW(), NOW())
+       ON DUPLICATE KEY UPDATE
+         display_name = VALUES(display_name),
+         is_shared = VALUES(is_shared),
+         assigned_broker_id = VALUES(assigned_broker_id),
+         status = 'pending',
+         office365_tenant_id = VALUES(office365_tenant_id),
+         office365_client_id = VALUES(office365_client_id),
+         updated_at = NOW()`,
+      [
+        MORTGAGE_TENANT_ID,
+        String(mailbox_email).toLowerCase(),
+        display_name || null,
+        is_shared ? 1 : 0,
+        is_shared ? null : assignedBrokerId,
+        tenantId,
+        clientId,
+        brokerId,
+      ],
+    );
+
+    const [mailboxRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_email_mailboxes
+       WHERE tenant_id = ? AND provider = 'office365' AND mailbox_email = ?
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, String(mailbox_email).toLowerCase()],
+    );
+
+    if (mailboxRows.length === 0) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to initialize mailbox" });
+    }
+
+    const mailboxId = Number(mailboxRows[0].id);
+    const state = createOffice365State(Number(brokerId), mailboxId);
+
+    const authUrl =
+      `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
+      new URLSearchParams({
+        client_id: clientId,
+        response_type: "code",
+        redirect_uri: redirectUri,
+        response_mode: "query",
+        scope: OFFICE365_SCOPES.join(" "),
+        state,
+      }).toString();
+
+    return res.json({
+      success: true,
+      mailbox_id: mailboxId,
+      auth_url: authUrl,
+    });
+  } catch (error) {
+    console.error("Office365 connect error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to start Office365 mailbox connection",
+    });
+  }
+};
+
+/**
+ * GET /api/conversations/mailboxes/office365/callback
+ *
+ * OAuth redirect handler from Microsoft; persists access/refresh tokens.
+ */
+const handleOffice365Callback: RequestHandler = async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = String(req.query.state || "");
+    const oauthError = String(req.query.error || "");
+
+    const clientUrl =
+      process.env.CLIENT_URL || process.env.BASE_URL || "http://localhost:8080";
+
+    if (oauthError) {
+      return res.redirect(
+        `${clientUrl}/conversations?office365=error&reason=${encodeURIComponent(oauthError)}`,
+      );
+    }
+
+    const verified = verifyOffice365State(state);
+    if (!verified.valid || !verified.mailboxId) {
+      return res.redirect(
+        `${clientUrl}/conversations?office365=error&reason=invalid_state`,
+      );
+    }
+
+    if (!code) {
+      return res.redirect(
+        `${clientUrl}/conversations?office365=error&reason=missing_code`,
+      );
+    }
+
+    const { tenantId, clientId, clientSecret, redirectUri } =
+      getOffice365OAuthConfig();
+    if (!tenantId || !clientId || !clientSecret) {
+      return res.redirect(
+        `${clientUrl}/conversations?office365=error&reason=missing_oauth_env`,
+      );
+    }
+
+    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    const params = new URLSearchParams();
+    params.set("grant_type", "authorization_code");
+    params.set("client_id", clientId);
+    params.set("client_secret", clientSecret);
+    params.set("code", code);
+    params.set("redirect_uri", redirectUri);
+    params.set("scope", OFFICE365_SCOPES.join(" "));
+
+    const { data } = await axios.post(tokenUrl, params.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const expiresIn = Number(data.expires_in || 3600);
+    const expiresAt = new Date(
+      Date.now() + Math.max(300, expiresIn - 120) * 1000,
+    )
+      .toISOString()
+      .slice(0, 19)
+      .replace("T", " ");
+
+    await pool.query(
+      `UPDATE conversation_email_mailboxes
+       SET oauth_access_token = ?,
+           oauth_refresh_token = ?,
+           oauth_expires_at = ?,
+           office365_tenant_id = ?,
+           office365_client_id = ?,
+           status = 'active',
+           updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [
+        String(data.access_token || ""),
+        String(data.refresh_token || ""),
+        expiresAt,
+        tenantId,
+        clientId,
+        verified.mailboxId,
+        MORTGAGE_TENANT_ID,
+      ],
+    );
+
+    // If no default mailbox exists, set this one as default.
+    const [defaults] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_email_mailboxes
+       WHERE tenant_id = ? AND status = 'active' AND is_default = 1
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID],
+    );
+    if (defaults.length === 0) {
+      await pool.query(
+        `UPDATE conversation_email_mailboxes
+         SET is_default = 1, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [verified.mailboxId, MORTGAGE_TENANT_ID],
+      );
+    }
+
+    return res.redirect(`${clientUrl}/conversations?office365=connected`);
+  } catch (error) {
+    console.error("Office365 callback error:", error);
+    const clientUrl =
+      process.env.CLIENT_URL || process.env.BASE_URL || "http://localhost:8080";
+    return res.redirect(
+      `${clientUrl}/conversations?office365=error&reason=callback_failed`,
+    );
+  }
+};
+
+/**
+ * PATCH /api/conversations/mailboxes/:mailboxId/assign
+ *
+ * Assign a mailbox to a specific broker, or mark it as shared (broker_id = null).
+ * Body: { assigned_broker_id: number | null, is_shared: boolean, is_default?: boolean }
+ */
+const handleAssignConversationMailbox: RequestHandler = async (req, res) => {
+  try {
+    const mailboxId = Number(req.params.mailboxId);
+    if (!Number.isFinite(mailboxId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid mailboxId" });
+    }
+
+    const { assigned_broker_id, is_shared, is_default } = req.body as {
+      assigned_broker_id: number | null;
+      is_shared: boolean;
+      is_default?: boolean;
+    };
+
+    // Validate broker exists if provided
+    if (assigned_broker_id !== null && assigned_broker_id !== undefined) {
+      const [brokerRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [assigned_broker_id, MORTGAGE_TENANT_ID],
+      );
+      if (brokerRows.length === 0) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Broker not found" });
+      }
+    }
+
+    // If setting as default, unset current default first
+    if (is_default) {
+      await pool.query(
+        `UPDATE conversation_email_mailboxes SET is_default = 0 WHERE tenant_id = ? AND is_default = 1`,
+        [MORTGAGE_TENANT_ID],
+      );
+    }
+
+    await pool.query(
+      `UPDATE conversation_email_mailboxes
+       SET assigned_broker_id = ?,
+           is_shared = ?,
+           ${is_default !== undefined ? "is_default = ?," : ""}
+           updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      is_default !== undefined
+        ? [
+            assigned_broker_id ?? null,
+            is_shared ? 1 : 0,
+            is_default ? 1 : 0,
+            mailboxId,
+            MORTGAGE_TENANT_ID,
+          ]
+        : [
+            assigned_broker_id ?? null,
+            is_shared ? 1 : 0,
+            mailboxId,
+            MORTGAGE_TENANT_ID,
+          ],
+    );
+
+    return res.json({ success: true, mailbox_id: mailboxId });
+  } catch (error: any) {
+    console.error("Assign mailbox error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to assign mailbox",
+    });
+  }
+};
+
+/**
+ * GET /api/conversations/mailboxes
+ */
+const handleGetConversationMailboxes: RequestHandler = async (_req, res) => {
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT m.id, m.provider, m.mailbox_email, m.display_name, m.is_shared,
+              m.assigned_broker_id,
+              CONCAT(b.first_name, ' ', b.last_name) AS assigned_broker_name,
+              m.status, m.is_default,
+              m.last_sync_at, m.last_sync_status, m.last_sync_error,
+              m.created_at, m.updated_at
+       FROM conversation_email_mailboxes m
+       LEFT JOIN brokers b ON b.id = m.assigned_broker_id
+       WHERE m.tenant_id = ?
+       ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`,
+      [MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({ success: true, mailboxes: rows });
+  } catch (error) {
+    console.error("Get mailboxes error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch mailboxes" });
+  }
+};
+
+/**
+ * POST /api/conversations/mailboxes/:mailboxId/sync
+ */
+const handleSyncConversationMailbox: RequestHandler = async (req, res) => {
+  try {
+    const mailboxId = Number(req.params.mailboxId);
+    if (!Number.isFinite(mailboxId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid mailboxId" });
+    }
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ? AND provider = 'office365'
+       LIMIT 1`,
+      [mailboxId, MORTGAGE_TENANT_ID],
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Mailbox not found" });
+    }
+
+    const mailbox = rows[0];
+    const result = await syncOffice365Mailbox(mailbox);
+
+    await pool.query(
+      `UPDATE conversation_email_mailboxes
+       SET last_sync_at = NOW(),
+           last_sync_status = ?,
+           last_sync_error = ?,
+           status = ?,
+           updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [
+        result.errors > 0 ? "error" : "ok",
+        result.errors > 0
+          ? `Encountered ${result.errors} message errors`
+          : null,
+        "active",
+        mailbox.id,
+        MORTGAGE_TENANT_ID,
+      ],
+    );
+
+    return res.json({
+      success: true,
+      mailbox_id: mailbox.id,
+      processed: result.processed,
+      errors: result.errors,
+    });
+  } catch (error: any) {
+    console.error("Sync mailbox error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to sync mailbox",
+    });
+  }
+};
+
+/**
+ * GET /api/cron/sync-office365-mailboxes
+ *
+ * Secret-protected cron endpoint that syncs all active Office365 mailboxes.
+ */
+const handleCronSyncOffice365Mailboxes: RequestHandler = async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ||
+        (req.query.secret as string);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE tenant_id = ? AND provider = 'office365' AND status IN ('active', 'error')`,
+      [MORTGAGE_TENANT_ID],
+    );
+
+    let totalProcessed = 0;
+    let totalErrors = 0;
+
+    for (const mailbox of rows) {
+      try {
+        const result = await syncOffice365Mailbox(mailbox);
+        totalProcessed += result.processed;
+        totalErrors += result.errors;
+
+        await pool.query(
+          `UPDATE conversation_email_mailboxes
+           SET last_sync_at = NOW(),
+               last_sync_status = ?,
+               last_sync_error = ?,
+               status = 'active',
+               updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            result.errors > 0 ? "error" : "ok",
+            result.errors > 0
+              ? `Encountered ${result.errors} message errors`
+              : null,
+            mailbox.id,
+            MORTGAGE_TENANT_ID,
+          ],
+        );
+      } catch (mailboxErr: any) {
+        totalErrors++;
+        await pool.query(
+          `UPDATE conversation_email_mailboxes
+           SET last_sync_at = NOW(),
+               last_sync_status = 'error',
+               last_sync_error = ?,
+               status = 'error',
+               updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            mailboxErr?.message || "Mailbox sync failed",
+            mailbox.id,
+            MORTGAGE_TENANT_ID,
+          ],
+        );
+      }
+    }
+
+    return res.json({
+      success: true,
+      mailboxes: rows.length,
+      processed: totalProcessed,
+      errors: totalErrors,
+    });
+  } catch (error) {
+    console.error("Office365 cron sync error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Office365 sync failed" });
+  }
+};
+
+/**
  * GET /api/cron/poll-inbound-email
  *
  * Called on a schedule (Vercel Cron or HostGator cPanel cron via curl).
@@ -12962,8 +13835,8 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       whereConditions.push("ct.status = ?");
       queryParams.push(status);
     } else {
-      // Default view excludes archived — those are only shown when explicitly requested
-      whereConditions.push("ct.status != 'archived'");
+      // Default view excludes closed — only shown when explicitly requested
+      whereConditions.push("ct.status != 'closed'");
     }
 
     if (priority) {
@@ -13198,8 +14071,12 @@ const handleDeleteConversationMessage: RequestHandler = async (req, res) => {
     }
 
     const msg = rows[0];
+    const brokerRole = (req as any).brokerRole;
+    const isAdminRole = brokerRole === "admin" || brokerRole === "superadmin";
     const canDelete =
-      msg.from_broker_id === brokerId || msg.thread_owner === brokerId;
+      msg.from_broker_id === brokerId ||
+      msg.thread_owner === brokerId ||
+      isAdminRole;
     if (!canDelete) {
       return res.status(403).json({
         success: false,
@@ -13245,6 +14122,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       application_id,
       lead_id,
       client_id,
+      mailbox_id,
       communication_type,
       recipient_phone,
       recipient_email,
@@ -13337,64 +14215,62 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     }
 
     // Determine which Twilio number to send from:
-    // 1. Broker's own assigned number (twilio_caller_id)
-    // 2. Thread's inbox_number — ONLY if it is not another broker's personal line
-    // 3. First shared Twilio number (not assigned to any broker as personal line)
-    // 4. First available number in the account
+    // Priority for REPLIES (existing thread with inbox_number):
+    //   1. Thread's inbox_number — always preserve conversation continuity (client sees the same number)
+    //   2. Broker's own assigned number (twilio_caller_id) — fallback if no inbox_number
+    //   3. First shared Twilio number
+    //   4. Last resort: first broker number in DB
+    // Priority for NEW outbound conversations (no thread / no inbox_number):
+    //   1. Broker's own assigned number
+    //   2. First shared number
+    //   3. Last resort
     let fromNumber: string = "";
 
-    // 1. Broker's own personal number
-    const [brokerPhoneRows] = await pool.query<RowDataPacket[]>(
-      `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? AND twilio_caller_id IS NOT NULL LIMIT 1`,
-      [brokerId, MORTGAGE_TENANT_ID],
-    );
-    if (brokerPhoneRows.length > 0 && brokerPhoneRows[0].twilio_caller_id) {
-      fromNumber = brokerPhoneRows[0].twilio_caller_id;
-    }
-
-    if (!fromNumber && conversation_id) {
+    // Step 1: Try to use the thread's inbox_number (preserves conversation continuity)
+    if (conversation_id) {
       const [threadRow] = await pool.query<RowDataPacket[]>(
         `SELECT inbox_number FROM conversation_threads
          WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
         [conversation_id, MORTGAGE_TENANT_ID],
       );
       const inboxNum: string | null = threadRow[0]?.inbox_number ?? null;
-
       if (inboxNum) {
-        // Check if inbox_number is another broker's personal line
-        const [ownerRows] = await pool.query<RowDataPacket[]>(
-          `SELECT id FROM brokers WHERE twilio_caller_id = ? AND id != ? AND tenant_id = ? LIMIT 1`,
-          [inboxNum, brokerId, MORTGAGE_TENANT_ID],
-        );
-
-        if (ownerRows.length === 0) {
-          // inbox_number is shared/unassigned — safe to use
-          fromNumber = inboxNum;
-        } else {
-          // inbox_number belongs to a different broker — find a shared number instead
-          if (twilioClient) {
-            const [allPersonalRows] = await pool.query<RowDataPacket[]>(
-              `SELECT twilio_caller_id FROM brokers WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL`,
-              [MORTGAGE_TENANT_ID],
-            );
-            const personalNums = new Set(
-              allPersonalRows.map((r) => r.twilio_caller_id as string),
-            );
-            const twilioNums = await twilioClient.incomingPhoneNumbers.list({
-              limit: 50,
-            });
-            const shared = twilioNums.find(
-              (n) => !personalNums.has(n.phoneNumber),
-            );
-            if (shared) fromNumber = shared.phoneNumber;
-          }
-          // Still nothing — fall back to inbox_number (better than silence)
-          if (!fromNumber) fromNumber = inboxNum;
-        }
+        fromNumber = inboxNum;
       }
     }
 
-    // Last resort: first broker number in DB
+    // Step 2: Broker's own personal number (used when no inbox_number exists, i.e. new conversation)
+    if (!fromNumber) {
+      const [brokerPhoneRows] = await pool.query<RowDataPacket[]>(
+        `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? AND twilio_caller_id IS NOT NULL LIMIT 1`,
+        [brokerId, MORTGAGE_TENANT_ID],
+      );
+      if (brokerPhoneRows.length > 0 && brokerPhoneRows[0].twilio_caller_id) {
+        fromNumber = brokerPhoneRows[0].twilio_caller_id;
+      }
+    }
+
+    // Step 3: First shared Twilio number (not assigned to any broker as personal line)
+    if (!fromNumber && twilioClient) {
+      try {
+        const [allPersonalRows] = await pool.query<RowDataPacket[]>(
+          `SELECT twilio_caller_id FROM brokers WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL`,
+          [MORTGAGE_TENANT_ID],
+        );
+        const personalNums = new Set(
+          allPersonalRows.map((r) => r.twilio_caller_id as string),
+        );
+        const twilioNums = await twilioClient.incomingPhoneNumbers.list({
+          limit: 50,
+        });
+        const shared = twilioNums.find((n) => !personalNums.has(n.phoneNumber));
+        if (shared) fromNumber = shared.phoneNumber;
+      } catch (_e) {
+        // ignore — fall through to last resort
+      }
+    }
+
+    // Step 4 (last resort): first broker number in DB
     if (!fromNumber) {
       const [firstNumber] = await pool.query<RowDataPacket[]>(
         `SELECT twilio_caller_id FROM brokers
@@ -13609,8 +14485,8 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       `INSERT INTO communications (
         tenant_id, application_id, lead_id, from_broker_id, to_user_id,
         communication_type, direction, subject, body, media_url, media_content_type, status,
-        conversation_id, message_type, template_id, scheduled_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        conversation_id, message_type, template_id, metadata, scheduled_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         MORTGAGE_TENANT_ID,
         application_id || null,
@@ -13635,6 +14511,9 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         finalConversationId,
         message_type,
         template_id || null,
+        mailbox_id
+          ? JSON.stringify({ mailbox_id, provider: "office365" })
+          : null,
         scheduled_at || null,
       ],
     )) as [ResultSetHeader, any];
@@ -13713,13 +14592,25 @@ const handleSendMessage: RequestHandler = async (req, res) => {
           if (finalRecipientEmail) {
             // Auto-detect HTML content so template-based emails render correctly
             const isHtmlEmail = /<[a-z][\s\S]*>/i.test(processedBody);
-            sendResult = await sendEmailMessage(
-              finalRecipientEmail,
-              processedSubject || "Message from Mortgage Professional",
-              processedBody,
-              isHtmlEmail,
-              finalConversationId,
-            );
+            if (mailbox_id) {
+              sendResult = await sendEmailMessageViaOffice365({
+                mailboxId: Number(mailbox_id),
+                to: finalRecipientEmail,
+                subject:
+                  processedSubject || "Message from Mortgage Professional",
+                body: processedBody,
+                isHtml: isHtmlEmail,
+                conversationId: finalConversationId,
+              });
+            } else {
+              sendResult = await sendEmailMessage(
+                finalRecipientEmail,
+                processedSubject || "Message from Mortgage Professional",
+                processedBody,
+                isHtmlEmail,
+                finalConversationId,
+              );
+            }
           } else {
             sendResult = {
               success: false,
@@ -14106,10 +14997,14 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
 
     // Verify broker has access to this conversation
+    // Admins can update any thread; regular brokers can update their own or unassigned threads
+    const brokerRole = (req as any).brokerRole;
+    const isAdminRole = brokerRole === "admin" || brokerRole === "superadmin";
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       `SELECT id FROM conversation_threads 
-       WHERE conversation_id = ? AND broker_id = ? AND tenant_id = ?`,
-      [conversationId, brokerId, MORTGAGE_TENANT_ID],
+       WHERE conversation_id = ? AND tenant_id = ?
+         AND (broker_id = ? OR broker_id IS NULL OR ?)`,
+      [conversationId, MORTGAGE_TENANT_ID, brokerId, isAdminRole],
     );
 
     if (threadCheck.length === 0) {
@@ -14122,11 +15017,11 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
     const updateFields: string[] = [];
     const updateValues: any[] = [];
 
-    if (status && ["active", "archived", "closed"].includes(status)) {
+    if (status && ["active", "closed"].includes(status)) {
       updateFields.push("status = ?");
       updateValues.push(status);
-      // Set or clear archived_at when archiving
-      if (status === "archived") {
+      // Clear archived_at when reopening; set it when closing
+      if (status === "closed") {
         updateFields.push("archived_at = NOW()");
       } else {
         updateFields.push("archived_at = NULL");
@@ -14196,12 +15091,14 @@ const handleDeleteConversation: RequestHandler = async (req, res) => {
     const { conversationId } = req.params;
     const brokerId = (req as any).brokerId;
 
-    // Verify broker has access — owns the thread, or thread is unassigned (shared inbox)
+    // Verify broker has access — admins can delete any thread; brokers can delete own or unassigned
+    const brokerRole = (req as any).brokerRole;
+    const isAdminRole = brokerRole === "admin" || brokerRole === "superadmin";
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       `SELECT id FROM conversation_threads
        WHERE conversation_id = ? AND tenant_id = ?
-         AND (broker_id = ? OR broker_id IS NULL)`,
-      [conversationId, MORTGAGE_TENANT_ID, brokerId],
+         AND (broker_id = ? OR broker_id IS NULL OR ?)`,
+      [conversationId, MORTGAGE_TENANT_ID, brokerId, isAdminRole],
     );
 
     if (threadCheck.length === 0) {
@@ -18851,6 +19748,12 @@ function createServer() {
   // Inbound IMAP poll cron — called by Vercel Cron or HostGator cPanel cron via curl
   expressApp.get("/api/cron/poll-inbound-email", handlePollInboundEmail);
 
+  // Office365 mailbox sync cron — called by scheduler with CRON_SECRET
+  expressApp.get(
+    "/api/cron/sync-office365-mailboxes",
+    handleCronSyncOffice365Mailboxes,
+  );
+
   // Reminder flow execution engine cron — run every 5-15 min via cPanel cron:
   //   curl -s "https://yourdomain.com/api/cron/process-reminder-flows?secret=CRON_SECRET"
   expressApp.get(
@@ -18863,6 +19766,30 @@ function createServer() {
     "/api/conversations/threads",
     verifyBrokerSession,
     handleGetConversationThreads,
+  );
+  expressApp.get(
+    "/api/conversations/mailboxes",
+    verifyBrokerSession,
+    handleGetConversationMailboxes,
+  );
+  expressApp.post(
+    "/api/conversations/mailboxes/office365/connect",
+    verifyBrokerSession,
+    handleConnectOffice365Mailbox,
+  );
+  expressApp.get(
+    "/api/conversations/mailboxes/office365/callback",
+    handleOffice365Callback,
+  );
+  expressApp.post(
+    "/api/conversations/mailboxes/:mailboxId/sync",
+    verifyBrokerSession,
+    handleSyncConversationMailbox,
+  );
+  expressApp.patch(
+    "/api/conversations/mailboxes/:mailboxId/assign",
+    verifyBrokerSession,
+    handleAssignConversationMailbox,
   );
   expressApp.get(
     "/api/conversations/:conversationId/messages",

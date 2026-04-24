@@ -27,12 +27,12 @@ const initialState: ContactSubmissionsState = {
 
 export const fetchContactSubmissions = createAsyncThunk(
   "contactSubmissions/fetchAll",
-  async (params: FetchContactParams = {}, { getState, rejectWithValue }) => {
+  async (params: FetchContactParams | void, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.get("/api/contact", {
         headers: { Authorization: `Bearer ${sessionToken}` },
-        params,
+        params: params ?? {},
       });
       return {
         submissions: data.submissions as ContactSubmission[],

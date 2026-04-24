@@ -20,6 +20,8 @@ import {
   Smartphone,
   Zap,
   Globe,
+  RefreshCw,
+  Plus,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -47,6 +49,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import type { ConversationMailbox } from "@shared/api";
+
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchBrokerProfile,
@@ -54,6 +58,15 @@ import {
   uploadBrokerAvatar,
   clearProfileError,
 } from "@/store/slices/brokerAuthSlice";
+import {
+  connectOffice365Mailbox,
+  fetchConversationMailboxes,
+  syncConversationMailbox,
+} from "@/store/slices/conversationsSlice";
+import {
+  fetchCallForwardingSettings,
+  saveCallForwardingSettings,
+} from "@/store/slices/voiceSlice";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -148,17 +161,80 @@ const BrokerProfile = () => {
   const [fwdLoading, setFwdLoading] = useState(false);
   const [fwdSaving, setFwdSaving] = useState(false);
 
+  // ── Email mailbox state ──────────────────────────────────────────────────
+  const myMailbox = useAppSelector((s) =>
+    (s.conversations.mailboxes as ConversationMailbox[]).find(
+      (m) =>
+        m.assigned_broker_id === user?.id ||
+        (m.is_shared && m.status === "active"),
+    ),
+  );
+  const myOwnMailbox = useAppSelector((s) =>
+    (s.conversations.mailboxes as ConversationMailbox[]).find(
+      (m) => m.assigned_broker_id === user?.id,
+    ),
+  );
+  const isLoadingMailboxes = useAppSelector(
+    (s) => s.conversations.isLoadingMailboxes,
+  );
+  const isConnectingMailbox = useAppSelector(
+    (s) => s.conversations.isConnectingMailbox,
+  );
+  const [mailboxEmailInput, setMailboxEmailInput] = useState("");
+  const [isSyncingMyMailbox, setIsSyncingMyMailbox] = useState(false);
+
+  useEffect(() => {
+    dispatch(fetchConversationMailboxes());
+  }, [dispatch]);
+
+  const handleConnectMyMailbox = async () => {
+    const email = mailboxEmailInput.trim();
+    if (!email.includes("@")) return;
+    try {
+      const result = await dispatch(
+        connectOffice365Mailbox({
+          mailbox_email: email,
+          is_shared: false,
+        }),
+      ).unwrap();
+      if (result.auth_url) window.location.href = result.auth_url;
+    } catch (err: any) {
+      toast({
+        title: "Connection failed",
+        description: err || "Could not start Office365 authentication",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSyncMyMailbox = async (mailboxId: number) => {
+    setIsSyncingMyMailbox(true);
+    try {
+      const result = await dispatch(
+        syncConversationMailbox(mailboxId),
+      ).unwrap();
+      toast({
+        title: "Sync complete",
+        description: `Processed ${result.processed} new message(s).`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Sync failed",
+        description: err || "Could not sync mailbox",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSyncingMyMailbox(false);
+    }
+  };
+
   const loadFwdSettings = async () => {
-    if (!sessionToken) return;
     setFwdLoading(true);
     try {
-      const res = await fetch("/api/voice/call-forwarding", {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
-      const data = await res.json();
+      const data = await dispatch(fetchCallForwardingSettings()).unwrap();
       if (data.success) {
         setFwdEnabled(!!data.call_forwarding_enabled);
-        setFwdPhone(data.call_forwarding_phone ?? "");
+        setFwdPhone(data.call_forwarding_number ?? "");
       }
     } catch {
       // graceful degradation
@@ -173,18 +249,11 @@ const BrokerProfile = () => {
   }, [sessionToken]);
 
   const saveForwarding = async () => {
-    if (!sessionToken) return;
     setFwdSaving(true);
     try {
-      const res = await fetch("/api/voice/call-forwarding", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({ enabled: fwdEnabled, phone: fwdPhone }),
-      });
-      const data = await res.json();
+      const data = await dispatch(
+        saveCallForwardingSettings({ enabled: fwdEnabled, phone: fwdPhone }),
+      ).unwrap();
       if (data.success) {
         setFwdPhone(data.call_forwarding_phone ?? fwdPhone);
         toast({
@@ -906,6 +975,128 @@ const BrokerProfile = () => {
                       </Button>
                     </div>
                   </>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Email Mailbox */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Mail className="h-4 w-4 text-primary" />
+                  Email Inbox
+                </CardTitle>
+                <CardDescription>
+                  Connect your Office 365 mailbox so emails you send and receive
+                  in Conversations route through your personal address.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {isLoadingMailboxes ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading…
+                  </div>
+                ) : myOwnMailbox ? (
+                  /* Connected — show status + sync */
+                  <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3">
+                    <div
+                      className={cn(
+                        "h-2.5 w-2.5 rounded-full shrink-0",
+                        myOwnMailbox.status === "active"
+                          ? "bg-green-500"
+                          : myOwnMailbox.status === "error"
+                            ? "bg-red-500"
+                            : "bg-yellow-400",
+                      )}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {myOwnMailbox.mailbox_email}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {myOwnMailbox.status === "active"
+                          ? myOwnMailbox.last_sync_at
+                            ? `Last synced ${new Date(myOwnMailbox.last_sync_at).toLocaleString()}`
+                            : "Connected — not yet synced"
+                          : myOwnMailbox.status === "error"
+                            ? myOwnMailbox.last_sync_error || "Sync error"
+                            : "Pending authorization"}
+                      </p>
+                    </div>
+                    {myOwnMailbox.status === "active" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs shrink-0"
+                        onClick={() => handleSyncMyMailbox(myOwnMailbox.id)}
+                        disabled={isSyncingMyMailbox}
+                      >
+                        <RefreshCw
+                          className={cn(
+                            "h-3.5 w-3.5",
+                            isSyncingMyMailbox && "animate-spin",
+                          )}
+                        />
+                        Sync now
+                      </Button>
+                    )}
+                    {myOwnMailbox.status === "pending" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs shrink-0"
+                        onClick={() => {
+                          setMailboxEmailInput(myOwnMailbox.mailbox_email);
+                          handleConnectMyMailbox();
+                        }}
+                        disabled={isConnectingMailbox}
+                      >
+                        Re-authorize
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  /* Not connected — show connect form */
+                  <div className="space-y-3">
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          type="email"
+                          placeholder="yourname@encoremortgage.org"
+                          value={mailboxEmailInput}
+                          onChange={(e) => setMailboxEmailInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleConnectMyMailbox();
+                          }}
+                          className="pl-9 h-9 text-sm"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        className="h-9 gap-1.5 shrink-0"
+                        onClick={handleConnectMyMailbox}
+                        disabled={
+                          isConnectingMailbox ||
+                          !mailboxEmailInput.trim().includes("@")
+                        }
+                      >
+                        {isConnectingMailbox ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <>
+                            <Plus className="h-3.5 w-3.5" />
+                            Connect
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      You'll be redirected to Microsoft to authorize access.
+                      Make sure the address is a valid Office 365 account.
+                    </p>
+                  </div>
                 )}
               </CardContent>
             </Card>

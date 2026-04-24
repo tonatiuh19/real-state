@@ -1,4 +1,5 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import axios from "axios";
 import type { RootState } from "../index";
 
 interface Notification {
@@ -30,20 +31,14 @@ export const fetchNotifications = createAsyncThunk(
   async (_, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
-      const response = await fetch("/api/notifications", {
-        headers: {
-          Authorization: `Bearer ${sessionToken}`,
-        },
+      const { data } = await axios.get("/api/notifications", {
+        headers: { Authorization: `Bearer ${sessionToken}` },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(error.error || "Failed to fetch notifications");
-      }
-
-      return await response.json();
-    } catch (error) {
-      return rejectWithValue("Network error");
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to fetch notifications",
+      );
     }
   },
 );
@@ -53,26 +48,16 @@ export const markAsRead = createAsyncThunk(
   async (notificationId: number, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
-      const response = await fetch(
+      await axios.put(
         `/api/notifications/${notificationId}/read`,
-        {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${sessionToken}`,
-          },
-        },
+        {},
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
       );
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(
-          error.error || "Failed to mark notification as read",
-        );
-      }
-
       return notificationId;
-    } catch (error) {
-      return rejectWithValue("Network error");
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to mark notification as read",
+      );
     }
   },
 );
@@ -82,23 +67,16 @@ export const markAllAsRead = createAsyncThunk(
   async (_, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
-      const response = await fetch("/api/notifications/read-all", {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${sessionToken}`,
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        return rejectWithValue(
-          error.error || "Failed to mark all notifications as read",
-        );
-      }
-
+      await axios.put(
+        "/api/notifications/read-all",
+        {},
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
       return true;
-    } catch (error) {
-      return rejectWithValue("Network error");
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to mark all notifications as read",
+      );
     }
   },
 );

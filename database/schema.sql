@@ -493,6 +493,7 @@ CREATE TABLE `communications` (
   `recording_url` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio recording URL (mp3) for call communications',
   `recording_duration` int DEFAULT NULL COMMENT 'Recording duration in seconds',
   `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `mailbox_id` int DEFAULT NULL,
   `source_execution_id` int DEFAULT NULL COMMENT 'reminder_flow_executions.id that produced this message (NULL = manual send)',
   `thread_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `reply_to_id` int DEFAULT NULL,
@@ -531,6 +532,7 @@ CREATE TABLE `communications` (
   KEY `idx_communications_created` (`created_at`),
   KEY `idx_comm_source_exec` (`source_execution_id`),
   KEY `idx_communications_recording` (`recording_url`(100)),
+  KEY `idx_communications_mailbox_id` (`mailbox_id`),
   CONSTRAINT `communications_ibfk_1` FOREIGN KEY (`application_id`) REFERENCES `loan_applications` (`id`) ON DELETE SET NULL,
   CONSTRAINT `communications_ibfk_2` FOREIGN KEY (`lead_id`) REFERENCES `leads` (`id`) ON DELETE SET NULL,
   CONSTRAINT `communications_ibfk_3` FOREIGN KEY (`from_user_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL,
@@ -538,8 +540,9 @@ CREATE TABLE `communications` (
   CONSTRAINT `communications_ibfk_5` FOREIGN KEY (`to_user_id`) REFERENCES `clients` (`id`) ON DELETE SET NULL,
   CONSTRAINT `communications_ibfk_6` FOREIGN KEY (`to_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_communications_reply_to` FOREIGN KEY (`reply_to_id`) REFERENCES `communications` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_communications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=3570005;
+  CONSTRAINT `fk_communications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_communications_mailbox_id` FOREIGN KEY (`mailbox_id`) REFERENCES `conversation_email_mailboxes` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=3720005;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -650,6 +653,46 @@ CREATE TABLE `contact_submissions` (
 /*!40000 ALTER TABLE `contact_submissions` ENABLE KEYS */;
 
 --
+-- Table structure for table `conversation_email_mailboxes`
+--
+
+DROP TABLE IF EXISTS `conversation_email_mailboxes`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `conversation_email_mailboxes` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tenant_id` int NOT NULL DEFAULT '1',
+  `provider` enum('office365','imap') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'office365',
+  `mailbox_email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `display_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `is_shared` tinyint(1) NOT NULL DEFAULT '1',
+  `assigned_broker_id` int DEFAULT NULL,
+  `status` enum('pending','active','disabled','error') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
+  `office365_tenant_id` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `office365_client_id` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `oauth_access_token` mediumtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `oauth_refresh_token` mediumtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `oauth_expires_at` datetime DEFAULT NULL,
+  `last_sync_at` datetime DEFAULT NULL,
+  `last_sync_status` enum('ok','error') COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `last_sync_error` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `last_graph_delta_link` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_by_broker_id` int DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_conversation_email_mailboxes` (`tenant_id`,`provider`,`mailbox_email`),
+  KEY `idx_conversation_email_mailboxes_tenant_status` (`tenant_id`,`status`),
+  KEY `idx_conversation_email_mailboxes_assigned` (`assigned_broker_id`),
+  KEY `idx_conversation_email_mailboxes_default` (`tenant_id`,`is_default`),
+  CONSTRAINT `fk_conversation_email_mailboxes_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_conversation_email_mailboxes_assigned_broker` FOREIGN KEY (`assigned_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_conversation_email_mailboxes_created_by` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `conversation_threads`
 --
 
@@ -664,6 +707,7 @@ CREATE TABLE `conversation_threads` (
   `lead_id` int DEFAULT NULL,
   `client_id` int DEFAULT NULL,
   `broker_id` int DEFAULT NULL,
+  `mailbox_id` int DEFAULT NULL,
   `contact_broker_id` int DEFAULT NULL COMMENT 'Broker/realtor who is the contact in this thread (not the CRM handler)',
   `client_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `client_phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -675,8 +719,8 @@ CREATE TABLE `conversation_threads` (
   `message_count` int DEFAULT '0',
   `unread_count` int DEFAULT '0',
   `priority` enum('low','normal','high','urgent') COLLATE utf8mb4_unicode_ci DEFAULT 'normal',
-  `status` enum('active','archived','closed') COLLATE utf8mb4_unicode_ci DEFAULT 'active',
-  `archived_at` datetime DEFAULT NULL COMMENT 'Set when status is changed to archived; used by the 7-day auto-delete job',
+  `status` enum('active','closed') COLLATE utf8mb4_unicode_ci DEFAULT 'active',
+  `archived_at` datetime DEFAULT NULL COMMENT 'Set when status is changed to closed; used by the 7-day auto-delete job',
   `tags` json DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -697,12 +741,14 @@ CREATE TABLE `conversation_threads` (
   KEY `idx_conversations_priority` (`priority`,`tenant_id`),
   KEY `idx_conversations_last_message` (`last_message_at`),
   KEY `idx_conversation_threads_archived_at` (`archived_at`),
+  KEY `idx_conversation_threads_mailbox_id` (`mailbox_id`),
   CONSTRAINT `fk_conversation_threads_application` FOREIGN KEY (`application_id`) REFERENCES `loan_applications` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_conversation_threads_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_conversation_threads_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_conversation_threads_lead` FOREIGN KEY (`lead_id`) REFERENCES `leads` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_conversation_threads_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=2460002;
+  CONSTRAINT `fk_conversation_threads_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_conversation_threads_mailbox_id` FOREIGN KEY (`mailbox_id`) REFERENCES `conversation_email_mailboxes` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=2610002;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --

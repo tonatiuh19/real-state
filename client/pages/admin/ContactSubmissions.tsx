@@ -286,64 +286,69 @@ const ContactSubmissions = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(sortedSubmissions as ContactSubmission[]).map((sub) => (
-                    <TableRow
-                      key={sub.id}
-                      className={cn(
-                        "cursor-pointer hover:bg-muted/50 transition-colors",
-                        !sub.is_read && "bg-primary/3 font-medium",
-                      )}
-                      onClick={() => setSelected(sub)}
-                    >
-                      <TableCell>
-                        {!sub.is_read && (
-                          <span className="block h-2 w-2 rounded-full bg-primary" />
+                  {(sortedSubmissions as unknown as ContactSubmission[]).map(
+                    (sub) => (
+                      <TableRow
+                        key={sub.id}
+                        className={cn(
+                          "cursor-pointer hover:bg-muted/50 transition-colors",
+                          !sub.is_read && "bg-primary/3 font-medium",
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col">
-                          <span className="text-sm font-semibold leading-none">
-                            {sub.name}
+                        onClick={() => setSelected(sub)}
+                      >
+                        <TableCell>
+                          {!sub.is_read && (
+                            <span className="block h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-semibold leading-none">
+                              {sub.name}
+                            </span>
+                            <span className="text-xs text-muted-foreground mt-0.5">
+                              <EmailLink
+                                email={sub.email}
+                                className="text-sm"
+                              />
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm line-clamp-1">
+                            {sub.subject}
                           </span>
-                          <span className="text-xs text-muted-foreground mt-0.5">
-                            <EmailLink email={sub.email} className="text-sm" />
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="text-sm line-clamp-1">
-                          {sub.subject}
-                        </span>
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
-                        {sub.phone ? (
-                          <PhoneLink
-                            phone={sub.phone}
-                            clientName={sub.name}
-                            className="text-sm"
-                          />
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell text-xs text-muted-foreground whitespace-nowrap">
-                        {formatDate(sub.created_at)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelected(sub);
-                          }}
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
+                          {sub.phone ? (
+                            <PhoneLink
+                              phone={sub.phone}
+                              clientName={sub.name}
+                              className="text-sm"
+                            />
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell text-xs text-muted-foreground whitespace-nowrap">
+                          {formatDate(sub.created_at)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelected(sub);
+                            }}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ),
+                  )}
                 </TableBody>
               </Table>
             </div>

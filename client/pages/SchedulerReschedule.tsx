@@ -266,134 +266,138 @@ export default function SchedulerReschedule() {
             </motion.div>
           )}
 
-          {status === "confirming" && info && !isLoadingPublic && (
-            <motion.div
-              key="confirming"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              className="w-full max-w-lg space-y-4"
-            >
-              {/* Header */}
-              <div className="rounded-2xl border border-border bg-card p-6 space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-xl bg-primary/10 p-3">
-                    <CalendarClock className="h-6 w-6 text-primary" />
+          {(status === "confirming" || status === "submitting") &&
+            info &&
+            !isLoadingPublic && (
+              <motion.div
+                key="confirming"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="w-full max-w-lg space-y-4"
+              >
+                {/* Header */}
+                <div className="rounded-2xl border border-border bg-card p-6 space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-xl bg-primary/10 p-3">
+                      <CalendarClock className="h-6 w-6 text-primary" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-foreground">
+                        Reschedule Meeting
+                      </h2>
+                      <p className="text-sm text-muted-foreground">
+                        Choose a new date and time below
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-foreground">
-                      Reschedule Meeting
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      Choose a new date and time below
-                    </p>
-                  </div>
-                </div>
 
-                {/* Current booking summary */}
-                <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-2 text-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                    Current booking
-                  </p>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-muted-foreground">With</span>
-                    <span className="font-medium text-foreground text-right">
-                      {info.broker_name || "Your Mortgage Banker"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-muted-foreground">Client</span>
-                    <span className="font-medium text-foreground text-right">
-                      {info.client_name}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-muted-foreground">Meeting Type</span>
-                    <span className="font-medium text-foreground text-right">
-                      {meetingTypeLabel(info.meeting_type)}
-                    </span>
-                  </div>
-                  {info.broker_timezone && (
+                  {/* Current booking summary */}
+                  <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-2 text-sm">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                      Current booking
+                    </p>
                     <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">Timezone</span>
+                      <span className="text-muted-foreground">With</span>
                       <span className="font-medium text-foreground text-right">
-                        {info.broker_timezone}
+                        {info.broker_name || "Your Mortgage Banker"}
                       </span>
                     </div>
-                  )}
-                  <div className="flex justify-between border-t border-border/60 pt-2 mt-1">
-                    <span className="text-muted-foreground">Was</span>
-                    <span className="font-medium text-foreground text-right">
-                      {formatDate(info.old_meeting_date)} ·{" "}
-                      {formatTime(info.old_meeting_time)}
-                    </span>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">Client</span>
+                      <span className="font-medium text-foreground text-right">
+                        {info.client_name}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        Meeting Type
+                      </span>
+                      <span className="font-medium text-foreground text-right">
+                        {meetingTypeLabel(info.meeting_type)}
+                      </span>
+                    </div>
+                    {info.broker_timezone && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">Timezone</span>
+                        <span className="font-medium text-foreground text-right">
+                          {info.broker_timezone}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-border/60 pt-2 mt-1">
+                      <span className="text-muted-foreground">Was</span>
+                      <span className="font-medium text-foreground text-right">
+                        {formatDate(info.old_meeting_date)} ·{" "}
+                        {formatTime(info.old_meeting_time)}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* New date + time pickers */}
-              <div className="rounded-2xl border border-border bg-card p-6 space-y-5">
-                <p className="text-sm font-semibold text-foreground">
-                  Pick a new slot
-                </p>
+                {/* New date + time pickers */}
+                <div className="rounded-2xl border border-border bg-card p-6 space-y-5">
+                  <p className="text-sm font-semibold text-foreground">
+                    Pick a new slot
+                  </p>
 
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    <Calendar className="h-3 w-3" />
-                    Date
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <Calendar className="h-3 w-3" />
+                      Date
+                    </div>
+                    <ClientDatePicker
+                      value={newDate}
+                      onChange={(d) => {
+                        setNewDate(d);
+                        setNewTime(""); // reset time when date changes
+                      }}
+                      availableDates={availableDates}
+                      disabled={status === "submitting"}
+                    />
                   </div>
-                  <ClientDatePicker
-                    value={newDate}
-                    onChange={(d) => {
-                      setNewDate(d);
-                      setNewTime(""); // reset time when date changes
-                    }}
-                    availableDates={availableDates}
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <Clock className="h-3 w-3" />
+                      Time
+                    </div>
+                    <ClientTimePicker
+                      date={newDate}
+                      value={newTime}
+                      onChange={setNewTime}
+                      brokerToken={info.broker_public_token}
+                      disabled={status === "submitting"}
+                    />
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handleConfirm}
+                    disabled={!newDate || !newTime || status === "submitting"}
+                    className="w-full h-12 bg-primary text-primary-foreground rounded-xl font-semibold text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {status === "submitting" ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Rescheduling…
+                      </>
+                    ) : (
+                      "Confirm Reschedule"
+                    )}
+                  </button>
+                  <button
+                    onClick={() => navigate("/")}
                     disabled={status === "submitting"}
-                  />
+                    className="w-full h-10 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                  >
+                    Keep my current appointment
+                  </button>
                 </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    <Clock className="h-3 w-3" />
-                    Time
-                  </div>
-                  <ClientTimePicker
-                    date={newDate}
-                    value={newTime}
-                    onChange={setNewTime}
-                    brokerToken={info.broker_public_token}
-                    disabled={status === "submitting"}
-                  />
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={handleConfirm}
-                  disabled={!newDate || !newTime || status === "submitting"}
-                  className="w-full h-12 bg-primary text-primary-foreground rounded-xl font-semibold text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {status === "submitting" ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Rescheduling…
-                    </>
-                  ) : (
-                    "Confirm Reschedule"
-                  )}
-                </button>
-                <button
-                  onClick={() => navigate("/")}
-                  disabled={status === "submitting"}
-                  className="w-full h-10 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                >
-                  Keep my current appointment
-                </button>
-              </div>
-            </motion.div>
-          )}
+              </motion.div>
+            )}
         </AnimatePresence>
       </div>
     </div>

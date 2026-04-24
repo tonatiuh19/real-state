@@ -185,7 +185,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Contact Messages",
       icon: <MessageSquare className="h-4 w-4" />,
       path: "/admin/contact-submissions",
-      hidden: isPartner,
+      hidden: true,
     },
     {
       id: "income-calculator",

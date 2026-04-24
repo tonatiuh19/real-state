@@ -99,10 +99,10 @@ function renderLetterHtml(
   const clientName =
     `${letter.client_first_name ?? ""} ${letter.client_last_name ?? ""}`.trim();
   const propertyAddr = [
-    letter.property_address,
-    letter.property_city,
-    letter.property_state,
-    letter.property_zip,
+    letter.purchase_property_address || letter.property_address,
+    letter.purchase_property_city || letter.property_city,
+    letter.purchase_property_state || letter.property_state,
+    letter.purchase_property_zip || letter.property_zip,
   ]
     .filter(Boolean)
     .join(", ");

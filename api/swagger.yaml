@@ -3216,15 +3216,21 @@ paths:
           application/json:
             schema:
               type: object
-              required: [conversation_id, channel, body]
+              required: [communication_type, body]
               properties:
-                conversation_id: { type: integer }
-                channel:
+                conversation_id: { type: string }
+                communication_type:
                   type: string
                   enum: [email, sms, whatsapp]
+                mailbox_id:
+                  type: integer
+                  description: Optional Office365 mailbox id used for outbound email sends
                 body: { type: string }
                 subject:
-                  { type: string, description: "Required for email channel" }
+                  {
+                    type: string,
+                    description: "Required for email communication_type",
+                  }
       responses:
         "200":
           description: Sent
@@ -3374,6 +3380,129 @@ paths:
                       application_number: { type: string }
         "409":
           description: Thread already has a client, or duplicate email
+
+  /conversations/mailboxes:
+    get:
+      tags: [Conversations]
+      summary: List configured conversation mailboxes
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Mailboxes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  mailboxes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        provider: { type: string, enum: [office365, imap] }
+                        mailbox_email: { type: string }
+                        display_name: { type: string, nullable: true }
+                        status:
+                          type: string
+                          enum: [pending, active, disabled, error]
+                        is_default: { type: boolean }
+                        is_shared: { type: boolean }
+
+  /conversations/mailboxes/office365/connect:
+    post:
+      tags: [Conversations]
+      summary: Start Office365 mailbox OAuth connection
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mailbox_email]
+              properties:
+                mailbox_email: { type: string, format: email }
+                display_name: { type: string }
+                is_shared: { type: boolean }
+      responses:
+        "200":
+          description: OAuth URL generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  mailbox_id: { type: integer }
+                  auth_url: { type: string }
+
+  /conversations/mailboxes/{mailboxId}/sync:
+    post:
+      tags: [Conversations]
+      summary: Sync inbound messages from a configured Office365 mailbox
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: mailboxId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Sync completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  mailbox_id: { type: integer }
+                  processed: { type: integer }
+                  errors: { type: integer }
+
+  /conversations/mailboxes/{mailboxId}/assign:
+    patch:
+      tags: [Conversations]
+      summary: Assign a mailbox to a specific broker or set it as shared
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: mailboxId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assigned_broker_id, is_shared]
+              properties:
+                assigned_broker_id:
+                  type: integer
+                  nullable: true
+                  description: Broker ID to assign, or null for shared
+                is_shared:
+                  type: boolean
+                  description: True when no specific broker is assigned
+                is_default:
+                  type: boolean
+                  description: Set this mailbox as the default for outbound email
+      responses:
+        "200":
+          description: Assignment updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  mailbox_id: { type: integer }
 
   # ── Audit Logs ─────────────────────────────────────────────────────────────────
   /audit-logs:
@@ -4681,7 +4810,16 @@ paths:
           name: stage
           schema:
             type: string
-            enum: [contact_attempted,contacted,appt_set,waiting_for_1st_deal,first_deal_funded,second_deal_funded,top_agent_whale]
+            enum:
+              [
+                contact_attempted,
+                contacted,
+                appt_set,
+                waiting_for_1st_deal,
+                first_deal_funded,
+                second_deal_funded,
+                top_agent_whale,
+              ]
         - in: query
           name: status
           schema: { type: string, enum: [open, won, lost] }
@@ -4708,7 +4846,20 @@ paths:
               required: [opportunity_name]
               properties:
                 opportunity_name: { type: string }
-                stage: { type: string, enum: [contact_attempted,contacted,appt_set,waiting_for_1st_deal,first_deal_funded,second_deal_funded,top_agent_whale] }
+                stage:
+                  {
+                    type: string,
+                    enum:
+                      [
+                        contact_attempted,
+                        contacted,
+                        appt_set,
+                        waiting_for_1st_deal,
+                        first_deal_funded,
+                        second_deal_funded,
+                        top_agent_whale,
+                      ],
+                  }
                 status: { type: string, enum: [open, won, lost] }
                 opportunity_value: { type: number }
                 contact_name: { type: string }
@@ -4720,7 +4871,8 @@ paths:
                 notes: { type: string }
                 owner_broker_id: { type: integer, nullable: true }
                 followers: { type: array, items: { type: integer } }
-                progress_report: { type: string, enum: [ready_to_send, sent], nullable: true }
+                progress_report:
+                  { type: string, enum: [ready_to_send, sent], nullable: true }
                 add_to_refi_rates_dropped: { type: boolean }
       responses:
         "201":
@@ -4789,7 +4941,20 @@ paths:
               type: object
               required: [stage]
               properties:
-                stage: { type: string, enum: [contact_attempted,contacted,appt_set,waiting_for_1st_deal,first_deal_funded,second_deal_funded,top_agent_whale] }
+                stage:
+                  {
+                    type: string,
+                    enum:
+                      [
+                        contact_attempted,
+                        contacted,
+                        appt_set,
+                        waiting_for_1st_deal,
+                        first_deal_funded,
+                        second_deal_funded,
+                        top_agent_whale,
+                      ],
+                  }
       responses:
         "200":
           description: Stage updated
