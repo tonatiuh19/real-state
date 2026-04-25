@@ -667,7 +667,31 @@ async function upsertConversationThread(params: {
     const resolvedClientId = toUserId ?? fromUserId ?? null;
     const resolvedBrokerId = fromBrokerId ?? toBrokerId ?? null;
     const convId = conversationId ?? `conv_auto_${commId}`;
-    const preview = body ? body.slice(0, 200) : null;
+    // Build a sidebar preview. For MMS / media-only messages with no text body,
+    // fall back to a typed placeholder so the thread list isn't blank.
+    let preview: string | null = body ? body.slice(0, 200) : null;
+    if (
+      !preview &&
+      (communicationType === "sms" || communicationType === "whatsapp")
+    ) {
+      // Look up media on the just-inserted communication row to pick an emoji label.
+      try {
+        const [mrows] = await pool.query<RowDataPacket[]>(
+          `SELECT media_url, media_content_type FROM communications WHERE id = ? LIMIT 1`,
+          [commId],
+        );
+        const ct: string = (mrows[0]?.media_content_type as string) || "";
+        const hasMedia = !!mrows[0]?.media_url;
+        if (hasMedia) {
+          if (ct.startsWith("image/")) preview = "\uD83D\uDCF7 Photo";
+          else if (ct.startsWith("video/")) preview = "\uD83C\uDFA5 Video";
+          else if (ct.startsWith("audio/")) preview = "\uD83C\uDFA7 Audio";
+          else preview = "\uD83D\uDCCE Attachment";
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
     const unreadDelta = direction === "inbound" ? 1 : 0;
 
     let clientName: string | null = null;
@@ -733,9 +757,13 @@ async function upsertConversationThread(params: {
           message_count, unread_count)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
        ON DUPLICATE KEY UPDATE
-         last_message_at      = IF(NOW() > last_message_at, NOW(), last_message_at),
-         last_message_preview = IF(NOW() > last_message_at, ?, last_message_preview),
-         last_message_type    = IF(NOW() > last_message_at, ?, last_message_type),
+         -- Always update preview/type/timestamp for the new message.
+         -- (Out-of-order delivery is rare; the previous IF(NOW()>last_message_at)
+         -- guard was buggy because MySQL evaluates SET clauses left-to-right with
+         -- already-updated values, so the preview/type were never updated.)
+         last_message_preview = ?,
+         last_message_type    = ?,
+         last_message_at      = NOW(),
          message_count        = message_count + 1,
          unread_count         = unread_count + ?,
          client_id            = COALESCE(client_id, ?),
@@ -744,6 +772,8 @@ async function upsertConversationThread(params: {
          client_phone         = COALESCE(client_phone, ?),
          client_email         = COALESCE(client_email, ?),
          inbox_number         = COALESCE(inbox_number, ?),
+         status               = 'active',
+         archived_at          = NULL,
          updated_at           = NOW()`,
       [
         tenantId,
@@ -907,6 +937,57 @@ async function getSharedVoiceNumber(): Promise<string | null> {
   }
 }
 
+/**
+ * Dynamically picks the first SMS-capable "All Mortgage Bankers" number —
+ * a Twilio number that is NOT exclusively assigned to any individual broker.
+ * Used for outbound SMS/MMS/WhatsApp from brokers who have no personal line
+ * and when no shared number can be derived from existing thread history.
+ * Results are cached for 60s to avoid hitting the Twilio API on every send.
+ */
+let _sharedSmsNumberCache: { value: string | null; at: number } | null = null;
+async function getSharedSmsNumber(): Promise<string | null> {
+  if (!twilioClient) return null;
+  const now = Date.now();
+  if (_sharedSmsNumberCache && now - _sharedSmsNumberCache.at < 60_000) {
+    return _sharedSmsNumberCache.value;
+  }
+  try {
+    const [assignedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT twilio_phone_sid, twilio_caller_id FROM brokers
+       WHERE tenant_id = ?
+         AND ((twilio_phone_sid IS NOT NULL AND twilio_phone_sid <> '')
+              OR (twilio_caller_id IS NOT NULL AND twilio_caller_id <> ''))`,
+      [MORTGAGE_TENANT_ID],
+    );
+    const assignedSids = new Set(
+      (assignedRows as RowDataPacket[])
+        .map((r) => r.twilio_phone_sid as string)
+        .filter(Boolean),
+    );
+    const assignedNumbers = new Set(
+      (assignedRows as RowDataPacket[])
+        .map((r) => r.twilio_caller_id as string)
+        .filter(Boolean),
+    );
+
+    const numbers = await twilioClient.incomingPhoneNumbers.list({ limit: 50 });
+    const shared = numbers
+      .filter(
+        (n: any) =>
+          n.capabilities?.sms &&
+          !assignedSids.has(n.sid) &&
+          !assignedNumbers.has(n.phoneNumber),
+      )
+      .sort((a: any, b: any) => a.phoneNumber.localeCompare(b.phoneNumber))[0];
+    const value = shared?.phoneNumber ?? null;
+    _sharedSmsNumberCache = { value, at: now };
+    return value;
+  } catch (err) {
+    console.error("❌ getSharedSmsNumber failed:", err);
+    return null;
+  }
+}
+
 async function sendVoiceOTP(
   to: string,
   code: number,
@@ -986,10 +1067,20 @@ async function sendWhatsAppMessage(
     const whatsappNumber = `whatsapp:${normalizedPhone}`;
     const whatsappFrom = `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER}`;
 
+    // Attach delivery status callback so the WhatsApp message can progress from
+    // ✓ (sent) → ✓✓ (delivered) → ✓✓ blue (read), matching SMS behavior.
+    // Twilio cannot reach localhost, so only attach for public URLs.
+    const baseUrl = getBaseUrl();
+    const isPublicUrl =
+      !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1");
+
     const message = await twilioClient.messages.create({
       body,
       to: whatsappNumber,
       from: whatsappFrom,
+      ...(isPublicUrl
+        ? { statusCallback: `${baseUrl}/api/webhooks/sms-status` }
+        : {}),
       ...metadata,
     });
 
@@ -12355,6 +12446,107 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
  *
  * Protected by CRON_SECRET (same env var used by the IMAP polling cron).
  */
+
+/**
+ * Backfill stale outbound delivery_status values from Twilio.
+ *
+ * Twilio's statusCallback occasionally fails (network blip, our endpoint
+ * temporarily unreachable, dev environment with no public URL, etc.) which
+ * leaves rows stuck at delivery_status='sent' even when they were actually
+ * delivered/read/failed. This cron picks up SMS/MMS/WhatsApp rows that have
+ * a Twilio SID, are still 'sent' or 'pending', and were sent more than
+ * 2 minutes ago, queries Twilio for the authoritative status, and updates
+ * the row. Limit 50 per run to stay within Twilio API quotas.
+ *
+ * Schedule: every 10 minutes
+ *   curl -s "https://yourdomain.com/api/cron/backfill-message-status?secret=CRON_SECRET"
+ */
+const handleBackfillMessageStatus: RequestHandler = async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ??
+        (req.query.secret as string | undefined);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    if (!twilioClient) {
+      return res
+        .status(503)
+        .json({ success: false, error: "Twilio not configured" });
+    }
+
+    const [stale] = await pool.query<RowDataPacket[]>(
+      `SELECT id, external_id, communication_type
+       FROM communications
+       WHERE tenant_id = ?
+         AND direction = 'outbound'
+         AND communication_type IN ('sms','whatsapp')
+         AND external_id IS NOT NULL
+         AND external_id != ''
+         AND (delivery_status IN ('sent','pending') OR delivery_status IS NULL)
+         AND sent_at < (NOW() - INTERVAL 2 MINUTE)
+         AND sent_at > (NOW() - INTERVAL 7 DAY)
+       ORDER BY sent_at DESC
+       LIMIT 50`,
+      [MORTGAGE_TENANT_ID],
+    );
+
+    const statusMap: Record<string, string> = {
+      sent: "sent",
+      delivered: "delivered",
+      read: "read",
+      failed: "failed",
+      undelivered: "failed",
+    };
+
+    let updated = 0;
+    let unchanged = 0;
+    let errors = 0;
+
+    for (const row of stale as RowDataPacket[]) {
+      try {
+        const msg = await twilioClient.messages(row.external_id).fetch();
+        const mapped = statusMap[msg.status] ?? null;
+        if (!mapped || mapped === "sent") {
+          unchanged++;
+          continue;
+        }
+        await pool.query(
+          `UPDATE communications
+           SET delivery_status = ?, status = ?
+           WHERE id = ? AND tenant_id = ?`,
+          [mapped, mapped, row.id, MORTGAGE_TENANT_ID],
+        );
+        updated++;
+      } catch (err: any) {
+        errors++;
+        console.warn(
+          `[backfill-status] failed for sid=${row.external_id}:`,
+          err?.message || err,
+        );
+      }
+    }
+
+    return res.json({
+      success: true,
+      checked: (stale as RowDataPacket[]).length,
+      updated,
+      unchanged,
+      errors,
+    });
+  } catch (err: any) {
+    console.error("[backfill-status] cron error:", err);
+    return res
+      .status(500)
+      .json({ success: false, error: err?.message || "Backfill failed" });
+  }
+};
+
 const handleProcessReminderFlows: RequestHandler = async (req, res) => {
   try {
     const secret = process.env.CRON_SECRET;
@@ -13570,20 +13762,26 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       loanId = clientRows[0].loan_id ?? null;
     }
 
-    // If no client matched, route to the broker who owns the called Twilio number.
-    // This means the number assignment in the CRM also defines inbox ownership.
-    if (brokerId === null) {
-      if (toPhone) {
-        const [ownerRows] = await pool.query<RowDataPacket[]>(
-          `SELECT id FROM brokers
-           WHERE tenant_id = ? AND status = 'active'
-             AND twilio_caller_id = ?
-           LIMIT 1`,
-          [MORTGAGE_TENANT_ID, toPhone],
-        );
-        if (ownerRows.length > 0) brokerId = ownerRows[0].id;
+    // Ownership rule: if the client sent to a Twilio number that is currently a
+    // broker's personal line, the OWNER of that number always gets the message —
+    // even if the client has a different assigned_broker_id. This ensures
+    // reassignment takes effect immediately (previous owner stops receiving
+    // messages to numbers they no longer own) and personal-line promises are kept.
+    if (toPhone) {
+      const [ownerRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM brokers
+         WHERE tenant_id = ? AND status = 'active'
+           AND twilio_caller_id = ?
+         LIMIT 1`,
+        [MORTGAGE_TENANT_ID, toPhone],
+      );
+      if (ownerRows.length > 0) {
+        brokerId = ownerRows[0].id;
       }
     }
+    // If still no broker (shared line + unknown client), leave brokerId NULL —
+    // the thread becomes a shared-inbox thread visible to all brokers.
+    void 0;
 
     // ── Determine conversation_id ────────────────────────────────────────────
     // Priority order:
@@ -13675,6 +13873,23 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
         inboxNumber: toPhone,
         recipientPhone: fromPhone || null,
       });
+
+      // Ownership enforcement: if the called number is currently owned by a
+      // broker (personal line), force the thread's broker_id AND inbox_number
+      // to reflect the CURRENT owner — overriding any stale values from when
+      // the thread was first created under a different (or no) owner. This
+      // ensures reassignments take effect immediately: the previous owner
+      // stops seeing the thread, the new owner sees it.
+      if (brokerId && toPhone) {
+        await pool.query(
+          `UPDATE conversation_threads
+           SET broker_id = ?,
+               inbox_number = ?,
+               updated_at = NOW()
+           WHERE conversation_id = ? AND tenant_id = ?`,
+          [brokerId, toPhone, conversationId, MORTGAGE_TENANT_ID],
+        );
+      }
     } catch (upsertErr) {
       // Non-fatal for the webhook — Twilio must always receive a 200.
       console.error(
@@ -13835,8 +14050,9 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       whereConditions.push("ct.status = ?");
       queryParams.push(status);
     } else {
-      // Default view excludes closed — only shown when explicitly requested
-      whereConditions.push("ct.status != 'closed'");
+      // Default view shows only active threads (excludes 'closed' and any
+      // legacy 'archived' rows that may still exist in the data).
+      whereConditions.push("ct.status = 'active'");
     }
 
     if (priority) {
@@ -13980,15 +14196,34 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
        FROM conversation_threads ct
        LEFT JOIN loan_applications la ON ct.application_id = la.id
        LEFT JOIN clients cl ON ct.client_id = cl.id
-       WHERE ct.conversation_id = ?`,
-      [conversationId],
+       WHERE ct.conversation_id = ? AND ct.tenant_id = ?`,
+      [conversationId, MORTGAGE_TENANT_ID],
     );
 
     // Get total message count
     const [countResult] = await pool.query<RowDataPacket[]>(
-      "SELECT COUNT(*) as total FROM communications WHERE conversation_id = ?",
-      [conversationId],
+      "SELECT COUNT(*) as total FROM communications WHERE conversation_id = ? AND tenant_id = ?",
+      [conversationId, MORTGAGE_TENANT_ID],
     );
+
+    // Server-side mark-as-read: opening a conversation clears its unread badge
+    // for everyone (no need for a separate endpoint or client retry).
+    if (threadInfo[0] && (threadInfo[0].unread_count ?? 0) > 0) {
+      pool
+        .query(
+          `UPDATE conversation_threads SET unread_count = 0, updated_at = NOW()
+           WHERE conversation_id = ? AND tenant_id = ?`,
+          [conversationId, MORTGAGE_TENANT_ID],
+        )
+        .then(() =>
+          publishToAbly("conversations:all", "thread-read", {
+            conversationId,
+          }).catch(() => undefined),
+        )
+        .catch((e) => console.warn("⚠️ Failed to reset unread_count:", e));
+      // Reflect the reset in the response so the client UI matches the DB.
+      threadInfo[0].unread_count = 0;
+    }
 
     const total = countResult[0]?.total || 0;
     const totalPages = Math.ceil(total / parseInt(limit as string));
@@ -14214,71 +14449,121 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       }
     }
 
-    // Determine which Twilio number to send from:
-    // Priority for REPLIES (existing thread with inbox_number):
-    //   1. Thread's inbox_number — always preserve conversation continuity (client sees the same number)
-    //   2. Broker's own assigned number (twilio_caller_id) — fallback if no inbox_number
-    //   3. First shared Twilio number
-    //   4. Last resort: first broker number in DB
-    // Priority for NEW outbound conversations (no thread / no inbox_number):
-    //   1. Broker's own assigned number
-    //   2. First shared number
-    //   3. Last resort
+    // Determine which Twilio number to send from, honoring ownership rules:
+    //   Rule 1: Broker with a personal number must ALWAYS use it (absolute priority,
+    //           even for replies on old threads that used a shared number).
+    //   Rule 2: Broker with NO personal number uses the thread's existing inbox_number
+    //           if that number is NOT someone else's personal line. Otherwise falls
+    //           through to the first available shared number.
+    //   Rule 3: Never send from a number that is now assigned as another broker's
+    //           personal line (prevents ownership leakage after reassignment).
     let fromNumber: string = "";
 
-    // Step 1: Try to use the thread's inbox_number (preserves conversation continuity)
-    if (conversation_id) {
+    // Fetch broker's personal number AND the set of all personal lines in one shot
+    const [brokerPhoneRows] = await pool.query<RowDataPacket[]>(
+      `SELECT twilio_caller_id FROM brokers
+       WHERE id = ? AND tenant_id = ? AND twilio_caller_id IS NOT NULL LIMIT 1`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+    const brokerPersonalNumber: string | null =
+      brokerPhoneRows[0]?.twilio_caller_id ?? null;
+
+    const [allPersonalRows] = await pool.query<RowDataPacket[]>(
+      `SELECT twilio_caller_id FROM brokers
+       WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL AND twilio_caller_id <> ''`,
+      [MORTGAGE_TENANT_ID],
+    );
+    const personalLines = new Set(
+      (allPersonalRows as RowDataPacket[]).map(
+        (r) => r.twilio_caller_id as string,
+      ),
+    );
+    const otherBrokerPersonalLines = new Set(personalLines);
+    if (brokerPersonalNumber)
+      otherBrokerPersonalLines.delete(brokerPersonalNumber);
+
+    // Step 1: If broker has a personal number → use it unconditionally (Rule 1)
+    if (brokerPersonalNumber) {
+      fromNumber = brokerPersonalNumber;
+    }
+
+    // Step 2: No personal number → try thread's inbox_number, but skip it if it's
+    // now another broker's personal line (Rule 3 — reassignment safety)
+    if (!fromNumber && conversation_id) {
       const [threadRow] = await pool.query<RowDataPacket[]>(
         `SELECT inbox_number FROM conversation_threads
          WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
         [conversation_id, MORTGAGE_TENANT_ID],
       );
       const inboxNum: string | null = threadRow[0]?.inbox_number ?? null;
-      if (inboxNum) {
+      if (inboxNum && !otherBrokerPersonalLines.has(inboxNum)) {
         fromNumber = inboxNum;
       }
     }
 
-    // Step 2: Broker's own personal number (used when no inbox_number exists, i.e. new conversation)
+    // Step 3: First shared number — derived from inbox_number values seen on
+    // existing threads, excluding any number that is now a broker's personal line.
+    // Sorted deterministically so the same broker always picks the same shared
+    // number until reassignment.
     if (!fromNumber) {
-      const [brokerPhoneRows] = await pool.query<RowDataPacket[]>(
-        `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? AND twilio_caller_id IS NOT NULL LIMIT 1`,
-        [brokerId, MORTGAGE_TENANT_ID],
-      );
-      if (brokerPhoneRows.length > 0 && brokerPhoneRows[0].twilio_caller_id) {
-        fromNumber = brokerPhoneRows[0].twilio_caller_id;
-      }
-    }
-
-    // Step 3: First shared Twilio number (not assigned to any broker as personal line)
-    if (!fromNumber && twilioClient) {
       try {
-        const [allPersonalRows] = await pool.query<RowDataPacket[]>(
-          `SELECT twilio_caller_id FROM brokers WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL`,
-          [MORTGAGE_TENANT_ID],
+        const [sharedRows] = await pool.query<RowDataPacket[]>(
+          `SELECT DISTINCT ct.inbox_number
+           FROM conversation_threads ct
+           WHERE ct.tenant_id = ?
+             AND ct.inbox_number IS NOT NULL
+             AND ct.inbox_number <> ''
+             AND ct.inbox_number NOT IN (
+               SELECT twilio_caller_id FROM brokers
+               WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL
+             )
+           ORDER BY ct.inbox_number ASC
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
         );
-        const personalNums = new Set(
-          allPersonalRows.map((r) => r.twilio_caller_id as string),
-        );
-        const twilioNums = await twilioClient.incomingPhoneNumbers.list({
-          limit: 50,
-        });
-        const shared = twilioNums.find((n) => !personalNums.has(n.phoneNumber));
-        if (shared) fromNumber = shared.phoneNumber;
+        if (sharedRows.length > 0) fromNumber = sharedRows[0].inbox_number;
       } catch (_e) {
         // ignore — fall through to last resort
       }
     }
 
-    // Step 4 (last resort): first broker number in DB
+    // Step 4: Query Twilio directly for the first SMS-capable shared line.
+    // This is the authoritative source: any Twilio number NOT assigned as a
+    // broker's personal line (by SID or caller_id) is considered shared.
+    // Replaces the previous `otp_from_number` lookup which could hold a
+    // number that has since been reassigned as a personal line.
     if (!fromNumber) {
-      const [firstNumber] = await pool.query<RowDataPacket[]>(
-        `SELECT twilio_caller_id FROM brokers
-         WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL
-         ORDER BY id ASC LIMIT 1`,
-        [MORTGAGE_TENANT_ID],
-      );
-      if (firstNumber.length > 0) fromNumber = firstNumber[0].twilio_caller_id;
+      try {
+        const twilioShared = await getSharedSmsNumber();
+        if (twilioShared) {
+          fromNumber = twilioShared;
+        }
+      } catch (e) {
+        console.warn("⚠️ Step 4 (Twilio shared lookup) failed:", e);
+      }
+    }
+
+    // Step 5 (absolute last resort): otp_from_number from system_settings,
+    // only if it is NOT a broker's personal line. Prevents sending from
+    // another broker's exclusive number when all other steps fail.
+    if (!fromNumber) {
+      try {
+        const [settingRows] = await pool.query<RowDataPacket[]>(
+          `SELECT setting_value FROM system_settings
+           WHERE tenant_id = ? AND setting_key = 'otp_from_number' LIMIT 1`,
+          [MORTGAGE_TENANT_ID],
+        );
+        const candidate = settingRows[0]?.setting_value as string | undefined;
+        if (candidate && !personalLines.has(candidate)) {
+          fromNumber = candidate;
+        } else if (candidate && personalLines.has(candidate)) {
+          console.warn(
+            `⚠️ otp_from_number=${candidate} is now a broker's personal line — refusing to use.`,
+          );
+        }
+      } catch (e) {
+        console.warn("⚠️ Step 5 from-number fallback failed:", e);
+      }
     }
 
     if (
@@ -14533,9 +14818,36 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       communicationType: communication_type,
       direction: "outbound",
       body: processedBody,
+      inboxNumber: fromNumber || null,
       recipientPhone: finalRecipientPhone || null,
       recipientEmail: finalRecipientEmail || null,
     });
+
+    // Ownership-aware inbox_number refresh:
+    //   - If broker has a personal number, ALWAYS overwrite the thread's
+    //     inbox_number with it (Rule 1: absolute priority). This ensures
+    //     transitions from shared→personal take effect immediately and the
+    //     sidebar displays the current owner's line.
+    //   - Otherwise, only stamp inbox_number if it was NULL (don't overwrite
+    //     an existing shared-pool number).
+    if (fromNumber) {
+      if (brokerPersonalNumber && fromNumber === brokerPersonalNumber) {
+        await pool.query(
+          `UPDATE conversation_threads
+           SET inbox_number = ?, updated_at = NOW()
+           WHERE conversation_id = ? AND tenant_id = ?
+             AND (inbox_number IS NULL OR inbox_number <> ?)`,
+          [fromNumber, finalConversationId, MORTGAGE_TENANT_ID, fromNumber],
+        );
+      } else {
+        await pool.query(
+          `UPDATE conversation_threads
+           SET inbox_number = ?, updated_at = NOW()
+           WHERE conversation_id = ? AND tenant_id = ? AND inbox_number IS NULL`,
+          [fromNumber, finalConversationId, MORTGAGE_TENANT_ID],
+        );
+      }
+    }
 
     // Auto-claim: if this thread was previously unassigned (shared inbox),
     // assign it to the broker who just replied. This removes it from other
@@ -14714,8 +15026,28 @@ const handleSendMessage: RequestHandler = async (req, res) => {
           body: processedBody.slice(0, 200),
         },
       );
+      // Fetch the freshly-updated thread row so other clients can patch their
+      // sidebar in-place (no full refetch needed).
+      const [refreshedThread] = await pool.query<RowDataPacket[]>(
+        `SELECT ct.*, la.application_number,
+                CONCAT(cl.first_name, ' ', cl.last_name) as client_full_name
+         FROM conversation_threads ct
+         LEFT JOIN loan_applications la ON ct.application_id = la.id
+         LEFT JOIN clients cl ON ct.client_id = cl.id
+         WHERE ct.conversation_id = ? AND ct.tenant_id = ?
+         LIMIT 1`,
+        [finalConversationId, MORTGAGE_TENANT_ID],
+      );
       await publishToAbly("conversations:all", "thread-updated", {
         conversationId: finalConversationId,
+        thread: refreshedThread[0]
+          ? {
+              ...refreshedThread[0],
+              tags: refreshedThread[0].tags
+                ? JSON.parse(refreshedThread[0].tags)
+                : [],
+            }
+          : null,
       });
     } catch (ablyErr) {
       console.warn("Ably publish failed (non-fatal):", ablyErr);
@@ -15047,10 +15379,11 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
 
     updateFields.push("updated_at = NOW()");
     updateValues.push(conversationId);
+    updateValues.push(MORTGAGE_TENANT_ID);
 
     await pool.query(
       `UPDATE conversation_threads SET ${updateFields.join(", ")} 
-       WHERE conversation_id = ?`,
+       WHERE conversation_id = ? AND tenant_id = ?`,
       updateValues,
     );
 
@@ -15062,16 +15395,33 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
        FROM conversation_threads ct
        LEFT JOIN loan_applications la ON ct.application_id = la.id
        LEFT JOIN clients cl ON ct.client_id = cl.id
-       WHERE ct.conversation_id = ?`,
-      [conversationId],
+       WHERE ct.conversation_id = ? AND ct.tenant_id = ?`,
+      [conversationId, MORTGAGE_TENANT_ID],
     );
+
+    const updatedThreadPayload = updatedThread[0]
+      ? {
+          ...updatedThread[0],
+          tags: updatedThread[0].tags ? JSON.parse(updatedThread[0].tags) : [],
+        }
+      : null;
+
+    // Broadcast the update to all listening clients (other tabs / other brokers)
+    // so close/reopen/priority/tag changes appear instantly without a refetch.
+    if (updatedThreadPayload) {
+      try {
+        await publishToAbly("conversations:all", "thread-updated", {
+          conversationId,
+          thread: updatedThreadPayload,
+        });
+      } catch (publishErr) {
+        console.warn("⚠️ Ably publish (thread-updated) failed:", publishErr);
+      }
+    }
 
     res.json({
       success: true,
-      thread: {
-        ...updatedThread[0],
-        tags: updatedThread[0]?.tags ? JSON.parse(updatedThread[0].tags) : [],
-      },
+      thread: updatedThreadPayload ?? { conversation_id: conversationId },
     });
   } catch (error) {
     console.error("Error updating conversation:", error);
@@ -15883,6 +16233,7 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
           communicationType: "call",
           direction: "inbound",
           body,
+          inboxNumber: calledNumber || null,
           recipientPhone: callerNumber,
         }),
       )
@@ -19759,6 +20110,15 @@ function createServer() {
   expressApp.get(
     "/api/cron/process-reminder-flows",
     handleProcessReminderFlows,
+  );
+
+  // Twilio delivery-status backfill cron — run every 10 min:
+  //   curl -s "https://yourdomain.com/api/cron/backfill-message-status?secret=CRON_SECRET"
+  // Catches SMS/MMS/WhatsApp rows whose statusCallback never arrived and
+  // refreshes their delivery_status from Twilio's authoritative state.
+  expressApp.get(
+    "/api/cron/backfill-message-status",
+    handleBackfillMessageStatus,
   );
 
   // Conversation routes

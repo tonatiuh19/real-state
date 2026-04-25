@@ -4795,6 +4795,38 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
 
+  /cron/backfill-message-status:
+    get:
+      tags: [Webhooks & Cron]
+      summary: Backfill stale Twilio delivery_status (cron trigger)
+      description: |
+        Run every ~10 minutes via cPanel cron:
+        `curl -s "https://yourdomain.com/api/cron/backfill-message-status?secret=CRON_SECRET"`
+
+        Picks up to 50 outbound SMS/MMS/WhatsApp rows whose `delivery_status`
+        is still `sent`/`pending` more than 2 minutes after `sent_at`,
+        queries Twilio for the authoritative status, and updates the row.
+        Catches messages whose `statusCallback` webhook never arrived.
+      parameters:
+        - in: query
+          name: secret
+          required: false
+          schema: { type: string }
+          description: Shared secret matching `CRON_SECRET` env var
+      responses:
+        "200":
+          description: Backfill complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  checked: { type: integer }
+                  updated: { type: integer }
+                  unchanged: { type: integer }
+                  errors: { type: integer }
+
   # ─── Realtor Prospecting Pipeline ─────────────────────────────────────────
   /realtor-prospects:
     get:

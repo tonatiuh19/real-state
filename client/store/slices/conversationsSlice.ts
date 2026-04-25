@@ -721,6 +721,36 @@ const conversationsSlice = createSlice({
         state.messages = [];
       }
     },
+
+    // Real-time thread update from Ably (status change, priority, tags, etc.).
+    // Merges the partial update into the existing thread without a refetch.
+    threadUpdatedRealtime: (
+      state,
+      action: { payload: { conversationId: string; thread: any } },
+    ) => {
+      const { conversationId, thread } = action.payload;
+      const idx = state.threads.findIndex(
+        (t) => t.conversation_id === conversationId,
+      );
+      if (idx >= 0) {
+        state.threads[idx] = { ...state.threads[idx], ...thread };
+      }
+      if (state.currentThread?.conversation_id === conversationId) {
+        state.currentThread = { ...state.currentThread, ...thread };
+      }
+    },
+
+    // Real-time read receipt from Ably — zero out unread badge for everyone.
+    threadReadRealtime: (state, action: { payload: string }) => {
+      const conversationId = action.payload;
+      const thread = state.threads.find(
+        (t) => t.conversation_id === conversationId,
+      );
+      if (thread) thread.unread_count = 0;
+      if (state.currentThread?.conversation_id === conversationId) {
+        state.currentThread.unread_count = 0;
+      }
+    },
   },
 
   extraReducers: (builder) => {
@@ -791,11 +821,20 @@ const conversationsSlice = createSlice({
             : existing.last_message_preview;
           existing.last_message_at = now;
           existing.message_count = (existing.message_count ?? 0) + 1;
+          // If the thread was closed, reopen it in the local state so it
+          // immediately moves to the active list without waiting for a re-fetch.
+          existing.status = "active";
+          (existing as any).archived_at = null;
           // Bubble the thread to the top
           state.threads = [
             existing,
             ...state.threads.filter((t) => t.conversation_id !== convId),
           ];
+          // Keep the right-pane currentThread in sync so the header / status
+          // chip flips to "active" immediately without waiting for a refetch.
+          if (state.currentThread?.conversation_id === convId) {
+            state.currentThread = { ...state.currentThread, ...existing };
+          }
         } else {
           // New thread — add a placeholder so it appears immediately while
           // fetchConversationThreads runs (avoids TiDB replication lag gap).
@@ -1051,6 +1090,8 @@ export const {
   addNewMessage,
   markConversationAsRead,
   removeThread,
+  threadUpdatedRealtime,
+  threadReadRealtime,
   patchMessageRecording,
 } = conversationsSlice.actions;
 

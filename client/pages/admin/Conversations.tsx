@@ -151,6 +151,8 @@ import {
   markConversationAsRead,
   checkWhatsAppAvailability,
   removeThread,
+  threadUpdatedRealtime,
+  threadReadRealtime,
   saveContactFromConversation,
   updateConversation,
   deleteConversation,
@@ -557,10 +559,24 @@ const Conversations = () => {
             callback(null, tokenRequest),
         });
 
-        // Subscribe to thread-list changes so the sidebar stays fresh
+        // Subscribe to thread-list changes so the sidebar stays fresh.
+        // Apply patches in-place — no full refetch — to keep the UI feeling
+        // smooth and instant (WhatsApp/Telegram-style).
         const allChannel = realtimeClient.channels.get("conversations:all");
-        allChannel.subscribe("thread-updated", () => {
-          dispatch(fetchConversationThreads(threadsFilters));
+        allChannel.subscribe("thread-updated", (msg) => {
+          const { conversationId, thread } = (msg.data ?? {}) as {
+            conversationId?: string;
+            thread?: any;
+          };
+          if (conversationId && thread) {
+            dispatch(threadUpdatedRealtime({ conversationId, thread }));
+          }
+        });
+        allChannel.subscribe("thread-read", (msg) => {
+          const { conversationId } = (msg.data ?? {}) as {
+            conversationId?: string;
+          };
+          if (conversationId) dispatch(threadReadRealtime(conversationId));
         });
         // Another broker claimed an unassigned thread — remove it from our list.
         // If WE claimed it, refresh our threads so the "Unassigned" badge disappears
@@ -858,21 +874,25 @@ const Conversations = () => {
 
   const handleStatusFilter = (status: string) => {
     setSelectedStatus(status);
-    const filters = status === "all" ? {} : { status };
-    dispatch(setThreadsFilters(filters));
-    // Explicitly omit any previous status so "all" truly clears it
+    // Preserve any other active filters (priority/search) when changing status.
     const { status: _removed, ...restFilters } = threadsFilters as Record<
       string,
       unknown
     >;
-    dispatch(fetchConversationThreads({ ...restFilters, ...filters }));
+    const merged = status === "all" ? restFilters : { ...restFilters, status };
+    dispatch(setThreadsFilters(merged));
+    dispatch(fetchConversationThreads(merged));
   };
 
   const handlePriorityFilter = (priority: string) => {
     setSelectedPriority(priority);
-    const filters = priority === "" ? {} : { priority };
-    dispatch(setThreadsFilters(filters));
-    dispatch(fetchConversationThreads({ ...threadsFilters, ...filters }));
+    const { priority: _removed, ...restFilters } = threadsFilters as Record<
+      string,
+      unknown
+    >;
+    const merged = priority === "" ? restFilters : { ...restFilters, priority };
+    dispatch(setThreadsFilters(merged));
+    dispatch(fetchConversationThreads(merged));
   };
 
   const handleDeleteMessage = async (messageId: number | string) => {
@@ -994,7 +1014,19 @@ const Conversations = () => {
           prev.filter((m) => m.tempId !== tempId),
         );
       }
-      dispatch(fetchConversationThreads(threadsFilters));
+      // If the message was sent to a closed thread, reopen it and switch
+      // the view back to active so the user can continue the conversation.
+      if (selectedStatus === "closed") {
+        setSelectedStatus("all");
+        dispatch(setThreadsFilters({}));
+        dispatch(fetchConversationThreads({}));
+        toast({
+          title: "Conversation reopened",
+          description: "This conversation is now active again.",
+        });
+      } else {
+        dispatch(fetchConversationThreads(threadsFilters));
+      }
     } catch (error: any) {
       // 5. Mark as failed and restore the text so the user can retry
       setOptimisticMessages((prev) =>
@@ -1502,7 +1534,7 @@ const Conversations = () => {
                     })
                   )
                 ) : /* ── Thread list ── */
-                isLoadingThreads ? (
+                isLoadingThreads && filteredThreads.length === 0 ? (
                   <div className="flex items-center justify-center py-12">
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
                   </div>
