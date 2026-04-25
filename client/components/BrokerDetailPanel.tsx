@@ -190,6 +190,7 @@ export default function BrokerDetailPanel({
   const [saving, setSaving] = useState(false);
   const [editFirst, setEditFirst] = useState("");
   const [editLast, setEditLast] = useState("");
+  const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editLicense, setEditLicense] = useState("");
   const [editBio, setEditBio] = useState("");
@@ -256,6 +257,7 @@ export default function BrokerDetailPanel({
     const p = selectedBrokerProfile;
     setEditFirst(p.first_name);
     setEditLast(p.last_name);
+    setEditEmail(p.email ?? "");
     setEditPhone(p.phone ?? "");
     setEditLicense(p.license_number ?? "");
     setEditBio(p.bio ?? "");
@@ -304,6 +306,7 @@ export default function BrokerDetailPanel({
       const p = selectedBrokerProfile;
       setEditFirst(p.first_name);
       setEditLast(p.last_name);
+      setEditEmail(p.email ?? "");
       setEditPhone(p.phone ?? "");
       setEditLicense(p.license_number ?? "");
       setEditTwitter((p as any).twitter_url ?? "");
@@ -328,6 +331,7 @@ export default function BrokerDetailPanel({
           id: brokerId,
           first_name: editFirst,
           last_name: editLast,
+          email: editEmail || undefined,
           phone: editPhone || undefined,
           license_number: editLicense || undefined,
           role: editRole,
@@ -883,6 +887,20 @@ export default function BrokerDetailPanel({
                               className="h-8 text-sm"
                             />
                           </div>
+                        </div>
+
+                        {/* Email */}
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">
+                            Email
+                          </Label>
+                          <Input
+                            type="email"
+                            value={editEmail}
+                            onChange={(e) => setEditEmail(e.target.value)}
+                            className="h-8 text-sm"
+                            placeholder="email@example.com"
+                          />
                         </div>
 
                         {/* Phone + License */}

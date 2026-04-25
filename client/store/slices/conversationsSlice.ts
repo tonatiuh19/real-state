@@ -821,10 +821,9 @@ const conversationsSlice = createSlice({
             : existing.last_message_preview;
           existing.last_message_at = now;
           existing.message_count = (existing.message_count ?? 0) + 1;
-          // If the thread was closed, reopen it in the local state so it
-          // immediately moves to the active list without waiting for a re-fetch.
-          existing.status = "active";
-          (existing as any).archived_at = null;
+          // Note: we deliberately do NOT auto-reopen a closed thread when the
+          // broker sends an outbound message. A broker who closed a thread
+          // expects it to stay closed; reopening requires an explicit action.
           // Bubble the thread to the top
           state.threads = [
             existing,

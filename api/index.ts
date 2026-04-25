@@ -772,8 +772,10 @@ async function upsertConversationThread(params: {
          client_phone         = COALESCE(client_phone, ?),
          client_email         = COALESCE(client_email, ?),
          inbox_number         = COALESCE(inbox_number, ?),
-         status               = 'active',
-         archived_at          = NULL,
+         -- Do NOT auto-reopen closed threads. A broker who explicitly closed a
+         -- thread expects it to stay closed; new activity is still tracked via
+         -- unread_count and visible under "Closed conversations". Reopening
+         -- requires an explicit user action via the close/reopen control.
          updated_at           = NOW()`,
       [
         tenantId,
@@ -6505,24 +6507,43 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       phone?: string;
     };
 
-    if (!first_name?.trim() || !last_name?.trim() || !email?.trim()) {
+    if (!first_name?.trim() || !last_name?.trim()) {
       return res.status(400).json({
         success: false,
-        error: "first_name, last_name and email are required",
+        error: "first_name and last_name are required",
       });
     }
 
-    // Check for duplicate email under this tenant
-    const [[existing]] = await pool.query<any[]>(
-      "SELECT id FROM clients WHERE tenant_id = ? AND email = ? LIMIT 1",
-      [MORTGAGE_TENANT_ID, email.trim().toLowerCase()],
-    );
-    if (existing) {
-      return res.status(409).json({
+    const trimmedEmail = email?.trim().toLowerCase() || null;
+
+    // Validate email format when provided
+    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      return res.status(400).json({
         success: false,
-        error: "A client with this email already exists",
+        error: "Invalid email format",
       });
     }
+
+    // Check for duplicate real email under this tenant (skip placeholder emails)
+    if (trimmedEmail) {
+      const [[existing]] = await pool.query<any[]>(
+        "SELECT id FROM clients WHERE tenant_id = ? AND email = ? LIMIT 1",
+        [MORTGAGE_TENANT_ID, trimmedEmail],
+      );
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: "A client with this email already exists",
+        });
+      }
+    }
+
+    // When no real email is provided, generate a unique placeholder so that
+    // downstream code (reminder flows, email guards) can detect the absence.
+    const trimmedPhone = phone?.trim() || null;
+    const finalEmail =
+      trimmedEmail ??
+      `noemail_${Date.now()}${trimmedPhone ? trimmedPhone.replace(/\D/g, "") : Math.random().toString(36).slice(2)}@noemail.placeholder`;
 
     const [result] = await pool.query<any>(
       `INSERT INTO clients (tenant_id, first_name, last_name, email, phone, status, assigned_broker_id, income_type)
@@ -6531,8 +6552,8 @@ const handleCreateClient: RequestHandler = async (req, res) => {
         MORTGAGE_TENANT_ID,
         first_name.trim(),
         last_name.trim(),
-        email.trim().toLowerCase(),
-        phone?.trim() || null,
+        finalEmail,
+        trimmedPhone,
         brokerId,
       ],
     );
@@ -6555,13 +6576,15 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       ? `${creatingBroker.first_name} ${creatingBroker.last_name}`.trim()
       : "Your Loan Officer";
 
-    // Send welcome email (non-blocking — failure won't abort the response)
-    sendClientManualWelcomeEmail(
-      client.email,
-      client.first_name,
-      client.last_name,
-      brokerFullName,
-    ).catch(() => {});
+    // Send welcome email only when the client has a real email address
+    if (client.email && !client.email.startsWith("noemail_")) {
+      sendClientManualWelcomeEmail(
+        client.email,
+        client.first_name,
+        client.last_name,
+        brokerFullName,
+      ).catch(() => {});
+    }
 
     return res.status(201).json({ success: true, client });
   } catch (error) {
@@ -6585,6 +6608,7 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     const {
       first_name,
       last_name,
+      email,
       phone,
       alternate_phone,
       date_of_birth,
@@ -6601,6 +6625,7 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     } = req.body as {
       first_name?: string;
       last_name?: string;
+      email?: string;
       phone?: string;
       alternate_phone?: string;
       date_of_birth?: string;
@@ -6643,6 +6668,28 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     const updates: string[] = [];
     const values: any[] = [];
 
+    if (email !== undefined) {
+      const trimmedEmail = email?.trim().toLowerCase();
+      if (trimmedEmail) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid email format" });
+        }
+        const [[emailExists]] = await pool.query<any[]>(
+          "SELECT id FROM clients WHERE email = ? AND tenant_id = ? AND id != ? LIMIT 1",
+          [trimmedEmail, MORTGAGE_TENANT_ID, clientId],
+        );
+        if (emailExists) {
+          return res.status(409).json({
+            success: false,
+            error: "A client with this email already exists",
+          });
+        }
+      }
+      updates.push("email = ?");
+      values.push(trimmedEmail || null);
+    }
     if (first_name !== undefined) {
       updates.push("first_name = ?");
       values.push(first_name.trim());
@@ -7281,6 +7328,7 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     const {
       first_name,
       last_name,
+      email,
       phone,
       role,
       status,
@@ -7347,6 +7395,30 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     if (last_name !== undefined) {
       updates.push("last_name = ?");
       values.push(last_name);
+    }
+    if (email !== undefined) {
+      const trimmedEmail = email?.trim().toLowerCase();
+      if (trimmedEmail) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid email format" });
+        }
+        const [[emailExists]] = await pool.query<any[]>(
+          "SELECT id FROM brokers WHERE email = ? AND tenant_id = ? AND id != ? LIMIT 1",
+          [trimmedEmail, MORTGAGE_TENANT_ID, targetBrokerId],
+        );
+        if (emailExists) {
+          return res.status(409).json({
+            success: false,
+            error: "A broker with this email already exists",
+          });
+        }
+      }
+      if (trimmedEmail) {
+        updates.push("email = ?");
+        values.push(trimmedEmail);
+      }
     }
     if (phone !== undefined) {
       updates.push("phone = ?");

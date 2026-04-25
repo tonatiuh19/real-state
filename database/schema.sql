@@ -420,7 +420,7 @@ DROP TABLE IF EXISTS `clients`;
 CREATE TABLE `clients` (
   `id` int NOT NULL AUTO_INCREMENT,
   `tenant_id` int NOT NULL DEFAULT '1',
-  `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `first_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `last_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,

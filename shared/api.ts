@@ -661,6 +661,7 @@ export interface CreateBrokerRequest {
 export interface UpdateBrokerRequest {
   first_name?: string;
   last_name?: string;
+  email?: string;
   phone?: string;
   role?: "broker" | "admin";
   status?: "active" | "inactive" | "suspended";
@@ -835,6 +836,7 @@ export interface CreateClientRequest {
 export interface UpdateClientRequest {
   first_name?: string;
   last_name?: string;
+  email?: string;
   phone?: string;
   alternate_phone?: string;
   date_of_birth?: string;

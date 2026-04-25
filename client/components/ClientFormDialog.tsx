@@ -29,7 +29,7 @@ interface ClientFormDialogProps {
 const validationSchema = Yup.object({
   first_name: Yup.string().trim().required("First name is required"),
   last_name: Yup.string().trim().required("Last name is required"),
-  email: Yup.string().email("Invalid email").required("Email is required"),
+  email: Yup.string().email("Invalid email").optional(),
   phone: Yup.string().trim(),
   date_of_birth: Yup.string(),
   address_street: Yup.string().trim(),
@@ -90,7 +90,7 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
             createClient({
               first_name: values.first_name,
               last_name: values.last_name,
-              email: values.email,
+              email: values.email?.trim() || undefined,
               phone: values.phone || undefined,
             }),
           ).unwrap();
@@ -171,12 +171,7 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
               {field("last_name", "Last Name", "text", "Doe")}
             </div>
             <div className="mt-3 space-y-3">
-              {field("email", "Email", "email", "jane@example.com")}
-              {isEdit && (
-                <p className="text-xs text-muted-foreground -mt-1">
-                  Email cannot be changed after creation.
-                </p>
-              )}
+              {field("email", "Email (optional)", "email", "jane@example.com")}
               {field("phone", "Phone", "tel", "(555) 000-0000")}
               {field("date_of_birth", "Date of Birth", "date")}
             </div>
