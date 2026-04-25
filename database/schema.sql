@@ -1109,6 +1109,7 @@ CREATE TABLE `reminder_flow_connections` (
   `edge_type` enum('default','condition_yes','condition_no','loan_type_purchase','loan_type_refinance','no_response','responded') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'default',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`) /*T![clustered_index] NONCLUSTERED */,
+  UNIQUE KEY `uniq_flow_edge_key` (`flow_id`,`edge_key`),
   KEY `idx_flow_connections_flow` (`flow_id`),
   CONSTRAINT `fk_flow_connections_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=30031;
@@ -1170,6 +1171,41 @@ INSERT INTO `reminder_flow_executions` VALUES (240004,1,3,180016,180015,'conv_cl
 /*!40000 ALTER TABLE `reminder_flow_executions` ENABLE KEYS */;
 
 --
+-- Table structure for table `reminder_flow_step_logs`
+--
+
+DROP TABLE IF EXISTS `reminder_flow_step_logs`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `reminder_flow_step_logs` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `tenant_id` int NOT NULL DEFAULT '1',
+  `flow_id` int NOT NULL,
+  `execution_id` int NOT NULL,
+  `step_key` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `step_type` enum('trigger','wait','send_notification','send_email','send_sms','send_whatsapp','condition','branch','wait_for_response','wait_until_date','end') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `event` enum('started','succeeded','failed','skipped','timeout','cancelled') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `channel` enum('sms','email','whatsapp','notification','none') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none',
+  `recipient` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'phone or email used at send time',
+  `external_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'twilio SID, email message-id, etc.',
+  `delivery_status` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'queued/sent/delivered/failed/undelivered',
+  `payload` json DEFAULT NULL COMMENT 'snapshot: rendered message, subject, edge taken, etc.',
+  `error_message` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `duration_ms` int DEFAULT NULL COMMENT 'wall-clock time for the step',
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `completed_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`) /*T![clustered_index] NONCLUSTERED */,
+  KEY `idx_flow_step_logs_flow` (`flow_id`),
+  KEY `idx_flow_step_logs_execution` (`execution_id`),
+  KEY `idx_flow_step_logs_tenant` (`tenant_id`),
+  KEY `idx_flow_step_logs_started` (`started_at`),
+  CONSTRAINT `fk_flow_step_logs_execution` FOREIGN KEY (`execution_id`) REFERENCES `reminder_flow_executions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_flow_step_logs_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `reminder_flow_steps`
 --
 
@@ -1189,6 +1225,7 @@ CREATE TABLE `reminder_flow_steps` (
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`) /*T![clustered_index] NONCLUSTERED */,
+  UNIQUE KEY `uniq_flow_step_key` (`flow_id`,`step_key`),
   KEY `idx_flow_steps_flow` (`flow_id`),
   CONSTRAINT `fk_flow_steps_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=30032;
@@ -1221,6 +1258,8 @@ CREATE TABLE `reminder_flows` (
   `loan_type_filter` enum('all','purchase','refinance') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'all' COMMENT 'Restrict this flow to a specific loan type or all',
   `flow_category` enum('loan','realtor_prospecting') NOT NULL DEFAULT 'loan',
   `created_by_broker_id` int DEFAULT NULL,
+  `restricted_to_broker_id` int DEFAULT NULL COMMENT 'NULL = visible to all brokers in tenant. Otherwise only this broker can see/run the flow.',
+  `enable_trace_logging` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'When 1, engine writes per-step rows into reminder_flow_step_logs.',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`) /*T![clustered_index] NONCLUSTERED */,
@@ -1228,7 +1267,9 @@ CREATE TABLE `reminder_flows` (
   KEY `idx_reminder_flows_active` (`is_active`),
   KEY `fk_reminder_flows_broker` (`created_by_broker_id`),
   KEY `idx_reminder_flows_trigger_loantype` (`trigger_event`,`loan_type_filter`,`is_active`),
-  KEY `idx_reminder_flows_category` (`flow_category`,`is_active`)
+  KEY `idx_reminder_flows_category` (`flow_category`,`is_active`),
+  KEY `idx_reminder_flows_restricted_broker` (`restricted_to_broker_id`),
+  CONSTRAINT `fk_reminder_flows_restricted_broker` FOREIGN KEY (`restricted_to_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=30004;
 /*!40101 SET character_set_client = @saved_cs_client */;
 

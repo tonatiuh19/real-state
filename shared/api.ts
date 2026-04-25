@@ -1577,6 +1577,8 @@ export interface BrokerProfileDetails {
   twitter_url: string | null;
   youtube_url: string | null;
   website_url: string | null;
+  // Feature flags
+  office365_enabled: boolean;
 }
 
 export interface GetBrokerProfileResponse {
@@ -1901,6 +1903,10 @@ export interface ReminderFlow {
   /** Whether this flow belongs to the loan pipeline or realtor prospecting pipeline. */
   flow_category: "loan" | "realtor_prospecting";
   created_by_broker_id: number | null;
+  /** When set, only this broker can see/run the flow. NULL = visible to all brokers in the tenant. */
+  restricted_to_broker_id: number | null;
+  /** When true, the engine writes per-step rows into reminder_flow_step_logs. */
+  enable_trace_logging: boolean;
   created_at: string;
   updated_at: string;
   steps?: ReminderFlowStep[];
@@ -1991,8 +1997,47 @@ export interface SaveReminderFlowRequest {
   is_active?: boolean;
   apply_to_all_loans?: boolean;
   loan_type_filter?: "all" | "purchase" | "refinance";
+  flow_category?: "loan" | "realtor_prospecting";
+  /** When set, only this broker can see/run the flow. */
+  restricted_to_broker_id?: number | null;
+  /** Per-flow opt-in for step-level trace logging. */
+  enable_trace_logging?: boolean;
   steps: SaveReminderFlowStep[];
   connections: SaveReminderFlowConnection[];
+}
+
+/**
+ * One row from `reminder_flow_step_logs` — a single lifecycle event for a
+ * step inside a running execution. Multiple rows per step are expected
+ * (e.g. "started" then "succeeded").
+ */
+export interface ReminderFlowStepLog {
+  id: number;
+  execution_id: number;
+  step_key: string;
+  step_type: ReminderStepType;
+  event:
+    | "started"
+    | "succeeded"
+    | "failed"
+    | "skipped"
+    | "timeout"
+    | "cancelled";
+  channel: "sms" | "email" | "whatsapp" | "notification" | "none";
+  recipient: string | null;
+  external_id: string | null;
+  delivery_status: string | null;
+  payload: Record<string, unknown> | null;
+  error_message: string | null;
+  duration_ms: number | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface GetReminderFlowTraceResponse {
+  success: boolean;
+  flow: { id: number; name: string; enable_trace_logging: boolean };
+  logs: ReminderFlowStepLog[];
 }
 
 export interface ProcessReminderFlowsResponse {

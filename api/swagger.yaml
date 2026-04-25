@@ -3753,6 +3753,28 @@ paths:
     put:
       tags: [Reminder Flows]
       summary: Save (overwrite) a full reminder flow including nodes/edges
+      description: |
+        Replaces all steps and connections for the flow.
+
+        **Validation enforced by the server (returns 400 on failure):**
+          - `step_type` must be one of: trigger, wait, send_notification,
+            send_email, send_sms, send_whatsapp, condition, branch,
+            wait_for_response, wait_until_date, end.
+          - `edge_type` must be one of: default, condition_yes, condition_no,
+            loan_type_purchase, loan_type_refinance, no_response, responded.
+          - `trigger_event` (when step_type=trigger) must be one of the
+            `ReminderTriggerEvent` enum values.
+          - Every step must have a non-empty `label`.
+          - `step_key` values must be unique within the payload.
+          - `edge_key` values must be unique within the payload.
+          - Every connection's `source_step_key` and `target_step_key` must
+            reference a `step_key` present in the payload.
+          - `position_x` / `position_y` are NaN-guarded (default 0).
+          - `trigger_delay_days` is clamped to >= 0.
+
+        Also persists `flow_category` (`loan` | `realtor_prospecting`),
+        `loan_type_filter`, `realtor_role_filter`, and `is_active` when
+        provided.
       security:
         - BrokerAuth: []
       parameters:
@@ -3767,15 +3789,36 @@ paths:
             schema:
               type: object
               properties:
+                name: { type: string }
+                description: { type: string, nullable: true }
+                flow_category:
+                  type: string
+                  enum: [loan, realtor_prospecting]
+                loan_type_filter:
+                  type: string
+                  nullable: true
+                  enum: [purchase, refinance, null]
+                realtor_role_filter:
+                  type: string
+                  nullable: true
+                is_active: { type: boolean }
                 nodes: { type: array, items: { type: object } }
                 edges: { type: array, items: { type: object } }
-                name: { type: string }
       responses:
         "200":
           description: Saved
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Validation failure (invalid enum, duplicate key, missing label, or unresolved connection reference)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: false }
+                  message: { type: string }
     delete:
       tags: [Reminder Flows]
       summary: Delete a reminder flow

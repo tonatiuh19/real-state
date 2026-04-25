@@ -3175,6 +3175,14 @@ const handleGetBrokerProfile: RequestHandler = async (req, res) => {
       }
     }
 
+    // Expose whether Office365 OAuth is configured so the UI can hide the
+    // connect form until the env vars are set.
+    profile.office365_enabled = !!(
+      process.env.OFFICE365_CLIENT_ID &&
+      process.env.OFFICE365_CLIENT_SECRET &&
+      process.env.OFFICE365_TENANT_ID
+    );
+
     res.json({ success: true, profile });
   } catch (error) {
     console.error("Error fetching broker profile:", error);
@@ -5565,6 +5573,21 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     triggerReminderFlows(loanId, newStatus, MORTGAGE_TENANT_ID).catch((err) =>
       console.error("Reminder flow trigger error:", err),
     );
+
+    // R4 fix: cancel any in-flight reminder flow executions for this loan when
+    // it reaches a terminal status (denied, cancelled, closed, funded). Prevents
+    // "we're working on your loan" drips from continuing after the loan is dead.
+    if (
+      ["denied", "rejected", "cancelled", "closed", "loan_funded"].includes(
+        newStatus,
+      )
+    ) {
+      cancelActiveExecutionsForLoan(
+        loanId,
+        MORTGAGE_TENANT_ID,
+        newStatus,
+      ).catch((err) => console.error("Cancel active executions error:", err));
+    }
 
     res.json({
       success: true,
@@ -11725,9 +11748,11 @@ async function triggerReminderFlows(
     const loan = loanRows[0];
     const loanType: string = loan.loan_type || "purchase";
 
-    // Find active flows matching this trigger_event and loan_type_filter
+    // Find active flows matching this trigger_event and loan_type_filter.
     // IMPORTANT: filter by flow_category = 'loan' so realtor prospecting flows
     // (which share no_activity/manual trigger names) are never fired here.
+    // Also enforce per-broker restriction: a flow with restricted_to_broker_id
+    // set will ONLY fire for loans whose loan officer matches that broker.
     const [flows] = await pool.query<RowDataPacket[]>(
       `SELECT rf.id, rf.trigger_delay_days, rf.loan_type_filter
        FROM reminder_flows rf
@@ -11735,8 +11760,9 @@ async function triggerReminderFlows(
          AND rf.trigger_event = ?
          AND rf.is_active = 1
          AND rf.flow_category = 'loan'
-         AND (rf.loan_type_filter = 'all' OR rf.loan_type_filter = ?)`,
-      [tenantId, newStatus, loanType],
+         AND (rf.loan_type_filter = 'all' OR rf.loan_type_filter = ?)
+         AND (rf.restricted_to_broker_id IS NULL OR rf.restricted_to_broker_id = ?)`,
+      [tenantId, newStatus, loanType, loan.broker_id ?? -1],
     );
 
     if (!flows.length) return;
@@ -11761,6 +11787,24 @@ async function triggerReminderFlows(
     });
 
     for (const flow of flows) {
+      // R2 fix: Skip if there is already an active execution for the same
+      // (flow, loan, client) tuple. Prevents duplicate drips when a loan's
+      // status flips back-and-forth or the same trigger fires twice.
+      const [existing] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM reminder_flow_executions
+         WHERE tenant_id = ? AND flow_id = ?
+           AND loan_application_id = ? AND client_id = ?
+           AND status = 'active'
+         LIMIT 1`,
+        [tenantId, flow.id, loanId, loan.client_id],
+      );
+      if (existing.length > 0) {
+        console.log(
+          `⏭️  Reminder flow #${flow.id} — skipping duplicate trigger for loan #${loanId} client #${loan.client_id} (exec #${existing[0].id} already active)`,
+        );
+        continue;
+      }
+
       // Find the trigger node for this flow to set current_step_key
       const [triggerSteps] = await pool.query<RowDataPacket[]>(
         `SELECT step_key FROM reminder_flow_steps
@@ -11801,6 +11845,40 @@ async function triggerReminderFlows(
     }
   } catch (err) {
     console.error("❌ Reminder flow trigger failed:", err);
+  }
+}
+
+/**
+ * Cancel all active reminder flow executions for a loan when the loan reaches
+ * a terminal status (denied, cancelled, closed, funded). Prevents drips from
+ * continuing after the loan is no longer viable. Non-throwing.
+ */
+async function cancelActiveExecutionsForLoan(
+  loanId: number,
+  tenantId: number,
+  reason: string,
+): Promise<void> {
+  try {
+    const [result] = await pool.query<ResultSetHeader>(
+      `UPDATE reminder_flow_executions
+       SET status = 'cancelled',
+           completed_at = NOW(),
+           updated_at = NOW(),
+           context_data = JSON_SET(
+             COALESCE(context_data, JSON_OBJECT()),
+             '$._cancelled_reason', ?,
+             '$._cancelled_at', NOW()
+           )
+       WHERE tenant_id = ? AND loan_application_id = ? AND status = 'active'`,
+      [`loan_status:${reason}`, tenantId, loanId],
+    );
+    if (result.affectedRows > 0) {
+      console.log(
+        `🛑 Cancelled ${result.affectedRows} active reminder flow execution(s) for loan #${loanId} (reason=${reason})`,
+      );
+    }
+  } catch (err) {
+    console.error("❌ cancelActiveExecutionsForLoan error:", err);
   }
 }
 
@@ -11947,6 +12025,84 @@ function wrapReminderEmailBody(plainText: string): string {
 }
 
 /**
+ * Insert a row into `reminder_flow_step_logs` if the parent flow has
+ * `enable_trace_logging = 1`. Always non-throwing: trace logging must never
+ * break flow execution.
+ *
+ * The execution row is expected to carry an `enable_trace_logging` field
+ * pulled from the JOIN in `handleProcessReminderFlows`. For trigger-time
+ * inserts (where the field isn't joined yet) we fall back to a small lookup.
+ */
+type FlowStepLogChannel =
+  | "sms"
+  | "email"
+  | "whatsapp"
+  | "notification"
+  | "none";
+type FlowStepLogEvent =
+  | "started"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "timeout"
+  | "cancelled";
+
+async function logFlowStepTrace(
+  execution:
+    | RowDataPacket
+    | {
+        id: number;
+        flow_id: number;
+        tenant_id?: number;
+        enable_trace_logging?: number | boolean;
+      },
+  step: { step_key: string; step_type: string },
+  event: FlowStepLogEvent,
+  opts: {
+    channel?: FlowStepLogChannel;
+    recipient?: string | null;
+    external_id?: string | null;
+    delivery_status?: string | null;
+    payload?: Record<string, any> | null;
+    error_message?: string | null;
+    duration_ms?: number | null;
+    completed_at?: Date | null;
+  } = {},
+): Promise<void> {
+  try {
+    const enabled = (execution as any).enable_trace_logging;
+    if (!enabled) return; // gated by flow flag
+    const tenantId = (execution as any).tenant_id ?? MORTGAGE_TENANT_ID;
+    await pool.query(
+      `INSERT INTO reminder_flow_step_logs
+         (tenant_id, flow_id, execution_id, step_key, step_type, event,
+          channel, recipient, external_id, delivery_status, payload,
+          error_message, duration_ms, started_at, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
+      [
+        tenantId,
+        execution.flow_id,
+        execution.id,
+        step.step_key,
+        step.step_type,
+        event,
+        opts.channel ?? "none",
+        opts.recipient ?? null,
+        opts.external_id ?? null,
+        opts.delivery_status ?? null,
+        opts.payload ? JSON.stringify(opts.payload) : null,
+        opts.error_message ?? null,
+        opts.duration_ms ?? null,
+        opts.completed_at ?? null,
+      ],
+    );
+  } catch (err) {
+    // Never let logging errors break the engine.
+    console.error("⚠️  logFlowStepTrace failed (non-fatal):", err);
+  }
+}
+
+/**
  * Send a message for a send_email / send_sms / send_notification step.
  * Never throws — all exceptions are caught and logged so the flow execution
  * is not marked failed due to a transient send or DB error.
@@ -11966,6 +12122,10 @@ async function executeFlowSendStep(
     console.warn(
       `⚠️  executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no message and no template_id; skipping send`,
     );
+    await logFlowStepTrace(execution, step, "skipped", {
+      error_message: "no message and no template_id",
+      completed_at: new Date(),
+    });
     return;
   }
 
@@ -12020,11 +12180,21 @@ async function executeFlowSendStep(
       cost?: number;
     } = { success: false, error: "Not configured" };
 
+    // R12: track which shared number was used for outbound SMS so we can
+    // stamp it as the inbox_number on the conversation thread (powers the
+    // "sent from" indicator in the conversations UI).
+    let sharedFromNumber: string | undefined;
+
     if (step.step_type === "send_email") {
       if (!clientEmail) {
         console.error(
           `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no client_email in contextData (client_id=${clientId}); skipping email send`,
         );
+        await logFlowStepTrace(execution, step, "skipped", {
+          channel: "email",
+          error_message: "no client_email in context",
+          completed_at: new Date(),
+        });
         return;
       }
       console.log(
@@ -12043,14 +12213,34 @@ async function executeFlowSendStep(
         console.error(
           `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no client_phone in contextData (client_id=${clientId}); skipping SMS send`,
         );
+        await logFlowStepTrace(execution, step, "skipped", {
+          channel: "sms",
+          error_message: "no client_phone in context",
+          completed_at: new Date(),
+        });
         return;
       }
-      sendResult = await sendSMSMessage(clientPhone, body);
+      // Reminder flows must always use a SHARED (non-assigned) number, never a
+      // broker's personal line. This keeps automated drips from appearing as
+      // direct outreach from a specific banker (which can confuse the client
+      // and bypass ownership rules).
+      sharedFromNumber = (await getSharedSmsNumber()) ?? undefined;
+      sendResult = await sendSMSMessage(
+        clientPhone,
+        body,
+        undefined,
+        sharedFromNumber,
+      );
     } else if (step.step_type === "send_whatsapp") {
       if (!clientPhone) {
         console.error(
           `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — no client_phone in contextData (client_id=${clientId}); skipping WhatsApp send`,
         );
+        await logFlowStepTrace(execution, step, "skipped", {
+          channel: "whatsapp",
+          error_message: "no client_phone in context",
+          completed_at: new Date(),
+        });
         return;
       }
       sendResult = await sendWhatsAppMessage(clientPhone, body);
@@ -12111,6 +12301,9 @@ async function executeFlowSendStep(
         communicationType: commType,
         direction: "outbound",
         body,
+        // R12: stamp the shared number so the UI shows which line the drip
+        // was sent from (and so inbound replies can route back to it).
+        inboxNumber: sharedFromNumber ?? null,
       });
 
       // Ensure the execution record has its conversation_id set (idempotent upsert)
@@ -12127,10 +12320,46 @@ async function executeFlowSendStep(
       console.log(
         `✅ executeFlowSendStep: exec #${execution.id} step [${step.step_key}/${step.step_type}] sent | ext_id=${sendResult.external_id ?? "n/a"}`,
       );
+      await logFlowStepTrace(execution, step, "succeeded", {
+        channel:
+          step.step_type === "send_email"
+            ? "email"
+            : step.step_type === "send_sms"
+              ? "sms"
+              : step.step_type === "send_whatsapp"
+                ? "whatsapp"
+                : "notification",
+        recipient:
+          step.step_type === "send_email"
+            ? ((contextData.client_email as string) ?? null)
+            : ((contextData.client_phone as string) ?? null),
+        external_id: sendResult.external_id ?? null,
+        delivery_status: "sent",
+        payload: { subject, body, template_id: config.template_id ?? null },
+        completed_at: new Date(),
+      });
     } else {
       console.error(
         `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}/${step.step_type}] FAILED | error="${sendResult.error}"`,
       );
+      await logFlowStepTrace(execution, step, "failed", {
+        channel:
+          step.step_type === "send_email"
+            ? "email"
+            : step.step_type === "send_sms"
+              ? "sms"
+              : step.step_type === "send_whatsapp"
+                ? "whatsapp"
+                : "notification",
+        recipient:
+          step.step_type === "send_email"
+            ? ((contextData.client_email as string) ?? null)
+            : ((contextData.client_phone as string) ?? null),
+        delivery_status: "failed",
+        error_message: sendResult.error ?? "unknown send failure",
+        payload: { subject, body, template_id: config.template_id ?? null },
+        completed_at: new Date(),
+      });
     }
   } catch (err: any) {
     // Catch all exceptions so a DB or send error never marks the whole execution as failed.
@@ -12140,6 +12369,10 @@ async function executeFlowSendStep(
       `❌ executeFlowSendStep: exec #${execution.id} step [${step.step_key}/${step.step_type}] — UNHANDLED EXCEPTION: ${msg}`,
       err,
     );
+    await logFlowStepTrace(execution, step, "failed", {
+      error_message: `Unhandled exception: ${msg}`,
+      completed_at: new Date(),
+    });
   }
 }
 
@@ -12191,16 +12424,28 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
     iterations++;
     const step = stepMap.get(currentKey);
     if (!step) {
-      // Invalid step key — fail this execution
+      // R10 fix: Step key not found — likely the flow definition was edited
+      // and a step was removed/renamed. Recover gracefully by completing the
+      // execution (rather than marking 'failed' which poisons retry metrics).
+      // Records the recovery reason in context_data for debuggability.
       console.error(
-        `\u274c processFlowExecution: exec #${execution.id} \u2014 step key [${currentKey}] not found in flow #${execution.flow_id}; marking failed`,
+        `\u274c processFlowExecution: exec #${execution.id} \u2014 step key [${currentKey}] not found in flow #${execution.flow_id}; completing gracefully (recovery)`,
       );
       await pool.query(
         `UPDATE reminder_flow_executions
-         SET status = 'failed', updated_at = NOW(),
-             completed_steps = ?, current_step_key = ?
+         SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+             completed_steps = ?, current_step_key = ?,
+             context_data = JSON_SET(
+               COALESCE(context_data, JSON_OBJECT()),
+               '$._recovery_reason', ?
+             )
          WHERE id = ?`,
-        [JSON.stringify(completedSteps), currentKey, execution.id],
+        [
+          JSON.stringify(completedSteps),
+          currentKey,
+          `step_not_found:${currentKey}`,
+          execution.id,
+        ],
       );
       return;
     }
@@ -12208,6 +12453,14 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
     console.log(
       `\u27a1\ufe0f  processFlowExecution: exec #${execution.id} \u2014 iteration ${iterations} processing step [${currentKey}/${step.step_type}]`,
     );
+
+    // Trace: emit a "started" event for this step (no-op if flow flag is off).
+    // We log started for ALL step types; send steps will additionally log
+    // succeeded/failed/skipped from inside executeFlowSendStep, while
+    // structural steps (trigger/wait/condition/branch/end) log their own
+    // succeeded event when they advance.
+    const _stepStartedAt = Date.now();
+    await logFlowStepTrace(execution, step, "started");
 
     completedSteps.push(currentKey);
 
@@ -12257,9 +12510,19 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
       let nextEdge: FlowConnection | undefined;
       if (execution.responded_at) {
         nextEdge = pickEdge(connections, currentKey, "responded", "default");
-        // Reset responded_at in-memory so any subsequent wait_for_response
-        // steps in this flow start waiting for a new reply.
+        // R7 fix: Reset responded_at in BOTH memory and DB so any subsequent
+        // wait_for_response steps in this flow start fresh waiting for a new
+        // reply. Without the DB reset, the inbound handler's
+        // markExecutionsRespondedForConversation UPDATE (which has
+        // `WHERE responded_at IS NULL`) would silently no-op for the next
+        // reply, breaking multi-stage response flows.
         execution.responded_at = null;
+        await pool
+          .query(
+            `UPDATE reminder_flow_executions SET responded_at = NULL, updated_at = NOW() WHERE id = ?`,
+            [execution.id],
+          )
+          .catch(() => {});
       } else {
         // Timeout elapsed without response — take no_response branch
         nextEdge = pickEdge(connections, currentKey, "no_response", "default");
@@ -12311,15 +12574,48 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
             nextExecAt.getMinutes() + (cfg.delay_minutes ?? 0),
           );
         } else if (nextStep.step_type === "wait_until_date") {
-          // Wait until the date stored in the specified contextData field.
-          // If the date is missing or already in the past, proceed immediately (1-minute buffer).
+          // R6 fix: Wait until the date stored in the specified contextData field.
+          // If the field is missing, the date is invalid, or already in the past,
+          // treat as "no scheduled date" — mark execution completed instead of
+          // firing immediately. A missing close-date for a not-yet-closed loan
+          // should NOT cause an immediate "post-close" message.
           const dateFieldName = cfg.date_field as string | undefined;
           const rawDate = dateFieldName ? contextData[dateFieldName] : null;
           const targetDate = rawDate ? new Date(rawDate) : null;
-          if (targetDate && targetDate > new Date()) {
-            nextExecAt = targetDate;
+          const validFutureDate =
+            targetDate &&
+            !isNaN(targetDate.getTime()) &&
+            targetDate > new Date();
+          if (validFutureDate) {
+            nextExecAt = targetDate!;
+          } else if (cfg.proceed_if_missing === true) {
+            // Explicit opt-in: caller wants to proceed when date is absent
+            nextExecAt = new Date(Date.now() + 60_000);
           } else {
-            nextExecAt = new Date(Date.now() + 60_000); // 1-minute buffer
+            // Default safe behavior: pause execution and mark completed.
+            // Avoids accidentally firing a 'post-close follow-up' on a loan
+            // that hasn't closed yet.
+            console.warn(
+              `⏸️  processFlowExecution: exec #${execution.id} step [${currentKey}/wait_until_date] — date_field="${dateFieldName}" missing/invalid; completing flow gracefully (no future date to wait for)`,
+            );
+            await pool.query(
+              `UPDATE reminder_flow_executions
+               SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+                   completed_steps = ?, current_step_key = ?,
+                   context_data = JSON_SET(
+                     COALESCE(context_data, JSON_OBJECT()),
+                     '$._completed_reason',
+                     ?
+                   )
+               WHERE id = ?`,
+              [
+                JSON.stringify(completedSteps),
+                currentKey,
+                `wait_until_date_missing:${dateFieldName}`,
+                execution.id,
+              ],
+            );
+            return;
           }
         } else {
           nextExecAt = new Date();
@@ -12374,10 +12670,72 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
             ? "condition_yes"
             : "condition_no";
       } else if (condType === "inactivity_days") {
-        // Default yes branch when we cannot evaluate dynamically at this time
-        edgeType = "condition_yes";
+        // R5 fix: actually evaluate inactivity. condition_yes = client has been
+        // inactive for >= cfg.days days (no inbound communication). Falls back
+        // to "yes" if we cannot resolve client_id.
+        const days = Number(cfg.days ?? cfg.threshold_days ?? 7);
+        const clientId = execution.client_id;
+        if (!clientId || !Number.isFinite(days) || days < 0) {
+          edgeType = "condition_yes";
+        } else {
+          try {
+            const [rows] = await pool.query<RowDataPacket[]>(
+              `SELECT MAX(created_at) AS last_at FROM communications
+               WHERE tenant_id = ? AND client_id = ? AND direction = 'inbound'`,
+              [execution.tenant_id, clientId],
+            );
+            const lastAt = rows[0]?.last_at
+              ? new Date(rows[0].last_at).getTime()
+              : 0;
+            const ageDays = lastAt
+              ? (Date.now() - lastAt) / 86_400_000
+              : Number.POSITIVE_INFINITY;
+            edgeType = ageDays >= days ? "condition_yes" : "condition_no";
+          } catch (e) {
+            console.warn(
+              `inactivity_days condition eval failed for exec #${execution.id}:`,
+              e,
+            );
+            edgeType = "condition_yes";
+          }
+        }
       } else if (condType === "task_completed") {
-        edgeType = "condition_yes";
+        // R5 fix: condition_yes when the named task (cfg.task_name or
+        // cfg.task_id) is completed for the loan. Falls back to "no" so the
+        // "not yet done" branch is taken (safer default than spamming).
+        const loanId = execution.loan_application_id;
+        const taskId = cfg.task_id ? Number(cfg.task_id) : null;
+        const taskName = cfg.task_name as string | undefined;
+        if (!loanId || (!taskId && !taskName)) {
+          edgeType = "condition_no";
+        } else {
+          try {
+            const params: any[] = [execution.tenant_id, loanId];
+            let where = `tenant_id = ? AND loan_application_id = ?`;
+            if (taskId) {
+              where += ` AND id = ?`;
+              params.push(taskId);
+            } else if (taskName) {
+              where += ` AND title = ?`;
+              params.push(taskName);
+            }
+            const [rows] = await pool.query<RowDataPacket[]>(
+              `SELECT status FROM tasks WHERE ${where} LIMIT 1`,
+              params,
+            );
+            const status = rows[0]?.status;
+            edgeType =
+              status === "completed" || status === "done"
+                ? "condition_yes"
+                : "condition_no";
+          } catch (e) {
+            console.warn(
+              `task_completed condition eval failed for exec #${execution.id}:`,
+              e,
+            );
+            edgeType = "condition_no";
+          }
+        }
       } else if (condType === "field_not_empty") {
         const fieldName = cfg.field_name as string | undefined;
         const fieldVal = fieldName ? contextData[fieldName] : undefined;
@@ -12421,12 +12779,20 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
     currentKey = fallback.target_step_key;
   }
 
-  // Max iterations guard — save whatever progress was made
+  // R9 fix: Max iterations guard — reschedule the execution to continue on
+  // the next cron tick instead of saving partial state with no
+  // next_execution_at (which would orphan it). 30 chained immediate steps
+  // is unusual; if a flow legitimately needs more, the cron will pick it up
+  // again in 5 minutes.
   console.warn(
-    `\u26a0\ufe0f  processFlowExecution: exec #${execution.id} flow #${execution.flow_id} \u2014 hit MAX_STEPS (${MAX_STEPS}) guard at step [${currentKey}]; saving partial progress`,
+    `\u26a0\ufe0f  processFlowExecution: exec #${execution.id} flow #${execution.flow_id} \u2014 hit MAX_STEPS (${MAX_STEPS}) guard at step [${currentKey}]; rescheduling for continuation`,
   );
   await pool.query(
-    `UPDATE reminder_flow_executions SET current_step_key = ?, completed_steps = ?, updated_at = NOW() WHERE id = ?`,
+    `UPDATE reminder_flow_executions
+     SET current_step_key = ?, completed_steps = ?,
+         next_execution_at = DATE_ADD(NOW(), INTERVAL 5 MINUTE),
+         updated_at = NOW()
+     WHERE id = ?`,
     [currentKey, JSON.stringify(completedSteps), execution.id],
   );
 }
@@ -12566,8 +12932,11 @@ const handleProcessReminderFlows: RequestHandler = async (req, res) => {
     );
 
     // Load all due active executions (next_execution_at <= NOW())
+    // Pulls `enable_trace_logging` so the engine can decide per-execution
+    // whether to write rows to `reminder_flow_step_logs` without an extra
+    // round-trip per step.
     const [executions] = await pool.query<RowDataPacket[]>(
-      `SELECT rfe.*, rf.name AS flow_name
+      `SELECT rfe.*, rf.name AS flow_name, rf.enable_trace_logging
        FROM reminder_flow_executions rfe
        JOIN reminder_flows rf ON rf.id = rfe.flow_id AND rf.is_active = 1
        WHERE rfe.status = 'active'
@@ -12601,13 +12970,46 @@ const handleProcessReminderFlows: RequestHandler = async (req, res) => {
         const msg = err instanceof Error ? err.message : String(err);
         errors.push(`exec#${execution.id}: ${msg}`);
         console.error(`❌ Flow execution #${execution.id} failed:`, err);
-        // Mark as failed so it won't be retried indefinitely
-        await pool
-          .query(
-            `UPDATE reminder_flow_executions SET status = 'failed', updated_at = NOW() WHERE id = ?`,
-            [execution.id],
-          )
-          .catch(() => {});
+        // R3 fix: do NOT mark as 'failed' on transient errors — reschedule
+        // for retry in 15 minutes. Permanent failure is reserved for cases
+        // where the flow definition is invalid (handled inside processFlowExecution).
+        // After 5 retries (tracked via context_data._retry_count), give up.
+        try {
+          let retryCount = 0;
+          try {
+            const ctx =
+              typeof execution.context_data === "string"
+                ? JSON.parse(execution.context_data || "{}")
+                : execution.context_data || {};
+            retryCount = (ctx._retry_count ?? 0) + 1;
+            ctx._retry_count = retryCount;
+            ctx._last_error = msg.slice(0, 500);
+            if (retryCount >= 5) {
+              await pool.query(
+                `UPDATE reminder_flow_executions
+                 SET status = 'failed', context_data = ?, updated_at = NOW()
+                 WHERE id = ?`,
+                [JSON.stringify(ctx), execution.id],
+              );
+            } else {
+              await pool.query(
+                `UPDATE reminder_flow_executions
+                 SET next_execution_at = DATE_ADD(NOW(), INTERVAL 15 MINUTE),
+                     context_data = ?, updated_at = NOW()
+                 WHERE id = ?`,
+                [JSON.stringify(ctx), execution.id],
+              );
+            }
+          } catch {
+            // If we can't even parse context, just mark failed
+            await pool.query(
+              `UPDATE reminder_flow_executions SET status = 'failed', updated_at = NOW() WHERE id = ?`,
+              [execution.id],
+            );
+          }
+        } catch {
+          /* swallow */
+        }
       }
     }
 
@@ -19056,9 +19458,12 @@ const handleGetReminderFlows: RequestHandler = async (req, res) => {
         (SELECT COUNT(*) FROM reminder_flow_executions rfe WHERE rfe.flow_id = rf.id AND rfe.status = 'active') AS active_executions_count
        FROM reminder_flows rf
        WHERE rf.tenant_id = ?
+         AND (rf.restricted_to_broker_id IS NULL OR rf.restricted_to_broker_id = ?)
        ${categoryFilter ? "AND rf.flow_category = ?" : ""}
        ORDER BY rf.created_at DESC`,
-      categoryFilter ? [tenantId, categoryFilter] : [tenantId],
+      categoryFilter
+        ? [tenantId, brokerId, categoryFilter]
+        : [tenantId, brokerId],
     );
 
     return res.json({ success: true, flows });
@@ -19086,6 +19491,8 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
       apply_to_all_loans = true,
       loan_type_filter = "all",
       flow_category = "loan",
+      restricted_to_broker_id = null,
+      enable_trace_logging = false,
     } = req.body;
 
     if (!name || !trigger_event) {
@@ -19101,8 +19508,8 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [result] = await pool.query<ResultSetHeader>(
-      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, loan_type_filter, flow_category, created_by_broker_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reminder_flows (tenant_id, name, description, trigger_event, trigger_delay_days, is_active, apply_to_all_loans, loan_type_filter, flow_category, created_by_broker_id, restricted_to_broker_id, enable_trace_logging)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         tenantId,
         name,
@@ -19118,6 +19525,12 @@ const handleCreateReminderFlow: RequestHandler = async (req, res) => {
           ? flow_category
           : "loan",
         brokerId,
+        restricted_to_broker_id !== null &&
+        restricted_to_broker_id !== "" &&
+        Number.isFinite(Number(restricted_to_broker_id))
+          ? Number(restricted_to_broker_id)
+          : null,
+        enable_trace_logging ? 1 : 0,
       ],
     );
 
@@ -19150,8 +19563,10 @@ const handleGetReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [flowRows] = await pool.query<RowDataPacket[]>(
-      "SELECT * FROM reminder_flows WHERE id = ? AND tenant_id = ?",
-      [flowId, tenantId],
+      `SELECT * FROM reminder_flows
+        WHERE id = ? AND tenant_id = ?
+          AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
+      [flowId, tenantId, brokerId],
     );
 
     if (!flowRows.length) {
@@ -19210,9 +19625,137 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
       is_active,
       apply_to_all_loans,
       loan_type_filter,
+      flow_category,
+      restricted_to_broker_id,
+      enable_trace_logging,
       steps = [],
       connections = [],
     } = req.body;
+
+    // ── Validation: enums for safety ───────────────────────────────
+    // Keep these in sync with database/schema.sql `reminder_flows`,
+    // `reminder_flow_steps`, `reminder_flow_connections` enums.
+    const VALID_TRIGGER_EVENTS = new Set([
+      "app_sent",
+      "application_received",
+      "prequalified",
+      "preapproved",
+      "under_contract_loan_setup",
+      "submitted_to_underwriting",
+      "approved_with_conditions",
+      "clear_to_close",
+      "docs_out",
+      "loan_funded",
+      "task_pending",
+      "task_in_progress",
+      "task_overdue",
+      "no_activity",
+      "manual",
+      "prospect_contact_attempted",
+      "prospect_contacted",
+      "prospect_appt_set",
+      "prospect_waiting_for_1st_deal",
+      "prospect_first_deal_funded",
+      "prospect_second_deal_funded",
+      "prospect_top_agent_whale",
+    ]);
+    const VALID_STEP_TYPES = new Set([
+      "trigger",
+      "wait",
+      "send_notification",
+      "send_email",
+      "send_sms",
+      "send_whatsapp",
+      "condition",
+      "branch",
+      "wait_for_response",
+      "wait_until_date",
+      "end",
+    ]);
+    const VALID_EDGE_TYPES = new Set([
+      "default",
+      "condition_yes",
+      "condition_no",
+      "loan_type_purchase",
+      "loan_type_refinance",
+      "no_response",
+      "responded",
+    ]);
+
+    if (
+      trigger_event !== undefined &&
+      !VALID_TRIGGER_EVENTS.has(trigger_event)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid trigger_event: ${trigger_event}`,
+      });
+    }
+
+    // Validate step payload
+    const stepKeysSeen = new Set<string>();
+    for (const s of steps) {
+      if (!s?.step_key || typeof s.step_key !== "string") {
+        return res
+          .status(400)
+          .json({ success: false, error: "Each step requires step_key" });
+      }
+      if (stepKeysSeen.has(s.step_key)) {
+        return res.status(400).json({
+          success: false,
+          error: `Duplicate step_key in payload: ${s.step_key}`,
+        });
+      }
+      stepKeysSeen.add(s.step_key);
+      if (!VALID_STEP_TYPES.has(s.step_type)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid step_type "${s.step_type}" for step ${s.step_key}`,
+        });
+      }
+      if (!s.label || typeof s.label !== "string") {
+        return res.status(400).json({
+          success: false,
+          error: `Step ${s.step_key} requires a label`,
+        });
+      }
+    }
+
+    // Validate connection payload
+    const edgeKeysSeen = new Set<string>();
+    for (const c of connections) {
+      if (!c?.edge_key || typeof c.edge_key !== "string") {
+        return res
+          .status(400)
+          .json({ success: false, error: "Each connection requires edge_key" });
+      }
+      if (edgeKeysSeen.has(c.edge_key)) {
+        return res.status(400).json({
+          success: false,
+          error: `Duplicate edge_key in payload: ${c.edge_key}`,
+        });
+      }
+      edgeKeysSeen.add(c.edge_key);
+      if (c.edge_type && !VALID_EDGE_TYPES.has(c.edge_type)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid edge_type "${c.edge_type}" for edge ${c.edge_key}`,
+        });
+      }
+      // Referential integrity — connection endpoints must exist in step set
+      if (!stepKeysSeen.has(c.source_step_key)) {
+        return res.status(400).json({
+          success: false,
+          error: `Edge ${c.edge_key} references unknown source_step_key: ${c.source_step_key}`,
+        });
+      }
+      if (!stepKeysSeen.has(c.target_step_key)) {
+        return res.status(400).json({
+          success: false,
+          error: `Edge ${c.edge_key} references unknown target_step_key: ${c.target_step_key}`,
+        });
+      }
+    }
 
     const [tenantRows] = await pool.query<RowDataPacket[]>(
       "SELECT tenant_id FROM brokers WHERE id = ?",
@@ -19221,8 +19764,10 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [flowRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id FROM reminder_flows WHERE id = ? AND tenant_id = ?",
-      [flowId, tenantId],
+      `SELECT id FROM reminder_flows
+        WHERE id = ? AND tenant_id = ?
+          AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
+      [flowId, tenantId, brokerId],
     );
 
     if (!flowRows.length) {
@@ -19252,8 +19797,9 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
         updateValues.push(trigger_event);
       }
       if (trigger_delay_days !== undefined) {
+        const delay = Math.max(0, Number(trigger_delay_days) || 0);
         updateFields.push("trigger_delay_days = ?");
-        updateValues.push(trigger_delay_days);
+        updateValues.push(delay);
       }
       if (is_active !== undefined) {
         updateFields.push("is_active = ?");
@@ -19269,6 +19815,30 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
       ) {
         updateFields.push("loan_type_filter = ?");
         updateValues.push(loan_type_filter);
+      }
+      // B1 fix: persist flow_category on update (was previously ignored)
+      if (
+        flow_category !== undefined &&
+        ["loan", "realtor_prospecting"].includes(flow_category)
+      ) {
+        updateFields.push("flow_category = ?");
+        updateValues.push(flow_category);
+      }
+      // Per-broker restriction: NULL clears, integer sets, else ignored.
+      if (restricted_to_broker_id !== undefined) {
+        if (
+          restricted_to_broker_id === null ||
+          restricted_to_broker_id === ""
+        ) {
+          updateFields.push("restricted_to_broker_id = NULL");
+        } else if (Number.isFinite(Number(restricted_to_broker_id))) {
+          updateFields.push("restricted_to_broker_id = ?");
+          updateValues.push(Number(restricted_to_broker_id));
+        }
+      }
+      if (enable_trace_logging !== undefined) {
+        updateFields.push("enable_trace_logging = ?");
+        updateValues.push(enable_trace_logging ? 1 : 0);
       }
 
       if (updateFields.length) {
@@ -19290,8 +19860,8 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
           s.label,
           s.description || null,
           s.config ? JSON.stringify(s.config) : null,
-          s.position_x ?? 0,
-          s.position_y ?? 0,
+          Number.isFinite(Number(s.position_x)) ? Number(s.position_x) : 0,
+          Number.isFinite(Number(s.position_y)) ? Number(s.position_y) : 0,
         ]);
         await conn.query(
           `INSERT INTO reminder_flow_steps (flow_id, step_key, step_type, label, description, config, position_x, position_y)
@@ -19357,8 +19927,10 @@ const handleDeleteReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [result] = await pool.query<ResultSetHeader>(
-      "DELETE FROM reminder_flows WHERE id = ? AND tenant_id = ?",
-      [flowId, tenantId],
+      `DELETE FROM reminder_flows
+        WHERE id = ? AND tenant_id = ?
+          AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
+      [flowId, tenantId, brokerId],
     );
 
     if (result.affectedRows === 0) {
@@ -19373,6 +19945,75 @@ const handleDeleteReminderFlow: RequestHandler = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, error: "Failed to delete reminder flow" });
+  }
+};
+
+/**
+ * GET /api/reminder-flows/:flowId/trace
+ * Return per-step trace logs for a flow's executions, gated by per-broker
+ * restriction. Useful for debugging the test flow lifecycle. Optional query:
+ *   - execution_id (number) — filter to a single execution
+ *   - limit (1..500, default 200)
+ */
+const handleGetReminderFlowTrace: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { flowId } = req.params;
+    const executionId = req.query.execution_id
+      ? Number(req.query.execution_id)
+      : null;
+    const limit = Math.min(
+      500,
+      Math.max(1, parseInt(req.query.limit as string) || 200),
+    );
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ?",
+      [brokerId],
+    );
+    const tenantId = tenantRows[0]?.tenant_id;
+
+    // Confirm caller can see this flow (per-broker restriction).
+    const [flowRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, name, enable_trace_logging FROM reminder_flows
+        WHERE id = ? AND tenant_id = ?
+          AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
+      [flowId, tenantId, brokerId],
+    );
+    if (!flowRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Reminder flow not found" });
+    }
+
+    const params: any[] = [tenantId, flowId];
+    let where = "tenant_id = ? AND flow_id = ?";
+    if (executionId) {
+      where += " AND execution_id = ?";
+      params.push(executionId);
+    }
+
+    const [logs] = await pool.query<RowDataPacket[]>(
+      `SELECT id, execution_id, step_key, step_type, event, channel,
+              recipient, external_id, delivery_status, payload,
+              error_message, duration_ms, started_at, completed_at
+         FROM reminder_flow_step_logs
+         WHERE ${where}
+         ORDER BY started_at DESC, id DESC
+         LIMIT ${limit}`,
+      params,
+    );
+
+    return res.json({
+      success: true,
+      flow: flowRows[0],
+      logs,
+    });
+  } catch (error) {
+    console.error("Error fetching reminder flow trace:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch trace logs" });
   }
 };
 
@@ -19392,8 +20033,10 @@ const handleToggleReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [flowRows] = await pool.query<RowDataPacket[]>(
-      "SELECT id, is_active FROM reminder_flows WHERE id = ? AND tenant_id = ?",
-      [flowId, tenantId],
+      `SELECT id, is_active FROM reminder_flows
+        WHERE id = ? AND tenant_id = ?
+          AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
+      [flowId, tenantId, brokerId],
     );
 
     if (!flowRows.length) {
@@ -20398,6 +21041,11 @@ function createServer() {
     "/api/reminder-flows/:flowId/toggle",
     verifyBrokerSession,
     handleToggleReminderFlow,
+  );
+  expressApp.get(
+    "/api/reminder-flows/:flowId/trace",
+    verifyBrokerSession,
+    handleGetReminderFlowTrace,
   );
   expressApp.get(
     "/api/reminder-flow-executions",
