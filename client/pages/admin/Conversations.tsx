@@ -1666,11 +1666,6 @@ const Conversations = () => {
                                 <div className="hidden md:flex items-center gap-1 flex-shrink-0">
                                   {/* Badges — hidden on group-hover */}
                                   <div className="flex items-center gap-1 group-hover:hidden">
-                                    {!thread.broker_id && (
-                                      <span className="bg-amber-100 text-amber-700 text-[10px] rounded px-1.5 py-0.5 font-semibold leading-none border border-amber-300">
-                                        Unassigned
-                                      </span>
-                                    )}
                                     {thread.unread_count > 0 && (
                                       <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
                                         {thread.unread_count}
@@ -1733,11 +1728,6 @@ const Conversations = () => {
 
                                 {/* ── Mobile: badges + permanent ⋮ dropdown ── */}
                                 <div className="flex md:hidden items-center gap-1 flex-shrink-0">
-                                  {!thread.broker_id && (
-                                    <span className="bg-amber-100 text-amber-700 text-[10px] rounded px-1.5 py-0.5 font-semibold leading-none border border-amber-300">
-                                      Unassigned
-                                    </span>
-                                  )}
                                   {thread.unread_count > 0 && (
                                     <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
                                       {thread.unread_count}
@@ -2346,6 +2336,19 @@ const Conversations = () => {
 
               {/* Composer */}
               <div className="p-3 border-t border-border bg-card flex-shrink-0">
+                {/* Unassigned claim notice */}
+                {!currentThread.broker_id && (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 mb-2.5">
+                    <Info className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-snug">
+                      <span className="font-semibold">
+                        Unassigned conversation —
+                      </span>{" "}
+                      replying will assign it to you and remove it from other
+                      bankers' queues.
+                    </p>
+                  </div>
+                )}
                 {/* Row 1: Channel + Smart Template picker */}
                 <div className="flex items-center gap-2 mb-2">
                   <Select
