@@ -2390,6 +2390,23 @@ async function createBrokerNotification(params: {
        VALUES ${placeholders.join(", ")}`,
       values,
     );
+
+    // Real-time fanout via Ably so brokers see the bell update instantly
+    // without polling. One message per recipient on a per-broker channel.
+    // Non-fatal: publishToAbly already swallows errors internally.
+    const arrivedAt = new Date().toISOString();
+    await Promise.all(
+      ids.map((brokerId) =>
+        publishToAbly(`broker-notifications:${brokerId}`, "new", {
+          title: params.title,
+          message: params.message,
+          notification_type: type,
+          category: params.category,
+          action_url: params.actionUrl ?? null,
+          created_at: arrivedAt,
+        }),
+      ),
+    );
   } catch (err) {
     console.error("createBrokerNotification failed (non-fatal):", err);
   }
@@ -14632,6 +14649,7 @@ const handleAblyToken: RequestHandler = async (req, res) => {
         "conversation:*": ["subscribe"],
         "conversations:all": ["subscribe"],
         "voice:incoming": ["subscribe"],
+        [`broker-notifications:${brokerId}`]: ["subscribe"],
       },
       ttl: 3_600_000, // 1 hour in ms
     });

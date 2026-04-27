@@ -53,8 +53,14 @@ import {
   isNotificationSoundMuted,
   setNotificationSoundMuted,
 } from "@/lib/notification-sound";
+import { getSharedAblyClient } from "@/lib/ably-client";
 
-const POLL_INTERVAL_MS = 30000;
+/**
+ * Idle-tab safety net poll interval. The primary delivery channel is Ably
+ * realtime — this only runs when the tab regains focus or reconnects, to
+ * catch notifications that may have arrived while the websocket was down.
+ */
+const FALLBACK_POLL_MS = 5 * 60 * 1000;
 
 const CATEGORY_ICON: Record<
   NotificationCategory,
@@ -91,6 +97,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
   const navigate = useNavigate();
   const { toast } = useToast();
   const sessionToken = useAppSelector((s) => s.brokerAuth.sessionToken);
+  const brokerId = useAppSelector((s) => s.brokerAuth.user?.id ?? null);
   const notifications = useAppSelector(selectNotifications);
   const unreadCount = useAppSelector(selectUnreadCount);
   const lastSeenMaxId = useAppSelector(selectLastSeenMaxId);
@@ -101,15 +108,66 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
   const [muted, setMuted] = React.useState(() => isNotificationSoundMuted());
   const ringTimerRef = React.useRef<number | null>(null);
 
-  // Poll for notifications
+  // Initial fetch + visibility/connectivity-aware safety net.
+  // Ably is the primary delivery channel (see effect below); this only fetches
+  // on mount, when the tab becomes visible, when the network reconnects, and
+  // every 5 minutes as a backstop against missed websocket events.
   React.useEffect(() => {
     if (!sessionToken) return;
     dispatch(fetchNotifications());
-    const id = window.setInterval(() => {
-      dispatch(fetchNotifications());
-    }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
+
+    const refresh = () => {
+      if (document.visibilityState === "visible") {
+        dispatch(fetchNotifications());
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const onOnline = () => refresh();
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    const id = window.setInterval(refresh, FALLBACK_POLL_MS);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+      window.clearInterval(id);
+    };
   }, [dispatch, sessionToken]);
+
+  // Real-time delivery via Ably — subscribes to the per-broker channel and
+  // refreshes the slice the moment the server publishes a new notification.
+  // No polling cost when the tab is idle and the websocket is healthy.
+  React.useEffect(() => {
+    if (!sessionToken || !brokerId) return;
+    let channel: ReturnType<
+      Awaited<ReturnType<typeof getSharedAblyClient>>["channels"]["get"]
+    > | null = null;
+    let cancelled = false;
+
+    (async () => {
+      const client = await getSharedAblyClient(sessionToken);
+      if (cancelled || !client) return;
+      channel = client.channels.get(`broker-notifications:${brokerId}`);
+      channel.subscribe("new", () => {
+        // Pull the canonical record (with id + read state) from the API so
+        // dedup/grouping logic stays in one place.
+        dispatch(fetchNotifications());
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      try {
+        channel?.unsubscribe();
+      } catch {
+        /* noop */
+      }
+    };
+  }, [dispatch, sessionToken, brokerId]);
 
   // Detect new arrivals — toast + ring animation
   React.useEffect(() => {
