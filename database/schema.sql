@@ -991,9 +991,11 @@ CREATE TABLE `notifications` (
   `id` int NOT NULL AUTO_INCREMENT,
   `tenant_id` int NOT NULL DEFAULT '1',
   `user_id` int NOT NULL,
+  `recipient_type` enum('client','broker') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'client',
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `message` text COLLATE utf8mb4_unicode_ci NOT NULL,
   `notification_type` enum('info','success','warning','error') COLLATE utf8mb4_unicode_ci DEFAULT 'info',
+  `category` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'system',
   `is_read` tinyint(1) DEFAULT '0',
   `action_url` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
@@ -1003,8 +1005,8 @@ CREATE TABLE `notifications` (
   KEY `idx_is_read` (`is_read`),
   KEY `idx_created_at` (`created_at`),
   KEY `tenant_id` (`tenant_id`),
-  CONSTRAINT `fk_notifications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
+  KEY `idx_recipient_lookup` (`tenant_id`,`recipient_type`,`user_id`,`is_read`,`created_at`),
+  CONSTRAINT `fk_notifications_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=270019;
 /*!40101 SET character_set_client = @saved_cs_client */;
 

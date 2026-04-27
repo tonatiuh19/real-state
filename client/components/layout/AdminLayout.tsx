@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import GlobalVoiceManager from "@/components/GlobalVoiceManager";
+import NotificationBell from "@/components/layout/NotificationBell";
 import {
   LayoutDashboard,
   Kanban,
@@ -289,14 +290,17 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           alt="Encore Mortgage"
           className="h-8 w-auto"
         />
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setMobileMenuOpen(true)}
-          className="h-9 w-9"
-        >
-          <Menu className="h-5 w-5" />
-        </Button>
+        <div className="flex items-center gap-1">
+          {sessionToken && <NotificationBell variant="compact" />}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setMobileMenuOpen(true)}
+            className="h-9 w-9"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        </div>
       </div>
 
       {/* Mobile Navigation Sheet */}
@@ -621,6 +625,15 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           )}
         </div>
       </aside>
+
+      {/* Desktop floating notification bell — top-right of main content */}
+      {sessionToken && (
+        <div className="hidden md:flex fixed top-3 right-4 z-40">
+          <div className="rounded-full bg-background/80 backdrop-blur border shadow-sm">
+            <NotificationBell />
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto h-screen pt-14 md:pt-0">

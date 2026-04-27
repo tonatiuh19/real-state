@@ -803,6 +803,41 @@ async function upsertConversationThread(params: {
         inboxNumber ?? null,
       ],
     );
+
+    // Notify broker(s) of inbound activity so the bell lights up in real time.
+    if (direction === "inbound") {
+      try {
+        const channelLabel =
+          communicationType === "sms"
+            ? "SMS"
+            : communicationType === "email"
+              ? "email"
+              : communicationType === "whatsapp"
+                ? "WhatsApp"
+                : communicationType === "voice"
+                  ? "voice"
+                  : "message";
+        const who = clientName || clientPhone || clientEmail || "a contact";
+        const snippet = (body || "").trim().slice(0, 120);
+        const category = communicationType === "voice" ? "call" : "message";
+        await createBrokerNotification({
+          brokerIds: resolvedBrokerId,
+          notifyAllAdminsOnEmpty: !resolvedBrokerId,
+          title: `New ${channelLabel} from ${who}`,
+          message: snippet || `New inbound ${channelLabel}`,
+          category: category as any,
+          type: "info",
+          actionUrl: `/admin/conversations?conversation=${encodeURIComponent(
+            convId,
+          )}`,
+        });
+      } catch (notifyErr) {
+        console.error(
+          "Broker notification (inbound thread) failed:",
+          notifyErr,
+        );
+      }
+    }
   } catch (err) {
     // Re-throw so callers know the upsert failed and can surface the error
     // rather than silently returning a success response with no thread.
@@ -2289,6 +2324,76 @@ const verifyBrokerSession = async (
     });
   }
 };
+
+// =====================================================
+// BROKER NOTIFICATION HELPER
+// =====================================================
+
+type BrokerNotificationCategory =
+  | "message"
+  | "call"
+  | "loan"
+  | "client"
+  | "task"
+  | "flow"
+  | "lead"
+  | "system";
+
+/**
+ * Create an in-app notification for one or more brokers (admin bell feed).
+ * Non-fatal: errors are logged and swallowed so callers never break the
+ * primary action because of a notification failure.
+ */
+async function createBrokerNotification(params: {
+  brokerIds: number | number[] | null | undefined;
+  title: string;
+  message: string;
+  category: BrokerNotificationCategory;
+  type?: "info" | "success" | "warning" | "error";
+  actionUrl?: string | null;
+  /** When brokerIds is null/empty, notify ALL active brokers (admins). */
+  notifyAllAdminsOnEmpty?: boolean;
+}): Promise<void> {
+  try {
+    let ids: number[] = [];
+    if (Array.isArray(params.brokerIds)) {
+      ids = params.brokerIds.filter((n) => Number.isFinite(n)) as number[];
+    } else if (typeof params.brokerIds === "number") {
+      ids = [params.brokerIds];
+    }
+    if (ids.length === 0 && params.notifyAllAdminsOnEmpty) {
+      const [admins] = await pool.query<any[]>(
+        "SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active' AND role = 'admin'",
+        [MORTGAGE_TENANT_ID],
+      );
+      ids = admins.map((a: any) => a.id);
+    }
+    if (ids.length === 0) return;
+    const type = params.type ?? "info";
+    const values: any[] = [];
+    const placeholders: string[] = [];
+    for (const brokerId of ids) {
+      placeholders.push("(?, ?, 'broker', ?, ?, ?, ?, ?)");
+      values.push(
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        params.title,
+        params.message,
+        type,
+        params.category,
+        params.actionUrl ?? null,
+      );
+    }
+    await pool.query(
+      `INSERT INTO notifications
+         (tenant_id, user_id, recipient_type, title, message, notification_type, category, action_url)
+       VALUES ${placeholders.join(", ")}`,
+      values,
+    );
+  } catch (err) {
+    console.error("createBrokerNotification failed (non-fatal):", err);
+  }
+}
 
 // =====================================================
 // AUDIT LOG HELPER
@@ -4074,6 +4179,23 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     );
 
     await connection.commit();
+
+    // Notify the assigned broker(s) about the new self-service application.
+    // Falls back to all admins only when no broker can be resolved (e.g., no
+    // share-link token).
+    const targetBrokerIds = [
+      resolvedBrokerUserId,
+      resolvedPartnerBrokerId,
+    ].filter((id): id is number => typeof id === "number");
+    await createBrokerNotification({
+      brokerIds: targetBrokerIds.length ? targetBrokerIds : null,
+      notifyAllAdminsOnEmpty: targetBrokerIds.length === 0,
+      title: "New Loan Application",
+      message: `${first_name} ${last_name} submitted application ${applicationNumber}`,
+      category: "loan",
+      type: "success",
+      actionUrl: `/admin/clients/${clientId}`,
+    });
 
     // Trigger reminder flows for application_received event (non-fatal)
     triggerReminderFlows(
@@ -9544,6 +9666,38 @@ const handleSubmitTaskSignatures: RequestHandler = async (req, res) => {
       [taskId],
     );
 
+    // Notify brokers that a task is awaiting their review
+    try {
+      const [taskRows] = await pool.query<RowDataPacket[]>(
+        `SELECT t.title, t.created_by_broker_id, t.application_id,
+                CONCAT(c.first_name, ' ', c.last_name) AS client_name
+           FROM tasks t
+           LEFT JOIN clients c ON t.assigned_to_user_id = c.id
+          WHERE t.id = ? AND t.tenant_id = ?
+          LIMIT 1`,
+        [taskId, MORTGAGE_TENANT_ID],
+      );
+      const tr = taskRows[0];
+      if (tr) {
+        await createBrokerNotification({
+          brokerIds: tr.created_by_broker_id ?? null,
+          notifyAllAdminsOnEmpty: !tr.created_by_broker_id,
+          title: "Task Submitted for Review",
+          message: `${tr.client_name || "A client"} submitted \"${tr.title}\" for approval`,
+          category: "task",
+          type: "info",
+          actionUrl: tr.application_id
+            ? `/admin/loans/${tr.application_id}`
+            : `/admin/tasks`,
+        });
+      }
+    } catch (notifyErr) {
+      console.error(
+        "Broker notification (task signatures submitted) failed:",
+        notifyErr,
+      );
+    }
+
     res.json({
       success: true,
       message: "Signatures submitted successfully",
@@ -10669,11 +10823,49 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
     // Map 'completed' from client to 'pending_approval' so broker must approve
     const actualStatus = status === "completed" ? "pending_approval" : status;
     const completedAt = actualStatus === "pending_approval" ? new Date() : null;
+    const previousStatus = tasks[0].status;
 
     await pool.query(
       "UPDATE tasks SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?",
       [actualStatus, completedAt, taskId],
     );
+
+    // Notify brokers when a client submits a task for approval, OR
+    // when a client first marks a task as in_progress (so the assigned
+    // broker knows the client has started working on it).
+    // Only notify on actual status transitions to avoid duplicate spam.
+    if (
+      actualStatus !== previousStatus &&
+      (actualStatus === "pending_approval" || actualStatus === "in_progress")
+    ) {
+      try {
+        const task = tasks[0];
+        const [clientRows] = await pool.query<any[]>(
+          "SELECT CONCAT(first_name, ' ', last_name) AS name FROM clients WHERE id = ? LIMIT 1",
+          [clientId],
+        );
+        const clientName = clientRows[0]?.name || "A client";
+        const isCompleted = actualStatus === "pending_approval";
+        await createBrokerNotification({
+          brokerIds: task.created_by_broker_id ?? null,
+          notifyAllAdminsOnEmpty: !task.created_by_broker_id,
+          title: isCompleted ? "Task Submitted for Review" : "Task In Progress",
+          message: isCompleted
+            ? `${clientName} submitted "${task.title}" for approval`
+            : `${clientName} started working on "${task.title}"`,
+          category: "task",
+          type: isCompleted ? "info" : "info",
+          actionUrl: task.application_id
+            ? `/admin/loans/${task.application_id}`
+            : `/admin/tasks`,
+        });
+      } catch (notifyErr) {
+        console.error(
+          "Broker notification (client task status change) failed:",
+          notifyErr,
+        );
+      }
+    }
 
     res.json({
       success: true,
@@ -24433,6 +24625,172 @@ function createServer() {
     "/api/realtor-prospects/:id",
     verifyBrokerSession,
     handleDeleteRealtorProspect,
+  );
+
+  // =====================================================
+  // BROKER NOTIFICATIONS — bell feed in admin layout
+  // =====================================================
+
+  // GET /api/notifications — list notifications for the authenticated broker
+  // Query params: unread_only=1, limit (default 50)
+  expressApp.get(
+    "/api/notifications",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerId = (req as any).brokerId;
+        const unreadOnly = req.query.unread_only === "1";
+        const limit = Math.min(
+          parseInt((req.query.limit as string) || "50", 10) || 50,
+          200,
+        );
+
+        const where = unreadOnly ? "AND is_read = 0" : "";
+
+        const [rows] = await pool.query<any[]>(
+          `SELECT id, title, message, notification_type, category, is_read,
+                  action_url, created_at, read_at
+             FROM notifications
+            WHERE tenant_id = ?
+              AND recipient_type = 'broker'
+              AND user_id = ?
+              ${where}
+            ORDER BY created_at DESC
+            LIMIT ?`,
+          [MORTGAGE_TENANT_ID, brokerId, limit],
+        );
+
+        const [unreadRows] = await pool.query<any[]>(
+          `SELECT COUNT(*) AS unread
+             FROM notifications
+            WHERE tenant_id = ?
+              AND recipient_type = 'broker'
+              AND user_id = ?
+              AND is_read = 0`,
+          [MORTGAGE_TENANT_ID, brokerId],
+        );
+
+        return res.json({
+          success: true,
+          notifications: rows.map((n) => ({
+            id: n.id,
+            title: n.title,
+            message: n.message,
+            notification_type: n.notification_type,
+            category: n.category,
+            is_read: !!n.is_read,
+            action_url: n.action_url,
+            created_at: n.created_at,
+            read_at: n.read_at,
+          })),
+          unread_count: unreadRows[0]?.unread ?? 0,
+        });
+      } catch (error: any) {
+        console.error("Error fetching broker notifications:", error);
+        return res.status(500).json({
+          success: false,
+          error: "Failed to fetch notifications",
+        });
+      }
+    },
+  );
+
+  // PUT /api/notifications/:id/read — mark single notification as read
+  expressApp.put(
+    "/api/notifications/:id/read",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerId = (req as any).brokerId;
+        const notificationId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(notificationId)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid notification id" });
+        }
+
+        const [result] = await pool.query<any>(
+          `UPDATE notifications
+              SET is_read = 1, read_at = NOW()
+            WHERE id = ?
+              AND tenant_id = ?
+              AND recipient_type = 'broker'
+              AND user_id = ?
+              AND is_read = 0`,
+          [notificationId, MORTGAGE_TENANT_ID, brokerId],
+        );
+
+        return res.json({
+          success: true,
+          updated: (result as any).affectedRows ?? 0,
+        });
+      } catch (error: any) {
+        console.error("Error marking notification as read:", error);
+        return res
+          .status(500)
+          .json({ success: false, error: "Failed to mark as read" });
+      }
+    },
+  );
+
+  // PUT /api/notifications/read-all — mark all broker notifications as read
+  expressApp.put(
+    "/api/notifications/read-all",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerId = (req as any).brokerId;
+        const [result] = await pool.query<any>(
+          `UPDATE notifications
+              SET is_read = 1, read_at = NOW()
+            WHERE tenant_id = ?
+              AND recipient_type = 'broker'
+              AND user_id = ?
+              AND is_read = 0`,
+          [MORTGAGE_TENANT_ID, brokerId],
+        );
+        return res.json({
+          success: true,
+          updated: (result as any).affectedRows ?? 0,
+        });
+      } catch (error: any) {
+        console.error("Error marking all notifications read:", error);
+        return res
+          .status(500)
+          .json({ success: false, error: "Failed to mark all as read" });
+      }
+    },
+  );
+
+  // DELETE /api/notifications/:id — dismiss a notification
+  expressApp.delete(
+    "/api/notifications/:id",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerId = (req as any).brokerId;
+        const notificationId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(notificationId)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid notification id" });
+        }
+        await pool.query(
+          `DELETE FROM notifications
+            WHERE id = ?
+              AND tenant_id = ?
+              AND recipient_type = 'broker'
+              AND user_id = ?`,
+          [notificationId, MORTGAGE_TENANT_ID, brokerId],
+        );
+        return res.json({ success: true });
+      } catch (error: any) {
+        console.error("Error deleting notification:", error);
+        return res
+          .status(500)
+          .json({ success: false, error: "Failed to delete notification" });
+      }
+    },
   );
 
   // 404 handler - only for API routes
