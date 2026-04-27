@@ -194,11 +194,14 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
 
     // Acknowledge so we don't toast again next poll
     dispatch(acknowledgeArrivals());
+  }, [notifications, lastSeenMaxId, hasFetchedOnce, dispatch, toast]);
 
+  // Clear ring timer only on unmount to prevent the ping staying forever
+  React.useEffect(() => {
     return () => {
       if (ringTimerRef.current) window.clearTimeout(ringTimerRef.current);
     };
-  }, [notifications, lastSeenMaxId, hasFetchedOnce, dispatch, toast]);
+  }, []);
 
   const handleClickNotification = (n: BrokerNotification) => {
     if (!n.is_read) dispatch(markAsRead(n.id));

@@ -2015,27 +2015,6 @@ const Conversations = () => {
                               new Date(prevDate).toDateString());
                         const isOutbound = message.direction === "outbound";
 
-                        // Delivery tick helper
-                        const DeliveryTick = () => {
-                          if (!isOutbound) return null;
-                          const ds = message.delivery_status;
-                          if (ds === "read") {
-                            return (
-                              <CheckCheck className="h-3 w-3 text-sky-400" />
-                            );
-                          }
-                          if (ds === "delivered") {
-                            return (
-                              <CheckCheck className="h-3 w-3 text-white/60" />
-                            );
-                          }
-                          if (ds === "failed" || ds === "rejected") {
-                            return <X className="h-3 w-3 text-red-400" />;
-                          }
-                          // sent / pending
-                          return <Check className="h-3 w-3 text-white/50" />;
-                        };
-
                         return (
                           <React.Fragment key={message.id}>
                             {showDateSep && msgDate && (
@@ -2049,228 +2028,256 @@ const Conversations = () => {
                             )}
                             <div
                               className={cn(
-                                "flex mb-2 group",
-                                isOutbound ? "justify-end" : "justify-start",
+                                "flex flex-col mb-2 group",
+                                isOutbound ? "items-end" : "items-start",
                               )}
                             >
-                              {isOutbound && (
-                                <button
-                                  onClick={() =>
-                                    handleDeleteMessage(message.id)
-                                  }
-                                  className="opacity-0 group-hover:opacity-100 transition-opacity mr-1.5 self-center p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                                  title="Delete message"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
                               <div
                                 className={cn(
-                                  "max-w-[72%] px-3.5 py-2.5 rounded-2xl text-sm shadow-sm",
-                                  isOutbound
-                                    ? "bg-slate-800 text-white rounded-br-sm"
-                                    : "bg-muted text-foreground rounded-bl-sm border border-border",
+                                  "flex items-end gap-1",
+                                  isOutbound ? "justify-end" : "justify-start",
+                                  "w-full",
                                 )}
                               >
+                                {isOutbound && (
+                                  <button
+                                    onClick={() =>
+                                      handleDeleteMessage(message.id)
+                                    }
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity mr-0.5 self-center p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                    title="Delete message"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                                 <div
                                   className={cn(
-                                    "flex items-center gap-1.5 mb-1",
+                                    "max-w-[72%] px-3.5 py-2.5 rounded-2xl text-sm shadow-sm cursor-default select-text",
                                     isOutbound
-                                      ? "text-white/60"
-                                      : "text-muted-foreground",
+                                      ? "bg-slate-800 text-white rounded-br-sm"
+                                      : "bg-muted text-foreground rounded-bl-sm border border-border",
                                   )}
                                 >
-                                  <span
-                                    className={cn(
-                                      isOutbound
-                                        ? "text-white/70"
-                                        : getChannelColor(
-                                            message.communication_type,
-                                          ),
-                                    )}
-                                  >
-                                    {getChannelIcon(
-                                      message.communication_type,
-                                      "h-3 w-3",
-                                    )}
-                                  </span>
-                                  <span className="text-xs">
-                                    {msgDate ? formatTime(msgDate) : ""}
-                                  </span>
-                                </div>
-                                {message.subject && (
-                                  <p className="font-semibold text-xs mb-1 opacity-90">
-                                    {message.subject}
-                                  </p>
-                                )}
-                                {/* Call recordings get an inline audio player + download */}
-                                {message.communication_type === "call" &&
-                                message.recording_url &&
-                                message.external_id ? (
-                                  /* ✅ Recording is ready */
-                                  <div className="flex flex-col gap-2 min-w-[220px]">
-                                    <p className="leading-relaxed text-sm">
-                                      {message.body}
+                                  {message.subject && (
+                                    <p className="font-semibold text-xs mb-1 opacity-90">
+                                      {message.subject}
                                     </p>
-                                    {/* token query param required — <audio> can't send Authorization header */}
-                                    <audio
-                                      controls
-                                      preload="metadata"
-                                      className="w-full h-8 rounded"
-                                      style={{
-                                        colorScheme: isOutbound
-                                          ? "dark"
-                                          : "light",
-                                      }}
-                                      src={`/api/voice/recording/${message.external_id}?token=${encodeURIComponent(sessionToken ?? "")}`}
-                                    />
-                                    <a
-                                      href={`/api/voice/recording/${message.external_id}?download=1&token=${encodeURIComponent(sessionToken ?? "")}`}
-                                      download={`call-${message.external_id}.mp3`}
-                                      className={cn(
-                                        "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
-                                        isOutbound
-                                          ? "bg-white/10 text-white/80 hover:bg-white/20"
-                                          : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
-                                      )}
-                                    >
-                                      <Download className="h-3.5 w-3.5" />
-                                      Download recording
-                                    </a>
-                                  </div>
-                                ) : message.communication_type === "call" &&
-                                  message.external_id &&
-                                  !(message as any).recording_url ? (
-                                  /* ⏳ Call ended but recording still processing */
-                                  <div className="flex flex-col gap-1.5 min-w-[200px]">
-                                    <p className="leading-relaxed text-sm">
-                                      {message.body}
-                                    </p>
-                                    <div
-                                      className={cn(
-                                        "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
-                                        isOutbound
-                                          ? "bg-white/10 text-white/50"
-                                          : "bg-muted-foreground/10 text-muted-foreground",
-                                      )}
-                                    >
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                      Recording processing…
+                                  )}
+                                  {/* Call recordings get an inline audio player + download */}
+                                  {message.communication_type === "call" &&
+                                  message.recording_url &&
+                                  message.external_id ? (
+                                    /* ✅ Recording is ready */
+                                    <div className="flex flex-col gap-2 min-w-[220px]">
+                                      <p className="leading-relaxed text-sm">
+                                        {message.body}
+                                      </p>
+                                      {/* token query param required — <audio> can't send Authorization header */}
+                                      <audio
+                                        controls
+                                        preload="metadata"
+                                        className="w-full h-8 rounded"
+                                        style={{
+                                          colorScheme: isOutbound
+                                            ? "dark"
+                                            : "light",
+                                        }}
+                                        src={`/api/voice/recording/${message.external_id}?token=${encodeURIComponent(sessionToken ?? "")}`}
+                                      />
+                                      <a
+                                        href={`/api/voice/recording/${message.external_id}?download=1&token=${encodeURIComponent(sessionToken ?? "")}`}
+                                        download={`call-${message.external_id}.mp3`}
+                                        className={cn(
+                                          "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
+                                          isOutbound
+                                            ? "bg-white/10 text-white/80 hover:bg-white/20"
+                                            : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
+                                        )}
+                                      >
+                                        <Download className="h-3.5 w-3.5" />
+                                        Download recording
+                                      </a>
                                     </div>
-                                  </div>
-                                ) : (
-                                  <div className="flex flex-col gap-2">
-                                    {/* MMS media attachment */}
-                                    {(message as any).media_url &&
-                                      (() => {
-                                        const rawUrl: string = (message as any)
-                                          .media_url;
-                                        const contentType: string =
-                                          (message as any).media_content_type ??
-                                          "";
-                                        // Support JSON array (multiple attachments) or single URL
-                                        let urls: string[];
-                                        try {
-                                          urls = JSON.parse(rawUrl);
-                                        } catch {
-                                          urls = [rawUrl];
-                                        }
-                                        const proxyUrl = (u: string) =>
-                                          // CDN URLs are already public — serve directly
-                                          // Twilio media URLs need our auth proxy
-                                          u.startsWith(
-                                            "https://disruptinglabs.com/",
-                                          )
-                                            ? u
-                                            : `/api/sms/media?url=${encodeURIComponent(u)}&token=${encodeURIComponent(sessionToken ?? "")}`;
-                                        return urls.map((u, i) => {
-                                          const ct = i === 0 ? contentType : "";
-                                          if (
-                                            ct.startsWith("image/") ||
-                                            (!ct &&
-                                              /\.(jpe?g|png|gif|webp|heic)$/i.test(
-                                                u,
-                                              ))
-                                          ) {
+                                  ) : message.communication_type === "call" &&
+                                    message.external_id &&
+                                    !(message as any).recording_url ? (
+                                    /* ⏳ Call ended but recording still processing */
+                                    <div className="flex flex-col gap-1.5 min-w-[200px]">
+                                      <p className="leading-relaxed text-sm">
+                                        {message.body}
+                                      </p>
+                                      <div
+                                        className={cn(
+                                          "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
+                                          isOutbound
+                                            ? "bg-white/10 text-white/50"
+                                            : "bg-muted-foreground/10 text-muted-foreground",
+                                        )}
+                                      >
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                        Recording processing…
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col gap-2">
+                                      {/* MMS media attachment */}
+                                      {(message as any).media_url &&
+                                        (() => {
+                                          const rawUrl: string = (
+                                            message as any
+                                          ).media_url;
+                                          const contentType: string =
+                                            (message as any)
+                                              .media_content_type ?? "";
+                                          // Support JSON array (multiple attachments) or single URL
+                                          let urls: string[];
+                                          try {
+                                            urls = JSON.parse(rawUrl);
+                                          } catch {
+                                            urls = [rawUrl];
+                                          }
+                                          const proxyUrl = (u: string) =>
+                                            // CDN URLs are already public — serve directly
+                                            // Twilio media URLs need our auth proxy
+                                            u.startsWith(
+                                              "https://disruptinglabs.com/",
+                                            )
+                                              ? u
+                                              : `/api/sms/media?url=${encodeURIComponent(u)}&token=${encodeURIComponent(sessionToken ?? "")}`;
+                                          return urls.map((u, i) => {
+                                            const ct =
+                                              i === 0 ? contentType : "";
+                                            if (
+                                              ct.startsWith("image/") ||
+                                              (!ct &&
+                                                /\.(jpe?g|png|gif|webp|heic)$/i.test(
+                                                  u,
+                                                ))
+                                            ) {
+                                              return (
+                                                <a
+                                                  key={i}
+                                                  href={proxyUrl(u)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                >
+                                                  <img
+                                                    src={proxyUrl(u)}
+                                                    alt="MMS attachment"
+                                                    className="rounded-xl max-w-[260px] max-h-[320px] object-cover border border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
+                                                    loading="lazy"
+                                                  />
+                                                </a>
+                                              );
+                                            }
+                                            if (ct.startsWith("video/")) {
+                                              return (
+                                                <video
+                                                  key={i}
+                                                  controls
+                                                  className="rounded-xl max-w-[260px]"
+                                                  preload="metadata"
+                                                >
+                                                  <source
+                                                    src={proxyUrl(u)}
+                                                    type={ct}
+                                                  />
+                                                </video>
+                                              );
+                                            }
+                                            if (ct.startsWith("audio/")) {
+                                              return (
+                                                <audio
+                                                  key={i}
+                                                  controls
+                                                  preload="metadata"
+                                                  className="w-full h-8 rounded"
+                                                >
+                                                  <source
+                                                    src={proxyUrl(u)}
+                                                    type={ct}
+                                                  />
+                                                </audio>
+                                              );
+                                            }
                                             return (
                                               <a
                                                 key={i}
                                                 href={proxyUrl(u)}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
+                                                className={cn(
+                                                  "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
+                                                  isOutbound
+                                                    ? "bg-white/10 text-white/80 hover:bg-white/20"
+                                                    : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
+                                                )}
                                               >
-                                                <img
-                                                  src={proxyUrl(u)}
-                                                  alt="MMS attachment"
-                                                  className="rounded-xl max-w-[260px] max-h-[320px] object-cover border border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
-                                                  loading="lazy"
-                                                />
+                                                <Download className="h-3.5 w-3.5" />
+                                                Download attachment
                                               </a>
                                             );
-                                          }
-                                          if (ct.startsWith("video/")) {
-                                            return (
-                                              <video
-                                                key={i}
-                                                controls
-                                                className="rounded-xl max-w-[260px]"
-                                                preload="metadata"
-                                              >
-                                                <source
-                                                  src={proxyUrl(u)}
-                                                  type={ct}
-                                                />
-                                              </video>
-                                            );
-                                          }
-                                          if (ct.startsWith("audio/")) {
-                                            return (
-                                              <audio
-                                                key={i}
-                                                controls
-                                                preload="metadata"
-                                                className="w-full h-8 rounded"
-                                              >
-                                                <source
-                                                  src={proxyUrl(u)}
-                                                  type={ct}
-                                                />
-                                              </audio>
-                                            );
-                                          }
-                                          return (
-                                            <a
-                                              key={i}
-                                              href={proxyUrl(u)}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className={cn(
-                                                "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
-                                                isOutbound
-                                                  ? "bg-white/10 text-white/80 hover:bg-white/20"
-                                                  : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
-                                              )}
-                                            >
-                                              <Download className="h-3.5 w-3.5" />
-                                              Download attachment
-                                            </a>
-                                          );
-                                        });
-                                      })()}
-                                    {/* Text body (may be empty for image-only MMS) */}
-                                    {message.body ? (
-                                      <p className="leading-relaxed">
-                                        {message.body}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                )}
-                                {isOutbound && (
-                                  <div className="flex justify-end mt-1">
-                                    <DeliveryTick />
-                                  </div>
-                                )}
+                                          });
+                                        })()}
+                                      {/* Text body (may be empty for image-only MMS) */}
+                                      {message.body ? (
+                                        <p className="leading-relaxed">
+                                          {message.body}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
+                              {/* Timestamp — always visible short time, full date on hover */}
+                              {msgDate && (
+                                <Tooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <div className="flex items-center gap-1 mt-0.5 cursor-default">
+                                      <span
+                                        className={cn(
+                                          "shrink-0",
+                                          isOutbound
+                                            ? "text-muted-foreground/50"
+                                            : getChannelColor(
+                                                message.communication_type,
+                                              ),
+                                        )}
+                                      >
+                                        {getChannelIcon(
+                                          message.communication_type,
+                                          "h-2.5 w-2.5",
+                                        )}
+                                      </span>
+                                      <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+                                        {formatTime(msgDate)}
+                                      </span>
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side={isOutbound ? "left" : "right"}
+                                    className="text-xs font-medium"
+                                  >
+                                    {new Date(
+                                      /[Zz+\-]\d{2}:?\d{2}$/.test(msgDate) ||
+                                        msgDate.endsWith("Z")
+                                        ? msgDate
+                                        : msgDate.replace(" ", "T") + "Z",
+                                    ).toLocaleString("en-US", {
+                                      weekday: "short",
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                      hour12: true,
+                                      timeZone:
+                                        currentUser?.timezone || undefined,
+                                    })}
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
                             </div>
                           </React.Fragment>
                         );
