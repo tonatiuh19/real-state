@@ -522,7 +522,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               <button
                 type="button"
                 onClick={() => navigate("/admin/profile")}
-                className="focus:outline-none"
+                className="focus:outline-none shrink-0"
               >
                 <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
                   <AvatarImage
@@ -547,12 +547,17 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
                 </p>
               </button>
+              {sessionToken && (
+                <div className="shrink-0">
+                  <NotificationBell variant="compact" />
+                </div>
+              )}
               <Tooltip delayDuration={300}>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    className="shrink-0 h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                     onClick={() => setShowLogoutConfirm(true)}
                   >
                     <LogOut className="h-4 w-4" />
@@ -565,6 +570,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
             </div>
           ) : (
             <div className="flex flex-col items-center gap-2">
+              {sessionToken && <NotificationBell variant="compact" />}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-9 w-9">
@@ -625,15 +631,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           )}
         </div>
       </aside>
-
-      {/* Desktop floating notification bell — top-right of main content */}
-      {sessionToken && (
-        <div className="hidden md:flex fixed top-3 right-4 z-40">
-          <div className="rounded-full bg-background/80 backdrop-blur border shadow-sm">
-            <NotificationBell />
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto h-screen pt-14 md:pt-0">
