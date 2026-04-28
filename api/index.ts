@@ -1,6 +1,7 @@
 import "dotenv/config";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import express, { type RequestHandler } from "express";
+import { create } from "xmlbuilder2";
 import cors from "cors";
 import multer from "multer";
 import axios from "axios";
@@ -10113,16 +10114,15 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
 
 /**
  * Helper function to generate MISMO 3.4 XML
+ * Uses xmlbuilder2 for safe, schema-correct XML generation.
  */
 function generateMISMO34XML(loan: any): string {
-  const now = new Date().toISOString();
   const loanAmount = parseFloat(loan.loan_amount || 0);
   const propertyValue = parseFloat(loan.property_value || 0);
-  const downPayment = parseFloat(loan.down_payment || 0);
-  const loanToValue =
-    propertyValue > 0 ? ((loanAmount / propertyValue) * 100).toFixed(2) : "0";
+  const monthlyIncome = loan.annual_income
+    ? (parseFloat(loan.annual_income) / 12).toFixed(2)
+    : "0.0";
 
-  // Format loan type for MISMO
   const loanPurposeType =
     loan.loan_type === "purchase"
       ? "Purchase"
@@ -10130,230 +10130,313 @@ function generateMISMO34XML(loan: any): string {
         ? "Refinance"
         : "Other";
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<MESSAGE xmlns="http://www.mismo.org/residential/2009/schemas" 
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://www.mismo.org/residential/2009/schemas">
-  
-  <ABOUT_VERSIONS>
-    <ABOUT_VERSION>
-      <CreatedDatetime>${now}</CreatedDatetime>
-      <DataVersionIdentifier>MISMO 3.4</DataVersionIdentifier>
-    </ABOUT_VERSION>
-  </ABOUT_VERSIONS>
+  const maritalStatus =
+    loan.marital_status === "married"
+      ? "Married"
+      : loan.marital_status === "separated"
+        ? "Separated"
+        : "Unmarried";
 
-  <DEAL_SETS>
-    <DEAL_SET>
-      <DEALS>
-        <DEAL>
-          <LOANS>
-            <LOAN>
-              <LOAN_IDENTIFIERS>
-                <LOAN_IDENTIFIER>
-                  <LoanIdentifier>${loan.application_number}</LoanIdentifier>
-                  <LoanIdentifierType>LenderLoan</LoanIdentifierType>
-                </LOAN_IDENTIFIER>
-              </LOAN_IDENTIFIERS>
+  const formatDate = (d: string | null | undefined): string => {
+    if (!d) return "";
+    try {
+      return new Date(d).toISOString().split("T")[0];
+    } catch {
+      return String(d);
+    }
+  };
 
-              <LOAN_DETAIL>
-                <LoanAmountRequested>${loanAmount.toFixed(2)}</LoanAmountRequested>
-                <LoanPurposeType>${loanPurposeType}</LoanPurposeType>
-                <LoanStatusType>${loan.status === "approved" ? "Approved" : "Submitted"}</LoanStatusType>
-                <ApplicationReceivedDate>${loan.submitted_at || loan.created_at}</ApplicationReceivedDate>
-              </LOAN_DETAIL>
+  const str = (v: any): string => (v != null ? String(v) : "");
+  const borrowerDOB = formatDate(loan.date_of_birth);
+  const isSelfEmployed = loan.employment_status === "self_employed";
 
-              <TERMS_OF_LOAN>
-                <LoanAmortizationType>AdjustableRate</LoanAmortizationType>
-                <LoanAmortizationPeriodCount>${loan.loan_term_months || 360}</LoanAmortizationPeriodCount>
-                <LoanAmortizationPeriodType>Month</LoanAmortizationPeriodType>
-                ${loan.interest_rate ? `<NoteRatePercent>${loan.interest_rate}</NoteRatePercent>` : ""}
-              </TERMS_OF_LOAN>
+  // Build the document using xmlbuilder2 — no manual escaping needed, no template literal drift.
+  const doc = create({ version: "1.0", encoding: "UTF-8" })
+    .ele("MESSAGE", {
+      "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+      "xmlns:xlink": "http://www.w3.org/1999/xlink",
+      xmlns: "http://www.mismo.org/residential/2009/schemas",
+      MISMOReferenceModelIdentifier: "3.4.032420160128",
+      "xsi:schemaLocation":
+        "http://www.mismo.org/residential/2009/schemas DU_Wrapper_3.4.0_B324.xsd",
+    })
+    .ele("DEAL_SETS")
+    .ele("DEAL_SET")
+    .ele("DEALS")
+    .ele("DEAL");
 
-              <QUALIFICATION>
-                <ApplicationTakenMethodType>Internet</ApplicationTakenMethodType>
-              </QUALIFICATION>
+  // ── COLLATERALS ──────────────────────────────────────────────────────────
+  const subjectProperty = doc
+    .ele("COLLATERALS")
+    .ele("COLLATERAL")
+    .ele("SUBJECT_PROPERTY", { ValuationUseType: "SubjectProperty" });
 
-              <LOAN_PROGRAMS>
-                <LOAN_PROGRAM>
-                  <LoanProgramName>Conventional</LoanProgramName>
-                </LOAN_PROGRAM>
-              </LOAN_PROGRAMS>
+  subjectProperty
+    .ele("ADDRESS")
+    .ele("AddressLineText")
+    .txt(str(loan.property_address))
+    .up()
+    .ele("CityName")
+    .txt(str(loan.property_city))
+    .up()
+    .ele("CountryCode")
+    .txt("US")
+    .up()
+    .ele("CountryName")
+    .txt("United States")
+    .up()
+    .ele("PostalCode")
+    .txt(str(loan.property_zip))
+    .up()
+    .ele("StateCode")
+    .txt(str(loan.property_state))
+    .up();
 
-              <PARTIES>
-                <PARTY>
-                  <INDIVIDUAL>
-                    <NAME>
-                      <FirstName>${loan.client_first_name || ""}</FirstName>
-                      <LastName>${loan.client_last_name || ""}</LastName>
-                    </NAME>
-                    ${loan.date_of_birth ? `<BirthDate>${loan.date_of_birth}</BirthDate>` : ""}
-                    ${loan.ssn_encrypted ? `<TaxIdentificationIdentifier>${loan.ssn_encrypted}</TaxIdentificationIdentifier>` : ""}
-                  </INDIVIDUAL>
+  const propDetail = subjectProperty.ele("PROPERTY_DETAIL");
+  propDetail.ele("PropertyCurrentUsageType").txt("PrimaryResidence");
+  propDetail.ele("PropertyUsageType").txt("PrimaryResidence");
+  if (propertyValue > 0) {
+    propDetail
+      .ele("PropertyEstimatedValueAmount")
+      .txt(propertyValue.toFixed(2));
+  }
 
-                  <ROLES>
-                    <ROLE>
-                      <ROLE_DETAIL>
-                        <PartyRoleType>Borrower</PartyRoleType>
-                      </ROLE_DETAIL>
+  // ── LOANS ─────────────────────────────────────────────────────────────────
+  const loanEl = doc
+    .ele("LOANS")
+    .ele("LOAN", { LoanRoleType: "SubjectLoan", "xlink:label": "LOAN_1" });
 
-                      <BORROWER>
-                        ${
-                          loan.credit_score
-                            ? `<CREDIT_SCORES>
-                          <CREDIT_SCORE>
-                            <CreditScoreValue>${loan.credit_score}</CreditScoreValue>
-                            <CreditScoreModelType>FICO</CreditScoreModelType>
-                          </CREDIT_SCORE>
-                        </CREDIT_SCORES>`
-                            : ""
-                        }
+  loanEl
+    .ele("AMORTIZATION")
+    .ele("AMORTIZATION_RULE")
+    .ele("LoanAmortizationPeriodCount")
+    .txt(str(loan.loan_term_months || 360))
+    .up()
+    .ele("LoanAmortizationPeriodType")
+    .txt("Month");
 
-                        <EMPLOYERS>
-                          <EMPLOYER>
-                            <EMPLOYMENT>
-                              <EmploymentStatusType>${loan.employment_status || "Current"}</EmploymentStatusType>
-                              <EmploymentMonthlyIncomeAmount>${loan.annual_income ? (loan.annual_income / 12).toFixed(2) : "0"}</EmploymentMonthlyIncomeAmount>
-                            </EMPLOYMENT>
-                          </EMPLOYER>
-                        </EMPLOYERS>
+  loanEl
+    .ele("LOAN_DETAIL")
+    .ele("BorrowerCount")
+    .txt("1")
+    .up()
+    .ele("ConstructionLoanIndicator")
+    .txt("false");
 
-                        <RESIDENCES>
-                          <RESIDENCE>
-                            <ADDRESS>
-                              <AddressLineText>${loan.address_street || ""}</AddressLineText>
-                              <CityName>${loan.address_city || ""}</CityName>
-                              <StateCode>${loan.address_state || ""}</StateCode>
-                              <PostalCode>${loan.address_zip || ""}</PostalCode>
-                            </ADDRESS>
-                          </RESIDENCE>
-                        </RESIDENCES>
-                      </BORROWER>
-                    </ROLE>
-                  </ROLES>
+  const termsEl = loanEl.ele("TERMS_OF_LOAN");
+  termsEl.ele("BaseLoanAmount").txt(loanAmount.toFixed(2));
+  termsEl.ele("LienPriorityType").txt("FirstLien");
+  termsEl.ele("LoanPurposeType").txt(loanPurposeType);
+  if (loan.interest_rate) {
+    termsEl.ele("NoteRatePercent").txt(str(loan.interest_rate));
+  }
 
-                  <TAXPAYER_IDENTIFIERS>
-                    <TAXPAYER_IDENTIFIER>
-                      ${loan.ssn_encrypted ? `<TaxpayerIdentifierValue>${loan.ssn_encrypted}</TaxpayerIdentifierValue>` : ""}
-                      <TaxpayerIdentifierType>SocialSecurityNumber</TaxpayerIdentifierType>
-                    </TAXPAYER_IDENTIFIER>
-                  </TAXPAYER_IDENTIFIERS>
+  // ── PARTIES ───────────────────────────────────────────────────────────────
+  const partiesEl = doc.ele("PARTIES");
 
-                  <CONTACTS>
-                    <CONTACT>
-                      <CONTACT_POINTS>
-                        ${
-                          loan.client_email
-                            ? `<CONTACT_POINT>
-                          <ContactPointValue>${loan.client_email}</ContactPointValue>
-                          <ContactPointType>Email</ContactPointType>
-                        </CONTACT_POINT>`
-                            : ""
-                        }
-                        ${
-                          loan.client_phone
-                            ? `<CONTACT_POINT>
-                          <ContactPointValue>${loan.client_phone}</ContactPointValue>
-                          <ContactPointType>Phone</ContactPointType>
-                        </CONTACT_POINT>`
-                            : ""
-                        }
-                      </CONTACT_POINTS>
-                    </CONTACT>
-                  </CONTACTS>
-                </PARTY>
+  // Borrower party
+  const borrowerParty = partiesEl.ele("PARTY");
 
-                ${
-                  loan.broker_first_name
-                    ? `<PARTY>
-                  <INDIVIDUAL>
-                    <NAME>
-                      <FirstName>${loan.broker_first_name}</FirstName>
-                      <LastName>${loan.broker_last_name}</LastName>
-                    </NAME>
-                  </INDIVIDUAL>
+  const borrowerIndividual = borrowerParty.ele("INDIVIDUAL");
+  const borrowerContactPoints = borrowerIndividual.ele("CONTACT_POINTS");
+  if (loan.client_phone) {
+    borrowerContactPoints
+      .ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_TELEPHONE")
+      .ele("ContactPointTelephoneValue")
+      .txt(str(loan.client_phone))
+      .up()
+      .up()
+      .ele("CONTACT_POINT_DETAIL")
+      .ele("ContactPointRoleType")
+      .txt("Mobile");
+  }
+  if (loan.client_email) {
+    borrowerContactPoints
+      .ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_EMAIL")
+      .ele("ContactPointEmailValue")
+      .txt(str(loan.client_email));
+  }
+  borrowerIndividual
+    .ele("NAME")
+    .ele("FirstName")
+    .txt(str(loan.client_first_name))
+    .up()
+    .ele("LastName")
+    .txt(str(loan.client_last_name));
 
-                  <ROLES>
-                    <ROLE>
-                      <ROLE_DETAIL>
-                        <PartyRoleType>LoanOriginationCompany</PartyRoleType>
-                      </ROLE_DETAIL>
-                      <LOAN_ORIGINATOR>
-                        ${loan.license_number ? `<LicenseIdentifier>${loan.license_number}</LicenseIdentifier>` : ""}
-                      </LOAN_ORIGINATOR>
-                    </ROLE>
-                  </ROLES>
+  if (loan.address_street) {
+    borrowerParty
+      .ele("ADDRESSES")
+      .ele("ADDRESS")
+      .ele("AddressLineText")
+      .txt(str(loan.address_street))
+      .up()
+      .ele("AddressType")
+      .txt("Current")
+      .up()
+      .ele("CityName")
+      .txt(str(loan.address_city))
+      .up()
+      .ele("CountryCode")
+      .txt("US")
+      .up()
+      .ele("CountryName")
+      .txt("United States")
+      .up()
+      .ele("PostalCode")
+      .txt(str(loan.address_zip))
+      .up()
+      .ele("StateCode")
+      .txt(str(loan.address_state));
+  }
 
-                  <CONTACTS>
-                    <CONTACT>
-                      <CONTACT_POINTS>
-                        ${
-                          loan.broker_email
-                            ? `<CONTACT_POINT>
-                          <ContactPointValue>${loan.broker_email}</ContactPointValue>
-                          <ContactPointType>Email</ContactPointType>
-                        </CONTACT_POINT>`
-                            : ""
-                        }
-                        ${
-                          loan.broker_phone
-                            ? `<CONTACT_POINT>
-                          <ContactPointValue>${loan.broker_phone}</ContactPointValue>
-                          <ContactPointType>Phone</ContactPointType>
-                        </CONTACT_POINT>`
-                            : ""
-                        }
-                      </CONTACT_POINTS>
-                    </CONTACT>
-                  </CONTACTS>
-                </PARTY>`
-                    : ""
-                }
-              </PARTIES>
+  const borrowerRole = borrowerParty
+    .ele("ROLES")
+    .ele("ROLE", { SequenceNumber: "1", "xlink:label": "BORROWER_1" });
 
-              <COLLATERALS>
-                <COLLATERAL>
-                  <SUBJECT_PROPERTY>
-                    <ADDRESS>
-                      <AddressLineText>${loan.property_address || ""}</AddressLineText>
-                      <CityName>${loan.property_city || ""}</CityName>
-                      <StateCode>${loan.property_state || ""}</StateCode>
-                      <PostalCode>${loan.property_zip || ""}</PostalCode>
-                    </ADDRESS>
+  const borrowerEl = borrowerRole.ele("BORROWER");
 
-                    <PROPERTY_DETAIL>
-                      <PropertyCurrentUsageType>PrimaryResidence</PropertyCurrentUsageType>
-                      <PropertyEstimatedValueAmount>${propertyValue.toFixed(2)}</PropertyEstimatedValueAmount>
-                    </PROPERTY_DETAIL>
+  const borrowerDetail = borrowerEl.ele("BORROWER_DETAIL");
+  if (borrowerDOB) {
+    borrowerDetail.ele("BorrowerBirthDate").txt(borrowerDOB);
+  }
+  borrowerDetail.ele("BorrowerClassificationType").txt("Primary");
+  borrowerDetail.ele("MaritalStatusType").txt(maritalStatus);
+  borrowerDetail.ele("CitizenshipResidencyType").txt("USCitizen");
 
-                    <PROPERTY_VALUATIONS>
-                      <PROPERTY_VALUATION>
-                        <PropertyValuationAmount>${propertyValue.toFixed(2)}</PropertyValuationAmount>
-                        <PropertyValuationMethodType>Purchase</PropertyValuationMethodType>
-                      </PROPERTY_VALUATION>
-                    </PROPERTY_VALUATIONS>
-                  </SUBJECT_PROPERTY>
-                </COLLATERAL>
-              </COLLATERALS>
+  borrowerEl
+    .ele("CURRENT_INCOME")
+    .ele("CURRENT_INCOME_ITEMS")
+    .ele("CURRENT_INCOME_ITEM", { "xlink:label": "CURRENT_INCOME_ITEM_1" })
+    .ele("CURRENT_INCOME_ITEM_DETAIL")
+    .ele("CurrentIncomeMonthlyTotalAmount")
+    .txt(monthlyIncome)
+    .up()
+    .ele("EmploymentIncomeIndicator")
+    .txt("true")
+    .up()
+    .ele("IncomeType")
+    .txt("Base");
 
-              <GOVERNMENT_LOAN>
-                <GOVERNMENT_LOAN_DETAIL>
-                  <LoanToValuePercent>${loanToValue}</LoanToValuePercent>
-                </GOVERNMENT_LOAN_DETAIL>
-              </GOVERNMENT_LOAN>
+  const employerEl = borrowerEl
+    .ele("EMPLOYERS")
+    .ele("EMPLOYER", { SequenceNumber: "1", "xlink:label": "EMPLOYER_1" });
+  const employmentEl = employerEl.ele("EMPLOYMENT");
+  if (isSelfEmployed) {
+    employmentEl.ele("EmploymentBorrowerSelfEmployedIndicator").txt("true");
+  }
+  employmentEl.ele("EmploymentClassificationType").txt("Primary");
+  employmentEl.ele("EmploymentMonthlyIncomeAmount").txt(monthlyIncome);
+  employmentEl
+    .ele("EmploymentStatusType")
+    .txt(isSelfEmployed ? "Current" : str(loan.employment_status || "Current"));
 
-              <DOWN_PAYMENTS>
-                <DOWN_PAYMENT>
-                  <DownPaymentAmount>${downPayment.toFixed(2)}</DownPaymentAmount>
-                  <DownPaymentType>Cash</DownPaymentType>
-                </DOWN_PAYMENT>
-              </DOWN_PAYMENTS>
-            </LOAN>
-          </LOANS>
-        </DEAL>
-      </DEALS>
-    </DEAL_SET>
-  </DEAL_SETS>
-</MESSAGE>`;
+  borrowerEl
+    .ele("RESIDENCES")
+    .ele("RESIDENCE")
+    .ele("ADDRESS")
+    .ele("AddressLineText")
+    .txt(str(loan.address_street))
+    .up()
+    .ele("AddressType")
+    .txt("Current")
+    .up()
+    .ele("CityName")
+    .txt(str(loan.address_city))
+    .up()
+    .ele("CountryCode")
+    .txt("US")
+    .up()
+    .ele("CountryName")
+    .txt("United States")
+    .up()
+    .ele("PostalCode")
+    .txt(str(loan.address_zip))
+    .up()
+    .ele("StateCode")
+    .txt(str(loan.address_state))
+    .up()
+    .up()
+    .ele("RESIDENCE_DETAIL")
+    .ele("BorrowerResidencyType")
+    .txt("Current");
+
+  borrowerRole
+    .ele("ROLE_DETAIL")
+    .ele("ConsentToReceiveDocumentsElectronicallyIndicator")
+    .txt("true")
+    .up()
+    .ele("PartyRoleType")
+    .txt("Borrower");
+
+  const taxpayerIdEl = borrowerParty
+    .ele("TAXPAYER_IDENTIFIERS")
+    .ele("TAXPAYER_IDENTIFIER");
+  taxpayerIdEl.ele("TaxpayerIdentifierType").txt("SocialSecurityNumber");
+  if (loan.ssn_encrypted) {
+    taxpayerIdEl.ele("TaxpayerIdentifierValue").txt(str(loan.ssn_encrypted));
+  }
+
+  // Loan originator party (broker)
+  if (loan.broker_first_name) {
+    const brokerParty = partiesEl.ele("PARTY");
+    const brokerIndividual = brokerParty.ele("INDIVIDUAL");
+    const brokerContactPoints = brokerIndividual.ele("CONTACT_POINTS");
+    if (loan.broker_phone) {
+      brokerContactPoints
+        .ele("CONTACT_POINT")
+        .ele("CONTACT_POINT_TELEPHONE")
+        .ele("ContactPointTelephoneValue")
+        .txt(str(loan.broker_phone))
+        .up()
+        .up()
+        .ele("CONTACT_POINT_DETAIL")
+        .ele("ContactPointRoleType")
+        .txt("Work");
+    }
+    if (loan.broker_email) {
+      brokerContactPoints
+        .ele("CONTACT_POINT")
+        .ele("CONTACT_POINT_EMAIL")
+        .ele("ContactPointEmailValue")
+        .txt(str(loan.broker_email))
+        .up()
+        .up()
+        .ele("CONTACT_POINT_DETAIL")
+        .ele("ContactPointRoleType")
+        .txt("Work");
+    }
+    brokerIndividual
+      .ele("NAME")
+      .ele("FirstName")
+      .txt(str(loan.broker_first_name))
+      .up()
+      .ele("LastName")
+      .txt(str(loan.broker_last_name));
+
+    const brokerRole = brokerParty
+      .ele("ROLES")
+      .ele("ROLE", { SequenceNumber: "1", "xlink:label": "LOAN_ORIGINATOR_1" });
+    brokerRole.ele("ROLE_DETAIL").ele("PartyRoleType").txt("LoanOriginator");
+    if (loan.license_number) {
+      brokerRole
+        .ele("LOAN_ORIGINATOR")
+        .ele("LoanOriginatorIdentifier")
+        .txt(str(loan.license_number));
+    }
+  }
+
+  // ── RELATIONSHIPS ─────────────────────────────────────────────────────────
+  doc.ele("RELATIONSHIPS").ele("RELATIONSHIP", {
+    "xlink:from": "CURRENT_INCOME_ITEM_1",
+    "xlink:to": "EMPLOYER_1",
+    "xlink:arcrole":
+      "urn:fdc:mismo.org:2009:residential/CURRENT_INCOME_ITEM_IsAssociatedWith_EMPLOYER",
+  });
+
+  return doc.end({ prettyPrint: true });
 }
 
 /**
