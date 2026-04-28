@@ -26,7 +26,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Tooltip,
   TooltipContent,
@@ -340,7 +339,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
         </div>
 
         {/* List */}
-        <ScrollArea className="max-h-[480px]">
+        <div className="max-h-[480px] overflow-y-auto overscroll-contain">
           {notifications.length === 0 ? (
             <EmptyState />
           ) : (
@@ -364,7 +363,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </PopoverContent>
     </Popover>
   );
