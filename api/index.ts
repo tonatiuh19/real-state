@@ -666,7 +666,7 @@ async function upsertConversationThread(params: {
       recipientEmail,
     } = params;
     const resolvedClientId = toUserId ?? fromUserId ?? null;
-    const resolvedBrokerId = fromBrokerId ?? toBrokerId ?? null;
+    let resolvedBrokerId: number | null = fromBrokerId ?? toBrokerId ?? null;
     const convId = conversationId ?? `conv_auto_${commId}`;
     // Build a sidebar preview. For MMS / media-only messages with no text body,
     // fall back to a typed placeholder so the thread list isn't blank.
@@ -702,13 +702,16 @@ async function upsertConversationThread(params: {
 
     if (resolvedClientId !== null) {
       const [rows] = await pool.query<RowDataPacket[]>(
-        "SELECT CONCAT(first_name, ' ', last_name) AS name, phone, email FROM clients WHERE id = ? LIMIT 1",
+        "SELECT CONCAT(first_name, ' ', last_name) AS name, phone, email, assigned_broker_id FROM clients WHERE id = ? LIMIT 1",
         [resolvedClientId],
       );
       if (rows.length > 0) {
         clientName = rows[0].name;
         clientPhone = rows[0].phone ?? clientPhone;
         clientEmail = rows[0].email ?? clientEmail;
+        if (resolvedBrokerId == null && rows[0].assigned_broker_id != null) {
+          resolvedBrokerId = rows[0].assigned_broker_id as number;
+        }
       }
     } else if (clientPhone) {
       // No client ID yet — try to resolve name from phone so threads never
@@ -716,7 +719,7 @@ async function upsertConversationThread(params: {
       const lastTen = clientPhone.replace(/\D/g, "").slice(-10);
       if (lastTen.length === 10) {
         const [cRows] = await pool.query<RowDataPacket[]>(
-          `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, email
+          `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, email, assigned_broker_id
            FROM clients
            WHERE tenant_id = ?
              AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
@@ -727,10 +730,13 @@ async function upsertConversationThread(params: {
           (params as any).resolvedClientIdFromPhone = cRows[0].id;
           clientName = cRows[0].name?.trim() || null;
           clientEmail = cRows[0].email ?? clientEmail;
+          if (resolvedBrokerId == null && cRows[0].assigned_broker_id != null) {
+            resolvedBrokerId = cRows[0].assigned_broker_id as number;
+          }
         } else {
           // Fallback: leads table
           const [lRows] = await pool.query<RowDataPacket[]>(
-            `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone
+            `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
              FROM leads
              WHERE tenant_id = ?
                AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
@@ -740,6 +746,12 @@ async function upsertConversationThread(params: {
           if (lRows.length > 0) {
             resolvedLeadId = lRows[0].id;
             clientName = lRows[0].name?.trim() || null;
+            if (
+              resolvedBrokerId == null &&
+              lRows[0].assigned_broker_id != null
+            ) {
+              resolvedBrokerId = lRows[0].assigned_broker_id as number;
+            }
           }
         }
       }
@@ -821,9 +833,56 @@ async function upsertConversationThread(params: {
         const who = clientName || clientPhone || clientEmail || "a contact";
         const snippet = (body || "").trim().slice(0, 120);
         const category = communicationType === "voice" ? "call" : "message";
+        // Strict ownership rules for who gets the bell notification:
+        //   A. If the inbound activity arrived on a broker's PERSONAL Twilio
+        //      number (twilio_caller_id), notify ONLY that broker. Personal
+        //      lines are private — owners shouldn't see other brokers' calls.
+        //   B. Otherwise (shared inbox), notify the relationship owners:
+        //      loan primary broker + partner broker + client/lead assigned
+        //      broker. Falls back to all admins only when truly unknown.
+        let inboxOwnerId: number | null = null;
+        if (
+          inboxNumber &&
+          (communicationType === "sms" ||
+            communicationType === "voice" ||
+            communicationType === "whatsapp")
+        ) {
+          try {
+            const [inboxRows] = await pool.query<RowDataPacket[]>(
+              `SELECT id FROM brokers
+                WHERE tenant_id = ? AND status = 'active' AND twilio_caller_id = ?
+                LIMIT 1`,
+              [tenantId, inboxNumber],
+            );
+            const candidate = inboxRows[0]?.id;
+            if (typeof candidate === "number") {
+              inboxOwnerId = candidate;
+            }
+          } catch (inboxErr) {
+            console.error(
+              "Inbox-number owner lookup failed (non-fatal):",
+              inboxErr,
+            );
+          }
+        }
+
+        let ownerIds: number[];
+        if (inboxOwnerId != null) {
+          // Personal line — only the inbox owner is notified.
+          ownerIds = [inboxOwnerId];
+        } else {
+          // Shared inbox — notify all relationship owners.
+          ownerIds = await getApplicationOwnerBrokerIds(applicationId);
+          if (
+            resolvedBrokerId != null &&
+            !ownerIds.includes(resolvedBrokerId)
+          ) {
+            ownerIds.push(resolvedBrokerId);
+          }
+        }
         await createBrokerNotification({
-          brokerIds: resolvedBrokerId,
-          notifyAllAdminsOnEmpty: !resolvedBrokerId,
+          brokerIds: ownerIds.length ? ownerIds : null,
+          notifyAllAdminsOnEmpty: ownerIds.length === 0,
           title: `New ${channelLabel} from ${who}`,
           message: snippet || `New inbound ${channelLabel}`,
           category: category as any,
@@ -2339,6 +2398,41 @@ type BrokerNotificationCategory =
   | "flow"
   | "lead"
   | "system";
+
+/**
+ * Resolve every broker who "owns" a loan application:
+ *   - broker_user_id        (primary loan officer / mortgage banker)
+ *   - partner_broker_id     (assigned realtor partner)
+ *   - clients.assigned_broker_id (fallback if loan has no broker yet)
+ * Returns a deduped array of broker IDs. Empty array if nothing resolved.
+ */
+async function getApplicationOwnerBrokerIds(
+  applicationId: number | null | undefined,
+): Promise<number[]> {
+  if (!applicationId) return [];
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT a.broker_user_id, a.partner_broker_id, c.assigned_broker_id
+         FROM loan_applications a
+         LEFT JOIN clients c ON a.client_user_id = c.id
+        WHERE a.id = ? AND a.tenant_id = ?
+        LIMIT 1`,
+      [applicationId, MORTGAGE_TENANT_ID],
+    );
+    if (rows.length === 0) return [];
+    const ids = [
+      rows[0].broker_user_id,
+      rows[0].partner_broker_id,
+      rows[0].assigned_broker_id,
+    ]
+      .map((v) => (typeof v === "number" ? v : v != null ? Number(v) : null))
+      .filter((v): v is number => Number.isFinite(v as number));
+    return Array.from(new Set(ids));
+  } catch (err) {
+    console.error("getApplicationOwnerBrokerIds failed:", err);
+    return [];
+  }
+}
 
 /**
  * Create an in-app notification for one or more brokers (admin bell feed).
@@ -9697,9 +9791,17 @@ const handleSubmitTaskSignatures: RequestHandler = async (req, res) => {
       );
       const tr = taskRows[0];
       if (tr) {
+        // Owners = creator + loan's primary broker + partner broker (deduped)
+        const ownerIds = await getApplicationOwnerBrokerIds(tr.application_id);
+        if (
+          tr.created_by_broker_id &&
+          !ownerIds.includes(tr.created_by_broker_id)
+        ) {
+          ownerIds.push(tr.created_by_broker_id);
+        }
         await createBrokerNotification({
-          brokerIds: tr.created_by_broker_id ?? null,
-          notifyAllAdminsOnEmpty: !tr.created_by_broker_id,
+          brokerIds: ownerIds.length ? ownerIds : null,
+          notifyAllAdminsOnEmpty: ownerIds.length === 0,
           title: "Task Submitted for Review",
           message: `${tr.client_name || "A client"} submitted \"${tr.title}\" for approval`,
           category: "task",
@@ -10946,9 +11048,19 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
         );
         const clientName = clientRows[0]?.name || "A client";
         const isCompleted = actualStatus === "pending_approval";
+        // Owners = creator + loan's primary broker + partner broker (deduped)
+        const ownerIds = await getApplicationOwnerBrokerIds(
+          task.application_id,
+        );
+        if (
+          task.created_by_broker_id &&
+          !ownerIds.includes(task.created_by_broker_id)
+        ) {
+          ownerIds.push(task.created_by_broker_id);
+        }
         await createBrokerNotification({
-          brokerIds: task.created_by_broker_id ?? null,
-          notifyAllAdminsOnEmpty: !task.created_by_broker_id,
+          brokerIds: ownerIds.length ? ownerIds : null,
+          notifyAllAdminsOnEmpty: ownerIds.length === 0,
           title: isCompleted ? "Task Submitted for Review" : "Task In Progress",
           message: isCompleted
             ? `${clientName} submitted "${task.title}" for approval`
