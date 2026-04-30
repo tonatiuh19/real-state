@@ -22,6 +22,8 @@ import {
   Globe,
   RefreshCw,
   Plus,
+  Voicemail,
+  Volume2,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -66,6 +68,10 @@ import {
 import {
   fetchCallForwardingSettings,
   saveCallForwardingSettings,
+  fetchVoicemailSettings,
+  saveVoicemailSettings,
+  saveTenantVoicemailSettings,
+  type VoicemailSettingsResponse,
 } from "@/store/slices/voiceSlice";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -161,6 +167,21 @@ const BrokerProfile = () => {
   const [fwdLoading, setFwdLoading] = useState(false);
   const [fwdSaving, setFwdSaving] = useState(false);
 
+  // ── Voicemail settings ─────────────────────────────────────────────
+  const [vmLoading, setVmLoading] = useState(false);
+  const [vmSaving, setVmSaving] = useState(false);
+  const [vmData, setVmData] = useState<VoicemailSettingsResponse | null>(null);
+  // null = "inherit tenant default"
+  const [vmEnabled, setVmEnabled] = useState<boolean | null>(null);
+  const [vmGreetingText, setVmGreetingText] = useState("");
+  const [vmGreetingUrl, setVmGreetingUrl] = useState("");
+  // tenant-level (admin only)
+  const [tenantVmEnabled, setTenantVmEnabled] = useState(true);
+  const [tenantVmGreetingText, setTenantVmGreetingText] = useState("");
+  const [tenantVmGreetingUrl, setTenantVmGreetingUrl] = useState("");
+  const [tenantVmMaxSeconds, setTenantVmMaxSeconds] = useState(120);
+  const [tenantVmTranscribe, setTenantVmTranscribe] = useState(true);
+
   // ── Email mailbox state ──────────────────────────────────────────────────
   const myMailbox = useAppSelector((s) =>
     (s.conversations.mailboxes as ConversationMailbox[]).find(
@@ -247,6 +268,80 @@ const BrokerProfile = () => {
     loadFwdSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken]);
+
+  // ── Voicemail loaders / savers ────────────────────────────────────────
+  const loadVmSettings = async () => {
+    setVmLoading(true);
+    try {
+      const data = await dispatch(fetchVoicemailSettings()).unwrap();
+      if (data?.success) {
+        setVmData(data);
+        setVmEnabled(data.broker.voicemail_enabled);
+        setVmGreetingText(data.broker.voicemail_greeting_text ?? "");
+        setVmGreetingUrl(data.broker.voicemail_greeting_url ?? "");
+        setTenantVmEnabled(!!data.tenant.voicemail_enabled);
+        setTenantVmGreetingText(data.tenant.voicemail_greeting_text ?? "");
+        setTenantVmGreetingUrl(data.tenant.voicemail_greeting_url ?? "");
+        setTenantVmMaxSeconds(data.tenant.voicemail_max_seconds || 120);
+        setTenantVmTranscribe(!!data.tenant.voicemail_transcribe);
+      }
+    } catch {
+      // graceful degradation
+    } finally {
+      setVmLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadVmSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionToken]);
+
+  const saveVoicemail = async () => {
+    setVmSaving(true);
+    try {
+      // Save broker-level overrides
+      await dispatch(
+        saveVoicemailSettings({
+          enabled: vmEnabled,
+          greeting_text: vmGreetingText.trim() ? vmGreetingText.trim() : null,
+          greeting_url: vmGreetingUrl.trim() ? vmGreetingUrl.trim() : null,
+        }),
+      ).unwrap();
+
+      // Save tenant-level defaults if user is admin
+      if (user?.role === "admin") {
+        await dispatch(
+          saveTenantVoicemailSettings({
+            enabled: tenantVmEnabled,
+            greeting_text: tenantVmGreetingText.trim()
+              ? tenantVmGreetingText.trim()
+              : null,
+            greeting_url: tenantVmGreetingUrl.trim()
+              ? tenantVmGreetingUrl.trim()
+              : null,
+            max_seconds: tenantVmMaxSeconds,
+            transcribe: tenantVmTranscribe,
+          }),
+        ).unwrap();
+      }
+
+      toast({
+        title: "Voicemail saved",
+        description: "Your voicemail settings have been updated.",
+      });
+      // Refresh to show resolved state
+      loadVmSettings();
+    } catch (e: any) {
+      toast({
+        title: "Save failed",
+        description: e?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setVmSaving(false);
+    }
+  };
 
   const saveForwarding = async () => {
     setFwdSaving(true);
@@ -978,6 +1073,224 @@ const BrokerProfile = () => {
                 )}
               </CardContent>
             </Card>
+
+            {/* Voicemail Greeting — only visible when banker has a personal Twilio number */}
+            {vmLoading ? null : vmData?.broker.has_personal_line ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Voicemail className="h-4 w-4 text-primary" />
+                    Voicemail
+                  </CardTitle>
+                  <CardDescription>
+                    When no one picks up, callers hear a greeting and can leave
+                    a message. Recordings (and transcriptions) appear in your
+                    conversations inbox.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">
+                          Personal Line Voicemail
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Callers who dial your dedicated number hear this
+                          greeting if you don't pick up.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          {vmEnabled === false ? "Disabled" : "Enabled"}
+                        </span>
+                        <Switch
+                          checked={vmEnabled !== false}
+                          onCheckedChange={(v) =>
+                            setVmEnabled(v ? true : false)
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs">
+                        Greeting (text-to-speech)
+                      </Label>
+                      <Textarea
+                        rows={3}
+                        placeholder={
+                          vmData?.tenant.voicemail_greeting_text ||
+                          "Hi, you've reached [your name]. Please leave a message after the tone…"
+                        }
+                        value={vmGreetingText}
+                        onChange={(e) => setVmGreetingText(e.target.value)}
+                        maxLength={1000}
+                        className="text-sm"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        Leave blank to inherit the team default. Max 1000
+                        characters. Spoken in a natural female voice
+                        (Polly.Joanna).
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs flex items-center gap-1.5">
+                        <Volume2 className="h-3.5 w-3.5" />
+                        Pre-recorded Greeting (optional)
+                      </Label>
+                      <Input
+                        type="url"
+                        placeholder="https://… .mp3 or .wav"
+                        value={vmGreetingUrl}
+                        onChange={(e) => setVmGreetingUrl(e.target.value)}
+                        className="text-sm"
+                      />
+                      {vmGreetingUrl ? (
+                        <audio
+                          controls
+                          preload="none"
+                          src={vmGreetingUrl}
+                          className="w-full h-8 mt-1"
+                        />
+                      ) : null}
+                      <p className="text-[11px] text-muted-foreground">
+                        If set, this audio plays instead of the text-to-speech
+                        greeting.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVmEnabled(null);
+                        setVmGreetingText("");
+                        setVmGreetingUrl("");
+                      }}
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      Reset to team default
+                    </button>
+                  </div>
+
+                  {/* Tenant-level (admin only) */}
+                  {user?.role === "admin" ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-amber-900">
+                            Team Voicemail (Default)
+                          </p>
+                          <p className="text-xs text-amber-700/80">
+                            Fallback greeting for any banker who hasn't
+                            customized their own. Admin-only.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={tenantVmEnabled}
+                          onCheckedChange={setTenantVmEnabled}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs">
+                          Default greeting (text-to-speech)
+                        </Label>
+                        <Textarea
+                          rows={3}
+                          value={tenantVmGreetingText}
+                          onChange={(e) =>
+                            setTenantVmGreetingText(e.target.value)
+                          }
+                          maxLength={1000}
+                          placeholder="Hello, you've reached [Company Name]. We can't take your call right now — please leave your name, number, and a brief message after the tone."
+                          className="text-sm"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs flex items-center gap-1.5">
+                          <Volume2 className="h-3.5 w-3.5" />
+                          Default pre-recorded greeting URL
+                        </Label>
+                        <Input
+                          type="url"
+                          placeholder="https://… .mp3"
+                          value={tenantVmGreetingUrl}
+                          onChange={(e) =>
+                            setTenantVmGreetingUrl(e.target.value)
+                          }
+                          className="text-sm"
+                        />
+                        {tenantVmGreetingUrl ? (
+                          <audio
+                            controls
+                            preload="none"
+                            src={tenantVmGreetingUrl}
+                            className="w-full h-8 mt-1"
+                          />
+                        ) : null}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label className="text-xs">
+                            Max length (seconds)
+                          </Label>
+                          <Input
+                            type="number"
+                            min={10}
+                            max={600}
+                            value={tenantVmMaxSeconds}
+                            onChange={(e) =>
+                              setTenantVmMaxSeconds(
+                                parseInt(e.target.value, 10) || 120,
+                              )
+                            }
+                            className="text-sm"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-xs">Auto-transcribe</Label>
+                          <div className="flex items-center gap-2 h-9">
+                            <Switch
+                              checked={tenantVmTranscribe}
+                              onCheckedChange={setTenantVmTranscribe}
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              {tenantVmTranscribe ? "Yes" : "No"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-2"
+                      onClick={saveVoicemail}
+                      disabled={vmSaving}
+                    >
+                      {vmSaving ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        <>
+                          <Save className="h-3.5 w-3.5" />
+                          Save Voicemail Settings
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
 
             {/* Email Mailbox */}
             <Card className={!user?.office365_enabled ? "opacity-60" : ""}>

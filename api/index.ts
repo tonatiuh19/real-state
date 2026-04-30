@@ -16920,29 +16920,569 @@ const handleUpdateCallForwarding: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/voice/voicemail-settings
+ * Returns the authenticated broker's voicemail overrides AND the resolved
+ * tenant defaults. The frontend uses this to render the Voicemail Settings UI.
+ */
+const handleGetVoicemailSettings: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT voicemail_enabled, voicemail_greeting_text, voicemail_greeting_url,
+              twilio_caller_id
+       FROM brokers WHERE id = ? AND tenant_id = ?`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+    if (brokerRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      `SELECT voicemail_enabled, voicemail_greeting_text, voicemail_greeting_url,
+              voicemail_max_seconds, voicemail_transcribe
+       FROM tenants WHERE id = ? LIMIT 1`,
+      [MORTGAGE_TENANT_ID],
+    );
+    const tenant: any = tenantRows[0] || {};
+    const broker: any = brokerRows[0];
+
+    return res.json({
+      success: true,
+      broker: {
+        // null on these fields means "inherit from tenant"
+        voicemail_enabled:
+          broker.voicemail_enabled === null ? null : !!broker.voicemail_enabled,
+        voicemail_greeting_text: broker.voicemail_greeting_text ?? null,
+        voicemail_greeting_url: broker.voicemail_greeting_url ?? null,
+        has_personal_line: !!broker.twilio_caller_id,
+      },
+      tenant: {
+        voicemail_enabled: !!(tenant.voicemail_enabled ?? 1),
+        voicemail_greeting_text: tenant.voicemail_greeting_text ?? null,
+        voicemail_greeting_url: tenant.voicemail_greeting_url ?? null,
+        voicemail_max_seconds:
+          parseInt(String(tenant.voicemail_max_seconds ?? 120), 10) || 120,
+        voicemail_transcribe: !!(tenant.voicemail_transcribe ?? 1),
+      },
+    });
+  } catch (err) {
+    console.error("[handleGetVoicemailSettings] Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to load voicemail settings",
+    });
+  }
+};
+
+/**
+ * PUT /api/voice/voicemail-settings
+ * Updates the authenticated broker's voicemail overrides.
+ * Body: { enabled?: boolean | null, greeting_text?: string | null, greeting_url?: string | null }
+ * Pass null on any field to clear the override and inherit from the tenant.
+ */
+const handleUpdateVoicemailSettings: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const { enabled, greeting_text, greeting_url } = req.body as {
+      enabled?: boolean | null;
+      greeting_text?: string | null;
+      greeting_url?: string | null;
+    };
+
+    const enabledVal =
+      enabled === undefined
+        ? undefined
+        : enabled === null
+          ? null
+          : enabled
+            ? 1
+            : 0;
+
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (enabledVal !== undefined) {
+      fields.push("voicemail_enabled = ?");
+      values.push(enabledVal);
+    }
+    if (greeting_text !== undefined) {
+      const text =
+        greeting_text === null || !greeting_text.trim()
+          ? null
+          : greeting_text.trim().slice(0, 1000);
+      fields.push("voicemail_greeting_text = ?");
+      values.push(text);
+    }
+    if (greeting_url !== undefined) {
+      const url =
+        greeting_url === null || !greeting_url.trim()
+          ? null
+          : greeting_url.trim().slice(0, 500);
+      fields.push("voicemail_greeting_url = ?");
+      values.push(url);
+    }
+
+    if (fields.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
+    }
+
+    fields.push("updated_at = NOW()");
+    values.push(brokerId, MORTGAGE_TENANT_ID);
+
+    await pool.query(
+      `UPDATE brokers SET ${fields.join(", ")} WHERE id = ? AND tenant_id = ?`,
+      values,
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("[handleUpdateVoicemailSettings] Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to update voicemail settings",
+    });
+  }
+};
+
+/**
+ * PUT /api/voice/voicemail-settings/tenant
+ * Admin-only: updates tenant-level voicemail defaults.
+ * Body: { enabled?, greeting_text?, greeting_url?, max_seconds?, transcribe? }
+ */
+const handleUpdateTenantVoicemailSettings: RequestHandler = async (
+  req,
+  res,
+) => {
+  try {
+    const role = (req as any).brokerRole as string | undefined;
+    if (role !== "admin") {
+      return res
+        .status(403)
+        .json({ success: false, error: "Admin access required" });
+    }
+
+    const { enabled, greeting_text, greeting_url, max_seconds, transcribe } =
+      req.body as {
+        enabled?: boolean;
+        greeting_text?: string | null;
+        greeting_url?: string | null;
+        max_seconds?: number;
+        transcribe?: boolean;
+      };
+
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (typeof enabled === "boolean") {
+      fields.push("voicemail_enabled = ?");
+      values.push(enabled ? 1 : 0);
+    }
+    if (greeting_text !== undefined) {
+      const text =
+        greeting_text === null || !greeting_text.trim()
+          ? null
+          : greeting_text.trim().slice(0, 1000);
+      fields.push("voicemail_greeting_text = ?");
+      values.push(text);
+    }
+    if (greeting_url !== undefined) {
+      const url =
+        greeting_url === null || !greeting_url.trim()
+          ? null
+          : greeting_url.trim().slice(0, 500);
+      fields.push("voicemail_greeting_url = ?");
+      values.push(url);
+    }
+    if (typeof max_seconds === "number") {
+      const clamped = Math.min(Math.max(Math.round(max_seconds), 10), 600);
+      fields.push("voicemail_max_seconds = ?");
+      values.push(clamped);
+    }
+    if (typeof transcribe === "boolean") {
+      fields.push("voicemail_transcribe = ?");
+      values.push(transcribe ? 1 : 0);
+    }
+
+    if (fields.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
+    }
+
+    fields.push("updated_at = NOW()");
+    values.push(MORTGAGE_TENANT_ID);
+
+    await pool.query(
+      `UPDATE tenants SET ${fields.join(", ")} WHERE id = ?`,
+      values,
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("[handleUpdateTenantVoicemailSettings] Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to update tenant voicemail settings",
+    });
+  }
+};
+
+/**
  * POST /api/voice/dial-status
- * Twilio statusCallback fired when ANY leg of the <Dial> is answered (browser OR phone).
- * We use this to publish the Ably call-answered event so ALL broker browsers dismiss
- * the ringing UI immediately — including when a personal phone answers.
+ * Twilio statusCallback fired when the <Dial> verb finishes (any leg answered,
+ * or all legs failed/no-answer/busy/canceled).
+ *
+ * Behaviour:
+ *   • DialCallStatus = "answered"  → broadcast Ably so all browsers dismiss
+ *     the ringing UI, return empty TwiML so the call ends after the answerer
+ *     hangs up.
+ *   • DialCallStatus = "no-answer" | "busy" | "failed" | "canceled" →
+ *     fall through to voicemail: play greeting + <Record> the caller.
+ *
  * No broker-session auth — called by Twilio servers.
  */
 const handleDialStatus: RequestHandler = async (req, res) => {
+  res.set("Content-Type", "text/xml");
   try {
     const callSid = (req.body?.CallSid as string) || "";
     const dialCallStatus = (req.body?.DialCallStatus as string) || "";
+    const calledNumber =
+      (req.body?.To as string) || (req.body?.Called as string) || "";
 
-    // Only broadcast when a leg actually answered (not busy/no-answer/failed)
+    // Answered → notify and end the call gracefully.
     if (callSid && dialCallStatus === "answered") {
       await publishToAbly("voice:incoming", "call-answered", { callSid });
+      return res.status(200).send("<Response></Response>");
     }
 
-    // Twilio expects a 200 with optional TwiML — empty response is fine
-    res.set("Content-Type", "text/xml");
-    return res.status(200).send("<Response></Response>");
+    // Unanswered states — drop into voicemail if enabled.
+    const unanswered = ["no-answer", "busy", "failed", "canceled"].includes(
+      dialCallStatus,
+    );
+
+    if (!unanswered) {
+      return res.status(200).send("<Response></Response>");
+    }
+
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const twiml = new VoiceResponse();
+
+    // ── resolve voicemail settings (broker override → tenant default) ──
+    const settings = await resolveVoicemailSettings(calledNumber);
+
+    if (!settings.enabled) {
+      twiml.say(
+        { voice: "Polly.Joanna" },
+        "Sorry, no one is available to take your call right now. Please try again later. Goodbye.",
+      );
+      twiml.hangup();
+      return res.status(200).send(twiml.toString());
+    }
+
+    // 1) Greeting — pre-recorded MP3 wins, else TTS, else default.
+    if (settings.greetingUrl) {
+      twiml.play(settings.greetingUrl);
+    } else if (settings.greetingText && settings.greetingText.trim()) {
+      twiml.say({ voice: "Polly.Joanna" }, settings.greetingText.trim());
+    } else {
+      twiml.say(
+        { voice: "Polly.Joanna" },
+        "Hello, you've reached our office. We're unable to answer right now. Please leave your name, number, and a brief message after the tone, and we'll get back to you as soon as possible.",
+      );
+    }
+
+    // 2) Record the voicemail.
+    twiml.record({
+      action: `${getVoiceBaseUrl()}/api/voice/voicemail-complete`,
+      method: "POST",
+      maxLength: settings.maxSeconds,
+      finishOnKey: "#",
+      playBeep: true,
+      trim: "trim-silence",
+      timeout: 5,
+      recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/voicemail-recording`,
+      recordingStatusCallbackMethod: "POST",
+      recordingStatusCallbackEvent: ["completed"],
+      transcribe: settings.transcribe,
+      transcribeCallback: settings.transcribe
+        ? `${getVoiceBaseUrl()}/api/voice/voicemail-transcription`
+        : undefined,
+    } as any);
+
+    // If recording finishes without explicit hangup, say goodbye.
+    twiml.say({ voice: "Polly.Joanna" }, "Thank you. Goodbye.");
+    twiml.hangup();
+
+    return res.status(200).send(twiml.toString());
   } catch (err) {
     console.error("[handleDialStatus] Error:", err);
-    res.set("Content-Type", "text/xml");
     return res.status(200).send("<Response></Response>");
+  }
+};
+
+/**
+ * Resolve effective voicemail settings for an inbound call.
+ * Voicemail is ONLY enabled for personal (assigned) lines — i.e. when the
+ * dialled number matches a broker's twilio_caller_id. Shared/main lines
+ * never record voicemails. Tenant settings only provide defaults (max
+ * length, transcribe, greeting fallback) for assigned lines whose broker
+ * hasn't customized their own greeting.
+ */
+async function resolveVoicemailSettings(calledNumber: string): Promise<{
+  enabled: boolean;
+  greetingUrl: string | null;
+  greetingText: string | null;
+  maxSeconds: number;
+  transcribe: boolean;
+}> {
+  // Tenant defaults
+  const [tenantRows] = await pool.query<RowDataPacket[]>(
+    `SELECT voicemail_enabled, voicemail_greeting_text, voicemail_greeting_url,
+            voicemail_max_seconds, voicemail_transcribe
+     FROM tenants WHERE id = ? LIMIT 1`,
+    [MORTGAGE_TENANT_ID],
+  );
+  const tenant: any = tenantRows[0] || {};
+
+  const maxSeconds = Math.min(
+    Math.max(
+      parseInt(String(tenant.voicemail_max_seconds ?? 120), 10) || 120,
+      10,
+    ),
+    600,
+  );
+  const transcribe = !!(tenant.voicemail_transcribe ?? 1);
+
+  // Voicemail is ONLY enabled for personal (assigned) lines. If no broker
+  // owns the dialled number, voicemail is disabled — shared/main lines do
+  // not record messages.
+  if (!calledNumber) {
+    return {
+      enabled: false,
+      greetingUrl: null,
+      greetingText: null,
+      maxSeconds,
+      transcribe,
+    };
+  }
+
+  const [brokerRows] = await pool.query<RowDataPacket[]>(
+    `SELECT voicemail_enabled, voicemail_greeting_text, voicemail_greeting_url
+     FROM brokers
+     WHERE tenant_id = ? AND status = 'active' AND twilio_caller_id = ?
+     LIMIT 1`,
+    [MORTGAGE_TENANT_ID, calledNumber],
+  );
+  const broker = brokerRows[0];
+  if (!broker) {
+    return {
+      enabled: false,
+      greetingUrl: null,
+      greetingText: null,
+      maxSeconds,
+      transcribe,
+    };
+  }
+
+  // Personal line — broker override falls back to tenant defaults when blank
+  const enabled =
+    broker.voicemail_enabled === null
+      ? !!(tenant.voicemail_enabled ?? 1)
+      : !!broker.voicemail_enabled;
+  let greetingUrl: string | null = tenant.voicemail_greeting_url ?? null;
+  let greetingText: string | null = tenant.voicemail_greeting_text ?? null;
+  if (broker.voicemail_greeting_url) {
+    greetingUrl = broker.voicemail_greeting_url;
+    greetingText = null;
+  } else if (broker.voicemail_greeting_text) {
+    greetingText = broker.voicemail_greeting_text;
+    greetingUrl = null;
+  }
+
+  return { enabled, greetingUrl, greetingText, maxSeconds, transcribe };
+}
+
+/**
+ * POST /api/voice/voicemail-complete
+ * Twilio fires this when the caller finishes recording (timeout, # key,
+ * or hangup). We respond with a polite goodbye TwiML — the recording itself
+ * is captured by the recordingStatusCallback (handleVoicemailRecording).
+ * No auth — called by Twilio servers.
+ */
+const handleVoicemailComplete: RequestHandler = async (_req, res) => {
+  res.set("Content-Type", "text/xml");
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  twiml.say(
+    { voice: "Polly.Joanna" },
+    "Thank you for your message. We will get back to you soon. Goodbye.",
+  );
+  twiml.hangup();
+  return res.status(200).send(twiml.toString());
+};
+
+/**
+ * POST /api/voice/voicemail-recording
+ * Twilio recordingStatusCallback for the voicemail <Record>.
+ * Inserts a NEW communications row (is_voicemail=1) and broadcasts an Ably
+ * event so the inbox refreshes in real time.
+ * No auth — called by Twilio servers.
+ */
+const handleVoicemailRecording: RequestHandler = async (req, res) => {
+  try {
+    const {
+      CallSid,
+      RecordingUrl,
+      RecordingDuration,
+      RecordingStatus,
+      RecordingSid,
+      From,
+      To,
+    } = req.body as {
+      CallSid?: string;
+      RecordingUrl?: string;
+      RecordingDuration?: string;
+      RecordingStatus?: string;
+      RecordingSid?: string;
+      From?: string;
+      To?: string;
+    };
+
+    if (RecordingStatus !== "completed" || !RecordingUrl) {
+      return res.sendStatus(204);
+    }
+
+    const mp3Url = RecordingUrl.endsWith(".mp3")
+      ? RecordingUrl
+      : `${RecordingUrl}.mp3`;
+    const durationSec = RecordingDuration
+      ? parseInt(RecordingDuration, 10)
+      : null;
+
+    // Skip ultra-short hang-ups (< 2s of audio)
+    if (durationSec !== null && durationSec < 2) {
+      return res.sendStatus(204);
+    }
+
+    const callerNumber = From || "Unknown";
+    const calledNumber = To || null;
+    const conversationId = `conv_phone_${callerNumber.replace(/\D/g, "")}`;
+    const body = `🎙️ Voicemail from ${callerNumber}${
+      durationSec ? ` (${durationSec}s)` : ""
+    }`;
+    // Use a distinct external_id so it doesn't collide with the original
+    // inbound-call communication row that shares the same CallSid.
+    const externalId = RecordingSid
+      ? `vm_${RecordingSid}`
+      : `vm_${CallSid || Date.now()}`;
+
+    const [insertResult] = await pool.query<any>(
+      `INSERT INTO communications
+         (tenant_id, from_broker_id, to_user_id, communication_type, direction,
+          body, status, external_id, conversation_id, recording_url,
+          recording_duration, is_voicemail, delivery_status, sent_at, created_at)
+       VALUES (?, NULL, NULL, 'call', 'inbound', ?, 'sent', ?, ?, ?, ?, 1, 'sent', NOW(), NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        body,
+        externalId,
+        conversationId,
+        mp3Url,
+        durationSec,
+      ],
+    );
+
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: insertResult.insertId,
+      conversationId,
+      applicationId: null,
+      leadId: null,
+      fromUserId: null,
+      fromBrokerId: null,
+      toUserId: null,
+      toBrokerId: null,
+      communicationType: "call",
+      direction: "inbound",
+      body,
+      inboxNumber: calledNumber,
+      recipientPhone: callerNumber,
+    }).catch((e) =>
+      console.error("[handleVoicemailRecording] thread upsert error:", e),
+    );
+
+    // Broadcast so all online brokers see the voicemail instantly.
+    await publishToAbly("voice:voicemail", "new", {
+      commId: insertResult.insertId,
+      conversationId,
+      from: callerNumber,
+      to: calledNumber,
+      durationSec,
+      callSid: CallSid,
+    }).catch(() => {});
+    await publishToAbly("conversations:all", "thread-updated", {
+      conversationId,
+      tenantId: MORTGAGE_TENANT_ID,
+    }).catch(() => {});
+
+    return res.sendStatus(204);
+  } catch (err) {
+    console.error("[handleVoicemailRecording] Error:", err);
+    return res.sendStatus(500);
+  }
+};
+
+/**
+ * POST /api/voice/voicemail-transcription
+ * Twilio transcribeCallback — fires after voicemail audio is transcribed.
+ * Patches the matching voicemail communications row.
+ * No auth — called by Twilio servers.
+ */
+const handleVoicemailTranscription: RequestHandler = async (req, res) => {
+  try {
+    const { RecordingSid, TranscriptionText, TranscriptionStatus } =
+      req.body as {
+        RecordingSid?: string;
+        TranscriptionText?: string;
+        TranscriptionStatus?: string;
+      };
+
+    if (TranscriptionStatus !== "completed" || !RecordingSid) {
+      return res.sendStatus(204);
+    }
+
+    const externalId = `vm_${RecordingSid}`;
+    await pool.query(
+      `UPDATE communications
+       SET voicemail_transcription = ?
+       WHERE external_id = ? AND tenant_id = ? AND is_voicemail = 1`,
+      [TranscriptionText || null, externalId, MORTGAGE_TENANT_ID],
+    );
+
+    // Look up the conversation_id so the UI can patch in place.
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, conversation_id FROM communications
+       WHERE external_id = ? AND tenant_id = ? AND is_voicemail = 1
+       LIMIT 1`,
+      [externalId, MORTGAGE_TENANT_ID],
+    );
+    if (rows.length > 0) {
+      await publishToAbly("voice:voicemail", "transcribed", {
+        commId: rows[0].id,
+        conversationId: rows[0].conversation_id,
+        transcription: TranscriptionText || "",
+      }).catch(() => {});
+    }
+
+    return res.sendStatus(204);
+  } catch (err) {
+    console.error("[handleVoicemailTranscription] Error:", err);
+    return res.sendStatus(500);
   }
 };
 
@@ -21333,6 +21873,13 @@ function createServer() {
   expressApp.post("/api/voice/incoming", handleVoiceIncoming); // no auth — Twilio webhook for inbound calls
   expressApp.post("/api/voice/dial-status", handleDialStatus); // no auth — Twilio statusCallback
   expressApp.post("/api/voice/recording-status", handleRecordingStatus); // no auth — Twilio recording webhook
+  // ── Voicemail webhooks (no auth — called by Twilio servers) ──
+  expressApp.post("/api/voice/voicemail-complete", handleVoicemailComplete);
+  expressApp.post("/api/voice/voicemail-recording", handleVoicemailRecording);
+  expressApp.post(
+    "/api/voice/voicemail-transcription",
+    handleVoicemailTranscription,
+  );
   expressApp.get("/api/voice/recording/:callSid", handleGetRecording);
   expressApp.get(
     "/api/voice/recording-check/:callSid",
@@ -21367,6 +21914,22 @@ function createServer() {
     "/api/voice/call-forwarding",
     verifyBrokerSession,
     handleUpdateCallForwarding,
+  );
+  // ── Voicemail settings ──
+  expressApp.get(
+    "/api/voice/voicemail-settings",
+    verifyBrokerSession,
+    handleGetVoicemailSettings,
+  );
+  expressApp.put(
+    "/api/voice/voicemail-settings",
+    verifyBrokerSession,
+    handleUpdateVoicemailSettings,
+  );
+  expressApp.put(
+    "/api/voice/voicemail-settings/tenant",
+    verifyBrokerSession,
+    handleUpdateTenantVoicemailSettings,
   );
   expressApp.post("/api/voice/log", verifyBrokerSession, handleVoiceLog);
   expressApp.get("/api/voice/calls", verifyBrokerSession, handleGetCallHistory);

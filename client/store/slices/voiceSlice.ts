@@ -65,7 +65,11 @@ export const lookupContact = createAsyncThunk(
         `/api/conversations/lookup-contact?phone=${encodeURIComponent(phone)}`,
         { headers: { Authorization: `Bearer ${sessionToken}` } },
       );
-      return data as { found: boolean; client_name?: string | null; client_id?: number | null };
+      return data as {
+        found: boolean;
+        client_name?: string | null;
+        client_id?: number | null;
+      };
     } catch (error: any) {
       return rejectWithValue("Lookup failed");
     }
@@ -109,7 +113,8 @@ export const fetchCallForwardingSettings = createAsyncThunk(
       };
     } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.message || "Failed to load call-forwarding settings",
+        error.response?.data?.message ||
+          "Failed to load call-forwarding settings",
       );
     }
   },
@@ -131,7 +136,100 @@ export const saveCallForwardingSettings = createAsyncThunk(
       return data;
     } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.message || "Failed to save call-forwarding settings",
+        error.response?.data?.message ||
+          "Failed to save call-forwarding settings",
+      );
+    }
+  },
+);
+
+// ── Voicemail-settings thunks ─────────────────────────────────────────────
+
+export interface VoicemailSettingsResponse {
+  success: boolean;
+  broker: {
+    voicemail_enabled: boolean | null;
+    voicemail_greeting_text: string | null;
+    voicemail_greeting_url: string | null;
+    has_personal_line: boolean;
+  };
+  tenant: {
+    voicemail_enabled: boolean;
+    voicemail_greeting_text: string | null;
+    voicemail_greeting_url: string | null;
+    voicemail_max_seconds: number;
+    voicemail_transcribe: boolean;
+  };
+}
+
+export const fetchVoicemailSettings = createAsyncThunk(
+  "voice/fetchVoicemailSettings",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<VoicemailSettingsResponse>(
+        "/api/voice/voicemail-settings",
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to load voicemail settings",
+      );
+    }
+  },
+);
+
+export const saveVoicemailSettings = createAsyncThunk(
+  "voice/saveVoicemailSettings",
+  async (
+    payload: {
+      enabled?: boolean | null;
+      greeting_text?: string | null;
+      greeting_url?: string | null;
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.put(
+        "/api/voice/voicemail-settings",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data as { success: boolean; error?: string };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to save voicemail settings",
+      );
+    }
+  },
+);
+
+export const saveTenantVoicemailSettings = createAsyncThunk(
+  "voice/saveTenantVoicemailSettings",
+  async (
+    payload: {
+      enabled?: boolean;
+      greeting_text?: string | null;
+      greeting_url?: string | null;
+      max_seconds?: number;
+      transcribe?: boolean;
+    },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.put(
+        "/api/voice/voicemail-settings/tenant",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data as { success: boolean; error?: string };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error ||
+          "Failed to save tenant voicemail settings",
       );
     }
   },
@@ -215,8 +313,6 @@ export const fixCallSetup = createAsyncThunk(
     }
   },
 );
-
-
 
 export type DeviceStatus = "idle" | "connecting" | "registered" | "error";
 

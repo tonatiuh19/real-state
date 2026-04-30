@@ -60,6 +60,7 @@ import {
   ImageIcon,
   Film,
   FileAudio,
+  Voicemail,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { uploadMMSMedia } from "@/lib/cdn-upload";
@@ -2068,10 +2069,53 @@ const Conversations = () => {
                                   message.recording_url &&
                                   message.external_id ? (
                                     /* ✅ Recording is ready */
-                                    <div className="flex flex-col gap-2 min-w-[220px]">
+                                    <div className="flex flex-col gap-2 min-w-[240px]">
+                                      {(message as any).is_voicemail ? (
+                                        <div
+                                          className={cn(
+                                            "inline-flex items-center gap-1.5 self-start text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5",
+                                            isOutbound
+                                              ? "bg-amber-400/20 text-amber-200"
+                                              : "bg-amber-100 text-amber-700",
+                                          )}
+                                        >
+                                          <Voicemail className="h-3 w-3" />
+                                          Voicemail
+                                        </div>
+                                      ) : null}
                                       <p className="leading-relaxed text-sm">
                                         {message.body}
                                       </p>
+                                      {(message as any).is_voicemail &&
+                                      (message as any)
+                                        .voicemail_transcription ? (
+                                        <div
+                                          className={cn(
+                                            "rounded-lg px-2.5 py-2 text-xs italic leading-relaxed",
+                                            isOutbound
+                                              ? "bg-white/10 text-white/85"
+                                              : "bg-amber-50 text-amber-900 border border-amber-200",
+                                          )}
+                                        >
+                                          “
+                                          {
+                                            (message as any)
+                                              .voicemail_transcription
+                                          }
+                                          ”
+                                        </div>
+                                      ) : (message as any).is_voicemail ? (
+                                        <div
+                                          className={cn(
+                                            "text-[11px] italic",
+                                            isOutbound
+                                              ? "text-white/60"
+                                              : "text-muted-foreground",
+                                          )}
+                                        >
+                                          Transcription pending…
+                                        </div>
+                                      ) : null}
                                       {/* token query param required — <audio> can't send Authorization header */}
                                       <audio
                                         controls
@@ -2086,7 +2130,7 @@ const Conversations = () => {
                                       />
                                       <a
                                         href={`/api/voice/recording/${message.external_id}?download=1&token=${encodeURIComponent(sessionToken ?? "")}`}
-                                        download={`call-${message.external_id}.mp3`}
+                                        download={`${(message as any).is_voicemail ? "voicemail" : "call"}-${message.external_id}.mp3`}
                                         className={cn(
                                           "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
                                           isOutbound
@@ -2095,7 +2139,10 @@ const Conversations = () => {
                                         )}
                                       >
                                         <Download className="h-3.5 w-3.5" />
-                                        Download recording
+                                        Download{" "}
+                                        {(message as any).is_voicemail
+                                          ? "voicemail"
+                                          : "recording"}
                                       </a>
                                     </div>
                                   ) : message.communication_type === "call" &&

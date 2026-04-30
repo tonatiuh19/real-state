@@ -1705,7 +1705,127 @@ paths:
                   success: { type: boolean }
                   available: { type: boolean }
 
+  /voice/voicemail-settings:
+    get:
+      tags: [Voice]
+      summary: Get voicemail overrides for the authenticated broker plus tenant defaults
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Voicemail settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  broker:
+                    type: object
+                    properties:
+                      voicemail_enabled:
+                        type: boolean
+                        nullable: true
+                        description: null = inherit tenant default
+                      voicemail_greeting_text: { type: string, nullable: true }
+                      voicemail_greeting_url: { type: string, nullable: true }
+                      has_personal_line: { type: boolean }
+                  tenant:
+                    type: object
+                    properties:
+                      voicemail_enabled: { type: boolean }
+                      voicemail_greeting_text: { type: string, nullable: true }
+                      voicemail_greeting_url: { type: string, nullable: true }
+                      voicemail_max_seconds: { type: integer }
+                      voicemail_transcribe: { type: boolean }
+    put:
+      tags: [Voice]
+      summary: Update the authenticated broker's voicemail overrides
+      description: Pass null on any field to clear the override and inherit the tenant default.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean, nullable: true }
+                greeting_text: { type: string, nullable: true }
+                greeting_url: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /voice/voicemail-settings/tenant:
+    put:
+      tags: [Voice]
+      summary: Update tenant-level voicemail defaults (admin only)
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                greeting_text: { type: string, nullable: true }
+                greeting_url: { type: string, nullable: true }
+                max_seconds: { type: integer, minimum: 10, maximum: 600 }
+                transcribe: { type: boolean }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "403":
+          description: Admin access required
+
+  /voice/voicemail-complete:
+    post:
+      tags: [Voice]
+      summary: TwiML callback fired by Twilio when caller finishes recording a voicemail
+      description: No authentication required — called by Twilio servers.
+      responses:
+        "200":
+          description: TwiML goodbye response
+          content:
+            text/xml:
+              schema: { type: string }
+
+  /voice/voicemail-recording:
+    post:
+      tags: [Voice]
+      summary: Twilio recordingStatusCallback for the voicemail Record verb
+      description: |
+        Inserts a new communications row with is_voicemail = 1 and broadcasts
+        an Ably event. No authentication required — called by Twilio servers.
+      responses:
+        "204":
+          description: Recording stored
+
+  /voice/voicemail-transcription:
+    post:
+      tags: [Voice]
+      summary: Twilio transcribeCallback for voicemail audio
+      description: |
+        Patches the matching voicemail communications row with the transcript.
+        No authentication required — called by Twilio servers.
+      responses:
+        "204":
+          description: Transcription saved
+
   /voice/phone-numbers:
+    get:
+      tags: [Voice]
+      summary: List Twilio phone numbers with webhook status and broker assignments
     get:
       tags: [Voice]
       summary: List Twilio phone numbers with webhook status and broker assignments
