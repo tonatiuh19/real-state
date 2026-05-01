@@ -1894,6 +1894,22 @@ CREATE TABLE `user_profiles` (
 /*!40000 ALTER TABLE `user_profiles` ENABLE KEYS */;
 
 --
+-- Table structure for table `revoked_tokens`
+--
+
+DROP TABLE IF EXISTS `revoked_tokens`;
+CREATE TABLE `revoked_tokens` (
+  `jti` varchar(36) NOT NULL,
+  `user_type` enum('client','broker') NOT NULL,
+  `user_id` bigint NOT NULL,
+  `expires_at` timestamp NOT NULL,
+  `revoked_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`jti`),
+  KEY `idx_revoked_tokens_expires_at` (`expires_at`),
+  KEY `idx_revoked_tokens_user` (`user_type`,`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
 -- Table structure for table `user_sessions`
 --
 

@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 import {
   Home,
   TrendingUp,
@@ -1661,8 +1662,7 @@ const IncomeCalculator: React.FC = () => {
         .from(html, "string")
         .save();
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("PDF generation failed:", err);
+      logger.error("PDF generation failed:", err);
     } finally {
       setIsGeneratingPdf(false);
     }

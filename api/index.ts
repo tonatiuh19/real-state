@@ -15,6 +15,8 @@ import twilio from "twilio";
 import crypto from "crypto";
 import { ImapFlow } from "imapflow";
 import Ably from "ably";
+import helmet from "helmet";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 
 // Validate critical environment variables
 if (
@@ -28,15 +30,13 @@ if (
   );
 }
 
-// JWT Secret with fallback (warn in production)
-const JWT_SECRET =
-  process.env.JWT_SECRET ||
-  (() => {
-    console.warn(
-      "⚠️  WARNING: Using default JWT_SECRET. Set JWT_SECRET in .env for production!",
-    );
-    return "default-jwt-secret-CHANGE-THIS-IN-PRODUCTION";
-  })();
+// JWT Secret — fail-fast if missing or weak. No insecure default in any env.
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  throw new Error(
+    "JWT_SECRET environment variable is required and must be at least 32 characters. Generate one with: openssl rand -hex 32",
+  );
+}
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Tenant Configuration
 const MORTGAGE_TENANT_ID = 1;
@@ -2259,6 +2259,44 @@ async function sendNewTaskAssignedEmail(
 }
 
 /**
+ * P1-3: JWT revocation helpers.
+ * Logout inserts the token's jti into `revoked_tokens`; auth middleware
+ * rejects any token whose jti is present until natural expiry.
+ */
+const isJtiRevoked = async (jti: string | undefined): Promise<boolean> => {
+  if (!jti || typeof jti !== "string") return false;
+  try {
+    const [rows] = await pool.query<any[]>(
+      "SELECT 1 FROM revoked_tokens WHERE jti = ? LIMIT 1",
+      [jti],
+    );
+    return rows.length > 0;
+  } catch (err) {
+    // Fail-open on infra errors so a transient DB issue doesn't lock everyone out.
+    console.error("isJtiRevoked query failed:", err);
+    return false;
+  }
+};
+
+const revokeJti = async (
+  jti: string | undefined,
+  userType: "client" | "broker",
+  userId: number | undefined,
+  exp: number | undefined,
+): Promise<void> => {
+  if (!jti || !userId || !exp) return;
+  try {
+    await pool.query(
+      `INSERT IGNORE INTO revoked_tokens (jti, user_type, user_id, expires_at)
+       VALUES (?, ?, ?, FROM_UNIXTIME(?))`,
+      [jti, userType, userId, exp],
+    );
+  } catch (err) {
+    console.error("revokeJti insert failed:", err);
+  }
+};
+
+/**
  * Middleware to verify client session
  */
 const verifyClientSession = async (
@@ -2279,12 +2317,22 @@ const verifyClientSession = async (
     const sessionToken = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
 
       if (decoded.userType !== "client") {
         return res.status(403).json({
           success: false,
           message: "Access denied",
+        });
+      }
+
+      // P1-3: reject revoked tokens
+      if (await isJtiRevoked(decoded.jti)) {
+        return res.status(401).json({
+          success: false,
+          message: "Session has been revoked",
         });
       }
 
@@ -2342,12 +2390,22 @@ const verifyBrokerSession = async (
     const sessionToken = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
 
       if (decoded.userType !== "broker") {
         return res.status(403).json({
           success: false,
           message: "Access denied",
+        });
+      }
+
+      // P1-3: reject revoked tokens
+      if (await isJtiRevoked(decoded.jti)) {
+        return res.status(401).json({
+          success: false,
+          message: "Session has been revoked",
         });
       }
 
@@ -2758,7 +2816,15 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
     // Normalize email to match send-code endpoint
     const normalizedEmail = email.trim().toLowerCase();
 
-    console.log("🔍 Verifying broker code:", { email: normalizedEmail, code });
+    // Strictly parse a 4–8 digit numeric OTP
+    const codeStr = String(code).trim();
+    if (!/^\d{4,8}$/.test(codeStr)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid code format",
+      });
+    }
+    const codeNum = parseInt(codeStr, 10);
 
     // Check if broker exists
     const [brokers] = await pool.query<any[]>(
@@ -2780,37 +2846,11 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
 
     // Check if code is valid
     const [sessions] = await pool.query<any[]>(
-      `SELECT *, expires_at, NOW() as server_time FROM broker_sessions 
+      `SELECT id, expires_at, NOW() as server_time FROM broker_sessions 
        WHERE broker_id = ? AND session_code = ? AND is_active = TRUE 
        AND expires_at > NOW()`,
-      [broker.id, parseInt(code)],
+      [broker.id, codeNum],
     );
-
-    console.log("📊 Sessions found:", sessions.length);
-    if (sessions.length > 0) {
-      console.log("⏰ Session expires at:", sessions[0].expires_at);
-      console.log("🕐 Server time:", sessions[0].server_time);
-      console.log("✅ Code is valid!");
-    } else {
-      // Check if session exists without time constraint
-      const [allSessions] = await pool.query<any[]>(
-        `SELECT *, expires_at, NOW() as server_time, 
-         TIMESTAMPDIFF(SECOND, NOW(), expires_at) as seconds_until_expiry 
-         FROM broker_sessions 
-         WHERE broker_id = ? AND session_code = ?`,
-        [broker.id, parseInt(code)],
-      );
-      console.log("❌ No valid sessions. Debug info:");
-      console.log("   Total sessions found:", allSessions.length);
-      if (allSessions.length > 0) {
-        console.log("   Session details:", {
-          expires_at: allSessions[0].expires_at,
-          server_time: allSessions[0].server_time,
-          is_active: allSessions[0].is_active,
-          seconds_until_expiry: allSessions[0].seconds_until_expiry,
-        });
-      }
-    }
 
     if (sessions.length === 0) {
       return res.status(401).json({
@@ -2819,6 +2859,12 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
       });
     }
 
+    // P0: invalidate this session row immediately so the code is single-use
+    await pool.query(
+      "UPDATE broker_sessions SET is_active = FALSE WHERE id = ?",
+      [sessions[0].id],
+    );
+
     // Generate session token (JWT)
     const sessionToken = jwt.sign(
       {
@@ -2826,6 +2872,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
         email: broker.email,
         role: broker.role,
         userType: "broker",
+        jti: crypto.randomUUID(),
       },
       JWT_SECRET,
       { expiresIn: "7d" },
@@ -2905,12 +2952,22 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
     const sessionToken = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
 
       if (decoded.userType !== "broker") {
         return res.status(401).json({
           success: false,
           message: "Invalid session type",
+        });
+      }
+
+      // P1-3: reject revoked tokens
+      if (await isJtiRevoked(decoded.jti)) {
+        return res.status(401).json({
+          success: false,
+          message: "Session has been revoked",
         });
       }
 
@@ -3115,7 +3172,15 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
     // Normalize email to match send-code endpoint
     const normalizedEmail = email.trim().toLowerCase();
 
-    console.log("🔍 Verifying client code:", { email: normalizedEmail, code });
+    // Strictly parse a 4–8 digit numeric OTP
+    const codeStr = String(code).trim();
+    if (!/^\d{4,8}$/.test(codeStr)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid code format",
+      });
+    }
+    const codeNum = parseInt(codeStr, 10);
 
     // Check if client exists
     const [clients] = await pool.query<any[]>(
@@ -3134,37 +3199,11 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
 
     // Check if code is valid
     const [sessions] = await pool.query<any[]>(
-      `SELECT *, expires_at, NOW() as server_time FROM user_sessions 
+      `SELECT id, expires_at, NOW() as server_time FROM user_sessions 
        WHERE user_id = ? AND session_code = ? AND is_active = TRUE 
        AND expires_at > NOW()`,
-      [client.id, parseInt(code)],
+      [client.id, codeNum],
     );
-
-    console.log("📊 Sessions found:", sessions.length);
-    if (sessions.length > 0) {
-      console.log("⏰ Session expires at:", sessions[0].expires_at);
-      console.log("🕐 Server time:", sessions[0].server_time);
-      console.log("✅ Code is valid!");
-    } else {
-      // Check if session exists without time constraint
-      const [allSessions] = await pool.query<any[]>(
-        `SELECT *, expires_at, NOW() as server_time, 
-         TIMESTAMPDIFF(SECOND, NOW(), expires_at) as seconds_until_expiry 
-         FROM user_sessions 
-         WHERE user_id = ? AND session_code = ?`,
-        [client.id, parseInt(code)],
-      );
-      console.log("❌ No valid sessions. Debug info:");
-      console.log("   Total sessions found:", allSessions.length);
-      if (allSessions.length > 0) {
-        console.log("   Session details:", {
-          expires_at: allSessions[0].expires_at,
-          server_time: allSessions[0].server_time,
-          is_active: allSessions[0].is_active,
-          seconds_until_expiry: allSessions[0].seconds_until_expiry,
-        });
-      }
-    }
 
     if (sessions.length === 0) {
       return res.status(401).json({
@@ -3173,12 +3212,19 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
       });
     }
 
+    // P0: invalidate this session row immediately so the code is single-use
+    await pool.query(
+      "UPDATE user_sessions SET is_active = FALSE WHERE id = ?",
+      [sessions[0].id],
+    );
+
     // Generate session token (JWT)
     const sessionToken = jwt.sign(
       {
         clientId: client.id,
         email: client.email,
         userType: "client",
+        jti: crypto.randomUUID(),
       },
       JWT_SECRET,
       { expiresIn: "30d" },
@@ -3230,12 +3276,22 @@ const handleClientValidateSession: RequestHandler = async (req, res) => {
     const sessionToken = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
 
       if (decoded.userType !== "client") {
         return res.status(401).json({
           success: false,
           message: "Invalid session type",
+        });
+      }
+
+      // P1-3: reject revoked tokens
+      if (await isJtiRevoked(decoded.jti)) {
+        return res.status(401).json({
+          success: false,
+          message: "Session has been revoked",
         });
       }
 
@@ -3296,9 +3352,13 @@ const handleClientLogout: RequestHandler = async (req, res) => {
     const sessionToken = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
 
       if (decoded.clientId) {
+        // P1-3: revoke this token's jti so it cannot be reused
+        await revokeJti(decoded.jti, "client", decoded.clientId, decoded.exp);
         // Delete all sessions for this client
         await pool.query("DELETE FROM user_sessions WHERE user_id = ?", [
           decoded.clientId,
@@ -3334,9 +3394,13 @@ const handleAdminLogout: RequestHandler = async (req, res) => {
     const sessionToken = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
 
       if (decoded.brokerId) {
+        // P1-3: revoke this token's jti so it cannot be reused
+        await revokeJti(decoded.jti, "broker", decoded.brokerId, decoded.exp);
         // Delete all sessions for this broker
         await pool.query("DELETE FROM broker_sessions WHERE broker_id = ?", [
           decoded.brokerId,
@@ -18061,7 +18125,9 @@ const handleGetRecording: RequestHandler = async (req, res) => {
       return res.status(401).json({ success: false, error: "Unauthorized" });
     }
     try {
-      const decoded = jwt.verify(sessionToken, JWT_SECRET) as any;
+      const decoded = jwt.verify(sessionToken, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as any;
       if (decoded.userType !== "broker") throw new Error("not a broker");
     } catch {
       return res.status(401).json({ success: false, error: "Invalid session" });
@@ -21219,10 +21285,79 @@ function createServer() {
 
   const expressApp = express();
 
-  // Middleware
+  // Trust proxy so req.ip is correct behind Vercel/load balancers (used by rate limiters & audit)
+  expressApp.set("trust proxy", 1);
+
+  // Security headers
+  expressApp.use(
+    helmet({
+      contentSecurityPolicy: false, // CSP managed at edge / not yet authored
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    }),
+  );
+
+  // CORS — temporarily permissive (revert of P0-4 allowlist).
+  // TODO: Re-enable origin allowlist once prod env vars / domains are confirmed.
   expressApp.use(cors());
+
   expressApp.use(express.json({ limit: "10mb" }));
   expressApp.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+  // ─── Rate limiters (P0-3) ─────────────────────────────────────────────────
+  const ipKey = (req: express.Request) =>
+    ipKeyGenerator(req.ip ?? "unknown") ?? "unknown";
+  // OTP send: prevents email/SMS bombing & cost amplification
+  const otpSendLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) =>
+      `${ipKey(req)}:${String((req.body as any)?.email ?? "").toLowerCase()}`,
+    message: {
+      success: false,
+      message: "Too many code requests. Try again later.",
+    },
+  });
+  // OTP verify: prevents brute force of 6-digit codes
+  const otpVerifyLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) =>
+      `${ipKey(req)}:${String((req.body as any)?.email ?? "").toLowerCase()}`,
+    message: {
+      success: false,
+      message: "Too many verification attempts. Try again later.",
+    },
+  });
+  // Public form submissions
+  const publicFormLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => ipKey(req),
+    message: { success: false, message: "Too many submissions. Slow down." },
+  });
+  // Generic write/auth-bearing endpoints (defense in depth)
+  const generalLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => ipKey(req),
+  });
+  expressApp.use("/api", generalLimiter);
+
+  // Expose limiters so route registration can use them
+  (expressApp as any).locals.limiters = {
+    otpSend: otpSendLimiter,
+    otpVerify: otpVerifyLimiter,
+    publicForm: publicFormLimiter,
+  };
 
   // Log requests
   expressApp.use((req, _res, next) => {
@@ -21236,21 +21371,47 @@ function createServer() {
   expressApp.get("/api/health", handleHealth);
   expressApp.get("/api/ping", handlePing);
 
+  const limiters = (expressApp as any).locals.limiters as {
+    otpSend: express.RequestHandler;
+    otpVerify: express.RequestHandler;
+    publicForm: express.RequestHandler;
+  };
+
   // Broker auth routes (no auth required)
-  expressApp.post("/api/admin/auth/send-code", handleAdminSendCode);
-  expressApp.post("/api/admin/auth/verify-code", handleAdminVerifyCode);
+  expressApp.post(
+    "/api/admin/auth/send-code",
+    limiters.otpSend,
+    handleAdminSendCode,
+  );
+  expressApp.post(
+    "/api/admin/auth/verify-code",
+    limiters.otpVerify,
+    handleAdminVerifyCode,
+  );
   expressApp.get("/api/admin/auth/validate", handleAdminValidateSession);
   expressApp.post("/api/admin/auth/logout", handleAdminLogout);
 
   // Client auth routes (no auth required)
-  expressApp.post("/api/client/auth/send-code", handleClientSendCode);
-  expressApp.post("/api/client/auth/verify-code", handleClientVerifyCode);
+  expressApp.post(
+    "/api/client/auth/send-code",
+    limiters.otpSend,
+    handleClientSendCode,
+  );
+  expressApp.post(
+    "/api/client/auth/verify-code",
+    limiters.otpVerify,
+    handleClientVerifyCode,
+  );
   expressApp.get("/api/client/auth/validate", handleClientValidateSession);
   expressApp.post("/api/client/auth/logout", handleClientLogout);
 
   // Public apply route (no auth required)
-  expressApp.post("/api/apply", handlePublicApply);
-  expressApp.post("/api/apply/draft", handlePublicSaveDraft);
+  expressApp.post("/api/apply", limiters.publicForm, handlePublicApply);
+  expressApp.post(
+    "/api/apply/draft",
+    limiters.publicForm,
+    handlePublicSaveDraft,
+  );
 
   // Public broker info for share link (no auth required)
   expressApp.get("/api/public/broker/:token", handleGetBrokerPublicInfo);
@@ -24843,7 +25004,11 @@ function createServer() {
     }
   };
 
-  expressApp.post("/api/contact", handleSubmitContact);
+  expressApp.post(
+    "/api/contact",
+    (expressApp as any).locals.limiters.publicForm,
+    handleSubmitContact,
+  );
   expressApp.get(
     "/api/contact",
     verifyBrokerSession,

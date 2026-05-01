@@ -9,9 +9,12 @@ import {
   Calendar,
   Clock,
 } from "lucide-react";
-import axios from "axios";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { fetchPublicScheduler } from "@/store/slices/schedulerSlice";
+import {
+  fetchPublicScheduler,
+  fetchPublicRescheduleInfo,
+  submitPublicReschedule,
+} from "@/store/slices/schedulerSlice";
 import { ClientDatePicker } from "@/components/ClientDatePicker";
 import { ClientTimePicker } from "@/components/ClientTimePicker";
 
@@ -55,76 +58,95 @@ export default function SchedulerReschedule() {
   useEffect(() => {
     if (!bookingToken) return;
     // Fetch meeting info first to show a confirmation screen
-    axios
-      .get<{ success: boolean; error?: string } & Partial<RescheduleInfo>>(
-        `/api/public/scheduler/reschedule/${bookingToken}`,
-      )
-      .then(({ data }) => {
-        if (!data.success) {
-          setError(data.error ?? "Booking not found");
-          setStatus("error");
-          return;
-        }
-        if (!data.broker_public_token) {
-          setError("This booking cannot be rescheduled right now.");
-          setStatus("error");
-          return;
-        }
-        setInfo({
-          broker_public_token: data.broker_public_token!,
-          broker_name: data.broker_name ?? null,
-          broker_timezone: data.broker_timezone ?? null,
-          client_name: data.client_name!,
-          client_email: data.client_email!,
-          client_phone: data.client_phone ?? null,
-          meeting_type: (data.meeting_type as "phone" | "video") ?? "phone",
-          old_meeting_date: data.old_meeting_date!,
-          old_meeting_time: data.old_meeting_time!,
-        });
-        // Load public scheduler data for available dates
-        dispatch(fetchPublicScheduler(data.broker_public_token!));
-        setStatus("confirming");
-      })
-      .catch(() => {
-        setError("Could not load booking information. Please try again.");
+    dispatch(fetchPublicRescheduleInfo(bookingToken)).then((result) => {
+      if (fetchPublicRescheduleInfo.rejected.match(result)) {
+        setError(
+          (result.payload as string) ||
+            "Could not load booking information. Please try again.",
+        );
         setStatus("error");
+        return;
+      }
+      const data = result.payload as {
+        success: boolean;
+        error?: string;
+        broker_public_token?: string;
+        broker_name?: string | null;
+        broker_timezone?: string | null;
+        client_name?: string;
+        client_email?: string;
+        client_phone?: string | null;
+        meeting_type?: "phone" | "video";
+        old_meeting_date?: string;
+        old_meeting_time?: string;
+      };
+      if (!data.success) {
+        setError(data.error ?? "Booking not found");
+        setStatus("error");
+        return;
+      }
+      if (!data.broker_public_token) {
+        setError("This booking cannot be rescheduled right now.");
+        setStatus("error");
+        return;
+      }
+      setInfo({
+        broker_public_token: data.broker_public_token!,
+        broker_name: data.broker_name ?? null,
+        broker_timezone: data.broker_timezone ?? null,
+        client_name: data.client_name!,
+        client_email: data.client_email!,
+        client_phone: data.client_phone ?? null,
+        meeting_type: (data.meeting_type as "phone" | "video") ?? "phone",
+        old_meeting_date: data.old_meeting_date!,
+        old_meeting_time: data.old_meeting_time!,
       });
-  }, [bookingToken]);
+      // Load public scheduler data for available dates
+      dispatch(fetchPublicScheduler(data.broker_public_token!));
+      setStatus("confirming");
+    });
+  }, [bookingToken, dispatch]);
 
   const handleConfirm = async () => {
     if (!info || !bookingToken || !newDate || !newTime) return;
     setStatus("submitting");
-    try {
-      const { data } = await axios.post<{
-        success: boolean;
-        booking_token?: string;
-        meeting_date?: string;
-        meeting_time?: string;
-        zoom_join_url?: string | null;
-        broker_name?: string;
-        error?: string;
-      }>(`/api/public/scheduler/reschedule/${bookingToken}`, {
+    const result = await dispatch(
+      submitPublicReschedule({
+        bookingToken,
         new_date: newDate,
         new_time: newTime,
-      });
-      if (!data.success) {
-        setError(data.error ?? "Failed to reschedule booking");
-        setStatus("error");
-        return;
-      }
-      setSuccessInfo({
-        booking_token: data.booking_token!,
-        meeting_date: data.meeting_date!,
-        meeting_time: data.meeting_time!,
-        zoom_join_url: data.zoom_join_url ?? null,
-        broker_name:
-          data.broker_name ?? info.broker_name ?? "Your Mortgage Banker",
-      });
-      setStatus("success");
-    } catch {
-      setError("Something went wrong. Please try again.");
+      }),
+    );
+    if (submitPublicReschedule.rejected.match(result)) {
+      setError(
+        (result.payload as string) || "Something went wrong. Please try again.",
+      );
       setStatus("error");
+      return;
     }
+    const data = result.payload as {
+      success: boolean;
+      booking_token?: string;
+      meeting_date?: string;
+      meeting_time?: string;
+      zoom_join_url?: string | null;
+      broker_name?: string;
+      error?: string;
+    };
+    if (!data.success) {
+      setError(data.error ?? "Failed to reschedule booking");
+      setStatus("error");
+      return;
+    }
+    setSuccessInfo({
+      booking_token: data.booking_token!,
+      meeting_date: data.meeting_date!,
+      meeting_time: data.meeting_time!,
+      zoom_join_url: data.zoom_join_url ?? null,
+      broker_name:
+        data.broker_name ?? info.broker_name ?? "Your Mortgage Banker",
+    });
+    setStatus("success");
   };
 
   const formatDate = (d: string) => {

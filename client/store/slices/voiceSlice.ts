@@ -23,6 +23,34 @@ export const fetchVoiceToken = createAsyncThunk(
   },
 );
 
+interface VoiceLogPayload {
+  phone: string;
+  duration: number;
+  call_status: string;
+  call_sid?: string;
+  client_id?: number;
+  application_id?: number;
+  client_name?: string;
+  direction?: string;
+}
+
+export const logVoiceCall = createAsyncThunk(
+  "voice/logCall",
+  async (payload: VoiceLogPayload, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.post("/api/voice/log", payload, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return true;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to log call",
+      );
+    }
+  },
+);
+
 export const fetchAblyToken = createAsyncThunk(
   "voice/fetchAblyToken",
   async (_, { getState, rejectWithValue }) => {

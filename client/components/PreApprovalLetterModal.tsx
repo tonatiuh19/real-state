@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from "react";
-import axios from "axios";
 import {
   Dialog,
   DialogContent,
@@ -60,6 +59,7 @@ import {
   createPreApprovalLetter,
   updatePreApprovalLetter,
   deletePreApprovalLetter,
+  sendPreApprovalEmail,
 } from "@/store/slices/preApprovalSlice";
 import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
 import { toast } from "@/hooks/use-toast";
@@ -341,9 +341,9 @@ export function PreApprovalLetterModal({
         logger.error("PDF generation for email failed:", pdfErr);
         // continue without attachment rather than blocking the send
       }
-      await axios.post(
-        `/api/loans/${loanId}/pre-approval-letter/send-email`,
-        {
+      await dispatch(
+        sendPreApprovalEmail({
+          loanId,
           subject: emailSubject || undefined,
           custom_message: emailCustomMessage || undefined,
           template_id:
@@ -351,9 +351,8 @@ export function PreApprovalLetterModal({
               ? Number(emailTemplateId)
               : undefined,
           pdf_base64: pdfBase64,
-        },
-        { headers: { Authorization: `Bearer ${sessionToken}` } },
-      );
+        }),
+      ).unwrap();
       toast({
         title: "Email Sent",
         description: `Pre-approval letter sent to ${letter.client_email ?? "the client"}.`,
@@ -365,7 +364,10 @@ export function PreApprovalLetterModal({
       logger.error("Error sending pre-approval email:", error);
       toast({
         title: "Send Failed",
-        description: error.response?.data?.error ?? "Failed to send the email.",
+        description:
+          typeof error === "string"
+            ? error
+            : (error.response?.data?.error ?? "Failed to send the email."),
         variant: "destructive",
       });
     } finally {

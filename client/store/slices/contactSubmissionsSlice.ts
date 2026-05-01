@@ -46,6 +46,29 @@ export const fetchContactSubmissions = createAsyncThunk(
   },
 );
 
+interface SubmitContactPayload {
+  name: string;
+  email: string;
+  phone: string | null;
+  subject: string;
+  message: string;
+}
+
+export const submitContactForm = createAsyncThunk(
+  "contactSubmissions/submit",
+  async (payload: SubmitContactPayload, { rejectWithValue }) => {
+    try {
+      const { data } = await axios.post("/api/contact", payload);
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error?.response?.data?.error ||
+          "Something went wrong. Please try again or call us directly.",
+      );
+    }
+  },
+);
+
 const contactSubmissionsSlice = createSlice({
   name: "contactSubmissions",
   initialState,

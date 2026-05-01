@@ -141,6 +141,68 @@ export const bookMeeting = createAsyncThunk(
   },
 );
 
+interface PublicRescheduleInfo {
+  success: boolean;
+  error?: string;
+  broker_public_token?: string;
+  broker_name?: string | null;
+  broker_timezone?: string | null;
+  client_name?: string;
+  client_email?: string;
+  client_phone?: string | null;
+  meeting_type?: "phone" | "video";
+  old_meeting_date?: string;
+  old_meeting_time?: string;
+}
+
+export const fetchPublicRescheduleInfo = createAsyncThunk(
+  "scheduler/fetchRescheduleInfo",
+  async (bookingToken: string, { rejectWithValue }) => {
+    try {
+      const { data } = await axios.get<PublicRescheduleInfo>(
+        `/api/public/scheduler/reschedule/${bookingToken}`,
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error?.response?.data?.error ||
+          "Could not load booking information. Please try again.",
+      );
+    }
+  },
+);
+
+interface SubmitRescheduleResponse {
+  success: boolean;
+  error?: string;
+  booking_token?: string;
+  meeting_date?: string;
+  meeting_time?: string;
+  zoom_join_url?: string | null;
+  broker_name?: string;
+}
+
+export const submitPublicReschedule = createAsyncThunk(
+  "scheduler/submitReschedule",
+  async (
+    payload: { bookingToken: string; new_date: string; new_time: string },
+    { rejectWithValue },
+  ) => {
+    try {
+      const { data } = await axios.post<SubmitRescheduleResponse>(
+        `/api/public/scheduler/reschedule/${payload.bookingToken}`,
+        { new_date: payload.new_date, new_time: payload.new_time },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error?.response?.data?.error ||
+          "Something went wrong. Please try again.",
+      );
+    }
+  },
+);
+
 // ---------------------------------------------------------------
 // Admin thunks (authenticated)
 // ---------------------------------------------------------------

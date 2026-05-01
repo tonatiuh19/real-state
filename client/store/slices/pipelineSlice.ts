@@ -180,6 +180,124 @@ export const updateLoanStatus = createAsyncThunk(
   },
 );
 
+export const updateLoanDetails = createAsyncThunk(
+  "pipeline/updateLoanDetails",
+  async (
+    { loanId, payload }: { loanId: number; payload: Record<string, any> },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.patch(`/api/loans/${loanId}/details`, payload, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return { loanId };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update loan details",
+      );
+    }
+  },
+);
+
+export const updateLoanSource = createAsyncThunk(
+  "pipeline/updateLoanSource",
+  async (
+    {
+      loanId,
+      source_category,
+    }: { loanId: number; source_category: string | null },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.patch(
+        `/api/loans/${loanId}/source`,
+        { source_category },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { loanId, source_category };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update lead source",
+      );
+    }
+  },
+);
+
+export const assignLoanBroker = createAsyncThunk(
+  "pipeline/assignLoanBroker",
+  async (
+    { loanId, brokerId }: { loanId: number; brokerId: number | null },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.patch(
+        `/api/loans/${loanId}/assign-broker`,
+        { broker_id: brokerId },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { loanId, brokerId };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update realtor assignment",
+      );
+    }
+  },
+);
+
+export const assignLoanPartner = createAsyncThunk(
+  "pipeline/assignLoanPartner",
+  async (
+    { loanId, partnerId }: { loanId: number; partnerId: number | null },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.patch(
+        `/api/loans/${loanId}/assign-partner`,
+        { partner_id: partnerId },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { loanId, partnerId };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update partner assignment",
+      );
+    }
+  },
+);
+
+export const exportLoanMismo = createAsyncThunk(
+  "pipeline/exportLoanMismo",
+  async (loanId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const response = await axios.get(`/api/loans/${loanId}/export-mismo`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+        responseType: "blob",
+      });
+      return response.data as Blob;
+    } catch (error: any) {
+      // Blob error responses need explicit decoding
+      let message = "Failed to generate MISMO file";
+      if (error.response?.data instanceof Blob) {
+        try {
+          const text = await error.response.data.text();
+          const parsed = JSON.parse(text);
+          message = parsed.error || message;
+        } catch {
+          /* ignore */
+        }
+      } else if (error.response?.data?.error) {
+        message = error.response.data.error;
+      }
+      return rejectWithValue(message);
+    }
+  },
+);
+
 const pipelineSlice = createSlice({
   name: "pipeline",
   initialState,

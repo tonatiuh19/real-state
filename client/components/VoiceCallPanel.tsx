@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
-import axios from "axios";
+import { useAppDispatch } from "@/store/hooks";
+import { fetchVoiceToken, logVoiceCall } from "@/store/slices/voiceSlice";
 import {
   Phone,
   PhoneOff,
@@ -39,7 +40,6 @@ import {
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { useAppSelector } from "@/store/hooks";
-import type { VoiceLogRequest } from "@shared/api";
 
 export type CallState =
   | "idle"
@@ -83,6 +83,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   direction = "outbound",
   deviceAudio,
 }) => {
+  const dispatch = useAppDispatch();
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
 
   const deviceRef = useRef<Device | null>(null);
@@ -308,24 +309,23 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const logCall = useCallback(
     async (status: string, durationSec: number, sid?: string | null) => {
       try {
-        const payload: VoiceLogRequest = {
-          phone,
-          duration: durationSec,
-          call_status: status,
-          call_sid: sid ?? undefined,
-          client_id: clientId ?? undefined,
-          application_id: applicationId ?? undefined,
-          client_name: clientName ?? undefined,
-          direction,
-        };
-        await axios.post("/api/voice/log", payload, {
-          headers: { Authorization: `Bearer ${sessionToken}` },
-        });
+        await dispatch(
+          logVoiceCall({
+            phone,
+            duration: durationSec,
+            call_status: status,
+            call_sid: sid ?? undefined,
+            client_id: clientId ?? undefined,
+            application_id: applicationId ?? undefined,
+            client_name: clientName ?? undefined,
+            direction,
+          }),
+        );
       } catch (err) {
         logger.error("[VoiceCallPanel] Failed to log call:", err);
       }
     },
-    [phone, clientId, applicationId, clientName, direction, sessionToken],
+    [phone, clientId, applicationId, clientName, direction, dispatch],
   );
 
   const stopTimer = useCallback(() => {
@@ -377,16 +377,18 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     setErrorMsg(null);
 
     try {
-      // 1. Fetch Access Token
-      const { data } = await axios.post<{ success: boolean; token: string }>(
-        "/api/voice/token",
-        {},
-        { headers: { Authorization: `Bearer ${sessionToken}` } },
-      );
-      if (!data.success || !data.token) throw new Error("Token fetch failed");
+      // 1. Fetch Access Token via Redux thunk
+      const tokenResult = await dispatch(fetchVoiceToken());
+      if (fetchVoiceToken.rejected.match(tokenResult)) {
+        throw new Error(
+          (tokenResult.payload as string) || "Token fetch failed",
+        );
+      }
+      const token = tokenResult.payload as string;
+      if (!token) throw new Error("Token fetch failed");
 
       // 2. Create Device with HD audio settings
-      const device = new Device(data.token, {
+      const device = new Device(token, {
         logLevel: 1,
         // Opus first for HD wideband audio (~16 kHz), PCMU as PSTN fallback
         codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
