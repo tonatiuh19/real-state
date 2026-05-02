@@ -10303,8 +10303,9 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
 };
 
 /**
- * Helper function to generate MISMO 3.4 XML
+ * Helper function to generate MISMO 3.4 (ULAD) XML
  * Uses xmlbuilder2 for safe, schema-correct XML generation.
+ * Elements ordered alphabetically within each parent per DU_Wrapper_3.4.0_B324.xsd xs:sequence rules.
  */
 function generateMISMO34XML(loan: any): string {
   const loanAmount = parseFloat(loan.loan_amount || 0);
@@ -10312,6 +10313,7 @@ function generateMISMO34XML(loan: any): string {
   const monthlyIncome = loan.annual_income
     ? (parseFloat(loan.annual_income) / 12).toFixed(2)
     : "0.0";
+  const loanTermMonths = loan.loan_term_months || 360;
 
   const loanPurposeType =
     loan.loan_type === "purchase"
@@ -10339,11 +10341,14 @@ function generateMISMO34XML(loan: any): string {
   const str = (v: any): string => (v != null ? String(v) : "");
   const borrowerDOB = formatDate(loan.date_of_birth);
   const isSelfEmployed = loan.employment_status === "self_employed";
+  const isRefinance = loan.loan_type === "refinance";
+  const hasProperty = isRefinance || propertyValue > 0;
 
   // Build the document using xmlbuilder2 — no manual escaping needed, no template literal drift.
   const doc = create({ version: "1.0", encoding: "UTF-8" })
     .ele("MESSAGE", {
       "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+      "xmlns:ULAD": "http://www.datamodelextension.org/Schema/ULAD",
       "xmlns:xlink": "http://www.w3.org/1999/xlink",
       xmlns: "http://www.mismo.org/residential/2009/schemas",
       MISMOReferenceModelIdentifier: "3.4.032420160128",
@@ -10354,6 +10359,36 @@ function generateMISMO34XML(loan: any): string {
     .ele("DEAL_SET")
     .ele("DEALS")
     .ele("DEAL");
+
+  // ── ASSETS (alphabetically before COLLATERALS per schema xs:sequence) ─────
+  if (hasProperty) {
+    doc
+      .ele("ASSETS")
+      .ele("ASSET", { "xlink:label": "ASSET_1" })
+      .ele("ASSET_DETAIL")
+      .ele("AssetType")
+      .txt("RealEstateOwned")
+      .up()
+      .up()
+      .ele("OWNED_PROPERTY")
+      .ele("OWNED_PROPERTY_DETAIL")
+      .ele("OwnedPropertySubjectIndicator")
+      .txt("false")
+      .up()
+      .up()
+      .ele("PROPERTY")
+      .ele("ADDRESS")
+      .ele("CountryCode")
+      .txt("US")
+      .up()
+      .ele("CountryName")
+      .txt("United States")
+      .up()
+      .up()
+      .ele("PROPERTY_DETAIL")
+      .ele("PropertyCurrentUsageType")
+      .txt("PrimaryResidence");
+  }
 
   // ── COLLATERALS ──────────────────────────────────────────────────────────
   const subjectProperty = doc
@@ -10383,7 +10418,9 @@ function generateMISMO34XML(loan: any): string {
     .up();
 
   const propDetail = subjectProperty.ele("PROPERTY_DETAIL");
-  propDetail.ele("PropertyCurrentUsageType").txt("PrimaryResidence");
+  propDetail.ele("AttachmentType").txt("Detached");
+  propDetail.ele("ConstructionMethodType").txt("SiteBuilt");
+  propDetail.ele("PropertyEstateType").txt("FeeSimple");
   propDetail.ele("PropertyUsageType").txt("PrimaryResidence");
   if (propertyValue > 0) {
     propDetail
@@ -10391,20 +10428,38 @@ function generateMISMO34XML(loan: any): string {
       .txt(propertyValue.toFixed(2));
   }
 
+  // ── LIABILITIES (alphabetically before LOANS per schema xs:sequence) ──────
+  if (hasProperty) {
+    doc
+      .ele("LIABILITIES")
+      .ele("LIABILITY", {
+        SequenceNumber: "1",
+        "xlink:label": "LIABILITY_1",
+      })
+      .ele("LIABILITY_DETAIL")
+      .ele("LiabilityType")
+      .txt("MortgageLoan")
+      .up()
+      .ele("LiabilityUnpaidBalanceAmount")
+      .txt(propertyValue > 0 ? propertyValue.toFixed(2) : "0.0");
+  }
+
   // ── LOANS ─────────────────────────────────────────────────────────────────
   const loanEl = doc
     .ele("LOANS")
     .ele("LOAN", { LoanRoleType: "SubjectLoan", "xlink:label": "LOAN_1" });
 
+  // AMORTIZATION
   loanEl
     .ele("AMORTIZATION")
     .ele("AMORTIZATION_RULE")
     .ele("LoanAmortizationPeriodCount")
-    .txt(str(loan.loan_term_months || 360))
+    .txt(str(loanTermMonths))
     .up()
     .ele("LoanAmortizationPeriodType")
     .txt("Month");
 
+  // LOAN_DETAIL
   loanEl
     .ele("LOAN_DETAIL")
     .ele("BorrowerCount")
@@ -10413,6 +10468,25 @@ function generateMISMO34XML(loan: any): string {
     .ele("ConstructionLoanIndicator")
     .txt("false");
 
+  // MATURITY (required by schema; must appear after LOAN_DETAIL)
+  loanEl
+    .ele("MATURITY")
+    .ele("MATURITY_RULE")
+    .ele("LoanMaturityPeriodCount")
+    .txt(str(loanTermMonths))
+    .up()
+    .ele("LoanMaturityPeriodType")
+    .txt("Month");
+
+  // REFINANCE (only for refinance loans; appears before TERMS_OF_LOAN per schema)
+  if (isRefinance) {
+    loanEl
+      .ele("REFINANCE")
+      .ele("RefinanceCashOutDeterminationType")
+      .txt("CashOut");
+  }
+
+  // TERMS_OF_LOAN
   const termsEl = loanEl.ele("TERMS_OF_LOAN");
   termsEl.ele("BaseLoanAmount").txt(loanAmount.toFixed(2));
   termsEl.ele("LienPriorityType").txt("FirstLien");
@@ -10427,6 +10501,7 @@ function generateMISMO34XML(loan: any): string {
   // Borrower party
   const borrowerParty = partiesEl.ele("PARTY");
 
+  // INDIVIDUAL
   const borrowerIndividual = borrowerParty.ele("INDIVIDUAL");
   const borrowerContactPoints = borrowerIndividual.ele("CONTACT_POINTS");
   if (loan.client_phone) {
@@ -10456,6 +10531,7 @@ function generateMISMO34XML(loan: any): string {
     .ele("LastName")
     .txt(str(loan.client_last_name));
 
+  // ADDRESSES
   if (loan.address_street) {
     borrowerParty
       .ele("ADDRESSES")
@@ -10464,7 +10540,7 @@ function generateMISMO34XML(loan: any): string {
       .txt(str(loan.address_street))
       .up()
       .ele("AddressType")
-      .txt("Current")
+      .txt("Primary")
       .up()
       .ele("CityName")
       .txt(str(loan.address_city))
@@ -10482,20 +10558,24 @@ function generateMISMO34XML(loan: any): string {
       .txt(str(loan.address_state));
   }
 
+  // ROLES
   const borrowerRole = borrowerParty
     .ele("ROLES")
     .ele("ROLE", { SequenceNumber: "1", "xlink:label": "BORROWER_1" });
 
   const borrowerEl = borrowerRole.ele("BORROWER");
 
+  // BORROWER_DETAIL — CitizenshipResidencyType belongs in DECLARATION, not here
   const borrowerDetail = borrowerEl.ele("BORROWER_DETAIL");
+  borrowerDetail.ele("BorrowerBankruptcyIndicator").txt("false");
   if (borrowerDOB) {
     borrowerDetail.ele("BorrowerBirthDate").txt(borrowerDOB);
   }
   borrowerDetail.ele("BorrowerClassificationType").txt("Primary");
   borrowerDetail.ele("MaritalStatusType").txt(maritalStatus);
-  borrowerDetail.ele("CitizenshipResidencyType").txt("USCitizen");
+  borrowerDetail.ele("SelfDeclaredMilitaryServiceIndicator").txt("false");
 
+  // CURRENT_INCOME
   borrowerEl
     .ele("CURRENT_INCOME")
     .ele("CURRENT_INCOME_ITEMS")
@@ -10510,6 +10590,56 @@ function generateMISMO34XML(loan: any): string {
     .ele("IncomeType")
     .txt("Base");
 
+  // DECLARATION (CitizenshipResidencyType must live here per ULAD 3.4 schema)
+  borrowerEl
+    .ele("DECLARATION")
+    .ele("DECLARATION_DETAIL")
+    .ele("BankruptcyIndicator")
+    .txt("false")
+    .up()
+    .ele("CitizenshipResidencyType")
+    .txt("USCitizen")
+    .up()
+    .ele("HomeownerPastThreeYearsType")
+    .txt(isRefinance ? "Yes" : "No")
+    .up()
+    .ele("IntentToOccupyType")
+    .txt("Yes")
+    .up()
+    .ele("OutstandingJudgmentsIndicator")
+    .txt("false")
+    .up()
+    .ele("PartyToLawsuitIndicator")
+    .txt("false")
+    .up()
+    .ele("PresentlyDelinquentIndicator")
+    .txt("false")
+    .up()
+    .ele("PriorPropertyDeedInLieuConveyedIndicator")
+    .txt("false")
+    .up()
+    .ele("PriorPropertyForeclosureCompletedIndicator")
+    .txt("false")
+    .up()
+    .ele("PriorPropertyShortSaleCompletedIndicator")
+    .txt("false")
+    .up()
+    .ele("PropertyProposedCleanEnergyLienIndicator")
+    .txt("false")
+    .up()
+    .ele("UndisclosedBorrowedFundsIndicator")
+    .txt("false")
+    .up()
+    .ele("UndisclosedComakerOfNoteIndicator")
+    .txt("false")
+    .up()
+    .ele("UndisclosedCreditApplicationIndicator")
+    .txt("false")
+    .up()
+    .ele("UndisclosedMortgageApplicationIndicator")
+    .txt("false");
+
+  // EMPLOYERS
   const employerEl = borrowerEl
     .ele("EMPLOYERS")
     .ele("EMPLOYER", { SequenceNumber: "1", "xlink:label": "EMPLOYER_1" });
@@ -10523,6 +10653,7 @@ function generateMISMO34XML(loan: any): string {
     .ele("EmploymentStatusType")
     .txt(isSelfEmployed ? "Current" : str(loan.employment_status || "Current"));
 
+  // RESIDENCES
   borrowerEl
     .ele("RESIDENCES")
     .ele("RESIDENCE")
@@ -10531,7 +10662,7 @@ function generateMISMO34XML(loan: any): string {
     .txt(str(loan.address_street))
     .up()
     .ele("AddressType")
-    .txt("Current")
+    .txt("Primary")
     .up()
     .ele("CityName")
     .txt(str(loan.address_city))
@@ -10550,9 +10681,13 @@ function generateMISMO34XML(loan: any): string {
     .up()
     .up()
     .ele("RESIDENCE_DETAIL")
+    .ele("BorrowerResidencyBasisType")
+    .txt("Own")
+    .up()
     .ele("BorrowerResidencyType")
     .txt("Current");
 
+  // ROLE_DETAIL
   borrowerRole
     .ele("ROLE_DETAIL")
     .ele("ConsentToReceiveDocumentsElectronicallyIndicator")
@@ -10561,6 +10696,7 @@ function generateMISMO34XML(loan: any): string {
     .ele("PartyRoleType")
     .txt("Borrower");
 
+  // TAXPAYER_IDENTIFIERS (after ROLES per PARTY schema)
   const taxpayerIdEl = borrowerParty
     .ele("TAXPAYER_IDENTIFIERS")
     .ele("TAXPAYER_IDENTIFIER");
@@ -10619,7 +10755,22 @@ function generateMISMO34XML(loan: any): string {
   }
 
   // ── RELATIONSHIPS ─────────────────────────────────────────────────────────
-  doc.ele("RELATIONSHIPS").ele("RELATIONSHIP", {
+  const relEl = doc.ele("RELATIONSHIPS");
+  if (hasProperty) {
+    relEl.ele("RELATIONSHIP", {
+      "xlink:from": "ASSET_1",
+      "xlink:to": "BORROWER_1",
+      "xlink:arcrole":
+        "urn:fdc:mismo.org:2009:residential/ASSET_IsAssociatedWith_ROLE",
+    });
+    relEl.ele("RELATIONSHIP", {
+      "xlink:from": "LIABILITY_1",
+      "xlink:to": "BORROWER_1",
+      "xlink:arcrole":
+        "urn:fdc:mismo.org:2009:residential/LIABILITY_IsAssociatedWith_ROLE",
+    });
+  }
+  relEl.ele("RELATIONSHIP", {
     "xlink:from": "CURRENT_INCOME_ITEM_1",
     "xlink:to": "EMPLOYER_1",
     "xlink:arcrole":
@@ -17466,6 +17617,30 @@ const handleVoicemailComplete: RequestHandler = async (_req, res) => {
 };
 
 /**
+ * POST /api/voice/call-screen
+ * Twilio fires this URL when a forwarded <Number> leg is answered.
+ * We require a keypress before bridging — carrier voicemail systems
+ * won't press a key, so the leg hangs up and Twilio's <Dial> falls
+ * through to the CRM voicemail instead of the carrier's.
+ * No auth — called by Twilio servers.
+ */
+const handleCallScreen: RequestHandler = (_req, res) => {
+  res.set("Content-Type", "text/xml");
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  // Give the broker 8 s to press any key; carrier voicemail won't.
+  const gather = twiml.gather({ numDigits: 1, timeout: 8 });
+  gather.say(
+    { voice: "Polly.Joanna" },
+    "Incoming call. Press any key to answer.",
+  );
+  // No key pressed → hang up this forwarded leg; Twilio keeps ringing
+  // the browser clients and, if still unanswered, triggers CRM voicemail.
+  twiml.hangup();
+  return res.send(twiml.toString());
+};
+
+/**
  * POST /api/voice/voicemail-recording
  * Twilio recordingStatusCallback for the voicemail <Record>.
  * Inserts a NEW communications row (is_voicemail=1) and broadcasts an Ably
@@ -17749,10 +17924,18 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     // Ring all target brokers simultaneously — first to accept wins.
     for (const bid of brokerIds) {
       dial.client(`broker_${bid}`);
-      // If this broker has call forwarding enabled, also ring their personal phone
+      // If this broker has call forwarding enabled, also ring their personal phone.
+      // Use a call-screen URL so carrier voicemail won't silently "answer" the
+      // Twilio <Dial>, which would prevent the CRM voicemail from ever triggering.
       const fwdPhone = forwardingMap.get(bid);
       if (fwdPhone) {
-        dial.number({}, fwdPhone);
+        dial.number(
+          {
+            url: `${getVoiceBaseUrl()}/api/voice/call-screen`,
+            method: "POST",
+          } as any,
+          fwdPhone,
+        );
       }
     }
 
@@ -22111,6 +22294,7 @@ function createServer() {
   expressApp.post("/api/voice/recording-status", handleRecordingStatus); // no auth — Twilio recording webhook
   // ── Voicemail webhooks (no auth — called by Twilio servers) ──
   expressApp.post("/api/voice/voicemail-complete", handleVoicemailComplete);
+  expressApp.post("/api/voice/call-screen", handleCallScreen); // no auth — Twilio Number url callback
   expressApp.post("/api/voice/voicemail-recording", handleVoicemailRecording);
   expressApp.post(
     "/api/voice/voicemail-transcription",
