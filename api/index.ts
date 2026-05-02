@@ -752,6 +752,21 @@ async function upsertConversationThread(params: {
             ) {
               resolvedBrokerId = lRows[0].assigned_broker_id as number;
             }
+          } else {
+            // Fallback: brokers/realtors table — so threads from partner
+            // realtors never show "Unknown Client".
+            const [brRows] = await pool.query<RowDataPacket[]>(
+              `SELECT id, CONCAT(first_name, ' ', last_name) AS name
+               FROM brokers
+               WHERE tenant_id = ?
+                 AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+               LIMIT 1`,
+              [tenantId, lastTen],
+            );
+            if (brRows.length > 0) {
+              clientName = brRows[0].name?.trim() || null;
+              (params as any).resolvedContactBrokerId = brRows[0].id as number;
+            }
           }
         }
       }
@@ -759,16 +774,19 @@ async function upsertConversationThread(params: {
     // Use the client ID resolved from phone if we found one
     const finalClientId =
       resolvedClientId ?? (params as any).resolvedClientIdFromPhone ?? null;
+    const finalContactBrokerId: number | null =
+      (params as any).resolvedContactBrokerId ?? null;
 
     // Always INSERT — broker_id is now nullable so shared-inbox threads (broker_id=NULL)
     // are also persisted and visible to all brokers.
     await pool.query(
       `INSERT INTO conversation_threads
          (tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
+          contact_broker_id,
           client_name, client_phone, client_email, inbox_number,
           last_message_at, last_message_preview, last_message_type,
           message_count, unread_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
        ON DUPLICATE KEY UPDATE
          -- Always update preview/type/timestamp for the new message.
          -- (Out-of-order delivery is rare; the previous IF(NOW()>last_message_at)
@@ -781,6 +799,7 @@ async function upsertConversationThread(params: {
          unread_count         = unread_count + ?,
          client_id            = COALESCE(client_id, ?),
          broker_id            = COALESCE(broker_id, ?),
+         contact_broker_id    = COALESCE(contact_broker_id, ?),
          client_name          = COALESCE(client_name, ?),
          client_phone         = COALESCE(client_phone, ?),
          client_email         = COALESCE(client_email, ?),
@@ -797,6 +816,7 @@ async function upsertConversationThread(params: {
         resolvedLeadId,
         finalClientId,
         resolvedBrokerId, // may be null for shared-inbox threads
+        finalContactBrokerId,
         clientName,
         clientPhone,
         clientEmail,
@@ -810,6 +830,7 @@ async function upsertConversationThread(params: {
         unreadDelta,
         finalClientId,
         resolvedBrokerId,
+        finalContactBrokerId,
         clientName,
         clientPhone,
         clientEmail,
@@ -8222,28 +8243,31 @@ const handleGetTaskTemplates: RequestHandler = async (req, res) => {
     const safeSortBy = TASK_SORT[sortBy] ?? "order_index";
 
     const searchWhere = search
-      ? " AND (title LIKE ? OR description LIKE ? OR task_type LIKE ?)"
+      ? " AND (tt.title LIKE ? OR tt.description LIKE ? OR tt.task_type LIKE ?)"
       : "";
     const searchParams: any[] = search
       ? [`%${search}%`, `%${search}%`, `%${search}%`]
       : [];
 
     const [[countRow]] = await pool.query<any[]>(
-      `SELECT COUNT(*) as total FROM task_templates WHERE created_by_broker_id = ? AND tenant_id = ?${searchWhere}`,
-      [brokerId, MORTGAGE_TENANT_ID, ...searchParams],
+      `SELECT COUNT(*) as total FROM task_templates tt WHERE tt.tenant_id = ?${searchWhere}`,
+      [MORTGAGE_TENANT_ID, ...searchParams],
     );
     const total = Number(countRow?.total || 0);
 
     const [templates] = await pool.query<any[]>(
       `SELECT
-        id, title, description, task_type, priority, default_due_days,
-        order_index, is_active, requires_documents, document_instructions,
-        has_custom_form, has_signing, created_at, updated_at
-      FROM task_templates
-      WHERE created_by_broker_id = ? AND tenant_id = ?${searchWhere}
-      ORDER BY ${safeSortBy} ${sortOrder}
+        tt.id, tt.title, tt.description, tt.task_type, tt.priority, tt.default_due_days,
+        tt.order_index, tt.is_active, tt.requires_documents, tt.document_instructions,
+        tt.has_custom_form, tt.has_signing, tt.created_at, tt.updated_at,
+        tt.created_by_broker_id,
+        CONCAT(b.first_name, ' ', b.last_name) AS created_by_broker_name
+      FROM task_templates tt
+      LEFT JOIN brokers b ON b.id = tt.created_by_broker_id
+      WHERE tt.tenant_id = ?${searchWhere}
+      ORDER BY tt.${safeSortBy} ${sortOrder}
       LIMIT ${limit} OFFSET ${offset}`,
-      [brokerId, MORTGAGE_TENANT_ID, ...searchParams],
+      [MORTGAGE_TENANT_ID, ...searchParams],
     );
 
     res.json({
@@ -15004,11 +15028,43 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     }
 
     if (search) {
+      // Also search broker/realtor names for threads that resolve via contact_broker_id
+      // or a phone-matched broker row (so "Unknown Client" threads appear when
+      // searching by realtor name or partial phone).
       whereConditions.push(
-        "(ct.client_name LIKE ? OR ct.client_email LIKE ? OR ct.client_phone LIKE ?)",
+        `(ct.client_name LIKE ?
+          OR ct.client_email LIKE ?
+          OR ct.client_phone LIKE ?
+          OR EXISTS (
+            SELECT 1 FROM brokers bsrch
+            WHERE bsrch.id = ct.contact_broker_id
+              AND CONCAT(bsrch.first_name, ' ', bsrch.last_name) LIKE ?
+          )
+          OR EXISTS (
+            SELECT 1 FROM brokers bsrch2
+            WHERE bsrch2.tenant_id = ct.tenant_id
+              AND ct.client_name IS NULL
+              AND ct.client_id IS NULL
+              AND ct.contact_broker_id IS NULL
+              AND RIGHT(REGEXP_REPLACE(bsrch2.phone, '[^0-9]', ''), 10)
+                  = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
+              AND CONCAT(bsrch2.first_name, ' ', bsrch2.last_name) LIKE ?
+          )
+          OR EXISTS (
+            SELECT 1 FROM clients csrch
+            WHERE csrch.id = ct.client_id
+              AND CONCAT(csrch.first_name, ' ', csrch.last_name) LIKE ?
+          ))`,
       );
       const searchTerm = `%${search}%`;
-      queryParams.push(searchTerm, searchTerm, searchTerm);
+      queryParams.push(
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+        searchTerm,
+      );
     }
 
     const whereClause = whereConditions.join(" AND ");
@@ -15021,10 +15077,26 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
         CONCAT(c.first_name, ' ', c.last_name) as client_full_name,
         c.email as client_email_current,
         c.phone as client_phone_current,
+        -- Resolve display name: stored value → linked client → linked contact broker → phone-matched broker
+        COALESCE(
+          ct.client_name,
+          CONCAT(c.first_name, ' ', c.last_name),
+          CONCAT(cb.first_name, ' ', cb.last_name),
+          CONCAT(pb.first_name, ' ', pb.last_name)
+        ) AS resolved_client_name,
         CASE WHEN ct.client_id IS NOT NULL THEN 1 ELSE 0 END AS can_view_client
       FROM conversation_threads ct
       LEFT JOIN loan_applications la ON ct.application_id = la.id
       LEFT JOIN clients c ON ct.client_id = c.id
+      LEFT JOIN brokers cb ON ct.contact_broker_id = cb.id
+      -- Phone-based broker match for threads with no stored name/client/contact_broker_id
+      LEFT JOIN brokers pb ON pb.tenant_id = ct.tenant_id
+        AND ct.client_name IS NULL
+        AND ct.client_id IS NULL
+        AND ct.contact_broker_id IS NULL
+        AND ct.client_phone IS NOT NULL
+        AND RIGHT(REGEXP_REPLACE(pb.phone, '[^0-9]', ''), 10)
+            = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
       WHERE ${whereClause}
       ORDER BY ct.last_message_at DESC
       LIMIT ${parseInt(limit as string)} OFFSET ${offset}
@@ -15053,6 +15125,9 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       success: true,
       threads: threads.map((thread) => ({
         ...thread,
+        // Use the resolved name (covers broker/realtor contacts and backfills
+        // existing threads that were stored with client_name = NULL)
+        client_name: thread.resolved_client_name || thread.client_name,
         tags: thread.tags ? JSON.parse(thread.tags) : [],
         can_view_client: !!thread.can_view_client,
       })),

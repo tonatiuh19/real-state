@@ -732,6 +732,8 @@ export interface TaskTemplate {
   has_signing?: boolean;
   created_at: string;
   updated_at: string;
+  created_by_broker_id?: number | null;
+  created_by_broker_name?: string | null;
   form_fields?: TaskFormField[];
   sign_document?: TaskSignDocument | null;
 }

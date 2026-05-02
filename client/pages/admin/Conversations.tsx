@@ -1887,25 +1887,28 @@ const Conversations = () => {
                         {getInitials(currentThread.client_name)}
                       </AvatarFallback>
                     </Avatar>
-                    <div>
-                      <p className="font-semibold text-foreground text-sm">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-foreground text-sm truncate">
                         {currentThread.client_name || "Unknown Client"}
                       </p>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground overflow-hidden">
                         {currentThread.client_phone && (
                           <PhoneLink
                             phone={currentThread.client_phone}
                             clientName={currentThread.client_name}
                             clientId={currentThread.client_id}
-                            className="text-xs text-muted-foreground"
+                            className="text-xs text-muted-foreground whitespace-nowrap"
                           />
                         )}
-                        {currentThread.client_email && (
-                          <EmailLink
-                            email={currentThread.client_email}
-                            className="text-xs text-muted-foreground"
-                          />
-                        )}
+                        {currentThread.client_email &&
+                          !currentThread.client_email.includes(
+                            "@noemail.placeholder",
+                          ) && (
+                            <EmailLink
+                              email={currentThread.client_email}
+                              className="text-xs text-muted-foreground min-w-0"
+                            />
+                          )}
                       </div>
                     </div>
                   </div>
@@ -3358,23 +3361,26 @@ const Conversations = () => {
                     </div>
                   )}
 
-                  {currentThread.client_email && (
-                    <div className="flex items-start gap-3">
-                      <div className="p-1.5 bg-blue-50 rounded-md flex-shrink-0">
-                        <Mail className="h-3.5 w-3.5 text-blue-500" />
+                  {currentThread.client_email &&
+                    !currentThread.client_email.includes(
+                      "@noemail.placeholder",
+                    ) && (
+                      <div className="flex items-start gap-3">
+                        <div className="p-1.5 bg-blue-50 rounded-md flex-shrink-0">
+                          <Mail className="h-3.5 w-3.5 text-blue-500" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs text-muted-foreground font-medium">
+                            Email
+                          </p>
+                          <EmailLink
+                            email={currentThread.client_email}
+                            noIcon
+                            className="text-sm text-foreground"
+                          />
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-xs text-muted-foreground font-medium">
-                          Email
-                        </p>
-                        <EmailLink
-                          email={currentThread.client_email}
-                          noIcon
-                          className="text-sm text-foreground"
-                        />
-                      </div>
-                    </div>
-                  )}
+                    )}
 
                   {currentThread.application_id && (
                     <div className="flex items-start gap-3">
