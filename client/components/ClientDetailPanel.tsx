@@ -758,6 +758,7 @@ export default function ClientDetailPanel({
       const c = profile.client;
       setForm({
         first_name: c.first_name ?? "",
+        middle_name: (c as any).middle_name ?? "",
         last_name: c.last_name ?? "",
         email: c.email && !c.email.startsWith("noemail_") ? c.email : "",
         phone: c.phone ?? "",
@@ -767,6 +768,7 @@ export default function ClientDetailPanel({
             ? c.date_of_birth.split("T")[0]
             : "",
         address_street: c.address_street ?? "",
+        address_unit: (c as any).address_unit ?? "",
         address_city: c.address_city ?? "",
         address_state: c.address_state ?? "",
         address_zip: c.address_zip ?? "",
@@ -794,6 +796,7 @@ export default function ClientDetailPanel({
           clientId,
           payload: {
             first_name: form.first_name || undefined,
+            middle_name: form.middle_name || undefined,
             last_name: form.last_name || undefined,
             email: form.email?.trim() || undefined,
             phone: form.phone || undefined,
@@ -804,6 +807,7 @@ export default function ClientDetailPanel({
                 ? form.date_of_birth
                 : undefined,
             address_street: form.address_street || undefined,
+            address_unit: form.address_unit || undefined,
             address_city: form.address_city || undefined,
             address_state: form.address_state || undefined,
             address_zip: form.address_zip || undefined,
@@ -1195,6 +1199,16 @@ export default function ClientDetailPanel({
                         editing={editing}
                         icon={<User className="w-3.5 h-3.5" />}
                       />
+                      <div className="col-span-2">
+                        <EditableField
+                          label="Middle Name"
+                          value={(client as any).middle_name}
+                          editValue={field("middle_name")}
+                          onEditChange={(v) => setField("middle_name", v)}
+                          editing={editing}
+                          placeholder="Middle name (optional)"
+                        />
+                      </div>
                       <EditableField
                         label="Email"
                         value={
@@ -1277,6 +1291,14 @@ export default function ClientDetailPanel({
                           placeholder="Street address"
                         />
                       </div>
+                      <EditableField
+                        label="Unit / Apt"
+                        value={(client as any).address_unit}
+                        editValue={field("address_unit")}
+                        onEditChange={(v) => setField("address_unit", v)}
+                        editing={editing}
+                        placeholder="Apt, Suite, Unit…"
+                      />
                       <EditableField
                         label="City"
                         value={client.address_city}

@@ -3738,13 +3738,23 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       down_payment,
       loan_purpose,
       property_address,
+      property_unit,
       property_city,
       property_state,
       property_zip,
       property_type,
+      marital_status,
+      dependent_count,
+      years_at_address,
       estimated_close_date,
       notes,
       tasks,
+      client_middle_name,
+      client_address_street,
+      client_address_unit,
+      client_address_city,
+      client_address_state,
+      client_address_zip,
     } = req.body;
 
     // Get broker ID from authenticated session
@@ -3762,11 +3772,19 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       clientId = existingClients[0].id;
       // Update client info
       await connection.query(
-        "UPDATE clients SET first_name = ?, last_name = ?, phone = ?, assigned_broker_id = ? WHERE id = ? AND tenant_id = ?",
+        `UPDATE clients SET first_name=?, middle_name=?, last_name=?, phone=?,
+          address_street=?, address_unit=?, address_city=?, address_state=?, address_zip=?,
+          assigned_broker_id=? WHERE id=? AND tenant_id=?`,
         [
           client_first_name,
+          client_middle_name || null,
           client_last_name,
           client_phone,
+          client_address_street || null,
+          client_address_unit || null,
+          client_address_city || null,
+          client_address_state || null,
+          client_address_zip || null,
           brokerId,
           clientId,
           MORTGAGE_TENANT_ID,
@@ -3775,14 +3793,23 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
     } else {
       // Create new client
       const [clientResult] = await connection.query<any>(
-        `INSERT INTO clients (tenant_id, email, first_name, last_name, phone, status, email_verified, assigned_broker_id, source) 
-         VALUES (?, ?, ?, ?, ?, 'active', 0, ?, 'broker_created')`,
+        `INSERT INTO clients
+          (tenant_id, email, first_name, middle_name, last_name, phone,
+           address_street, address_unit, address_city, address_state, address_zip,
+           status, email_verified, assigned_broker_id, source)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',0,?,'broker_created')`,
         [
           MORTGAGE_TENANT_ID,
           client_email,
           client_first_name,
+          client_middle_name || null,
           client_last_name,
           client_phone,
+          client_address_street || null,
+          client_address_unit || null,
+          client_address_city || null,
+          client_address_state || null,
+          client_address_zip || null,
           brokerId,
         ],
       );
@@ -3796,11 +3823,10 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
     const [loanResult] = await connection.query<any>(
       `INSERT INTO loan_applications (
         tenant_id, application_number, client_user_id, broker_user_id, loan_type, loan_amount,
-        property_value, property_address, property_city, property_state, property_zip,
-        property_type, down_payment, loan_purpose, status, current_step, total_steps,
-        estimated_close_date, notes, submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app_sent', 1, 8, ?, ?, NOW())`,
-
+        property_value, property_address, property_unit, property_city, property_state, property_zip,
+        property_type, down_payment, loan_purpose, marital_status, dependent_count, years_at_address,
+        status, current_step, total_steps, estimated_close_date, notes, submitted_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'app_sent',1,8,?,?,NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
@@ -3810,12 +3836,16 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         loan_amount,
         property_value,
         property_address,
+        property_unit || null,
         property_city,
         property_state,
         property_zip,
         property_type,
         down_payment,
         loan_purpose || null,
+        marital_status || null,
+        dependent_count != null ? parseInt(String(dependent_count)) : null,
+        years_at_address != null ? parseFloat(String(years_at_address)) : null,
         estimated_close_date || null,
         notes || null,
       ],
@@ -5492,6 +5522,10 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
       employment_status,
       employer_name,
       years_employed,
+      property_unit,
+      marital_status,
+      dependent_count,
+      years_at_address,
     } = req.body;
 
     // Verify the loan exists and broker has access
@@ -5621,6 +5655,31 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
     maybeSet("employment_status", employment_status);
     maybeSet("employer_name", employer_name);
     maybeSet("years_employed", years_employed);
+    maybeSet("property_unit", property_unit);
+    const VALID_MARITAL = [
+      "single",
+      "married",
+      "separated",
+      "divorced",
+      "widowed",
+    ];
+    if (marital_status !== undefined) {
+      if (marital_status === null || marital_status === "") {
+        maybeSet("marital_status", null);
+      } else if (VALID_MARITAL.includes(marital_status)) {
+        maybeSet("marital_status", marital_status);
+      }
+    }
+    maybeSet(
+      "dependent_count",
+      dependent_count != null ? parseInt(dependent_count) : dependent_count,
+    );
+    maybeSet(
+      "years_at_address",
+      years_at_address != null
+        ? parseFloat(years_at_address)
+        : years_at_address,
+    );
 
     if (fields.length === 0) {
       return res
@@ -6685,12 +6744,14 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
       client: {
         id: client.id,
         first_name: client.first_name,
+        middle_name: client.middle_name ?? null,
         last_name: client.last_name,
         email: client.email,
         phone: client.phone,
         alternate_phone: client.alternate_phone,
         date_of_birth: client.date_of_birth,
         address_street: client.address_street,
+        address_unit: client.address_unit ?? null,
         address_city: client.address_city,
         address_state: client.address_state,
         address_zip: client.address_zip,
@@ -6798,9 +6859,15 @@ const handleGetClients: RequestHandler = async (req, res) => {
         c.id,
         c.email,
         c.first_name,
+        c.middle_name,
         c.last_name,
         c.phone,
         c.date_of_birth,
+        c.address_street,
+        c.address_unit,
+        c.address_city,
+        c.address_state,
+        c.address_zip,
         c.status,
         c.created_at,
         COUNT(DISTINCT la.id) as total_applications,
@@ -6836,11 +6903,28 @@ const handleGetClients: RequestHandler = async (req, res) => {
 const handleCreateClient: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
-    const { first_name, last_name, email, phone } = req.body as {
+    const {
+      first_name,
+      last_name,
+      email,
+      phone,
+      middle_name,
+      address_street,
+      address_unit,
+      address_city,
+      address_state,
+      address_zip,
+    } = req.body as {
       first_name?: string;
+      middle_name?: string;
       last_name?: string;
       email?: string;
       phone?: string;
+      address_street?: string;
+      address_unit?: string;
+      address_city?: string;
+      address_state?: string;
+      address_zip?: string;
     };
 
     if (!first_name?.trim() || !last_name?.trim()) {
@@ -6882,14 +6966,20 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       `noemail_${Date.now()}${trimmedPhone ? trimmedPhone.replace(/\D/g, "") : Math.random().toString(36).slice(2)}@noemail.placeholder`;
 
     const [result] = await pool.query<any>(
-      `INSERT INTO clients (tenant_id, first_name, last_name, email, phone, status, assigned_broker_id, income_type)
-       VALUES (?, ?, ?, ?, ?, 'active', ?, 'W-2')`,
+      `INSERT INTO clients (tenant_id, first_name, middle_name, last_name, email, phone, address_street, address_unit, address_city, address_state, address_zip, status, assigned_broker_id, income_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'W-2')`,
       [
         MORTGAGE_TENANT_ID,
         first_name.trim(),
+        middle_name?.trim() || null,
         last_name.trim(),
         finalEmail,
         trimmedPhone,
+        address_street?.trim() || null,
+        address_unit?.trim() || null,
+        address_city?.trim() || null,
+        address_state?.trim()?.toUpperCase() || null,
+        address_zip?.trim() || null,
         brokerId,
       ],
     );
@@ -6897,7 +6987,7 @@ const handleCreateClient: RequestHandler = async (req, res) => {
     const newClientId: number = result.insertId;
 
     const [[client]] = await pool.query<any[]>(
-      `SELECT id, email, first_name, last_name, phone, date_of_birth, status, created_at,
+      `SELECT id, email, first_name, middle_name, last_name, phone, date_of_birth, status, created_at,
               0 as total_applications, 0 as active_applications, 0 as total_conversations
        FROM clients WHERE id = ?`,
       [newClientId],
@@ -6943,12 +7033,14 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     const hasGlobalClientAccess = brokerRole === "superadmin";
     const {
       first_name,
+      middle_name,
       last_name,
       email,
       phone,
       alternate_phone,
       date_of_birth,
       address_street,
+      address_unit,
       address_city,
       address_state,
       address_zip,
@@ -6960,12 +7052,14 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
       source,
     } = req.body as {
       first_name?: string;
+      middle_name?: string;
       last_name?: string;
       email?: string;
       phone?: string;
       alternate_phone?: string;
       date_of_birth?: string;
       address_street?: string;
+      address_unit?: string;
       address_city?: string;
       address_state?: string;
       address_zip?: string;
@@ -7030,6 +7124,10 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
       updates.push("first_name = ?");
       values.push(first_name.trim());
     }
+    if (middle_name !== undefined) {
+      updates.push("middle_name = ?");
+      values.push(middle_name?.trim() || null);
+    }
     if (last_name !== undefined) {
       updates.push("last_name = ?");
       values.push(last_name.trim());
@@ -7060,6 +7158,10 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     if (address_street !== undefined) {
       updates.push("address_street = ?");
       values.push(address_street?.trim() || null);
+    }
+    if (address_unit !== undefined) {
+      updates.push("address_unit = ?");
+      values.push(address_unit?.trim() || null);
     }
     if (address_city !== undefined) {
       updates.push("address_city = ?");
@@ -7123,8 +7225,8 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     }
 
     const [[client]] = await pool.query<any[]>(
-      `SELECT c.id, c.email, c.first_name, c.last_name, c.phone, c.date_of_birth,
-              c.address_street, c.address_city, c.address_state, c.address_zip,
+      `SELECT c.id, c.email, c.first_name, c.middle_name, c.last_name, c.phone, c.date_of_birth,
+              c.address_street, c.address_unit, c.address_city, c.address_state, c.address_zip,
               c.status, c.created_at,
               COALESCE(apps.total,0) AS total_applications,
               COALESCE(apps.active,0) AS active_applications,
@@ -11831,11 +11933,13 @@ const handleGetClientProfile: RequestHandler = async (req, res) => {
         id,
         email,
         first_name,
+        middle_name,
         last_name,
         phone,
         alternate_phone,
         date_of_birth,
         address_street,
+        address_unit,
         address_city,
         address_state,
         address_zip,
@@ -11880,10 +11984,12 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
     const clientId = (req as any).clientId;
     const {
       first_name,
+      middle_name,
       last_name,
       phone,
       alternate_phone,
       address_street,
+      address_unit,
       address_city,
       address_state,
       address_zip,
@@ -11895,6 +12001,10 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
     if (first_name !== undefined) {
       updates.push("first_name = ?");
       values.push(first_name);
+    }
+    if (middle_name !== undefined) {
+      updates.push("middle_name = ?");
+      values.push(middle_name?.trim() || null);
     }
     if (last_name !== undefined) {
       updates.push("last_name = ?");
@@ -11911,6 +12021,10 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
     if (address_street !== undefined) {
       updates.push("address_street = ?");
       values.push(address_street);
+    }
+    if (address_unit !== undefined) {
+      updates.push("address_unit = ?");
+      values.push(address_unit?.trim() || null);
     }
     if (address_city !== undefined) {
       updates.push("address_city = ?");
@@ -11943,8 +12057,8 @@ const handleUpdateClientProfile: RequestHandler = async (req, res) => {
     // Fetch updated profile
     const [clients] = await pool.query<any[]>(
       `SELECT 
-        id, email, first_name, last_name, phone, alternate_phone,
-        address_street, address_city, address_state, address_zip,
+        id, email, first_name, middle_name, last_name, phone, alternate_phone,
+        address_street, address_unit, address_city, address_state, address_zip,
         employment_status, income_type, annual_income,
         status, email_verified, phone_verified, created_at
       FROM clients WHERE id = ? AND tenant_id = ?`,

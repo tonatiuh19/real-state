@@ -224,6 +224,7 @@ export function LoanOverlay({
           ? String(selectedLoan.down_payment)
           : "",
       property_address: selectedLoan?.property_address ?? "",
+      property_unit: selectedLoan?.property_unit ?? "",
       property_city: selectedLoan?.property_city ?? "",
       property_state: selectedLoan?.property_state ?? "",
       property_zip: selectedLoan?.property_zip ?? "",
@@ -240,6 +241,15 @@ export function LoanOverlay({
       employment_status: selectedLoan?.employment_status ?? "",
       employer_name: selectedLoan?.employer_name ?? "",
       years_employed: selectedLoan?.years_employed ?? "",
+      marital_status: selectedLoan?.marital_status ?? "",
+      dependent_count:
+        selectedLoan?.dependent_count != null
+          ? String(selectedLoan.dependent_count)
+          : "",
+      years_at_address:
+        selectedLoan?.years_at_address != null
+          ? String(selectedLoan.years_at_address)
+          : "",
       loan_purpose: selectedLoan?.loan_purpose ?? "",
       estimated_close_date: selectedLoan?.estimated_close_date
         ? String(selectedLoan.estimated_close_date).slice(0, 10)
@@ -283,11 +293,21 @@ export function LoanOverlay({
         else payload[k] = null;
       });
       // Empty strings → null for optional selects
-      ["property_type", "citizenship_status", "employment_status"].forEach(
-        (k) => {
-          if (payload[k] === "") payload[k] = null;
-        },
-      );
+      [
+        "property_type",
+        "citizenship_status",
+        "employment_status",
+        "marital_status",
+      ].forEach((k) => {
+        if (payload[k] === "") payload[k] = null;
+      });
+      if (payload["dependent_count"] !== "")
+        payload["dependent_count"] = parseInt(payload["dependent_count"]) || 0;
+      else payload["dependent_count"] = null;
+      if (payload["years_at_address"] !== "")
+        payload["years_at_address"] =
+          parseFloat(payload["years_at_address"]) || null;
+      else payload["years_at_address"] = null;
       await dispatch(
         updateLoanDetails({ loanId: selectedLoan.id, payload }),
       ).unwrap();
@@ -324,11 +344,21 @@ export function LoanOverlay({
         if (payload[k] !== "") payload[k] = parseInt(payload[k]) || null;
         else payload[k] = null;
       });
-      ["property_type", "citizenship_status", "employment_status"].forEach(
-        (k) => {
-          if (payload[k] === "") payload[k] = null;
-        },
-      );
+      [
+        "property_type",
+        "citizenship_status",
+        "employment_status",
+        "marital_status",
+      ].forEach((k) => {
+        if (payload[k] === "") payload[k] = null;
+      });
+      if (payload["dependent_count"] !== "")
+        payload["dependent_count"] = parseInt(payload["dependent_count"]) || 0;
+      else payload["dependent_count"] = null;
+      if (payload["years_at_address"] !== "")
+        payload["years_at_address"] =
+          parseFloat(payload["years_at_address"]) || null;
+      else payload["years_at_address"] = null;
       await dispatch(
         updateLoanDetails({ loanId: selectedLoan.id, payload }),
       ).unwrap();
@@ -1530,6 +1560,22 @@ export function LoanOverlay({
                           </div>
                           <div className="space-y-1">
                             <label className="text-xs font-medium text-gray-600">
+                              Unit / Apt
+                            </label>
+                            <Input
+                              className="text-sm h-9"
+                              placeholder="e.g. Apt 4B"
+                              value={draftForm.property_unit}
+                              onChange={(e) =>
+                                handleDraftFieldChange(
+                                  "property_unit",
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">
                               City
                             </label>
                             <Input
@@ -1759,6 +1805,85 @@ export function LoanOverlay({
                               onChange={(e) =>
                                 handleDraftFieldChange(
                                   "years_employed",
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Borrower Profile */}
+                      <div>
+                        <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                          <Users className="h-3.5 w-3.5" />
+                          Borrower Profile
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">
+                              Marital Status
+                            </label>
+                            <Select
+                              value={draftForm.marital_status || "__none__"}
+                              onValueChange={(v) =>
+                                handleDraftFieldChange(
+                                  "marital_status",
+                                  v === "__none__" ? "" : v,
+                                )
+                              }
+                            >
+                              <SelectTrigger className="text-sm h-9">
+                                <SelectValue placeholder="Select..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">
+                                  — None —
+                                </SelectItem>
+                                <SelectItem value="single">Single</SelectItem>
+                                <SelectItem value="married">Married</SelectItem>
+                                <SelectItem value="separated">
+                                  Separated
+                                </SelectItem>
+                                <SelectItem value="divorced">
+                                  Divorced
+                                </SelectItem>
+                                <SelectItem value="widowed">Widowed</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">
+                              Dependents
+                            </label>
+                            <Input
+                              className="text-sm h-9"
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              value={draftForm.dependent_count}
+                              onChange={(e) =>
+                                handleDraftFieldChange(
+                                  "dependent_count",
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">
+                              Years at Address
+                            </label>
+                            <Input
+                              className="text-sm h-9"
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              placeholder="e.g. 2.5"
+                              value={draftForm.years_at_address}
+                              onChange={(e) =>
+                                handleDraftFieldChange(
+                                  "years_at_address",
                                   e.target.value,
                                 )
                               }

@@ -17,18 +17,28 @@ export interface DemoResponse {
 export interface CreateLoanRequest {
   client_email: string;
   client_first_name: string;
+  client_middle_name?: string;
   client_last_name: string;
   client_phone: string;
+  client_address_street?: string;
+  client_address_unit?: string;
+  client_address_city?: string;
+  client_address_state?: string;
+  client_address_zip?: string;
   loan_type: string;
   loan_amount: string;
   property_value: string;
   down_payment: string;
   loan_purpose?: string;
   property_address: string;
+  property_unit?: string;
   property_city: string;
   property_state: string;
   property_zip: string;
   property_type: string;
+  marital_status?: string;
+  dependent_count?: number;
+  years_at_address?: number;
   estimated_close_date?: string;
   notes?: string;
   tasks: Array<{
@@ -263,11 +273,13 @@ export interface ClientProfile {
   id: number;
   email: string;
   first_name: string;
+  middle_name: string | null;
   last_name: string;
   phone: string | null;
   alternate_phone: string | null;
   date_of_birth: string | null;
   address_street: string | null;
+  address_unit: string | null;
   address_city: string | null;
   address_state: string | null;
   address_zip: string | null;
@@ -287,10 +299,12 @@ export interface GetClientProfileResponse {
 
 export interface UpdateClientProfileRequest {
   first_name?: string;
+  middle_name?: string;
   last_name?: string;
   phone?: string;
   alternate_phone?: string;
   address_street?: string;
+  address_unit?: string;
   address_city?: string;
   address_state?: string;
   address_zip?: string;
@@ -816,9 +830,15 @@ export interface GetClientsResponse {
     id: number;
     email: string;
     first_name: string;
+    middle_name: string | null;
     last_name: string;
     phone: string | null;
     date_of_birth: string | null;
+    address_street: string | null;
+    address_unit: string | null;
+    address_city: string | null;
+    address_state: string | null;
+    address_zip: string | null;
     status: string;
     created_at: string;
     total_applications: number;
@@ -830,19 +850,27 @@ export interface GetClientsResponse {
 
 export interface CreateClientRequest {
   first_name: string;
+  middle_name?: string;
   last_name: string;
   email: string;
   phone?: string;
+  address_street?: string;
+  address_unit?: string;
+  address_city?: string;
+  address_state?: string;
+  address_zip?: string;
 }
 
 export interface UpdateClientRequest {
   first_name?: string;
+  middle_name?: string;
   last_name?: string;
   email?: string;
   phone?: string;
   alternate_phone?: string;
   date_of_birth?: string;
   address_street?: string;
+  address_unit?: string;
   address_city?: string;
   address_state?: string;
   address_zip?: string;
@@ -859,12 +887,14 @@ export interface GetClientDetailProfileResponse {
   client: {
     id: number;
     first_name: string;
+    middle_name: string | null;
     last_name: string;
     email: string;
     phone: string | null;
     alternate_phone: string | null;
     date_of_birth: string | null;
     address_street: string | null;
+    address_unit: string | null;
     address_city: string | null;
     address_state: string | null;
     address_zip: string | null;
@@ -939,7 +969,9 @@ export interface GetClientDetailProfileResponse {
 export interface UpdateClientResponse {
   success: boolean;
   client: CreateClientResponse["client"] & {
+    middle_name: string | null;
     address_street: string | null;
+    address_unit: string | null;
     address_city: string | null;
     address_state: string | null;
     address_zip: string | null;
@@ -952,6 +984,7 @@ export interface CreateClientResponse {
     id: number;
     email: string;
     first_name: string;
+    middle_name: string | null;
     last_name: string;
     phone: string | null;
     date_of_birth: string | null;

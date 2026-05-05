@@ -34,18 +34,28 @@ interface LoanDraft {
   formData: {
     client_email: string;
     client_first_name: string;
+    client_middle_name: string;
     client_last_name: string;
     client_phone: string;
+    client_address_street: string;
+    client_address_unit: string;
+    client_address_city: string;
+    client_address_state: string;
+    client_address_zip: string;
     loan_type: string;
     loan_amount: string;
     property_value: string;
     down_payment: string;
     loan_purpose: string;
     property_address: string;
+    property_unit: string;
     property_city: string;
     property_state: string;
     property_zip: string;
     property_type: string;
+    marital_status: string;
+    dependent_count: string;
+    years_at_address: string;
     estimated_close_date: string;
     notes: string;
   };
