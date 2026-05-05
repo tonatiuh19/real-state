@@ -121,6 +121,16 @@ const stepSchemas: Record<number, Yup.AnyObjectSchema> = {
       otherwise: (s) => s.notRequired(),
     }),
     years_employed: Yup.string().notRequired(),
+    marital_status: Yup.string().required("Marital status is required"),
+    dependent_count: Yup.number()
+      .typeError("Must be a number")
+      .min(0, "Cannot be negative")
+      .integer("Must be a whole number")
+      .notRequired(),
+    years_at_address: Yup.number()
+      .typeError("Must be a number")
+      .min(0, "Cannot be negative")
+      .notRequired(),
   }),
   5: Yup.object({}),
 };
@@ -136,10 +146,12 @@ const CITIZENSHIP_OPTIONS = [
 
 const initialValues = {
   first_name: "",
+  middle_name: "",
   last_name: "",
   email: "",
   phone: "",
   address_street: "",
+  address_unit: "",
   address_city: "",
   address_state: "",
   address_zip: "",
@@ -149,6 +161,7 @@ const initialValues = {
   down_payment: "",
   property_type: "single_family",
   property_address: "",
+  property_unit: "",
   property_city: "",
   property_state: "",
   property_zip: "",
@@ -159,6 +172,9 @@ const initialValues = {
   employment_status: "",
   employer_name: "",
   years_employed: "",
+  marital_status: "",
+  dependent_count: "",
+  years_at_address: "",
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -379,10 +395,12 @@ const ApplicationWizard = () => {
       const result = await dispatch(
         submitPublicApplication({
           first_name: values.first_name,
+          middle_name: values.middle_name || undefined,
           last_name: values.last_name,
           email: values.email,
           phone: values.phone,
           address_street: values.address_street,
+          address_unit: values.address_unit || undefined,
           address_city: values.address_city,
           address_state: values.address_state,
           address_zip: values.address_zip,
@@ -392,6 +410,7 @@ const ApplicationWizard = () => {
           down_payment: values.down_payment,
           property_type: values.property_type,
           property_address: values.property_address,
+          property_unit: values.property_unit || undefined,
           property_city: values.property_city,
           property_state: values.property_state,
           property_zip: values.property_zip,
@@ -402,6 +421,15 @@ const ApplicationWizard = () => {
           employment_status: values.employment_status,
           employer_name: values.employer_name,
           years_employed: values.years_employed,
+          marital_status: values.marital_status || undefined,
+          dependent_count:
+            values.dependent_count !== ""
+              ? Number(values.dependent_count)
+              : undefined,
+          years_at_address:
+            values.years_at_address !== ""
+              ? Number(values.years_at_address)
+              : undefined,
           // Pass broker_token so this application is tracked to the broker
           broker_token: brokerToken || undefined,
         }),
@@ -1379,6 +1407,20 @@ const ApplicationWizard = () => {
                             />
                           </div>
                           <div className="space-y-1.5">
+                            <Label htmlFor="middle_name">
+                              Middle Name{" "}
+                              <span className="text-muted-foreground text-xs">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              id="middle_name"
+                              placeholder="Elizabeth"
+                              className="h-12 rounded-xl"
+                              {...formik.getFieldProps("middle_name")}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
                             <Label htmlFor="email">Email Address *</Label>
                             <Input
                               id="email"
@@ -1418,7 +1460,7 @@ const ApplicationWizard = () => {
                             </Label>
                             <Input
                               id="address_street"
-                              placeholder="123 Main St, Apt 4B"
+                              placeholder="123 Main St"
                               className="h-12 rounded-xl"
                               {...formik.getFieldProps("address_street")}
                             />
@@ -1428,6 +1470,20 @@ const ApplicationWizard = () => {
                                   ? formik.errors.address_street
                                   : undefined
                               }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="address_unit">
+                              Apt / Unit{" "}
+                              <span className="text-muted-foreground text-xs">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              id="address_unit"
+                              placeholder="Apt 4B"
+                              className="h-12 rounded-xl"
+                              {...formik.getFieldProps("address_unit")}
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -1638,6 +1694,20 @@ const ApplicationWizard = () => {
                                   ? formik.errors.property_address
                                   : undefined
                               }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="property_unit">
+                              Unit / Apt{" "}
+                              <span className="text-muted-foreground text-xs">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              id="property_unit"
+                              placeholder="Unit A"
+                              className="h-12 rounded-xl"
+                              {...formik.getFieldProps("property_unit")}
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -1949,6 +2019,95 @@ const ApplicationWizard = () => {
                                 </p>
                               </div>
                             )}
+
+                          {/* Marital Status */}
+                          <div className="space-y-3 md:col-span-2">
+                            <Label>Marital Status *</Label>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              {[
+                                { v: "single", label: "Single" },
+                                { v: "married", label: "Married" },
+                                { v: "separated", label: "Separated" },
+                                { v: "divorced", label: "Divorced" },
+                              ].map(({ v, label }) => (
+                                <button
+                                  key={v}
+                                  type="button"
+                                  onClick={() =>
+                                    formik.setFieldValue("marital_status", v)
+                                  }
+                                  className={cn(
+                                    "h-12 rounded-xl border-2 text-sm font-semibold transition-all",
+                                    formik.values.marital_status === v
+                                      ? "border-primary bg-primary/5 text-primary"
+                                      : "border-muted hover:border-primary/40",
+                                  )}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                            <FieldError
+                              msg={
+                                formik.touched.marital_status
+                                  ? formik.errors.marital_status
+                                  : undefined
+                              }
+                            />
+                          </div>
+
+                          {/* Dependents + Years at Address */}
+                          <div className="space-y-1.5">
+                            <Label htmlFor="dependent_count">
+                              Number of Dependents{" "}
+                              <span className="text-muted-foreground text-xs">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              id="dependent_count"
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              className="h-12 rounded-xl"
+                              {...formik.getFieldProps("dependent_count")}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Children or other dependents you financially
+                              support
+                            </p>
+                            <FieldError
+                              msg={
+                                formik.touched.dependent_count
+                                  ? (formik.errors.dependent_count as string)
+                                  : undefined
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="years_at_address">
+                              Years at Current Address{" "}
+                              <span className="text-muted-foreground text-xs">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              id="years_at_address"
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              placeholder="2"
+                              className="h-12 rounded-xl"
+                              {...formik.getFieldProps("years_at_address")}
+                            />
+                            <FieldError
+                              msg={
+                                formik.touched.years_at_address
+                                  ? (formik.errors.years_at_address as string)
+                                  : undefined
+                              }
+                            />
+                          </div>
                         </div>
                       )}
 

@@ -804,10 +804,9 @@ async function upsertConversationThread(params: {
          client_phone         = COALESCE(client_phone, ?),
          client_email         = COALESCE(client_email, ?),
          inbox_number         = COALESCE(inbox_number, ?),
-         -- Do NOT auto-reopen closed threads. A broker who explicitly closed a
-         -- thread expects it to stay closed; new activity is still tracked via
-         -- unread_count and visible under "Closed conversations". Reopening
-         -- requires an explicit user action via the close/reopen control.
+         -- Auto-reopen closed threads when a client sends a new inbound message.
+         -- This ensures the conversation reappears in the active list immediately.
+         status               = IF(? = 'inbound', 'active', status),
          updated_at           = NOW()`,
       [
         tenantId,
@@ -835,6 +834,7 @@ async function upsertConversationThread(params: {
         clientPhone,
         clientEmail,
         inboxNumber ?? null,
+        direction,
       ],
     );
 
@@ -3920,10 +3920,12 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     const {
       // Identity (Step 1)
       first_name,
+      middle_name,
       last_name,
       email,
       phone,
       address_street,
+      address_unit,
       address_city,
       address_state,
       address_zip,
@@ -3934,6 +3936,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       down_payment,
       property_type,
       property_address,
+      property_unit,
       property_city,
       property_state,
       property_zip,
@@ -3942,10 +3945,13 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       annual_income,
       credit_score_range,
       income_type,
-      // Employment (Step 4)
+      // Employment + Personal (Step 4)
       employment_status,
       employer_name,
       years_employed,
+      marital_status,
+      dependent_count,
+      years_at_address,
       // Citizenship / immigration (Step 1)
       citizenship_status,
       // Optional broker association
@@ -3992,8 +3998,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     if (existingClients.length > 0) {
       clientId = existingClients[0].id;
       await connection.query(
-        `UPDATE clients SET first_name=?, last_name=?, phone=?,
-          address_street=?, address_city=?, address_state=?, address_zip=?,
+        `UPDATE clients SET first_name=?, middle_name=?, last_name=?, phone=?,
+          address_street=?, address_unit=?, address_city=?, address_state=?, address_zip=?,
           employment_status=?, income_type=?, annual_income=?, credit_score=?,
           citizenship_status=?,
           assigned_broker_id = COALESCE(assigned_broker_id, ?),
@@ -4001,9 +4007,11 @@ const handlePublicApply: RequestHandler = async (req, res) => {
          WHERE id=? AND tenant_id=?`,
         [
           first_name,
+          middle_name || null,
           last_name,
           phone || null,
           address_street || null,
+          address_unit || null,
           address_city || null,
           address_state || null,
           address_zip || null,
@@ -4020,18 +4028,20 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     } else {
       const [clientResult] = await connection.query<any>(
         `INSERT INTO clients
-          (tenant_id, email, first_name, last_name, phone,
-           address_street, address_city, address_state, address_zip,
+          (tenant_id, email, first_name, middle_name, last_name, phone,
+           address_street, address_unit, address_city, address_state, address_zip,
            employment_status, income_type, annual_income, credit_score,
            citizenship_status, assigned_broker_id, status, email_verified, source)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
         [
           MORTGAGE_TENANT_ID,
           email.toLowerCase().trim(),
           first_name,
+          middle_name || null,
           last_name,
           phone || null,
           address_street || null,
+          address_unit || null,
           address_city || null,
           address_state || null,
           address_zip || null,
@@ -4182,12 +4192,13 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         `INSERT INTO loan_applications
           (tenant_id, application_number, client_user_id, broker_user_id,
            partner_broker_id,
-           loan_type, loan_amount, property_value, property_address,
+           loan_type, loan_amount, property_value, property_address, property_unit,
            property_city, property_state, property_zip, property_type,
            down_payment, loan_purpose, employment_status, employer_name,
-           years_employed, status, current_step, total_steps,
+           years_employed, marital_status, dependent_count, years_at_address,
+           status, current_step, total_steps,
            priority, broker_token, citizenship_status, submitted_at)
-         VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,NOW())`,
+         VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,NOW())`,
         [
           MORTGAGE_TENANT_ID,
           applicationNumber,
@@ -4198,6 +4209,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           loan_amount,
           propVal || null,
           property_address || null,
+          property_unit || null,
           property_city || null,
           property_state || null,
           property_zip || null,
@@ -4207,6 +4219,11 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           resolvedEmploymentStatus,
           employer_name || null,
           years_employed || null,
+          marital_status || null,
+          dependent_count != null ? parseInt(String(dependent_count)) : null,
+          years_at_address != null
+            ? parseFloat(String(years_at_address))
+            : null,
           broker_token || null,
           resolvedCitizenshipStatus,
         ],
@@ -10221,11 +10238,13 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
         a.*,
         c.first_name as client_first_name,
         c.last_name as client_last_name,
+        c.middle_name as client_middle_name,
         c.email as client_email,
         c.phone as client_phone,
         c.date_of_birth,
         c.ssn_encrypted,
         c.address_street,
+        c.address_unit,
         c.address_city,
         c.address_state,
         c.address_zip,
@@ -10273,7 +10292,7 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
     }
 
     // Generate MISMO 3.4 XML
-    const xml = generateMISMO34XML(loan);
+    const xml = generateMISMO34XML(loan as unknown as MismoLoanRow);
 
     // Set headers for XML download
     const filename = `MISMO_${loan.application_number}_${new Date().toISOString().split("T")[0]}.xml`;
@@ -10302,164 +10321,292 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
   }
 };
 
-/**
- * Helper function to generate MISMO 3.4 (ULAD) XML
- * Uses xmlbuilder2 for safe, schema-correct XML generation.
- * Elements ordered alphabetically within each parent per DU_Wrapper_3.4.0_B324.xsd xs:sequence rules.
- */
-function generateMISMO34XML(loan: any): string {
-  const loanAmount = parseFloat(loan.loan_amount || 0);
-  const propertyValue = parseFloat(loan.property_value || 0);
-  const monthlyIncome = loan.annual_income
-    ? (parseFloat(loan.annual_income) / 12).toFixed(2)
-    : "0.0";
-  const loanTermMonths = loan.loan_term_months || 360;
+// ─────────────────────────────────────────────────────────────────────────────
+// MISMO 3.4 / ULAD XML generation helpers
+// Each function builds one named section of the DU_Wrapper_3.4.0_B324.xsd schema.
+// Keeping them separate ensures element ordering is always correct and makes
+// future schema updates trivial to locate and apply.
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const loanPurposeType =
-    loan.loan_type === "purchase"
-      ? "Purchase"
-      : loan.loan_type === "refinance"
-        ? "Refinance"
-        : "Other";
+/** Typed view of the SQL row returned by handleGenerateMISMO query */
+interface MismoLoanRow {
+  loan_amount: string | number;
+  property_value: string | number | null;
+  loan_type: "purchase" | "refinance" | string;
+  loan_term_months: number | null;
+  interest_rate: string | number | null;
+  property_address: string | null;
+  property_unit: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  property_zip: string | null;
+  employer_name: string | null;
+  years_employed: string | number | null;
+  employment_status: string | null;
+  marital_status: string | null;
+  citizenship_status: string | null;
+  annual_income: string | number | null;
+  date_of_birth: string | null;
+  ssn_encrypted: string | null;
+  dependent_count: number | null;
+  dependent_ages: string | number[] | null; // JSON array of ages stored as string or parsed
+  years_at_address: string | number | null;
+  client_first_name: string;
+  client_last_name: string;
+  client_middle_name: string | null;
+  client_email: string | null;
+  client_phone: string | null;
+  address_street: string | null;
+  address_unit: string | null;
+  address_city: string | null;
+  address_state: string | null;
+  address_zip: string | null;
+  broker_first_name: string | null;
+  broker_last_name: string | null;
+  broker_email: string | null;
+  broker_phone: string | null;
+  license_number: string | null;
+  application_number: string;
+  [k: string]: unknown;
+}
 
-  const maritalStatus =
-    loan.marital_status === "married"
-      ? "Married"
-      : loan.marital_status === "separated"
-        ? "Separated"
-        : "Unmarried";
+/** Coerce any value to a trimmed string; null/undefined → "" */
+const mismoStr = (v: unknown): string => (v != null ? String(v).trim() : "");
 
-  const formatDate = (d: string | null | undefined): string => {
-    if (!d) return "";
-    try {
-      return new Date(d).toISOString().split("T")[0];
-    } catch {
-      return String(d);
-    }
-  };
-
-  const str = (v: any): string => (v != null ? String(v) : "");
-  const borrowerDOB = formatDate(loan.date_of_birth);
-  const isSelfEmployed = loan.employment_status === "self_employed";
-  const isRefinance = loan.loan_type === "refinance";
-  const hasProperty = isRefinance || propertyValue > 0;
-
-  // Build the document using xmlbuilder2 — no manual escaping needed, no template literal drift.
-  const doc = create({ version: "1.0", encoding: "UTF-8" })
-    .ele("MESSAGE", {
-      "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
-      "xmlns:ULAD": "http://www.datamodelextension.org/Schema/ULAD",
-      "xmlns:xlink": "http://www.w3.org/1999/xlink",
-      xmlns: "http://www.mismo.org/residential/2009/schemas",
-      MISMOReferenceModelIdentifier: "3.4.032420160128",
-      "xsi:schemaLocation":
-        "http://www.mismo.org/residential/2009/schemas DU_Wrapper_3.4.0_B324.xsd",
-    })
-    .ele("DEAL_SETS")
-    .ele("DEAL_SET")
-    .ele("DEALS")
-    .ele("DEAL");
-
-  // ── ASSETS (alphabetically before COLLATERALS per schema xs:sequence) ─────
-  if (hasProperty) {
-    doc
-      .ele("ASSETS")
-      .ele("ASSET", { "xlink:label": "ASSET_1" })
-      .ele("ASSET_DETAIL")
-      .ele("AssetType")
-      .txt("RealEstateOwned")
-      .up()
-      .up()
-      .ele("OWNED_PROPERTY")
-      .ele("OWNED_PROPERTY_DETAIL")
-      .ele("OwnedPropertySubjectIndicator")
-      .txt("false")
-      .up()
-      .up()
-      .ele("PROPERTY")
-      .ele("ADDRESS")
-      .ele("CountryCode")
-      .txt("US")
-      .up()
-      .ele("CountryName")
-      .txt("United States")
-      .up()
-      .up()
-      .ele("PROPERTY_DETAIL")
-      .ele("PropertyCurrentUsageType")
-      .txt("PrimaryResidence");
+/** Format a DB date to YYYY-MM-DD, returns "" on bad input */
+const mismoDate = (d: string | null | undefined): string => {
+  if (!d) return "";
+  try {
+    return new Date(d).toISOString().split("T")[0];
+  } catch {
+    return String(d);
   }
+};
 
-  // ── COLLATERALS ──────────────────────────────────────────────────────────
-  const subjectProperty = doc
-    .ele("COLLATERALS")
-    .ele("COLLATERAL")
-    .ele("SUBJECT_PROPERTY", { ValuationUseType: "SubjectProperty" });
+/** Normalize US state: "California" | "CALIFORNIA" → "CA"; "CA" → "CA" */
+const MISMO_STATE_ABBR: Readonly<Record<string, string>> = {
+  alabama: "AL",
+  alaska: "AK",
+  arizona: "AZ",
+  arkansas: "AR",
+  california: "CA",
+  colorado: "CO",
+  connecticut: "CT",
+  delaware: "DE",
+  florida: "FL",
+  georgia: "GA",
+  hawaii: "HI",
+  idaho: "ID",
+  illinois: "IL",
+  indiana: "IN",
+  iowa: "IA",
+  kansas: "KS",
+  kentucky: "KY",
+  louisiana: "LA",
+  maine: "ME",
+  maryland: "MD",
+  massachusetts: "MA",
+  michigan: "MI",
+  minnesota: "MN",
+  mississippi: "MS",
+  missouri: "MO",
+  montana: "MT",
+  nebraska: "NE",
+  nevada: "NV",
+  "new hampshire": "NH",
+  "new jersey": "NJ",
+  "new mexico": "NM",
+  "new york": "NY",
+  "north carolina": "NC",
+  "north dakota": "ND",
+  ohio: "OH",
+  oklahoma: "OK",
+  oregon: "OR",
+  pennsylvania: "PA",
+  "rhode island": "RI",
+  "south carolina": "SC",
+  "south dakota": "SD",
+  tennessee: "TN",
+  texas: "TX",
+  utah: "UT",
+  vermont: "VT",
+  virginia: "VA",
+  washington: "WA",
+  "west virginia": "WV",
+  wisconsin: "WI",
+  wyoming: "WY",
+};
+const mismoState = (s: string | null | undefined): string => {
+  if (!s) return "";
+  const t = s.trim();
+  if (t.length <= 2) return t.toUpperCase();
+  return MISMO_STATE_ABBR[t.toLowerCase()] ?? t.toUpperCase();
+};
 
-  subjectProperty
+/** Map DB citizenship_status enum → MISMO CitizenshipResidencyType */
+const mismoCitizenship = (status: string | null | undefined): string => {
+  if (status === "us_citizen") return "USCitizen";
+  if (status === "permanent_resident") return "PermanentResidentAlien";
+  return "NonPermanentResidentAlien";
+};
+
+/** Map DB marital_status → MISMO MaritalStatusType */
+const mismoMarital = (status: string | null | undefined): string => {
+  if (status === "married") return "Married";
+  if (status === "separated") return "Separated";
+  return "Unmarried";
+};
+
+/** Map DB loan_type → MISMO LoanPurposeType */
+const mismoLoanPurpose = (loanType: string | null | undefined): string => {
+  if (loanType === "purchase") return "Purchase";
+  if (loanType === "refinance") return "Refinance";
+  return "Other";
+};
+
+/**
+ * Append a standard US address block to a parent xmlbuilder2 node.
+ * Uses the DU_Wrapper xs:sequence order:
+ *   AddressLineText → AddressUnitIdentifier? → AddressType? → CityName →
+ *   CountryCode → CountryName → PostalCode → StateCode
+ */
+function mismoAppendAddress(
+  parent: ReturnType<typeof create>,
+  opts: {
+    street: string;
+    unit?: string;
+    addressType?: string; // "Primary" | "Mailing" | omit
+    city: string;
+    zip: string;
+    stateCode: string;
+  },
+): void {
+  const addr = (parent as any).ele("ADDRESS");
+  if (opts.street) addr.ele("AddressLineText").txt(opts.street);
+  if (opts.unit) addr.ele("AddressUnitIdentifier").txt(opts.unit);
+  if (opts.addressType) addr.ele("AddressType").txt(opts.addressType);
+  addr.ele("CityName").txt(opts.city);
+  addr.ele("CountryCode").txt("US");
+  addr.ele("CountryName").txt("United States");
+  if (opts.zip) addr.ele("PostalCode").txt(opts.zip);
+  if (opts.stateCode) addr.ele("StateCode").txt(opts.stateCode);
+}
+
+/** Build the DEAL > ASSETS section (RealEstateOwned asset for existing property) */
+function mismoAppendAssets(
+  deal: ReturnType<typeof create>,
+  propertyValue: number,
+): void {
+  const ownedPropDetail = (deal as any)
+    .ele("ASSETS")
+    .ele("ASSET", { "xlink:label": "ASSET_1" })
+    .ele("ASSET_DETAIL")
+    .ele("AssetType")
+    .txt("RealEstateOwned")
+    .up()
+    .up()
+    .ele("OWNED_PROPERTY")
+    .ele("OWNED_PROPERTY_DETAIL");
+  if (propertyValue > 0) {
+    ownedPropDetail
+      .ele("OwnedPropertyLienUPBAmount")
+      .txt(propertyValue.toFixed(2));
+  }
+  ownedPropDetail
+    .ele("OwnedPropertySubjectIndicator")
+    .txt("false")
+    .up()
+    .up()
+    .ele("PROPERTY")
     .ele("ADDRESS")
-    .ele("AddressLineText")
-    .txt(str(loan.property_address))
-    .up()
-    .ele("CityName")
-    .txt(str(loan.property_city))
-    .up()
     .ele("CountryCode")
     .txt("US")
     .up()
     .ele("CountryName")
     .txt("United States")
     .up()
-    .ele("PostalCode")
-    .txt(str(loan.property_zip))
     .up()
-    .ele("StateCode")
-    .txt(str(loan.property_state))
-    .up();
+    .ele("PROPERTY_DETAIL")
+    .ele("PropertyCurrentUsageType")
+    .txt("PrimaryResidence");
+}
+
+/** Build the DEAL > COLLATERALS section */
+function mismoAppendCollaterals(
+  deal: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+  propStateCode: string,
+  propertyValue: number,
+): void {
+  const subjectProperty = (deal as any)
+    .ele("COLLATERALS")
+    .ele("COLLATERAL")
+    .ele("SUBJECT_PROPERTY", { ValuationUseType: "SubjectProperty" });
+
+  mismoAppendAddress(subjectProperty, {
+    street: mismoStr(loan.property_address),
+    unit: mismoStr(loan.property_unit) || undefined,
+    city: mismoStr(loan.property_city),
+    zip: mismoStr(loan.property_zip),
+    stateCode: propStateCode,
+  });
+
+  // PROJECT (alphabetically before PROPERTY_DETAIL)
+  subjectProperty
+    .ele("PROJECT")
+    .ele("PROJECT_DETAIL")
+    .ele("ProjectAttachmentType")
+    .txt("Detached")
+    .up()
+    .ele("ProjectLegalStructureType")
+    .txt("Unknown");
 
   const propDetail = subjectProperty.ele("PROPERTY_DETAIL");
   propDetail.ele("AttachmentType").txt("Detached");
   propDetail.ele("ConstructionMethodType").txt("SiteBuilt");
+  propDetail.ele("FinancedUnitCount").txt("1");
   propDetail.ele("PropertyEstateType").txt("FeeSimple");
   propDetail.ele("PropertyUsageType").txt("PrimaryResidence");
-  if (propertyValue > 0) {
-    propDetail
-      .ele("PropertyEstimatedValueAmount")
-      .txt(propertyValue.toFixed(2));
-  }
+  propDetail.ele("PUDIndicator").txt("false");
+}
 
-  // ── LIABILITIES (alphabetically before LOANS per schema xs:sequence) ──────
-  if (hasProperty) {
-    doc
-      .ele("LIABILITIES")
-      .ele("LIABILITY", {
-        SequenceNumber: "1",
-        "xlink:label": "LIABILITY_1",
-      })
-      .ele("LIABILITY_DETAIL")
-      .ele("LiabilityType")
-      .txt("MortgageLoan")
-      .up()
-      .ele("LiabilityUnpaidBalanceAmount")
-      .txt(propertyValue > 0 ? propertyValue.toFixed(2) : "0.0");
-  }
+/** Build the DEAL > LIABILITIES section */
+function mismoAppendLiabilities(
+  deal: ReturnType<typeof create>,
+  propertyValue: number,
+): void {
+  (deal as any)
+    .ele("LIABILITIES")
+    .ele("LIABILITY", { SequenceNumber: "1", "xlink:label": "LIABILITY_1" })
+    .ele("LIABILITY_DETAIL")
+    .ele("LiabilityType")
+    .txt("MortgageLoan")
+    .up()
+    .ele("LiabilityUnpaidBalanceAmount")
+    .txt(propertyValue > 0 ? propertyValue.toFixed(2) : "0.0");
+}
 
-  // ── LOANS ─────────────────────────────────────────────────────────────────
-  const loanEl = doc
+/** Build the DEAL > LOANS section */
+function mismoAppendLoans(
+  deal: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+  loanAmount: number,
+  loanTermMonths: number,
+  isRefinance: boolean,
+): void {
+  const loanEl = (deal as any)
     .ele("LOANS")
     .ele("LOAN", { LoanRoleType: "SubjectLoan", "xlink:label": "LOAN_1" });
 
-  // AMORTIZATION
   loanEl
     .ele("AMORTIZATION")
     .ele("AMORTIZATION_RULE")
     .ele("LoanAmortizationPeriodCount")
-    .txt(str(loanTermMonths))
+    .txt(String(loanTermMonths))
     .up()
     .ele("LoanAmortizationPeriodType")
     .txt("Month");
 
-  // LOAN_DETAIL
   loanEl
     .ele("LOAN_DETAIL")
     .ele("BorrowerCount")
@@ -10468,17 +10615,15 @@ function generateMISMO34XML(loan: any): string {
     .ele("ConstructionLoanIndicator")
     .txt("false");
 
-  // MATURITY (required by schema; must appear after LOAN_DETAIL)
   loanEl
     .ele("MATURITY")
     .ele("MATURITY_RULE")
     .ele("LoanMaturityPeriodCount")
-    .txt(str(loanTermMonths))
+    .txt(String(loanTermMonths))
     .up()
     .ele("LoanMaturityPeriodType")
     .txt("Month");
 
-  // REFINANCE (only for refinance loans; appears before TERMS_OF_LOAN per schema)
   if (isRefinance) {
     loanEl
       .ele("REFINANCE")
@@ -10486,97 +10631,72 @@ function generateMISMO34XML(loan: any): string {
       .txt("CashOut");
   }
 
-  // TERMS_OF_LOAN
   const termsEl = loanEl.ele("TERMS_OF_LOAN");
   termsEl.ele("BaseLoanAmount").txt(loanAmount.toFixed(2));
   termsEl.ele("LienPriorityType").txt("FirstLien");
-  termsEl.ele("LoanPurposeType").txt(loanPurposeType);
+  termsEl.ele("LoanPurposeType").txt(mismoLoanPurpose(loan.loan_type));
   if (loan.interest_rate) {
-    termsEl.ele("NoteRatePercent").txt(str(loan.interest_rate));
+    termsEl.ele("NoteRatePercent").txt(mismoStr(loan.interest_rate));
   }
+}
 
-  // ── PARTIES ───────────────────────────────────────────────────────────────
-  const partiesEl = doc.ele("PARTIES");
-
-  // Borrower party
-  const borrowerParty = partiesEl.ele("PARTY");
-
-  // INDIVIDUAL
-  const borrowerIndividual = borrowerParty.ele("INDIVIDUAL");
-  const borrowerContactPoints = borrowerIndividual.ele("CONTACT_POINTS");
-  if (loan.client_phone) {
-    borrowerContactPoints
-      .ele("CONTACT_POINT")
-      .ele("CONTACT_POINT_TELEPHONE")
-      .ele("ContactPointTelephoneValue")
-      .txt(str(loan.client_phone))
-      .up()
-      .up()
-      .ele("CONTACT_POINT_DETAIL")
-      .ele("ContactPointRoleType")
-      .txt("Mobile");
+/** Build the BORROWER_DETAIL element inside a BORROWER node */
+function mismoAppendBorrowerDetail(
+  borrowerEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+): void {
+  const detail = (borrowerEl as any).ele("BORROWER_DETAIL");
+  detail.ele("BorrowerBankruptcyIndicator").txt("false");
+  const dob = mismoDate(loan.date_of_birth);
+  if (dob) detail.ele("BorrowerBirthDate").txt(dob);
+  detail.ele("BorrowerClassificationType").txt("Primary");
+  detail.ele("BorrowerMailToAddressSameAsPropertyIndicator").txt("true");
+  detail.ele("CreditReportAuthorizationIndicator").txt("true");
+  // DependentCount: 0 when explicitly set to 0, omit only when null/undefined
+  const depCount = loan.dependent_count;
+  if (depCount != null) {
+    detail.ele("DependentCount").txt(String(depCount));
   }
-  if (loan.client_email) {
-    borrowerContactPoints
-      .ele("CONTACT_POINT")
-      .ele("CONTACT_POINT_EMAIL")
-      .ele("ContactPointEmailValue")
-      .txt(str(loan.client_email));
+  detail.ele("DomesticRelationshipIndicator").txt("false");
+  detail.ele("MaritalStatusType").txt(mismoMarital(loan.marital_status));
+  detail.ele("SelfDeclaredMilitaryServiceIndicator").txt("false");
+  detail.ele("SpousalVABenefitsEligibilityIndicator").txt("false");
+}
+
+/** Build the DEPENDENTS element inside a BORROWER node (alphabetically between DECLARATION and EMPLOYERS) */
+function mismoAppendDependents(
+  borrowerEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+): void {
+  // Parse dependent_ages — DB stores as JSON string or already-parsed array
+  let ages: number[] = [];
+  if (loan.dependent_ages) {
+    try {
+      const parsed =
+        typeof loan.dependent_ages === "string"
+          ? JSON.parse(loan.dependent_ages)
+          : loan.dependent_ages;
+      if (Array.isArray(parsed)) ages = parsed.map(Number).filter(isFinite);
+    } catch {
+      /* ignore parse errors */
+    }
   }
-  borrowerIndividual
-    .ele("NAME")
-    .ele("FirstName")
-    .txt(str(loan.client_first_name))
-    .up()
-    .ele("LastName")
-    .txt(str(loan.client_last_name));
-
-  // ADDRESSES
-  if (loan.address_street) {
-    borrowerParty
-      .ele("ADDRESSES")
-      .ele("ADDRESS")
-      .ele("AddressLineText")
-      .txt(str(loan.address_street))
-      .up()
-      .ele("AddressType")
-      .txt("Primary")
-      .up()
-      .ele("CityName")
-      .txt(str(loan.address_city))
-      .up()
-      .ele("CountryCode")
-      .txt("US")
-      .up()
-      .ele("CountryName")
-      .txt("United States")
-      .up()
-      .ele("PostalCode")
-      .txt(str(loan.address_zip))
-      .up()
-      .ele("StateCode")
-      .txt(str(loan.address_state));
+  if (ages.length === 0) return;
+  const dependentsEl = (borrowerEl as any).ele("DEPENDENTS");
+  for (const age of ages) {
+    dependentsEl
+      .ele("DEPENDENT")
+      .ele("DependentAgeYearsCount")
+      .txt(String(age));
   }
+}
 
-  // ROLES
-  const borrowerRole = borrowerParty
-    .ele("ROLES")
-    .ele("ROLE", { SequenceNumber: "1", "xlink:label": "BORROWER_1" });
-
-  const borrowerEl = borrowerRole.ele("BORROWER");
-
-  // BORROWER_DETAIL — CitizenshipResidencyType belongs in DECLARATION, not here
-  const borrowerDetail = borrowerEl.ele("BORROWER_DETAIL");
-  borrowerDetail.ele("BorrowerBankruptcyIndicator").txt("false");
-  if (borrowerDOB) {
-    borrowerDetail.ele("BorrowerBirthDate").txt(borrowerDOB);
-  }
-  borrowerDetail.ele("BorrowerClassificationType").txt("Primary");
-  borrowerDetail.ele("MaritalStatusType").txt(maritalStatus);
-  borrowerDetail.ele("SelfDeclaredMilitaryServiceIndicator").txt("false");
-
-  // CURRENT_INCOME
-  borrowerEl
+/** Build the CURRENT_INCOME element inside a BORROWER node */
+function mismoAppendCurrentIncome(
+  borrowerEl: ReturnType<typeof create>,
+  monthlyIncome: string,
+): void {
+  (borrowerEl as any)
     .ele("CURRENT_INCOME")
     .ele("CURRENT_INCOME_ITEMS")
     .ele("CURRENT_INCOME_ITEM", { "xlink:label": "CURRENT_INCOME_ITEM_1" })
@@ -10589,105 +10709,266 @@ function generateMISMO34XML(loan: any): string {
     .up()
     .ele("IncomeType")
     .txt("Base");
+}
 
-  // DECLARATION (CitizenshipResidencyType must live here per ULAD 3.4 schema)
-  borrowerEl
+/** Build the DECLARATION element inside a BORROWER node */
+function mismoAppendDeclaration(
+  borrowerEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+  isRefinance: boolean,
+): void {
+  const detail = (borrowerEl as any)
     .ele("DECLARATION")
-    .ele("DECLARATION_DETAIL")
-    .ele("BankruptcyIndicator")
-    .txt("false")
-    .up()
+    .ele("DECLARATION_DETAIL");
+  detail.ele("BankruptcyIndicator").txt("false");
+  detail
     .ele("CitizenshipResidencyType")
-    .txt("USCitizen")
-    .up()
-    .ele("HomeownerPastThreeYearsType")
-    .txt(isRefinance ? "Yes" : "No")
-    .up()
-    .ele("IntentToOccupyType")
-    .txt("Yes")
-    .up()
-    .ele("OutstandingJudgmentsIndicator")
-    .txt("false")
-    .up()
-    .ele("PartyToLawsuitIndicator")
-    .txt("false")
-    .up()
-    .ele("PresentlyDelinquentIndicator")
-    .txt("false")
-    .up()
-    .ele("PriorPropertyDeedInLieuConveyedIndicator")
-    .txt("false")
-    .up()
-    .ele("PriorPropertyForeclosureCompletedIndicator")
-    .txt("false")
-    .up()
-    .ele("PriorPropertyShortSaleCompletedIndicator")
-    .txt("false")
-    .up()
-    .ele("PropertyProposedCleanEnergyLienIndicator")
-    .txt("false")
-    .up()
-    .ele("UndisclosedBorrowedFundsIndicator")
-    .txt("false")
-    .up()
-    .ele("UndisclosedComakerOfNoteIndicator")
-    .txt("false")
-    .up()
-    .ele("UndisclosedCreditApplicationIndicator")
-    .txt("false")
-    .up()
-    .ele("UndisclosedMortgageApplicationIndicator")
+    .txt(mismoCitizenship(loan.citizenship_status));
+  detail.ele("HomeownerPastThreeYearsType").txt(isRefinance ? "Yes" : "No");
+  detail.ele("IntentToOccupyType").txt("Yes");
+  detail.ele("OutstandingJudgmentsIndicator").txt("false");
+  detail.ele("PartyToLawsuitIndicator").txt("false");
+  detail.ele("PresentlyDelinquentIndicator").txt("false");
+  detail.ele("PriorPropertyDeedInLieuConveyedIndicator").txt("false");
+  detail.ele("PriorPropertyForeclosureCompletedIndicator").txt("false");
+  detail.ele("PriorPropertyShortSaleCompletedIndicator").txt("false");
+  detail.ele("PropertyProposedCleanEnergyLienIndicator").txt("false");
+  detail.ele("UndisclosedBorrowedFundsIndicator").txt("false");
+  detail.ele("UndisclosedComakerOfNoteIndicator").txt("false");
+  detail.ele("UndisclosedCreditApplicationIndicator").txt("false");
+  detail.ele("UndisclosedMortgageApplicationIndicator").txt("false");
+  // ULAD extension required by Desktop Underwriter
+  detail
+    .ele("EXTENSION")
+    .ele("OTHER")
+    .ele("ULAD:DECLARATION_DETAIL_EXTENSION")
+    .ele("ULAD:SpecialBorrowerSellerRelationshipIndicator")
     .txt("false");
+}
 
-  // EMPLOYERS
-  const employerEl = borrowerEl
+/** Build the EMPLOYERS element inside a BORROWER node */
+function mismoAppendEmployers(
+  borrowerEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+  monthlyIncome: string,
+  clientStateCode: string,
+  isSelfEmployed: boolean,
+  monthsEmployed: number,
+): void {
+  const employerEl = (borrowerEl as any)
     .ele("EMPLOYERS")
     .ele("EMPLOYER", { SequenceNumber: "1", "xlink:label": "EMPLOYER_1" });
-  const employmentEl = employerEl.ele("EMPLOYMENT");
-  if (isSelfEmployed) {
-    employmentEl.ele("EmploymentBorrowerSelfEmployedIndicator").txt("true");
+
+  // LEGAL_ENTITY: contacts + name
+  const legalEntityEl = employerEl.ele("LEGAL_ENTITY");
+  if (loan.client_phone) {
+    legalEntityEl
+      .ele("CONTACTS")
+      .ele("CONTACT")
+      .ele("CONTACT_POINTS")
+      .ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_TELEPHONE")
+      .ele("ContactPointTelephoneValue")
+      .txt(mismoStr(loan.client_phone));
   }
-  employmentEl.ele("EmploymentClassificationType").txt("Primary");
-  employmentEl.ele("EmploymentMonthlyIncomeAmount").txt(monthlyIncome);
-  employmentEl
-    .ele("EmploymentStatusType")
-    .txt(isSelfEmployed ? "Current" : str(loan.employment_status || "Current"));
+  if (loan.employer_name) {
+    legalEntityEl
+      .ele("LEGAL_ENTITY_DETAIL")
+      .ele("FullName")
+      .txt(mismoStr(loan.employer_name));
+  }
 
-  // RESIDENCES
-  borrowerEl
-    .ele("RESIDENCES")
-    .ele("RESIDENCE")
-    .ele("ADDRESS")
-    .ele("AddressLineText")
-    .txt(str(loan.address_street))
-    .up()
-    .ele("AddressType")
-    .txt("Primary")
-    .up()
-    .ele("CityName")
-    .txt(str(loan.address_city))
-    .up()
-    .ele("CountryCode")
-    .txt("US")
-    .up()
-    .ele("CountryName")
-    .txt("United States")
-    .up()
-    .ele("PostalCode")
-    .txt(str(loan.address_zip))
-    .up()
-    .ele("StateCode")
-    .txt(str(loan.address_state))
-    .up()
-    .up()
-    .ele("RESIDENCE_DETAIL")
-    .ele("BorrowerResidencyBasisType")
-    .txt("Own")
-    .up()
-    .ele("BorrowerResidencyType")
-    .txt("Current");
+  // EMPLOYER ADDRESS
+  if (loan.address_street) {
+    mismoAppendAddress(employerEl, {
+      street: mismoStr(loan.address_street),
+      city: mismoStr(loan.address_city),
+      zip: mismoStr(loan.address_zip),
+      stateCode: clientStateCode,
+    });
+  }
 
-  // ROLE_DETAIL
+  // EMPLOYMENT
+  const empEl = employerEl.ele("EMPLOYMENT");
+  if (isSelfEmployed)
+    empEl.ele("EmploymentBorrowerSelfEmployedIndicator").txt("true");
+  empEl.ele("EmploymentClassificationType").txt("Primary");
+  empEl.ele("EmploymentMonthlyIncomeAmount").txt(monthlyIncome);
+  empEl.ele("EmploymentStatusType").txt("Current");
+  if (monthsEmployed > 0) {
+    empEl
+      .ele("EmploymentTimeInLineOfWorkMonthsCount")
+      .txt(String(monthsEmployed));
+  }
+  if (isSelfEmployed) {
+    empEl.ele("OwnershipInterestType").txt("GreaterThanOrEqualTo25Percent");
+  }
+}
+
+/** Build the GOVERNMENT_MONITORING element inside a BORROWER node */
+function mismoAppendGovernmentMonitoring(
+  borrowerEl: ReturnType<typeof create>,
+): void {
+  const detailEl = (borrowerEl as any)
+    .ele("GOVERNMENT_MONITORING")
+    .ele("GOVERNMENT_MONITORING_DETAIL");
+  detailEl.ele("HMDAEthnicityRefusalIndicator").txt("true");
+  detailEl.ele("HMDAGenderRefusalIndicator").txt("true");
+  detailEl.ele("HMDARaceRefusalIndicator").txt("true");
+  detailEl
+    .ele("EXTENSION")
+    .ele("OTHER")
+    .ele("ULAD:GOVERNMENT_MONITORING_DETAIL_EXTENSION")
+    .ele("ULAD:ApplicationTakenMethodType")
+    .txt("Internet");
+}
+
+/** Build the RESIDENCES element (Primary + Mailing) inside a BORROWER node */
+function mismoAppendResidences(
+  borrowerEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+  clientStateCode: string,
+): void {
+  const residencesEl = (borrowerEl as any).ele("RESIDENCES");
+
+  // Compute duration fields from years_at_address
+  const yearsAtAddr = loan.years_at_address
+    ? parseFloat(String(loan.years_at_address))
+    : null;
+  const durationMonths =
+    yearsAtAddr != null ? Math.round(yearsAtAddr * 12) : null;
+  const durationYears = yearsAtAddr != null ? Math.floor(yearsAtAddr) : null;
+
+  // Primary
+  const primaryRes = residencesEl.ele("RESIDENCE");
+  mismoAppendAddress(primaryRes, {
+    street: mismoStr(loan.address_street),
+    unit: mismoStr(loan.address_unit) || undefined,
+    addressType: "Primary",
+    city: mismoStr(loan.address_city),
+    zip: mismoStr(loan.address_zip),
+    stateCode: clientStateCode,
+  });
+  const primaryDetail = primaryRes.ele("RESIDENCE_DETAIL");
+  primaryDetail.ele("BorrowerResidencyBasisType").txt("Own");
+  if (durationMonths != null) {
+    primaryDetail
+      .ele("BorrowerResidencyDurationMonthsCount")
+      .txt(String(durationMonths));
+  }
+  if (durationYears != null) {
+    primaryDetail
+      .ele("BorrowerResidencyDurationYearsCount")
+      .txt(String(durationYears));
+  }
+  primaryDetail.ele("BorrowerResidencyType").txt("Current");
+
+  // Mailing (same address)
+  const mailingRes = residencesEl.ele("RESIDENCE");
+  mismoAppendAddress(mailingRes, {
+    street: mismoStr(loan.address_street),
+    unit: mismoStr(loan.address_unit) || undefined,
+    addressType: "Mailing",
+    city: mismoStr(loan.address_city),
+    zip: mismoStr(loan.address_zip),
+    stateCode: clientStateCode,
+  });
+}
+
+/** Build the borrower PARTY element and append it to the PARTIES node */
+function mismoAppendBorrowerParty(
+  partiesEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+  monthlyIncome: string,
+  clientStateCode: string,
+  isSelfEmployed: boolean,
+  isRefinance: boolean,
+  monthsEmployed: number,
+): void {
+  const borrowerParty = (partiesEl as any).ele("PARTY");
+
+  // INDIVIDUAL: contact points + name
+  const individual = borrowerParty.ele("INDIVIDUAL");
+  const cp = individual.ele("CONTACT_POINTS");
+  if (loan.client_phone) {
+    cp.ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_TELEPHONE")
+      .ele("ContactPointTelephoneValue")
+      .txt(mismoStr(loan.client_phone))
+      .up()
+      .up()
+      .ele("CONTACT_POINT_DETAIL")
+      .ele("ContactPointRoleType")
+      .txt("Mobile");
+  }
+  if (loan.client_email) {
+    cp.ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_EMAIL")
+      .ele("ContactPointEmailValue")
+      .txt(mismoStr(loan.client_email));
+  }
+  const nameEl = individual.ele("NAME");
+  nameEl.ele("FirstName").txt(mismoStr(loan.client_first_name));
+  nameEl.ele("LastName").txt(mismoStr(loan.client_last_name));
+  if (loan.client_middle_name) {
+    nameEl.ele("MiddleName").txt(mismoStr(loan.client_middle_name));
+  }
+
+  // ADDRESSES: Primary + Mailing (alphabetically before LANGUAGES, ROLES)
+  if (loan.address_street) {
+    const addrsEl = borrowerParty.ele("ADDRESSES");
+    mismoAppendAddress(addrsEl, {
+      street: mismoStr(loan.address_street),
+      unit: mismoStr(loan.address_unit) || undefined,
+      addressType: "Primary",
+      city: mismoStr(loan.address_city),
+      zip: mismoStr(loan.address_zip),
+      stateCode: clientStateCode,
+    });
+    mismoAppendAddress(addrsEl, {
+      street: mismoStr(loan.address_street),
+      unit: mismoStr(loan.address_unit) || undefined,
+      addressType: "Mailing",
+      city: mismoStr(loan.address_city),
+      zip: mismoStr(loan.address_zip),
+      stateCode: clientStateCode,
+    });
+  }
+
+  // LANGUAGES (alphabetically: ADDRESSES < LANGUAGES < ROLES)
+  borrowerParty
+    .ele("LANGUAGES")
+    .ele("LANGUAGE")
+    .ele("LanguageCode")
+    .txt("eng")
+    .up()
+    .ele("EXTENSION")
+    .ele("OTHER")
+    .ele("ULAD:LANGUAGE_EXTENSION")
+    .ele("ULAD:LanguageRefusalIndicator")
+    .txt("false");
+
+  // ROLES
+  const borrowerRole = borrowerParty
+    .ele("ROLES")
+    .ele("ROLE", { SequenceNumber: "1", "xlink:label": "BORROWER_1" });
+  const borrowerEl = borrowerRole.ele("BORROWER");
+
+  mismoAppendBorrowerDetail(borrowerEl, loan);
+  mismoAppendCurrentIncome(borrowerEl, monthlyIncome);
+  mismoAppendDeclaration(borrowerEl, loan, isRefinance);
+  mismoAppendDependents(borrowerEl, loan); // DEPENDENTS alphabetically after DECLARATION, before EMPLOYERS
+  mismoAppendEmployers(
+    borrowerEl,
+    loan,
+    monthlyIncome,
+    clientStateCode,
+    isSelfEmployed,
+    monthsEmployed,
+  );
+  mismoAppendGovernmentMonitoring(borrowerEl);
+  mismoAppendResidences(borrowerEl, loan, clientStateCode);
+
   borrowerRole
     .ele("ROLE_DETAIL")
     .ele("ConsentToReceiveDocumentsElectronicallyIndicator")
@@ -10696,66 +10977,75 @@ function generateMISMO34XML(loan: any): string {
     .ele("PartyRoleType")
     .txt("Borrower");
 
-  // TAXPAYER_IDENTIFIERS (after ROLES per PARTY schema)
-  const taxpayerIdEl = borrowerParty
+  // TAXPAYER_IDENTIFIERS (alphabetically after ROLES)
+  const taxId = borrowerParty
     .ele("TAXPAYER_IDENTIFIERS")
     .ele("TAXPAYER_IDENTIFIER");
-  taxpayerIdEl.ele("TaxpayerIdentifierType").txt("SocialSecurityNumber");
+  taxId.ele("TaxpayerIdentifierType").txt("SocialSecurityNumber");
   if (loan.ssn_encrypted) {
-    taxpayerIdEl.ele("TaxpayerIdentifierValue").txt(str(loan.ssn_encrypted));
+    taxId.ele("TaxpayerIdentifierValue").txt(mismoStr(loan.ssn_encrypted));
   }
+}
 
-  // Loan originator party (broker)
-  if (loan.broker_first_name) {
-    const brokerParty = partiesEl.ele("PARTY");
-    const brokerIndividual = brokerParty.ele("INDIVIDUAL");
-    const brokerContactPoints = brokerIndividual.ele("CONTACT_POINTS");
-    if (loan.broker_phone) {
-      brokerContactPoints
-        .ele("CONTACT_POINT")
-        .ele("CONTACT_POINT_TELEPHONE")
-        .ele("ContactPointTelephoneValue")
-        .txt(str(loan.broker_phone))
-        .up()
-        .up()
-        .ele("CONTACT_POINT_DETAIL")
-        .ele("ContactPointRoleType")
-        .txt("Work");
-    }
-    if (loan.broker_email) {
-      brokerContactPoints
-        .ele("CONTACT_POINT")
-        .ele("CONTACT_POINT_EMAIL")
-        .ele("ContactPointEmailValue")
-        .txt(str(loan.broker_email))
-        .up()
-        .up()
-        .ele("CONTACT_POINT_DETAIL")
-        .ele("ContactPointRoleType")
-        .txt("Work");
-    }
-    brokerIndividual
-      .ele("NAME")
-      .ele("FirstName")
-      .txt(str(loan.broker_first_name))
+/** Build the loan originator PARTY element and append it to the PARTIES node */
+function mismoAppendOriginatorParty(
+  partiesEl: ReturnType<typeof create>,
+  loan: MismoLoanRow,
+): void {
+  if (!loan.broker_first_name) return;
+
+  const brokerParty = (partiesEl as any).ele("PARTY");
+  const individual = brokerParty.ele("INDIVIDUAL");
+  const cp = individual.ele("CONTACT_POINTS");
+
+  if (loan.broker_phone) {
+    cp.ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_TELEPHONE")
+      .ele("ContactPointTelephoneValue")
+      .txt(mismoStr(loan.broker_phone))
       .up()
-      .ele("LastName")
-      .txt(str(loan.broker_last_name));
-
-    const brokerRole = brokerParty
-      .ele("ROLES")
-      .ele("ROLE", { SequenceNumber: "1", "xlink:label": "LOAN_ORIGINATOR_1" });
-    brokerRole.ele("ROLE_DETAIL").ele("PartyRoleType").txt("LoanOriginator");
-    if (loan.license_number) {
-      brokerRole
-        .ele("LOAN_ORIGINATOR")
-        .ele("LoanOriginatorIdentifier")
-        .txt(str(loan.license_number));
-    }
+      .up()
+      .ele("CONTACT_POINT_DETAIL")
+      .ele("ContactPointRoleType")
+      .txt("Work");
   }
+  if (loan.broker_email) {
+    cp.ele("CONTACT_POINT")
+      .ele("CONTACT_POINT_EMAIL")
+      .ele("ContactPointEmailValue")
+      .txt(mismoStr(loan.broker_email))
+      .up()
+      .up()
+      .ele("CONTACT_POINT_DETAIL")
+      .ele("ContactPointRoleType")
+      .txt("Work");
+  }
+  individual
+    .ele("NAME")
+    .ele("FirstName")
+    .txt(mismoStr(loan.broker_first_name))
+    .up()
+    .ele("LastName")
+    .txt(mismoStr(loan.broker_last_name));
 
-  // ── RELATIONSHIPS ─────────────────────────────────────────────────────────
-  const relEl = doc.ele("RELATIONSHIPS");
+  const brokerRole = brokerParty
+    .ele("ROLES")
+    .ele("ROLE", { SequenceNumber: "1", "xlink:label": "LOAN_ORIGINATOR_1" });
+  brokerRole.ele("ROLE_DETAIL").ele("PartyRoleType").txt("LoanOriginator");
+  if (loan.license_number) {
+    brokerRole
+      .ele("LOAN_ORIGINATOR")
+      .ele("LoanOriginatorIdentifier")
+      .txt(mismoStr(loan.license_number));
+  }
+}
+
+/** Build the DEAL > RELATIONSHIPS section */
+function mismoAppendRelationships(
+  deal: ReturnType<typeof create>,
+  hasProperty: boolean,
+): void {
+  const relEl = (deal as any).ele("RELATIONSHIPS");
   if (hasProperty) {
     relEl.ele("RELATIONSHIP", {
       "xlink:from": "ASSET_1",
@@ -10776,8 +11066,66 @@ function generateMISMO34XML(loan: any): string {
     "xlink:arcrole":
       "urn:fdc:mismo.org:2009:residential/CURRENT_INCOME_ITEM_IsAssociatedWith_EMPLOYER",
   });
+}
 
-  return doc.end({ prettyPrint: true });
+/**
+ * Generate a MISMO 3.4 / ULAD XML document from a loan row.
+ * Orchestrates the section helpers in the xs:sequence order mandated by
+ * DU_Wrapper_3.4.0_B324.xsd: ASSETS → COLLATERALS → LIABILITIES → LOANS →
+ * PARTIES → RELATIONSHIPS.
+ */
+function generateMISMO34XML(loan: MismoLoanRow): string {
+  const loanAmount = parseFloat(String(loan.loan_amount || 0));
+  const propertyValue = parseFloat(String(loan.property_value || 0));
+  const monthlyIncome = loan.annual_income
+    ? (parseFloat(String(loan.annual_income)) / 12).toFixed(2)
+    : "0.0";
+  const loanTermMonths = loan.loan_term_months || 360;
+  const yearsEmployed = parseInt(String(loan.years_employed || "0")) || 0;
+  const monthsEmployed = yearsEmployed > 0 ? yearsEmployed * 12 : 0;
+
+  const isSelfEmployed = loan.employment_status === "self_employed";
+  const isRefinance = loan.loan_type === "refinance";
+  const hasProperty = isRefinance || propertyValue > 0;
+
+  const propStateCode = mismoState(loan.property_state);
+  const clientStateCode = mismoState(loan.address_state);
+
+  const deal = create({ version: "1.0", encoding: "UTF-8" })
+    .ele("MESSAGE", {
+      "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+      "xmlns:ULAD": "http://www.datamodelextension.org/Schema/ULAD",
+      "xmlns:xlink": "http://www.w3.org/1999/xlink",
+      xmlns: "http://www.mismo.org/residential/2009/schemas",
+      MISMOReferenceModelIdentifier: "3.4.032420160128",
+      "xsi:schemaLocation":
+        "http://www.mismo.org/residential/2009/schemas DU_Wrapper_3.4.0_B324.xsd",
+    })
+    .ele("DEAL_SETS")
+    .ele("DEAL_SET")
+    .ele("DEALS")
+    .ele("DEAL");
+
+  if (hasProperty) mismoAppendAssets(deal, propertyValue);
+  mismoAppendCollaterals(deal, loan, propStateCode, propertyValue);
+  if (hasProperty) mismoAppendLiabilities(deal, propertyValue);
+  mismoAppendLoans(deal, loan, loanAmount, loanTermMonths, isRefinance);
+
+  const partiesEl = (deal as any).ele("PARTIES");
+  mismoAppendBorrowerParty(
+    partiesEl,
+    loan,
+    monthlyIncome,
+    clientStateCode,
+    isSelfEmployed,
+    isRefinance,
+    monthsEmployed,
+  );
+  mismoAppendOriginatorParty(partiesEl, loan);
+
+  mismoAppendRelationships(deal, hasProperty);
+
+  return deal.end({ prettyPrint: true });
 }
 
 /**
@@ -15040,6 +15388,7 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       });
       await publishToAbly("conversations:all", "thread-updated", {
         conversationId,
+        thread: { status: "active" },
       });
     }
 
@@ -15357,17 +15706,38 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       [conversationId, MORTGAGE_TENANT_ID],
     );
 
-    // Get thread info
+    // Get thread info — apply the same broker/realtor name resolution as the
+    // threads list so "Unknown Client" is never shown when opening a thread
+    // whose contact is a broker/realtor (stored with client_name = NULL).
     const [threadInfo] = await pool.query<RowDataPacket[]>(
-      `SELECT ct.*, 
+      `SELECT ct.*,
               la.application_number,
-              CONCAT(cl.first_name, ' ', cl.last_name) as client_full_name
+              CONCAT(cl.first_name, ' ', cl.last_name) AS client_full_name,
+              COALESCE(
+                ct.client_name,
+                CONCAT(cl.first_name, ' ', cl.last_name),
+                CONCAT(cb.first_name, ' ', cb.last_name),
+                CONCAT(pb.first_name, ' ', pb.last_name)
+              ) AS resolved_client_name
        FROM conversation_threads ct
        LEFT JOIN loan_applications la ON ct.application_id = la.id
        LEFT JOIN clients cl ON ct.client_id = cl.id
+       LEFT JOIN brokers cb ON ct.contact_broker_id = cb.id
+       LEFT JOIN brokers pb ON pb.tenant_id = ct.tenant_id
+         AND ct.client_name IS NULL
+         AND ct.client_id IS NULL
+         AND ct.contact_broker_id IS NULL
+         AND ct.client_phone IS NOT NULL
+         AND RIGHT(REGEXP_REPLACE(pb.phone, '[^0-9]', ''), 10)
+             = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
        WHERE ct.conversation_id = ? AND ct.tenant_id = ?`,
       [conversationId, MORTGAGE_TENANT_ID],
     );
+    // Normalise: promote resolved_client_name → client_name so the frontend
+    // always receives a populated name without any special-case handling.
+    if (threadInfo[0] && threadInfo[0].resolved_client_name) {
+      threadInfo[0].client_name = threadInfo[0].resolved_client_name;
+    }
 
     // Get total message count
     const [countResult] = await pool.query<RowDataPacket[]>(
@@ -15422,6 +15792,10 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       }),
       thread: {
         ...threadInfo[0],
+        client_name:
+          threadInfo[0]?.client_name ??
+          threadInfo[0]?.resolved_client_name ??
+          null,
         tags: (() => {
           try {
             return threadInfo[0]?.tags
@@ -17487,6 +17861,14 @@ const handleDialStatus: RequestHandler = async (req, res) => {
     }
 
     // 2) Record the voicemail.
+    // Twilio's recordingStatusCallback / transcribeCallback do NOT include
+    // the original From/To in their POST body — only the recording metadata.
+    // We forward the caller (From) and called number (To) as query params so
+    // the voicemail row is correctly attributed to the inbound caller.
+    const callerFrom = (req.body?.From as string) || "";
+    const callerTo = calledNumber || "";
+    const cbQs = `?from=${encodeURIComponent(callerFrom)}&to=${encodeURIComponent(callerTo)}`;
+
     twiml.record({
       action: `${getVoiceBaseUrl()}/api/voice/voicemail-complete`,
       method: "POST",
@@ -17495,12 +17877,12 @@ const handleDialStatus: RequestHandler = async (req, res) => {
       playBeep: true,
       trim: "trim-silence",
       timeout: 5,
-      recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/voicemail-recording`,
+      recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/voicemail-recording${cbQs}`,
       recordingStatusCallbackMethod: "POST",
       recordingStatusCallbackEvent: ["completed"],
       transcribe: settings.transcribe,
       transcribeCallback: settings.transcribe
-        ? `${getVoiceBaseUrl()}/api/voice/voicemail-transcription`
+        ? `${getVoiceBaseUrl()}/api/voice/voicemail-transcription${cbQs}`
         : undefined,
     } as any);
 
@@ -17683,9 +18065,31 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
       return res.sendStatus(204);
     }
 
-    const callerNumber = From || "Unknown";
-    const calledNumber = To || null;
-    const conversationId = `conv_phone_${callerNumber.replace(/\D/g, "")}`;
+    // Twilio's recordingStatusCallback body does NOT include From/To by
+    // default — we forward them via query string from handleDialStatus.
+    // Fall back to Twilio API lookup using CallSid if missing for any reason.
+    let callerNumber = (req.query?.from as string) || From || "";
+    let calledNumber: string | null = (req.query?.to as string) || To || null;
+
+    if ((!callerNumber || !calledNumber) && CallSid && twilioClient) {
+      try {
+        const call = await twilioClient.calls(CallSid).fetch();
+        if (!callerNumber) callerNumber = call.from || "";
+        if (!calledNumber) calledNumber = call.to || null;
+      } catch (e) {
+        console.warn(
+          "[handleVoicemailRecording] Twilio call lookup failed:",
+          (e as any)?.message || e,
+        );
+      }
+    }
+
+    if (!callerNumber) callerNumber = "Unknown";
+
+    const digits = callerNumber.replace(/\D/g, "");
+    const conversationId = digits
+      ? `conv_phone_${digits}`
+      : `conv_phone_unknown_${CallSid || RecordingSid || Date.now()}`;
     const body = `🎙️ Voicemail from ${callerNumber}${
       durationSec ? ` (${durationSec}s)` : ""
     }`;

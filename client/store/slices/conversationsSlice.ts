@@ -733,7 +733,18 @@ const conversationsSlice = createSlice({
         (t) => t.conversation_id === conversationId,
       );
       if (idx >= 0) {
-        state.threads[idx] = { ...state.threads[idx], ...thread };
+        const updated = { ...state.threads[idx], ...thread };
+        // If a closed thread was just reopened, bubble it to the top so
+        // brokers see it immediately without scrolling.
+        if (
+          thread.status === "active" &&
+          state.threads[idx].status !== "active"
+        ) {
+          state.threads.splice(idx, 1);
+          state.threads.unshift(updated);
+        } else {
+          state.threads[idx] = updated;
+        }
       }
       if (state.currentThread?.conversation_id === conversationId) {
         state.currentThread = { ...state.currentThread, ...thread };

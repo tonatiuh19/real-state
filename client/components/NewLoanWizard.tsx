@@ -458,7 +458,7 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
           }
         }}
       >
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
           {/* ── Mode Selection ── shown when dialog first opens */}
           {mode === null && (
             <AnimatePresence>
@@ -1032,7 +1032,7 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                           <h4 className="font-medium text-sm mb-3">
                             Available Templates
                           </h4>
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="flex flex-col gap-2">
                             {activeTemplates.map((template) => {
                               const isAdded = tasks.some(
                                 (t) => t.template_id === template.id,
@@ -1045,27 +1045,27 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                                   size="sm"
                                   onClick={() => addTemplateTask(template)}
                                   disabled={isAdded}
-                                  className="justify-start h-auto p-3"
+                                  className="justify-start h-auto p-3 w-full"
                                 >
-                                  <div className="flex items-start gap-2 w-full">
+                                  <div className="flex items-start gap-2 w-full min-w-0">
                                     {isAdded ? (
-                                      <CheckCircle className="h-4 w-4 mt-0.5 text-primary" />
+                                      <CheckCircle className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                                     ) : (
-                                      <Plus className="h-4 w-4 mt-0.5" />
+                                      <Plus className="h-4 w-4 mt-0.5 shrink-0" />
                                     )}
-                                    <div className="flex-1 text-left">
-                                      <p className="font-medium text-xs">
+                                    <div className="flex-1 text-left min-w-0">
+                                      <p className="font-medium text-xs truncate">
                                         {template.title}
                                       </p>
                                       {template.description && (
-                                        <p className="text-xs text-muted-foreground line-clamp-1">
+                                        <p className="text-xs text-muted-foreground truncate">
                                           {template.description}
                                         </p>
                                       )}
                                     </div>
                                     <Badge
                                       variant="outline"
-                                      className="text-xs"
+                                      className="text-xs shrink-0 ml-2"
                                     >
                                       {template.default_due_days || 3}d
                                     </Badge>

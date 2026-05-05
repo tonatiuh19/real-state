@@ -280,6 +280,16 @@ const Conversations = () => {
   );
   const composeTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Stable refs so Ably callbacks always see the latest state without stale closures
+  const threadsRef = useRef(threads);
+  const threadsFiltersRef = useRef(threadsFilters);
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
+  useEffect(() => {
+    threadsFiltersRef.current = threadsFilters;
+  }, [threadsFilters]);
+
   // Optimistic messages: show immediately while API is in-flight
   type OptimisticMsg = {
     tempId: string;
@@ -571,6 +581,16 @@ const Conversations = () => {
           };
           if (conversationId && thread) {
             dispatch(threadUpdatedRealtime({ conversationId, thread }));
+            // If the thread was previously closed and filtered out of the list,
+            // it won't be in state.threads — do a refresh so it reappears.
+            if (thread.status === "active") {
+              const alreadyInList = threadsRef.current.some(
+                (t) => t.conversation_id === conversationId,
+              );
+              if (!alreadyInList) {
+                dispatch(fetchConversationThreads(threadsFiltersRef.current));
+              }
+            }
           }
         });
         allChannel.subscribe("thread-read", (msg) => {
