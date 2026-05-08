@@ -238,46 +238,6 @@ const BrokerProfile = () => {
     const email = (emailOverride ?? mailboxEmailInput).trim();
     if (!email.includes("@")) return;
 
-    const openAuthPopup = (url: string) => {
-      const w = 600;
-      const h = 720;
-      const left = Math.round(window.screenX + (window.outerWidth - w) / 2);
-      const top = Math.round(window.screenY + (window.outerHeight - h) / 2);
-      const popup = window.open(
-        url,
-        "office365_oauth",
-        `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`,
-      );
-      if (!popup) {
-        // Popup blocked — fall back to full redirect
-        window.location.href = url;
-        return;
-      }
-      const onMessage = (event: MessageEvent) => {
-        if (event.origin !== window.location.origin) return;
-        if (event.data?.type !== "office365_callback") return;
-        window.removeEventListener("message", onMessage);
-        try {
-          popup.close();
-        } catch (_) {}
-        if (event.data.result === "connected") {
-          toast({
-            title: "Email Inbox connected",
-            description: "Your Office 365 mailbox is now active.",
-          });
-          dispatch(fetchConversationMailboxes());
-        } else {
-          const reason = event.data.reason || "unknown_error";
-          toast({
-            title: "Connection failed",
-            description: `Could not connect Office 365: ${String(reason).replace(/_/g, " ")}.`,
-            variant: "destructive",
-          });
-        }
-      };
-      window.addEventListener("message", onMessage);
-    };
-
     try {
       const result = await dispatch(
         connectOffice365Mailbox({
@@ -286,7 +246,7 @@ const BrokerProfile = () => {
           return_path: "/admin/profile",
         }),
       ).unwrap();
-      if (result.auth_url) openAuthPopup(result.auth_url);
+      if (result.auth_url) window.location.href = result.auth_url;
     } catch (err: any) {
       toast({
         title: "Connection failed",
