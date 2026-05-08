@@ -14443,16 +14443,25 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
       sanitizedReturnPath,
     );
 
+    // Build the auth URL. `prompt=login` forces Microsoft to show the account
+    // picker/login screen every time — prevents a cached browser session from
+    // silently signing in the wrong person (e.g. a different broker's account).
+    const authUrlParams: Record<string, string> = {
+      client_id: clientId,
+      response_type: "code",
+      redirect_uri: redirectUri,
+      response_mode: "query",
+      scope: OFFICE365_SCOPES.join(" "),
+      state,
+      prompt: "login",
+    };
+    // Pre-fill the email field if we know the mailbox email (quality-of-life).
+    if (mailbox_email) {
+      authUrlParams.login_hint = String(mailbox_email).toLowerCase();
+    }
     const authUrl =
       `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
-      new URLSearchParams({
-        client_id: clientId,
-        response_type: "code",
-        redirect_uri: redirectUri,
-        response_mode: "query",
-        scope: OFFICE365_SCOPES.join(" "),
-        state,
-      }).toString();
+      new URLSearchParams(authUrlParams).toString();
 
     return res.json({
       success: true,
