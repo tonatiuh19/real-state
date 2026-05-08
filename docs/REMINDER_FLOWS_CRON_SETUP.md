@@ -8,11 +8,12 @@ When a client replies, the system detects the response and advances (or stops) t
 
 **Three moving parts:**
 
-| Component                              | Trigger             | Purpose                                                       |
-| -------------------------------------- | ------------------- | ------------------------------------------------------------- |
-| `GET /api/cron/process-reminder-flows` | Every 10 min (cron) | Advance due flow steps, send messages, handle timeouts        |
-| `GET /api/cron/poll-inbound-email`     | Every 5 min (cron)  | Poll IMAP inbox for email replies → mark executions responded |
-| `POST /api/webhooks/inbound-sms`       | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
+| Component                                | Trigger             | Purpose                                                       |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------- |
+| `GET /api/cron/process-reminder-flows`   | Every 10 min (cron) | Advance due flow steps, send messages, handle timeouts        |
+| `GET /api/cron/poll-inbound-email`       | Every 5 min (cron)  | Poll IMAP inbox for email replies → mark executions responded |
+| `GET /api/cron/sync-office365-mailboxes` | Every 5 min (cron)  | Sync all active Office 365 mailboxes into Conversations       |
+| `POST /api/webhooks/inbound-sms`         | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
 
 ---
 
@@ -78,6 +79,20 @@ curl -s "https://yourdomain.com/api/cron/poll-inbound-email?secret=YOUR_CRON_SEC
 ```
 
 > Run the email poll **more frequently** than the flow processor so replies are captured before a `no_response` timeout expires.
+
+### 2c. Sync Office 365 mailboxes — every 5 minutes
+
+| Field   | Value |
+| ------- | ----- |
+| Minute  | `*/5` |
+| Hour    | `*`   |
+| Day     | `*`   |
+| Month   | `*`   |
+| Weekday | `*`   |
+
+```bash
+curl -s "https://admin.encoremortgage.org/api/cron/sync-office365-mailboxes?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
+```
 
 ---
 

@@ -546,7 +546,6 @@ const Conversations = () => {
         variant: "destructive",
       });
     }
-    // Remove the query params from the URL without a full navigation
     window.history.replaceState(null, "", window.location.pathname);
   }, [location.search]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -761,7 +760,11 @@ const Conversations = () => {
     if (!email || !email.includes("@")) return;
     try {
       const result = await dispatch(
-        connectOffice365Mailbox({ mailbox_email: email, is_shared: true }),
+        connectOffice365Mailbox({
+          mailbox_email: email,
+          is_shared: true,
+          return_path: "/conversations",
+        }),
       ).unwrap();
       if (result.auth_url) {
         window.location.href = result.auth_url;
@@ -1429,9 +1432,9 @@ const Conversations = () => {
                       disabled={locked}
                       title={locked ? "WhatsApp coming soon" : undefined}
                       className={cn(
-                        "flex-1 min-w-[2.5rem] inline-flex items-center justify-center gap-1 text-xs font-medium py-1 px-2 rounded-md transition-all whitespace-nowrap",
+                        "flex-1 min-w-[2.5rem] relative inline-flex items-center justify-center gap-1 text-xs font-medium py-1 px-2 rounded-md transition-all whitespace-nowrap",
                         locked
-                          ? "opacity-40 cursor-not-allowed text-muted-foreground"
+                          ? "opacity-50 cursor-not-allowed text-muted-foreground"
                           : channelFilter === key
                             ? "bg-card text-foreground shadow-sm"
                             : "text-muted-foreground hover:text-foreground",
@@ -1441,7 +1444,9 @@ const Conversations = () => {
                         {key === "whatsapp" ? "WA" : label}
                       </span>
                       <span className="hidden sm:inline">{label}</span>
-                      {locked && <Lock className="h-2.5 w-2.5 shrink-0" />}
+                      {locked && (
+                        <Lock className="h-2.5 w-2.5 shrink-0 text-muted-foreground/70" />
+                      )}
                     </button>
                   );
                 })}

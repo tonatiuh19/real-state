@@ -421,11 +421,13 @@ export const connectOffice365Mailbox = createAsyncThunk(
       display_name,
       is_shared = true,
       target_broker_id,
+      return_path,
     }: {
       mailbox_email: string;
       display_name?: string;
       is_shared?: boolean;
       target_broker_id?: number;
+      return_path?: string;
     },
     { getState, rejectWithValue },
   ) => {
@@ -433,13 +435,36 @@ export const connectOffice365Mailbox = createAsyncThunk(
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.post<ConnectOffice365MailboxResponse>(
         "/api/conversations/mailboxes/office365/connect",
-        { mailbox_email, display_name, is_shared, target_broker_id },
+        {
+          mailbox_email,
+          display_name,
+          is_shared,
+          target_broker_id,
+          return_path,
+        },
         { headers: { Authorization: `Bearer ${sessionToken}` } },
       );
       return data;
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.message || "Failed to start Office365 connection",
+      );
+    }
+  },
+);
+
+export const disconnectConversationMailbox = createAsyncThunk(
+  "conversations/disconnectConversationMailbox",
+  async (mailboxId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      await axios.delete(`/api/conversations/mailboxes/${mailboxId}`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      return { mailboxId };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to disconnect mailbox",
       );
     }
   },
@@ -1031,6 +1056,15 @@ const conversationsSlice = createSlice({
         state.isSyncingMailbox = false;
         state.error = action.payload as string;
       });
+
+    builder.addCase(
+      disconnectConversationMailbox.fulfilled,
+      (state, action) => {
+        state.mailboxes = state.mailboxes.filter(
+          (m) => m.id !== action.payload.mailboxId,
+        );
+      },
+    );
 
     builder
       .addCase(assignConversationMailbox.pending, (state) => {

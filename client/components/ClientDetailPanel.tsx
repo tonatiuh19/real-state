@@ -427,16 +427,20 @@ function ComposeBox({
               className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border transition-colors font-medium ${
                 composeType === t && !locked
                   ? "bg-primary text-primary-foreground border-primary"
-                  : disabled
-                    ? "opacity-40 cursor-not-allowed border-border text-muted-foreground"
-                    : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                  : locked
+                    ? "opacity-50 cursor-not-allowed border-dashed border-border text-muted-foreground"
+                    : disabled
+                      ? "opacity-40 cursor-not-allowed border-border text-muted-foreground"
+                      : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
               }`}
             >
               {t === "sms" && <Smartphone className="w-3 h-3" />}
               {t === "email" && <Mail className="w-3 h-3" />}
               {t === "whatsapp" && <MessageCircle className="w-3 h-3" />}
               {t === "sms" ? "SMS" : t === "email" ? "Email" : "WhatsApp"}
-              {locked && <Lock className="w-2.5 h-2.5 ml-0.5" />}
+              {locked && (
+                <Lock className="w-2.5 h-2.5 ml-0.5 text-muted-foreground/60" />
+              )}
             </button>
           );
         })}

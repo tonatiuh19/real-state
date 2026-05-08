@@ -170,10 +170,17 @@ const getOffice365OAuthConfig = () => {
 const signOffice365State = (payload: string) =>
   crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("hex");
 
-function createOffice365State(brokerId: number, mailboxId: number): string {
+function createOffice365State(
+  brokerId: number,
+  mailboxId: number,
+  returnPath?: string,
+): string {
   const ts = Date.now();
   const nonce = crypto.randomBytes(8).toString("hex");
-  const payload = `${brokerId}.${mailboxId}.${ts}.${nonce}`;
+  const returnPathB64 = returnPath
+    ? Buffer.from(returnPath).toString("base64url")
+    : "";
+  const payload = `${brokerId}.${mailboxId}.${ts}.${nonce}.${returnPathB64}`;
   const sig = signOffice365State(payload);
   return `${payload}.${sig}`;
 }
@@ -182,12 +189,27 @@ function verifyOffice365State(stateRaw: string): {
   valid: boolean;
   brokerId?: number;
   mailboxId?: number;
+  returnPath?: string;
 } {
   const parts = stateRaw.split(".");
-  if (parts.length !== 5) return { valid: false };
+  // Support old format (5 parts) and new format with returnPath (6 parts)
+  if (parts.length !== 5 && parts.length !== 6) return { valid: false };
 
-  const [brokerIdRaw, mailboxIdRaw, tsRaw, nonce, sig] = parts;
-  const payload = `${brokerIdRaw}.${mailboxIdRaw}.${tsRaw}.${nonce}`;
+  let brokerIdRaw: string,
+    mailboxIdRaw: string,
+    tsRaw: string,
+    nonce: string,
+    returnPathB64: string,
+    sig: string;
+
+  if (parts.length === 6) {
+    [brokerIdRaw, mailboxIdRaw, tsRaw, nonce, returnPathB64, sig] = parts;
+  } else {
+    [brokerIdRaw, mailboxIdRaw, tsRaw, nonce, sig] = parts;
+    returnPathB64 = "";
+  }
+
+  const payload = `${brokerIdRaw}.${mailboxIdRaw}.${tsRaw}.${nonce}.${returnPathB64}`;
   const expected = signOffice365State(payload);
   if (sig !== expected) return { valid: false };
 
@@ -202,7 +224,11 @@ function verifyOffice365State(stateRaw: string): {
     return { valid: false };
   }
 
-  return { valid: true, brokerId, mailboxId };
+  const returnPath = returnPathB64
+    ? Buffer.from(returnPathB64, "base64url").toString("utf8")
+    : undefined;
+
+  return { valid: true, brokerId, mailboxId, returnPath };
 }
 
 const stripHtmlForStorage = (html: string) =>
@@ -318,7 +344,7 @@ async function sendEmailMessageViaOffice365(options: {
     }
 
     await axios.post(
-      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}/sendMail`,
+      `https://graph.microsoft.com/v1.0/me/sendMail`,
       {
         message: {
           subject: options.subject,
@@ -369,18 +395,29 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
   let errors = 0;
 
   const accessToken = await getOffice365AccessToken(mailbox);
-  const { data } = await axios.get(
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}/mailFolders/Inbox/messages`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      params: {
-        $top: 50,
-        $orderby: "receivedDateTime desc",
-        $select:
-          "id,subject,from,toRecipients,internetMessageId,inReplyTo,conversationId,receivedDateTime,bodyPreview,body,internetMessageHeaders",
+  let data: any;
+  try {
+    const response = await axios.get(
+      `https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: {
+          $top: 50,
+          $orderby: "receivedDateTime desc",
+          $select:
+            "id,subject,from,toRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body",
+        },
       },
-    },
-  );
+    );
+    data = response.data;
+  } catch (graphError: any) {
+    const graphErrBody = graphError?.response?.data;
+    console.error(
+      "Graph API error fetching inbox:",
+      JSON.stringify(graphErrBody, null, 2),
+    );
+    throw graphError;
+  }
 
   const messages: any[] = Array.isArray(data?.value) ? data.value : [];
   messages.reverse();
@@ -475,6 +512,17 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
           clientId = clientRows[0].id ?? null;
           brokerId = clientRows[0].assigned_broker_id ?? null;
         }
+      }
+
+      // Skip emails from unknown senders with no existing thread — prevents
+      // random inbox emails (spam, alerts, promotions) from polluting Conversations
+      if (clientId === null && threadRows.length === 0) {
+        continue;
+      }
+
+      // Always fall back to the mailbox owner so emails are always visible
+      if (brokerId === null) {
+        brokerId = mailbox.assigned_broker_id ?? null;
       }
 
       const [insertResult] = (await pool.query(
@@ -14287,6 +14335,7 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
       display_name,
       is_shared = true,
       target_broker_id,
+      return_path,
     } = req.body || {};
 
     // Admin can assign to another broker; otherwise use self
@@ -14354,7 +14403,15 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
     }
 
     const mailboxId = Number(mailboxRows[0].id);
-    const state = createOffice365State(Number(brokerId), mailboxId);
+    const sanitizedReturnPath =
+      return_path && /^\/[a-zA-Z0-9/_?=&-]*$/.test(String(return_path))
+        ? String(return_path)
+        : undefined;
+    const state = createOffice365State(
+      Number(brokerId),
+      mailboxId,
+      sanitizedReturnPath,
+    );
 
     const authUrl =
       `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
@@ -14392,33 +14449,39 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
     const state = String(req.query.state || "");
     const oauthError = String(req.query.error || "");
 
-    const clientUrl =
-      process.env.CLIENT_URL || process.env.BASE_URL || "http://localhost:8080";
+    // ADMIN_URL is the broker admin app origin (e.g. https://admin.encoremortgage.org).
+    // Falls back to BASE_URL for local dev.
+    const adminUrl =
+      process.env.ADMIN_URL || process.env.BASE_URL || "http://localhost:8080";
 
     if (oauthError) {
       return res.redirect(
-        `${clientUrl}/conversations?office365=error&reason=${encodeURIComponent(oauthError)}`,
+        `${adminUrl}/conversations?office365=error&reason=${encodeURIComponent(oauthError)}`,
       );
     }
 
     const verified = verifyOffice365State(state);
     if (!verified.valid || !verified.mailboxId) {
       return res.redirect(
-        `${clientUrl}/conversations?office365=error&reason=invalid_state`,
+        `${adminUrl}/conversations?office365=error&reason=invalid_state`,
       );
     }
 
     if (!code) {
       return res.redirect(
-        `${clientUrl}/conversations?office365=error&reason=missing_code`,
+        `${adminUrl}/conversations?office365=error&reason=missing_code`,
       );
     }
 
-    const { tenantId, clientId, clientSecret, redirectUri } =
-      getOffice365OAuthConfig();
+    const {
+      tenantId,
+      clientId,
+      clientSecret,
+      redirectUri: oauthRedirectUri,
+    } = getOffice365OAuthConfig();
     if (!tenantId || !clientId || !clientSecret) {
       return res.redirect(
-        `${clientUrl}/conversations?office365=error&reason=missing_oauth_env`,
+        `${adminUrl}/conversations?office365=error&reason=missing_oauth_env`,
       );
     }
 
@@ -14428,7 +14491,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
     params.set("client_id", clientId);
     params.set("client_secret", clientSecret);
     params.set("code", code);
-    params.set("redirect_uri", redirectUri);
+    params.set("redirect_uri", oauthRedirectUri);
     params.set("scope", OFFICE365_SCOPES.join(" "));
 
     const { data } = await axios.post(tokenUrl, params.toString(), {
@@ -14480,13 +14543,14 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       );
     }
 
-    return res.redirect(`${clientUrl}/conversations?office365=connected`);
+    const redirectPath = verified.returnPath || "/conversations";
+    return res.redirect(`${adminUrl}${redirectPath}?office365=connected`);
   } catch (error) {
     console.error("Office365 callback error:", error);
-    const clientUrl =
-      process.env.CLIENT_URL || process.env.BASE_URL || "http://localhost:8080";
+    const errAdminUrl =
+      process.env.ADMIN_URL || process.env.BASE_URL || "http://localhost:8080";
     return res.redirect(
-      `${clientUrl}/conversations?office365=error&reason=callback_failed`,
+      `${errAdminUrl}/conversations?office365=error&reason=callback_failed`,
     );
   }
 };
@@ -14563,6 +14627,69 @@ const handleAssignConversationMailbox: RequestHandler = async (req, res) => {
       success: false,
       message: error?.message || "Failed to assign mailbox",
     });
+  }
+};
+
+/**
+ * DELETE /api/conversations/mailboxes/:mailboxId
+ *
+ * Disconnects a mailbox by wiping OAuth tokens and setting status to 'disconnected'.
+ * Admins can disconnect any mailbox; regular brokers can only disconnect their own.
+ */
+const handleDisconnectConversationMailbox: RequestHandler = async (
+  req,
+  res,
+) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const mailboxId = Number(req.params.mailboxId);
+    if (!Number.isFinite(mailboxId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid mailboxId" });
+    }
+
+    // Fetch mailbox to check ownership
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, assigned_broker_id, is_shared FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [mailboxId, MORTGAGE_TENANT_ID],
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Mailbox not found" });
+    }
+
+    const mb = rows[0];
+    const isAdmin = brokerRole === "admin" || brokerRole === "mortgage_banker";
+    const isOwner = mb.assigned_broker_id === brokerId;
+
+    if (!isAdmin && !isOwner && !mb.is_shared) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to disconnect this mailbox",
+      });
+    }
+
+    await pool.query(
+      `UPDATE conversation_email_mailboxes
+       SET oauth_access_token  = NULL,
+           oauth_refresh_token = NULL,
+           oauth_expires_at    = NULL,
+           status              = 'disconnected',
+           updated_at          = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [mailboxId, MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({ success: true, mailbox_id: mailboxId });
+  } catch (error: any) {
+    console.error("Disconnect mailbox error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to disconnect mailbox" });
   }
 };
 
@@ -22747,6 +22874,11 @@ function createServer() {
     "/api/conversations/mailboxes/:mailboxId/assign",
     verifyBrokerSession,
     handleAssignConversationMailbox,
+  );
+  expressApp.delete(
+    "/api/conversations/mailboxes/:mailboxId",
+    verifyBrokerSession,
+    handleDisconnectConversationMailbox,
   );
   expressApp.get(
     "/api/conversations/:conversationId/messages",

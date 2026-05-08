@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import {
@@ -62,6 +63,7 @@ import {
 } from "@/store/slices/brokerAuthSlice";
 import {
   connectOffice365Mailbox,
+  disconnectConversationMailbox,
   fetchConversationMailboxes,
   syncConversationMailbox,
 } from "@/store/slices/conversationsSlice";
@@ -157,6 +159,30 @@ const profileSchema = Yup.object({
 const BrokerProfile = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  // Handle Office365 OAuth callback redirect
+  useEffect(() => {
+    const result = searchParams.get("office365");
+    if (!result) return;
+    if (result === "connected") {
+      toast({
+        title: "Email Inbox connected",
+        description: "Your Office 365 mailbox is now active.",
+      });
+      dispatch(fetchConversationMailboxes());
+    } else if (result === "error") {
+      const reason = searchParams.get("reason") || "unknown_error";
+      toast({
+        title: "Connection failed",
+        description: `Could not connect the Office 365 mailbox: ${reason.replace(/_/g, " ")}.`,
+        variant: "destructive",
+      });
+    }
+    navigate("/admin/profile", { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const { user, profileLoading, profileSaving, avatarUploading, profileError } =
     useAppSelector((state) => state.brokerAuth);
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
@@ -208,23 +234,86 @@ const BrokerProfile = () => {
     dispatch(fetchConversationMailboxes());
   }, [dispatch]);
 
-  const handleConnectMyMailbox = async () => {
-    const email = mailboxEmailInput.trim();
+  const handleConnectMyMailbox = async (emailOverride?: string) => {
+    const email = (emailOverride ?? mailboxEmailInput).trim();
     if (!email.includes("@")) return;
+
+    const openAuthPopup = (url: string) => {
+      const w = 600;
+      const h = 720;
+      const left = Math.round(window.screenX + (window.outerWidth - w) / 2);
+      const top = Math.round(window.screenY + (window.outerHeight - h) / 2);
+      const popup = window.open(
+        url,
+        "office365_oauth",
+        `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`,
+      );
+      if (!popup) {
+        // Popup blocked — fall back to full redirect
+        window.location.href = url;
+        return;
+      }
+      const onMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.type !== "office365_callback") return;
+        window.removeEventListener("message", onMessage);
+        try {
+          popup.close();
+        } catch (_) {}
+        if (event.data.result === "connected") {
+          toast({
+            title: "Email Inbox connected",
+            description: "Your Office 365 mailbox is now active.",
+          });
+          dispatch(fetchConversationMailboxes());
+        } else {
+          const reason = event.data.reason || "unknown_error";
+          toast({
+            title: "Connection failed",
+            description: `Could not connect Office 365: ${String(reason).replace(/_/g, " ")}.`,
+            variant: "destructive",
+          });
+        }
+      };
+      window.addEventListener("message", onMessage);
+    };
+
     try {
       const result = await dispatch(
         connectOffice365Mailbox({
           mailbox_email: email,
           is_shared: false,
+          return_path: "/admin/profile",
         }),
       ).unwrap();
-      if (result.auth_url) window.location.href = result.auth_url;
+      if (result.auth_url) openAuthPopup(result.auth_url);
     } catch (err: any) {
       toast({
         title: "Connection failed",
         description: err || "Could not start Office365 authentication",
         variant: "destructive",
       });
+    }
+  };
+
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+
+  const handleDisconnectMyMailbox = async (mailboxId: number) => {
+    setIsDisconnecting(true);
+    try {
+      await dispatch(disconnectConversationMailbox(mailboxId)).unwrap();
+      toast({
+        title: "Mailbox disconnected",
+        description: "You can connect a new account at any time.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Disconnect failed",
+        description: err || "Could not disconnect the mailbox",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDisconnecting(false);
     }
   };
 
@@ -1366,15 +1455,29 @@ const BrokerProfile = () => {
                           variant="outline"
                           size="sm"
                           className="h-8 text-xs shrink-0"
-                          onClick={() => {
-                            setMailboxEmailInput(myOwnMailbox.mailbox_email);
-                            handleConnectMyMailbox();
-                          }}
+                          onClick={() =>
+                            handleConnectMyMailbox(myOwnMailbox.mailbox_email)
+                          }
                           disabled={isConnectingMailbox}
                         >
                           Re-authorize
                         </Button>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={() =>
+                          handleDisconnectMyMailbox(myOwnMailbox.id)
+                        }
+                        disabled={isDisconnecting}
+                      >
+                        {isDisconnecting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          "Disconnect"
+                        )}
+                      </Button>
                     </div>
                   ) : (
                     /* Not connected — show connect form */
@@ -1398,7 +1501,7 @@ const BrokerProfile = () => {
                         <Button
                           size="sm"
                           className="h-9 gap-1.5 shrink-0"
-                          onClick={handleConnectMyMailbox}
+                          onClick={() => handleConnectMyMailbox()}
                           disabled={
                             isConnectingMailbox ||
                             !mailboxEmailInput.trim().includes("@")
