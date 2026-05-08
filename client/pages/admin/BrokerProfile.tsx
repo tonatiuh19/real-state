@@ -174,9 +174,15 @@ const BrokerProfile = () => {
       dispatch(fetchConversationMailboxes());
     } else if (result === "error") {
       const reason = searchParams.get("reason") || "unknown_error";
+      const expected = searchParams.get("expected");
+      const got = searchParams.get("got");
+      const description =
+        reason === "account_mismatch" && expected && got
+          ? `Wrong Microsoft account signed in. Expected ${expected} but got ${got}. Please sign in with the correct account.`
+          : `Could not connect the Office 365 mailbox: ${reason.replace(/_/g, " ")}.`;
       toast({
         title: "Connection failed",
-        description: `Could not connect the Office 365 mailbox: ${reason.replace(/_/g, " ")}.`,
+        description,
         variant: "destructive",
       });
     }

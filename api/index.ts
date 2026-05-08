@@ -14564,6 +14564,30 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       console.warn("Could not verify /me identity after OAuth:", meErr);
     }
 
+    // Hard guard: fetch the expected mailbox email from the DB and reject if
+    // the authenticated account is a completely different person.
+    // This prevents a cached browser session (e.g. a different broker's MS
+    // account) from silently overwriting another broker's mailbox token.
+    const [expectedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT mailbox_email FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [verified.mailboxId, MORTGAGE_TENANT_ID],
+    );
+    const expectedEmail = (expectedRows[0]?.mailbox_email || "")
+      .toLowerCase()
+      .trim();
+
+    if (actualEmail && expectedEmail && actualEmail !== expectedEmail) {
+      console.error(
+        `Office365 OAuth identity mismatch: expected="${expectedEmail}" got="${actualEmail}" mailboxId=${verified.mailboxId}`,
+      );
+      return res.redirect(
+        `${adminUrl}/admin/profile?office365=error&reason=account_mismatch&expected=${encodeURIComponent(expectedEmail)}&got=${encodeURIComponent(actualEmail)}`,
+      );
+    }
+
+    // Identity verified — store the token. mailbox_email is NOT overwritten;
+    // it was already validated above and must not change after the guard passes.
     await pool.query(
       `UPDATE conversation_email_mailboxes
        SET oauth_access_token = ?,
@@ -14571,7 +14595,6 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
            oauth_expires_at = ?,
            office365_tenant_id = ?,
            office365_client_id = ?,
-           ${actualEmail ? "mailbox_email = ?," : ""}
            status = 'active',
            updated_at = NOW()
        WHERE id = ? AND tenant_id = ?`,
@@ -14581,7 +14604,6 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
         expiresAt,
         tenantId,
         clientId,
-        ...(actualEmail ? [actualEmail] : []),
         verified.mailboxId,
         MORTGAGE_TENANT_ID,
       ],
