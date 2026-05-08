@@ -1390,7 +1390,9 @@ const BrokerProfile = () => {
                               : "Connected — not yet synced"
                             : myOwnMailbox.status === "error"
                               ? myOwnMailbox.last_sync_error || "Sync error"
-                              : "Pending authorization"}
+                              : myOwnMailbox.status === "disabled"
+                                ? "Disconnected — click Connect to re-link"
+                                : "Pending authorization"}
                         </p>
                       </div>
                       {myOwnMailbox.status === "active" && (
@@ -1410,7 +1412,9 @@ const BrokerProfile = () => {
                           Sync now
                         </Button>
                       )}
-                      {myOwnMailbox.status === "pending" && (
+                      {(myOwnMailbox.status === "pending" ||
+                        myOwnMailbox.status === "disabled" ||
+                        myOwnMailbox.status === "error") && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -1420,7 +1424,9 @@ const BrokerProfile = () => {
                           }
                           disabled={isConnectingMailbox}
                         >
-                          Re-authorize
+                          {myOwnMailbox.status === "disabled"
+                            ? "Connect"
+                            : "Re-authorize"}
                         </Button>
                       )}
                       <Button

@@ -14687,7 +14687,7 @@ const handleAssignConversationMailbox: RequestHandler = async (req, res) => {
 /**
  * DELETE /api/conversations/mailboxes/:mailboxId
  *
- * Disconnects a mailbox by wiping OAuth tokens and setting status to 'disconnected'.
+ * Disconnects a mailbox by wiping OAuth tokens and setting status to 'disabled'.
  * Admins can disconnect any mailbox; regular brokers can only disconnect their own.
  */
 const handleDisconnectConversationMailbox: RequestHandler = async (
@@ -14732,9 +14732,11 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
        SET oauth_access_token  = NULL,
            oauth_refresh_token = NULL,
            oauth_expires_at    = NULL,
-           status              = 'disconnected',
+           last_graph_delta_link = NULL,
+           status              = 'disabled',
            updated_at          = NOW()
        WHERE id = ? AND tenant_id = ?`,
+      // 'disabled' is the correct ENUM value (valid: pending/active/disabled/error)
       [mailboxId, MORTGAGE_TENANT_ID],
     );
 
