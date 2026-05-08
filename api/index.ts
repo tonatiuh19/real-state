@@ -511,17 +511,25 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         if (clientRows.length > 0) {
           clientId = clientRows[0].id ?? null;
           brokerId = clientRows[0].assigned_broker_id ?? null;
+        } else {
+          // Also check leads table
+          const [leadRows] = await pool.query<RowDataPacket[]>(
+            `SELECT id, assigned_broker_id FROM leads
+             WHERE tenant_id = ? AND LOWER(email) = ?
+             LIMIT 1`,
+            [MORTGAGE_TENANT_ID, String(fromEmail).toLowerCase()],
+          );
+          if (leadRows.length > 0) {
+            leadId = leadRows[0].id ?? null;
+            brokerId = leadRows[0].assigned_broker_id ?? null;
+          }
         }
       }
 
-      // Skip obviously automated/no-reply senders with no existing thread
-      const automatedPattern =
-        /no.?reply|donotreply|noreply|notifications?@|alerts?@|mailer@|bounce@|postmaster@|support@.*\.(godaddy|microsoft|google|amazon|apple|linkedin|facebook|twitter|ubisoft|ea\.com)/i;
-      if (
-        clientId === null &&
-        threadRows.length === 0 &&
-        automatedPattern.test(fromEmail)
-      ) {
+      // Only import emails from known clients/leads or replies to existing threads.
+      // This prevents random inbox noise (newsletters, bank alerts, industry emails)
+      // from polluting Conversations.
+      if (clientId === null && leadId === null && threadRows.length === 0) {
         continue;
       }
 
