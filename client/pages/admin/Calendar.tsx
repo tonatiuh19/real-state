@@ -694,6 +694,17 @@ function MeetingCard({
               "{meeting.notes}"
             </p>
           )}
+          {meeting.meeting_type === "video" && meeting.zoom_join_url && (
+            <a
+              href={meeting.zoom_join_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 mt-2 text-xs text-blue-500 hover:text-blue-400 font-medium"
+            >
+              <Video className="h-3 w-3" /> Join Zoom
+            </a>
+          )}
         </div>
         <button
           onClick={() => onEdit(meeting)}
@@ -1046,8 +1057,19 @@ function UnifiedCalendarView({
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {formatTime(m.meeting_time)} ·{" "}
-                      {m.meeting_type === "phone" ? "Phone" : "Video"}
+                      {m.meeting_type === "phone" ? "Phone" : "Video (Zoom)"}
                     </p>
+                    {m.meeting_type === "video" && m.zoom_join_url && (
+                      <a
+                        href={m.zoom_join_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-400 mt-0.5"
+                      >
+                        <Video className="h-3 w-3" /> Join Zoom
+                      </a>
+                    )}
                   </div>
                   <span
                     className={cn(
@@ -1175,6 +1197,16 @@ function EditMeetingDialog({
               {formatDate(meeting.meeting_date)} at{" "}
               {formatTime(meeting.meeting_time)}
             </p>
+            {meeting.meeting_type === "video" && meeting.zoom_join_url && (
+              <a
+                href={meeting.zoom_join_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 mt-2 text-xs text-blue-500 hover:text-blue-400 font-medium"
+              >
+                <Video className="h-3.5 w-3.5" /> Join Zoom Meeting
+              </a>
+            )}
           </div>
           <div>
             <Label className="text-foreground/80 text-sm mb-1.5 block">
@@ -1206,19 +1238,15 @@ function EditMeetingDialog({
             </Label>
             <div className="grid grid-cols-2 gap-2">
               {(["phone", "video"] as MeetingType[]).map((t) => {
-                const isZoom = t === "video";
                 return (
                   <button
                     key={t}
-                    disabled={isZoom}
-                    onClick={() => !isZoom && setMeetingType(t)}
+                    onClick={() => setMeetingType(t)}
                     className={cn(
                       "relative flex items-center gap-2 p-3 rounded-xl border transition-all text-sm font-medium",
-                      isZoom
-                        ? "border-border bg-muted/20 text-muted-foreground/50 cursor-not-allowed opacity-60"
-                        : meetingType === t
-                          ? "border-primary bg-primary/15 text-foreground"
-                          : "border-border bg-muted/40 text-muted-foreground hover:border-border",
+                      meetingType === t
+                        ? "border-primary bg-primary/15 text-foreground"
+                        : "border-border bg-muted/40 text-muted-foreground hover:border-border",
                     )}
                   >
                     {t === "phone" ? (
@@ -1226,12 +1254,7 @@ function EditMeetingDialog({
                     ) : (
                       <Video className="h-4 w-4" />
                     )}
-                    {t === "phone" ? "Phone" : "Video"}
-                    {isZoom && (
-                      <span className="ml-auto inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200 rounded px-1 py-0.5">
-                        <Lock className="h-2.5 w-2.5" />
-                      </span>
-                    )}
+                    {t === "phone" ? "Phone" : "Video (Zoom)"}
                   </button>
                 );
               })}
@@ -1826,22 +1849,16 @@ function CreateMeetingDialog({
             </Label>
             <div className="grid grid-cols-2 gap-2">
               {(["phone", "video"] as MeetingType[]).map((t) => {
-                const isZoom = t === "video";
                 return (
                   <button
                     key={t}
                     type="button"
-                    disabled={isZoom}
-                    onClick={() =>
-                      !isZoom && formik.setFieldValue("meeting_type", t)
-                    }
+                    onClick={() => formik.setFieldValue("meeting_type", t)}
                     className={cn(
                       "relative flex items-center gap-2 p-3 rounded-xl border transition-all text-sm font-medium",
-                      isZoom
-                        ? "border-border bg-muted/20 text-muted-foreground/50 cursor-not-allowed opacity-60"
-                        : formik.values.meeting_type === t
-                          ? "border-primary bg-primary/15 text-foreground"
-                          : "border-border bg-muted/40 text-muted-foreground hover:border-border",
+                      formik.values.meeting_type === t
+                        ? "border-primary bg-primary/15 text-foreground"
+                        : "border-border bg-muted/40 text-muted-foreground hover:border-border",
                     )}
                   >
                     {t === "phone" ? (
@@ -1849,12 +1866,7 @@ function CreateMeetingDialog({
                     ) : (
                       <Video className="h-4 w-4" />
                     )}
-                    {t === "phone" ? "Phone" : "Video"}
-                    {isZoom && (
-                      <span className="ml-auto inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200 rounded px-1 py-0.5">
-                        <Lock className="h-2.5 w-2.5" />
-                      </span>
-                    )}
+                    {t === "phone" ? "Phone" : "Video (Zoom)"}
                   </button>
                 );
               })}
@@ -1933,8 +1945,10 @@ function SettingsPanel() {
   const [localAvailability, setLocalAvailability] = useState<
     SchedulerAvailability[]
   >([]);
-  const [saved, setSaved] = useState(false);
+  const [savingSection, setSavingSection] = useState<string | null>(null);
+  const [savedSection, setSavedSection] = useState<string | null>(null);
   const [availabilityDirty, setAvailabilityDirty] = useState(false);
+  const [connectionMethodsDirty, setConnectionMethodsDirty] = useState(false);
 
   // Blocked range form state
   const [blockStart, setBlockStart] = useState("");
@@ -1980,9 +1994,9 @@ function SettingsPanel() {
           })),
         }),
       );
-      setSaved(true);
+      setSavedSection("form");
       setAvailabilityDirty(false);
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => setSavedSection(null), 2000);
       dispatch(fetchSchedulerSettings());
       formik.resetForm({ values });
     },
@@ -2014,45 +2028,85 @@ function SettingsPanel() {
       </div>
     );
 
-  const isFormDirty = formik.dirty || availabilityDirty;
+  const meetingDetailsDirty =
+    formik.values.meeting_title !== formik.initialValues.meeting_title ||
+    formik.values.meeting_description !==
+      formik.initialValues.meeting_description;
 
-  return (
-    <form onSubmit={formik.handleSubmit} className="space-y-6 max-w-2xl">
-      {/* ── Sticky save header ───────────────────────────────────────── */}
-      <div className="flex items-center justify-between pb-2 border-b border-border/50">
-        <div>
-          <h2 className="text-base font-semibold text-foreground">
-            Scheduling Rules
-          </h2>
-          {isFormDirty && !saved && (
-            <p className="text-xs text-amber-500 mt-0.5">
-              You have unsaved changes
-            </p>
-          )}
-        </div>
+  const schedulingRulesDirty =
+    formik.values.slot_duration_minutes !==
+      formik.initialValues.slot_duration_minutes ||
+    formik.values.buffer_time_minutes !==
+      formik.initialValues.buffer_time_minutes ||
+    formik.values.advance_booking_days !==
+      formik.initialValues.advance_booking_days ||
+    formik.values.min_booking_hours !==
+      formik.initialValues.min_booking_hours ||
+    formik.values.timezone !== formik.initialValues.timezone;
+
+  const handleSectionSave = async (section: string) => {
+    setSavingSection(section);
+    await dispatch(
+      updateSchedulerSettings({
+        ...formik.values,
+        availability: localAvailability.map((a) => ({
+          day_of_week: a.day_of_week,
+          start_time: a.start_time,
+          end_time: a.end_time,
+          is_active: a.is_active,
+        })),
+      }),
+    );
+    setSavingSection(null);
+    if (section === "availability") setAvailabilityDirty(false);
+    if (section === "connection-methods") setConnectionMethodsDirty(false);
+    formik.resetForm({ values: formik.values });
+    setSavedSection(section);
+    setTimeout(() => setSavedSection(null), 2000);
+    dispatch(fetchSchedulerSettings());
+  };
+
+  const SectionSaveBar = ({
+    section,
+    isDirty,
+  }: {
+    section: string;
+    isDirty: boolean;
+  }) => {
+    if (!isDirty && savedSection !== section) return null;
+    const isSaving = savingSection === section;
+    return (
+      <div className="flex items-center justify-between pt-3 border-t border-border/30">
+        {savedSection === section ? (
+          <span className="text-xs text-green-500 flex items-center gap-1">
+            <CheckCircle2 className="h-3.5 w-3.5" /> Saved!
+          </span>
+        ) : (
+          <span className="text-xs text-amber-500">Unsaved changes</span>
+        )}
         <Button
-          type="submit"
-          disabled={isSavingSettings || !isFormDirty}
+          type="button"
           size="sm"
+          disabled={isSaving || !isDirty}
+          onClick={() => handleSectionSave(section)}
           className="bg-primary hover:bg-primary/90 text-primary-foreground disabled:opacity-40"
         >
-          {isSavingSettings ? (
+          {isSaving ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Saving…
             </>
-          ) : saved ? (
-            <>
-              <CheckCircle2 className="h-3.5 w-3.5 mr-1.5 text-green-400" />{" "}
-              Saved!
-            </>
           ) : (
             <>
-              <Save className="h-3.5 w-3.5 mr-1.5" /> Save Settings
+              <Save className="h-3.5 w-3.5 mr-1.5" /> Save
             </>
           )}
         </Button>
       </div>
+    );
+  };
 
+  return (
+    <div className="space-y-6 max-w-2xl">
       {/* Enable */}
       <div className="rounded-xl border border-border/50 bg-muted/30 p-5">
         <div className="flex items-center justify-between">
@@ -2066,7 +2120,24 @@ function SettingsPanel() {
           </div>
           <Switch
             checked={formik.values.is_enabled}
-            onCheckedChange={(v) => formik.setFieldValue("is_enabled", v)}
+            onCheckedChange={async (v) => {
+              const newValues = { ...formik.values, is_enabled: v };
+              formik.setFieldValue("is_enabled", v);
+              await dispatch(
+                updateSchedulerSettings({
+                  ...newValues,
+                  availability: localAvailability.map((a) => ({
+                    day_of_week: a.day_of_week,
+                    start_time: a.start_time,
+                    end_time: a.end_time,
+                    is_active: a.is_active,
+                  })),
+                }),
+              );
+              setSavedSection("booking-status");
+              setTimeout(() => setSavedSection(null), 2000);
+              dispatch(fetchSchedulerSettings());
+            }}
             className="data-[state=checked]:bg-green-500"
           />
         </div>
@@ -2095,6 +2166,10 @@ function SettingsPanel() {
             placeholder="Short description shown on the public booking page…"
           />
         </div>
+        <SectionSaveBar
+          section="meeting-details"
+          isDirty={meetingDetailsDirty}
+        />
       </div>
 
       {/* Scheduling rules */}
@@ -2299,6 +2374,10 @@ function SettingsPanel() {
             )}
           </AnimatePresence>
         </div>
+        <SectionSaveBar
+          section="scheduling-rules"
+          isDirty={schedulingRulesDirty}
+        />
       </div>
 
       {/* Connection methods */}
@@ -2320,43 +2399,35 @@ function SettingsPanel() {
             icon: <Video className="h-4 w-4 text-blue-400" />,
           },
         ].map(({ key, label, sub, icon }, i) => {
-          const isZoom = key === "allow_video";
           return (
             <div
               key={key}
               className={cn(
                 "flex items-center justify-between py-2",
                 i > 0 && "border-t border-border/30",
-                isZoom && "opacity-50",
               )}
             >
               <div className="flex items-center gap-3">
                 {icon}
                 <div>
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-foreground text-sm font-medium">
-                      {label}
-                    </p>
-                    {isZoom && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5">
-                        <Lock className="h-2.5 w-2.5" /> Coming Soon
-                      </span>
-                    )}
-                  </div>
+                  <p className="text-foreground text-sm font-medium">{label}</p>
                   <p className="text-xs text-muted-foreground">{sub}</p>
                 </div>
               </div>
               <Switch
-                checked={isZoom ? false : (formik.values as any)[key]}
-                onCheckedChange={
-                  isZoom ? undefined : (v) => formik.setFieldValue(key, v)
-                }
-                disabled={isZoom}
-                className={isZoom ? "cursor-not-allowed" : ""}
+                checked={(formik.values as any)[key]}
+                onCheckedChange={(v) => {
+                  formik.setFieldValue(key, v);
+                  setConnectionMethodsDirty(true);
+                }}
               />
             </div>
           );
         })}
+        <SectionSaveBar
+          section="connection-methods"
+          isDirty={connectionMethodsDirty}
+        />
       </div>
 
       {/* Availability */}
@@ -2412,6 +2483,7 @@ function SettingsPanel() {
             </div>
           ))}
         </div>
+        <SectionSaveBar section="availability" isDirty={availabilityDirty} />
       </div>
 
       {/* ── Blocked Date/Time Ranges ─────────────────────────────────── */}
@@ -2556,7 +2628,7 @@ function SettingsPanel() {
           </div>
         )}
       </div>
-    </form>
+    </div>
   );
 }
 
@@ -2657,11 +2729,17 @@ const AdminCalendar: React.FC = () => {
     error: calendarError,
   } = useAppSelector((s) => s.calendarEvents);
   const { user } = useAppSelector((s) => s.brokerAuth);
+  const { brokers: brokersList } = useAppSelector((s) => s.brokers);
 
   const isPartner = user?.role === "broker";
+  const isAdmin = user?.role === "admin";
 
   const [activeTab, setActiveTab] = useState<string>("calendar");
   const [statusFilter, setStatusFilter] = useState<string>("active");
+  const [meetingTimeFilter, setMeetingTimeFilter] = useState<
+    "upcoming" | "past"
+  >("upcoming");
+  const [brokerFilter, setBrokerFilter] = useState<number | null>(null);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editingMeeting, setEditingMeeting] = useState<ScheduledMeeting | null>(
@@ -2729,13 +2807,28 @@ const AdminCalendar: React.FC = () => {
 
   useEffect(() => {
     dispatch(fetchSchedulerSettings());
-    dispatch(fetchScheduledMeetings());
     // Initial load: calendar tab is active, so fetch the current month
     doFetchCalendarView(new Date());
     dispatch(fetchClients({ page: 1, limit: 200 }));
+    if (isAdmin) dispatch(fetchBrokers({ page: 1, limit: 100 }));
   }, [dispatch]);
 
-  // Show toast when a calendar error surfaces
+  // Re-fetch meetings whenever time filter or broker filter changes
+  const refetchMeetings = useCallback(
+    (timeFilter = meetingTimeFilter, bkFilter = brokerFilter) => {
+      const today = format(new Date(), "yyyy-MM-dd");
+      const params: { from?: string; to?: string; broker_id?: number } =
+        timeFilter === "upcoming" ? { from: today } : { to: today };
+      if (bkFilter !== null) params.broker_id = bkFilter;
+      dispatch(fetchScheduledMeetings(params));
+    },
+    [dispatch, meetingTimeFilter, brokerFilter],
+  );
+
+  useEffect(() => {
+    refetchMeetings(meetingTimeFilter, brokerFilter);
+  }, [meetingTimeFilter, brokerFilter]);
+
   useEffect(() => {
     if (calendarError) {
       toast({
@@ -2770,18 +2863,18 @@ const AdminCalendar: React.FC = () => {
         updateScheduledMeeting({ meetingId: id, payload: updates }),
       );
       setEditingMeeting(null);
-      dispatch(fetchScheduledMeetings());
+      refetchMeetings();
     },
-    [dispatch],
+    [dispatch, refetchMeetings],
   );
 
   const handleCreateMeeting = useCallback(
     async (values: any) => {
       await dispatch(createScheduledMeeting(values));
       setShowCreateMeeting(false);
-      dispatch(fetchScheduledMeetings());
+      refetchMeetings();
     },
-    [dispatch],
+    [dispatch, refetchMeetings],
   );
 
   const handleCreateEvent = useCallback(
@@ -2942,27 +3035,39 @@ const AdminCalendar: React.FC = () => {
     eventPage,
   ]);
 
-  const filteredMeetings = meetings.filter((m) => {
+  const today = format(new Date(), "yyyy-MM-dd");
+
+  // Safety filter: even if backend returns broader data, non-admin users should only see their own meetings.
+  const ownershipScopedMeetings = isAdmin
+    ? meetings
+    : meetings.filter((m) => m.broker_id === user?.id);
+
+  const filteredMeetings = ownershipScopedMeetings.filter((m) => {
     const matchStatus =
       statusFilter === "all" ||
       (statusFilter === "active" && m.status !== "cancelled") ||
       m.status === statusFilter;
+    const meetingDate = String(m.meeting_date).split("T")[0];
+    const matchTime =
+      meetingTimeFilter === "upcoming"
+        ? meetingDate >= today
+        : meetingDate < today;
     const q = search.toLowerCase();
     const matchSearch =
       !q ||
       m.client_name.toLowerCase().includes(q) ||
       m.client_email.toLowerCase().includes(q);
-    return matchStatus && matchSearch;
+    return matchStatus && matchTime && matchSearch;
   });
 
   // Events are filtered/sorted server-side; no client-side filter needed.
   const filteredEvents = events;
 
   // Stats
-  const upcomingMeetings = meetings.filter(
-    (m) => m.status === "confirmed",
+  const upcomingMeetings = ownershipScopedMeetings.filter(
+    (m) =>
+      m.status === "confirmed" && String(m.meeting_date).split("T")[0] >= today,
   ).length;
-  const today = format(new Date(), "yyyy-MM-dd");
   const upcomingEvents = events.filter((e) => {
     const base = e.event_date.split("T")[0];
     // For yearly recurring events, project to current year for comparison
@@ -2992,7 +3097,12 @@ const AdminCalendar: React.FC = () => {
         description="Manage your calendar, meetings, and important dates"
       />
 
-      <div className="flex flex-col h-full p-4 sm:p-6 lg:p-8 gap-4 sm:gap-5">
+      <div
+        className={cn(
+          "flex flex-col p-4 sm:p-6 lg:p-8 gap-4 sm:gap-5",
+          activeTab !== "settings" && "h-full",
+        )}
+      >
         {/* Header */}
         <PageHeader
           icon={<CalendarDays className="h-7 w-7 text-primary" />}
@@ -3003,7 +3113,7 @@ const AdminCalendar: React.FC = () => {
             <div className="flex items-center gap-2 flex-wrap">
               <Button
                 onClick={() => {
-                  dispatch(fetchScheduledMeetings());
+                  refetchMeetings();
                   if (activeTab === "calendar") {
                     doFetchCalendarView(calendarViewDate);
                   } else {
@@ -3083,7 +3193,12 @@ const AdminCalendar: React.FC = () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex-1 flex flex-col min-h-0">
+        <div
+          className={cn(
+            "flex flex-col",
+            activeTab !== "settings" && "flex-1 min-h-0",
+          )}
+        >
           {/* Custom underline-style tab bar */}
           <div className="shrink-0 flex items-end gap-0 border-b border-border/50 overflow-x-auto scrollbar-none">
             {(
@@ -3098,9 +3213,7 @@ const AdminCalendar: React.FC = () => {
                   value: "meetings",
                   label: "Meetings",
                   icon: <Phone className="h-4 w-4" />,
-                  badge:
-                    meetings.filter((m) => m.status === "confirmed").length ||
-                    null,
+                  badge: upcomingMeetings || null,
                 },
                 {
                   value: "events",
@@ -3173,7 +3286,7 @@ const AdminCalendar: React.FC = () => {
                   </div>
                 ) : (
                   <UnifiedCalendarView
-                    meetings={meetings}
+                    meetings={ownershipScopedMeetings}
                     events={events}
                     onEditMeeting={setEditingMeeting}
                     onEditEvent={setEditingEvent}
@@ -3188,6 +3301,24 @@ const AdminCalendar: React.FC = () => {
           {/* ── Meetings Tab ── */}
           {activeTab === "meetings" && (
             <div className="mt-4 flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pb-6">
+              {/* Upcoming / Past toggle */}
+              <div className="flex items-center gap-1 p-1 bg-muted/40 rounded-xl border border-border/50 self-start">
+                {(["upcoming", "past"] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setMeetingTimeFilter(t)}
+                    className={cn(
+                      "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
+                      meetingTimeFilter === t
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {t === "upcoming" ? "Upcoming" : "Past"}
+                  </button>
+                ))}
+              </div>
+
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
                 <div className="relative flex-1 max-w-xs">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -3208,7 +3339,7 @@ const AdminCalendar: React.FC = () => {
                       value="active"
                       className="text-foreground focus:bg-muted/50"
                     >
-                      Active (hide cancelled)
+                      Hide cancelled
                     </SelectItem>
                     <SelectItem
                       value="all"
@@ -3229,6 +3360,36 @@ const AdminCalendar: React.FC = () => {
                     )}
                   </SelectContent>
                 </Select>
+                {isAdmin && brokersList.length > 0 && (
+                  <Select
+                    value={brokerFilter === null ? "all" : String(brokerFilter)}
+                    onValueChange={(v) =>
+                      setBrokerFilter(v === "all" ? null : parseInt(v))
+                    }
+                  >
+                    <SelectTrigger className="bg-muted/40 border-border text-foreground w-[160px]">
+                      <User className="h-4 w-4 mr-2" />
+                      <SelectValue placeholder="All bankers" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                      <SelectItem
+                        value="all"
+                        className="text-foreground focus:bg-muted/50"
+                      >
+                        All bankers
+                      </SelectItem>
+                      {brokersList.map((b) => (
+                        <SelectItem
+                          key={b.id}
+                          value={String(b.id)}
+                          className="text-foreground focus:bg-muted/50"
+                        >
+                          {b.first_name} {b.last_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
                 <div className="flex rounded-lg border border-border overflow-hidden">
                   {(["grid", "list"] as const).map((m) => (
                     <button
@@ -3327,6 +3488,18 @@ const AdminCalendar: React.FC = () => {
                                 )}
                                 {m.meeting_type === "phone" ? "Phone" : "Video"}
                               </span>
+                              {m.meeting_type === "video" &&
+                                m.zoom_join_url && (
+                                  <a
+                                    href={m.zoom_join_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-400 mt-0.5"
+                                  >
+                                    <Video className="h-3 w-3" /> Join Zoom
+                                  </a>
+                                )}
                             </td>
                             <td className="px-4 py-3">
                               <span
@@ -3565,7 +3738,7 @@ const AdminCalendar: React.FC = () => {
 
           {/* ── Settings Tab ── */}
           {activeTab === "settings" && (
-            <div className="mt-4 flex-1 min-h-0 overflow-y-auto pb-6">
+            <div className="mt-4 pb-6">
               <SettingsPanel />
             </div>
           )}

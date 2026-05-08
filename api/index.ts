@@ -23153,13 +23153,22 @@ function createServer() {
     const timeLabel = (t: string) =>
       `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
     const connectionHtml =
-      opts.meetingType === "video" && opts.videoRoomUrl
-        ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+      opts.meetingType === "video"
+        ? opts.videoRoomUrl
+          ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
             <tr>
               <td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:14px 18px;">
                 <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 Zoom Video Call Link</p>
                 <a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:14px;word-break:break-all;">${opts.videoRoomUrl}</a>
                 <p style="margin:6px 0 0 0;color:#64748b;font-size:12px;">Click the link above at meeting time — no download required if using a browser.</p>
+              </td>
+            </tr>
+          </table>`
+          : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+            <tr>
+              <td style="background-color:#fff7ed;border-left:4px solid #f97316;border-radius:0 8px 8px 0;padding:14px 18px;">
+                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 Zoom Video Call</p>
+                <p style="margin:0;color:#475569;font-size:13px;">Zoom link is being generated. Please contact your mortgage banker if you don't receive a join link shortly.</p>
               </td>
             </tr>
           </table>`
@@ -23176,12 +23185,14 @@ function createServer() {
     const rescheduleUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/reschedule/${opts.rescheduleToken}`;
 
     const icsLocation =
-      opts.meetingType === "video" && opts.videoRoomUrl
-        ? opts.videoRoomUrl
+      opts.meetingType === "video"
+        ? opts.videoRoomUrl || "Zoom Video Call (join link pending)"
         : "Phone Call — your mortgage banker will call you";
     const icsDescription =
-      opts.meetingType === "video" && opts.videoRoomUrl
-        ? `Join the Zoom meeting: ${opts.videoRoomUrl}`
+      opts.meetingType === "video"
+        ? opts.videoRoomUrl
+          ? `Join the Zoom meeting: ${opts.videoRoomUrl}`
+          : `Zoom video call with ${opts.brokerName} (join link pending)`
         : `Phone call meeting with ${opts.brokerName}${opts.brokerPhone ? ` — ${opts.brokerPhone}` : ""}`;
     const icsAttachment = generateIcs({
       uid: `meeting-${opts.meetingId}@encoremortgage.org`,
@@ -23959,6 +23970,12 @@ function createServer() {
           zoomMeetingId = zoomMeeting.meeting_id;
           zoomJoinUrl = zoomMeeting.join_url;
           zoomStartUrl = zoomMeeting.start_url;
+        } else {
+          return res.status(503).json({
+            success: false,
+            error:
+              "Unable to create Zoom meeting right now. Please try again in a moment.",
+          });
         }
       }
 
@@ -24242,6 +24259,12 @@ function createServer() {
           zoomMeetingId = zoomMeeting.meeting_id;
           zoomJoinUrl = zoomMeeting.join_url;
           zoomStartUrl = zoomMeeting.start_url;
+        } else {
+          return res.status(503).json({
+            success: false,
+            error:
+              "Unable to create Zoom meeting right now. Please try rescheduling again in a moment.",
+          });
         }
       }
 
@@ -24844,12 +24867,23 @@ function createServer() {
             zoomMeetingId = zoomMeeting.meeting_id;
             zoomJoinUrl = zoomMeeting.join_url;
             zoomStartUrl = zoomMeeting.start_url;
+          } else {
+            return res.status(503).json({
+              success: false,
+              error:
+                "Unable to create Zoom meeting right now. Please try again in a moment.",
+            });
           }
         } catch (zoomErr) {
           console.error(
             "Zoom meeting creation error (admin booking):",
             zoomErr,
           );
+          return res.status(503).json({
+            success: false,
+            error:
+              "Unable to create Zoom meeting right now. Please try again in a moment.",
+          });
         }
       }
 

@@ -40,6 +40,7 @@ import {
   CheckCheck,
   Clock3,
   Lock,
+  Video,
   FileText,
   CalendarPlus,
   Copy,
@@ -2229,10 +2230,9 @@ export default function ClientDetailPanel({
                       <PhoneCall className="h-3.5 w-3.5" /> Phone Call
                     </span>
                   </SelectItem>
-                  <SelectItem value="video" disabled>
-                    <span className="flex items-center gap-2 opacity-50">
-                      <Lock className="h-3.5 w-3.5" /> Video (Zoom) — coming
-                      soon
+                  <SelectItem value="video">
+                    <span className="flex items-center gap-2">
+                      <Video className="h-3.5 w-3.5" /> Video (Zoom)
                     </span>
                   </SelectItem>
                 </SelectContent>

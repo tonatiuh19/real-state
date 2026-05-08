@@ -4166,6 +4166,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: Video meeting requested but Zoom meeting could not be created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /public/scheduler/cancel/{bookingToken}:
     post:
@@ -4294,6 +4299,11 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "410":
           description: Booking already cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          description: Video meeting requested but Zoom meeting could not be created
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -4433,6 +4443,11 @@ paths:
                     properties:
                       meeting_id: { type: integer }
                       booking_token: { type: string }
+        "503":
+          description: Video meeting requested but Zoom meeting could not be created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /scheduler/meetings/{meetingId}:
     put:
