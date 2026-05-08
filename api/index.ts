@@ -514,9 +514,14 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         }
       }
 
-      // Skip emails from unknown senders with no existing thread — prevents
-      // random inbox emails (spam, alerts, promotions) from polluting Conversations
-      if (clientId === null && threadRows.length === 0) {
+      // Skip obviously automated/no-reply senders with no existing thread
+      const automatedPattern =
+        /no.?reply|donotreply|noreply|notifications?@|alerts?@|mailer@|bounce@|postmaster@|support@.*\.(godaddy|microsoft|google|amazon|apple|linkedin|facebook|twitter|ubisoft|ea\.com)/i;
+      if (
+        clientId === null &&
+        threadRows.length === 0 &&
+        automatedPattern.test(fromEmail)
+      ) {
         continue;
       }
 
@@ -14464,9 +14469,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       (req.headers["x-forwarded-proto"] as string) ||
       (req.secure ? "https" : "http");
     const reqHost = req.headers["host"] || "localhost:8080";
-    const adminUrl =
-      process.env.ADMIN_URL ||
-      `${reqProto}://${reqHost}`;
+    const adminUrl = process.env.ADMIN_URL || `${reqProto}://${reqHost}`;
 
     // Derive redirect URI the same way the connect handler did
     const oauthRedirectUri =
@@ -14492,11 +14495,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       );
     }
 
-    const {
-      tenantId,
-      clientId,
-      clientSecret,
-    } = getOffice365OAuthConfig();
+    const { tenantId, clientId, clientSecret } = getOffice365OAuthConfig();
     if (!tenantId || !clientId || !clientSecret) {
       return res.redirect(
         `${adminUrl}/conversations?office365=error&reason=missing_oauth_env`,
@@ -14569,8 +14568,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       (req.headers["x-forwarded-proto"] as string) ||
       (req.secure ? "https" : "http");
     const reqHost2 = req.headers["host"] || "localhost:8080";
-    const errAdminUrl =
-      process.env.ADMIN_URL || `${reqProto2}://${reqHost2}`;
+    const errAdminUrl = process.env.ADMIN_URL || `${reqProto2}://${reqHost2}`;
     return res.redirect(
       `${errAdminUrl}/conversations?office365=error&reason=callback_failed`,
     );
