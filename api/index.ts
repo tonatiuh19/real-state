@@ -14353,8 +14353,7 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
       });
     }
 
-    const { tenantId, clientId, clientSecret, redirectUri } =
-      getOffice365OAuthConfig();
+    const { tenantId, clientId, clientSecret } = getOffice365OAuthConfig();
     if (!tenantId || !clientId || !clientSecret) {
       return res.status(400).json({
         success: false,
@@ -14362,6 +14361,16 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
           "Office365 OAuth env is missing. Set OFFICE365_TENANT_ID, OFFICE365_CLIENT_ID, OFFICE365_CLIENT_SECRET",
       });
     }
+
+    // Derive redirect URI from the incoming request host so it always matches
+    // the registered Azure redirect URI regardless of which domain is calling
+    const reqProto =
+      (req.headers["x-forwarded-proto"] as string) ||
+      (req.secure ? "https" : "http");
+    const reqHost = req.headers["host"] || "localhost:8080";
+    const redirectUri =
+      process.env.OFFICE365_REDIRECT_URI ||
+      `${reqProto}://${reqHost}/api/conversations/mailboxes/office365/callback`;
 
     await pool.query(
       `INSERT INTO conversation_email_mailboxes (
@@ -14449,10 +14458,20 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
     const state = String(req.query.state || "");
     const oauthError = String(req.query.error || "");
 
-    // ADMIN_URL is the broker admin app origin (e.g. https://admin.encoremortgage.org).
-    // Falls back to BASE_URL for local dev.
+    // Derive the admin base URL from the request host so redirects always go
+    // back to the correct domain (admin vs localhost) without needing env vars
+    const reqProto =
+      (req.headers["x-forwarded-proto"] as string) ||
+      (req.secure ? "https" : "http");
+    const reqHost = req.headers["host"] || "localhost:8080";
     const adminUrl =
-      process.env.ADMIN_URL || process.env.BASE_URL || "http://localhost:8080";
+      process.env.ADMIN_URL ||
+      `${reqProto}://${reqHost}`;
+
+    // Derive redirect URI the same way the connect handler did
+    const oauthRedirectUri =
+      process.env.OFFICE365_REDIRECT_URI ||
+      `${reqProto}://${reqHost}/api/conversations/mailboxes/office365/callback`;
 
     if (oauthError) {
       return res.redirect(
@@ -14477,7 +14496,6 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       tenantId,
       clientId,
       clientSecret,
-      redirectUri: oauthRedirectUri,
     } = getOffice365OAuthConfig();
     if (!tenantId || !clientId || !clientSecret) {
       return res.redirect(
@@ -14547,8 +14565,12 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
     return res.redirect(`${adminUrl}${redirectPath}?office365=connected`);
   } catch (error) {
     console.error("Office365 callback error:", error);
+    const reqProto2 =
+      (req.headers["x-forwarded-proto"] as string) ||
+      (req.secure ? "https" : "http");
+    const reqHost2 = req.headers["host"] || "localhost:8080";
     const errAdminUrl =
-      process.env.ADMIN_URL || process.env.BASE_URL || "http://localhost:8080";
+      process.env.ADMIN_URL || `${reqProto2}://${reqHost2}`;
     return res.redirect(
       `${errAdminUrl}/conversations?office365=error&reason=callback_failed`,
     );
