@@ -526,10 +526,18 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         }
       }
 
-      // Only import emails from known clients/leads or replies to existing threads.
-      // This prevents random inbox noise (newsletters, bank alerts, industry emails)
-      // from polluting Conversations.
-      if (clientId === null && leadId === null && threadRows.length === 0) {
+      // Only import emails from known clients/leads or replies to existing
+      // threads. Emails from completely unknown senders with no thread are
+      // skipped to prevent inbox noise, BUT the mailbox owner's own sent/received
+      // emails are always allowed (they sent from this account intentionally).
+      const isMailboxOwnerEmail =
+        fromEmail === (mailbox.mailbox_email || "").toLowerCase();
+      if (
+        clientId === null &&
+        leadId === null &&
+        threadRows.length === 0 &&
+        !isMailboxOwnerEmail
+      ) {
         continue;
       }
 
@@ -14531,6 +14539,22 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       .slice(0, 19)
       .replace("T", " ");
 
+    // Verify the actual authenticated user via /me — this ensures the stored
+    // mailbox_email always matches the real account that signed in, preventing
+    // one broker's token from being stored against another broker's mailbox.
+    let actualEmail: string | null = null;
+    try {
+      const meRes = await axios.get("https://graph.microsoft.com/v1.0/me", {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+      });
+      actualEmail =
+        (meRes.data?.mail || meRes.data?.userPrincipalName || "")
+          .toLowerCase()
+          .trim() || null;
+    } catch (meErr) {
+      console.warn("Could not verify /me identity after OAuth:", meErr);
+    }
+
     await pool.query(
       `UPDATE conversation_email_mailboxes
        SET oauth_access_token = ?,
@@ -14538,6 +14562,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
            oauth_expires_at = ?,
            office365_tenant_id = ?,
            office365_client_id = ?,
+           ${actualEmail ? "mailbox_email = ?," : ""}
            status = 'active',
            updated_at = NOW()
        WHERE id = ? AND tenant_id = ?`,
@@ -14547,6 +14572,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
         expiresAt,
         tenantId,
         clientId,
+        ...(actualEmail ? [actualEmail] : []),
         verified.mailboxId,
         MORTGAGE_TENANT_ID,
       ],
