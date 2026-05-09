@@ -1260,7 +1260,22 @@ export interface Communication {
   error_message?: string | null;
   cost?: number | null;
   provider_response?: any | null;
-  metadata?: any | null;
+  /**
+   * For email communications — stored as JSON in the metadata column.
+   * Populated on inbound sync from Graph API and on outbound send.
+   */
+  metadata?: {
+    mailbox_id?: number;
+    mailbox_email?: string;
+    provider?: string;
+    internet_message_id?: string | null;
+    graph_conversation_id?: string | null;
+    from_email?: string | null;
+    from_name?: string | null;
+    to_recipients?: EmailRecipient[];
+    cc_recipients?: EmailRecipient[];
+    [key: string]: any;
+  } | null;
   scheduled_at?: string | null;
   sent_at?: string | null;
   created_at: string;
@@ -1303,6 +1318,11 @@ export interface GetConversationMessagesResponse {
   };
 }
 
+export interface EmailRecipient {
+  email: string;
+  name?: string | null;
+}
+
 export interface SendMessageRequest {
   conversation_id?: string;
   application_id?: number;
@@ -1319,6 +1339,10 @@ export interface SendMessageRequest {
   scheduled_at?: string;
   /** Public URL of an MMS media attachment (image, video, document) */
   media_url?: string;
+  /** CC recipients for email */
+  cc?: EmailRecipient[];
+  /** BCC recipients for email */
+  bcc?: EmailRecipient[];
 }
 
 export interface SendMessageResponse {

@@ -206,7 +206,15 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     if (!n.is_read) dispatch(markAsRead(n.id));
     if (n.action_url) {
       setOpen(false);
-      navigate(n.action_url);
+      // Old email notifications were stored with /admin/conversations URL
+      // (before the email-specific route existed). Rewrite them on the fly so
+      // clicking either old or new email notifications always opens the Email page.
+      const isEmailNotification = /\bemail\b/i.test(n.title);
+      const conversationsEmailUrl = n.action_url.replace(
+        /^\/admin\/conversations(\?conversation=)/,
+        "/admin/email$1",
+      );
+      navigate(isEmailNotification ? conversationsEmailUrl : n.action_url);
     }
   };
 

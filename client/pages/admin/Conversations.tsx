@@ -158,10 +158,6 @@ import {
   updateConversation,
   deleteConversation,
   patchMessageRecording,
-  fetchConversationMailboxes,
-  connectOffice365Mailbox,
-  syncConversationMailbox,
-  assignConversationMailbox,
 } from "@/store/slices/conversationsSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import {
@@ -179,13 +175,12 @@ import type {
   Broker,
 } from "@shared/api";
 
-type ChannelFilter = "all" | "sms" | "whatsapp" | "email" | "calls";
+type ChannelFilter = "all" | "sms" | "whatsapp" | "calls";
 
 const CHANNEL_TABS: { key: ChannelFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "sms", label: "SMS" },
   { key: "whatsapp", label: "WhatsApp" },
-  { key: "email", label: "Email" },
   { key: "calls", label: "Calls" },
 ];
 
@@ -206,10 +201,6 @@ const Conversations = () => {
     threadsFilters,
     callHistory,
     isLoadingCallHistory,
-    mailboxes,
-    isLoadingMailboxes,
-    isConnectingMailbox,
-    isAssigningMailbox,
   } = useAppSelector((state) => state.conversations);
 
   const brokerList = useAppSelector((state) =>
@@ -226,22 +217,13 @@ const Conversations = () => {
   const { toast } = useToast();
   const isMobile = useIsMobile();
 
-  // Office365 mailbox state
-  const [selectedMailboxId, setSelectedMailboxId] = useState<number | null>(
-    null,
-  );
-  const [isMailboxConnectOpen, setIsMailboxConnectOpen] = useState(false);
-  const [mailboxEmailInput, setMailboxEmailInput] = useState("");
-
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPriority, setSelectedPriority] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("all");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [isNewConversationOpen, setIsNewConversationOpen] = useState(false);
   const [messageText, setMessageText] = useState("");
-  const [messageType, setMessageType] = useState<"email" | "sms" | "whatsapp">(
-    "sms",
-  );
+  const [messageType, setMessageType] = useState<"sms" | "whatsapp">("sms");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [messageSubject, setMessageSubject] = useState("");
   const [mobilePanel, setMobilePanel] = useState<"list" | "chat">("list");
@@ -294,8 +276,7 @@ const Conversations = () => {
   type OptimisticMsg = {
     tempId: string;
     body: string;
-    subject?: string;
-    type: "email" | "sms" | "whatsapp";
+    type: "sms" | "whatsapp";
     status: "sending" | "sent" | "failed";
     ts: Date;
     /** DB id returned by the send API — used to suppress the optimistic once the real message arrives */
@@ -470,10 +451,10 @@ const Conversations = () => {
   // Phone numbers management
   const [isPhoneNumbersOpen, setIsPhoneNumbersOpen] = useState(false);
 
-  // Client-side channel filtering
+  // Client-side channel filtering — email threads are handled in the dedicated Email section
   const filteredThreads =
     channelFilter === "all"
-      ? threads
+      ? threads.filter((t) => t.last_message_type !== "email")
       : threads.filter((t) => t.last_message_type === channelFilter);
 
   // Show all messages regardless of channel — channel tabs only filter the thread list
@@ -492,9 +473,6 @@ const Conversations = () => {
       );
       if (template) {
         setMessageText(template.body || "");
-        if (template.subject && messageType === "email") {
-          setMessageSubject(template.subject);
-        }
       }
     }
   }, [selectedTemplate, templates, messageType]);
@@ -511,43 +489,8 @@ const Conversations = () => {
     dispatch(fetchConversationThreads(threadsFilters));
     dispatch(fetchConversationTemplates(undefined));
     dispatch(fetchConversationStats());
-    dispatch(fetchConversationMailboxes());
     dispatch(fetchBrokers());
   }, [dispatch]);
-
-  // Auto-select default mailbox once mailboxes load
-  useEffect(() => {
-    if (mailboxes.length > 0 && selectedMailboxId === null) {
-      const defaultMb =
-        mailboxes.find((m) => m.is_default && m.status === "active") ??
-        mailboxes.find((m) => m.status === "active") ??
-        null;
-      if (defaultMb) setSelectedMailboxId(defaultMb.id);
-    }
-  }, [mailboxes, selectedMailboxId]);
-
-  // Handle OAuth callback result: ?office365=connected or ?office365=error
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const result = params.get("office365");
-    if (!result) return;
-    if (result === "connected") {
-      toast({
-        title: "Mailbox connected",
-        description:
-          "Office365 mailbox is now active and will sync inbound emails.",
-      });
-      dispatch(fetchConversationMailboxes());
-    } else if (result === "error") {
-      const reason = params.get("reason") || "unknown_error";
-      toast({
-        title: "Mailbox connection failed",
-        description: `Could not connect the Office365 mailbox: ${reason.replace(/_/g, " ")}.`,
-        variant: "destructive",
-      });
-    }
-    window.history.replaceState(null, "", window.location.pathname);
-  }, [location.search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load call history when "calls" tab is selected
   useEffect(() => {
@@ -755,76 +698,6 @@ const Conversations = () => {
     dispatch(fetchConversationThreads({ ...threadsFilters, search: query }));
   };
 
-  const handleConnectMailbox = async () => {
-    const email = mailboxEmailInput.trim().toLowerCase();
-    if (!email || !email.includes("@")) return;
-    try {
-      const result = await dispatch(
-        connectOffice365Mailbox({
-          mailbox_email: email,
-          is_shared: true,
-          return_path: "/conversations",
-        }),
-      ).unwrap();
-      if (result.auth_url) {
-        window.location.href = result.auth_url;
-      }
-    } catch (err: any) {
-      toast({
-        title: "Connection failed",
-        description: err || "Could not start Office365 authentication",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleSyncMailbox = async (mailboxId: number) => {
-    try {
-      const result = await dispatch(
-        syncConversationMailbox(mailboxId),
-      ).unwrap();
-      toast({
-        title: "Sync complete",
-        description: `Processed ${result.processed} new message(s).`,
-      });
-    } catch (err: any) {
-      toast({
-        title: "Sync failed",
-        description: err || "Could not sync mailbox",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleAssignMailbox = async (
-    mailboxId: number,
-    brokerId: number | null,
-  ) => {
-    try {
-      await dispatch(
-        assignConversationMailbox({
-          mailboxId,
-          assigned_broker_id: brokerId,
-          is_shared: brokerId === null,
-        }),
-      ).unwrap();
-      toast({
-        title: "Assignment updated",
-        description:
-          brokerId === null
-            ? "Mailbox set to shared (all bankers)"
-            : "Mailbox assigned to banker",
-      });
-      dispatch(fetchConversationMailboxes());
-    } catch (err: any) {
-      toast({
-        title: "Assignment failed",
-        description: err || "Could not update assignment",
-        variant: "destructive",
-      });
-    }
-  };
-
   const handleCloseThread = (
     thread: ConversationThread,
     e: React.MouseEvent,
@@ -969,7 +842,6 @@ const Conversations = () => {
     const optimistic: OptimisticMsg = {
       tempId,
       body: text,
-      subject: messageType === "email" ? messageSubject : undefined,
       type: messageType,
       status: "sending",
       ts: new Date(),
@@ -998,15 +870,10 @@ const Conversations = () => {
           communication_type: messageType,
           recipient_phone: currentThread?.client_phone || undefined,
           recipient_email: currentThread?.client_email || undefined,
-          subject: messageType === "email" ? optimistic.subject : undefined,
           body: text,
           message_type: sentTemplateId ? "template" : "text",
           template_id: sentTemplateId ?? undefined,
           media_url: uploadedMediaUrl,
-          mailbox_id:
-            messageType === "email" && selectedMailboxId
-              ? selectedMailboxId
-              : undefined,
         }),
       ).unwrap();
 
@@ -2391,11 +2258,6 @@ const Conversations = () => {
                                 })}
                               </span>
                             </div>
-                            {opt.subject && (
-                              <p className="font-semibold text-xs mb-1 opacity-90">
-                                {opt.subject}
-                              </p>
-                            )}
                             <p className="leading-relaxed">{opt.body}</p>
                             <div className="flex justify-end mt-1">
                               {opt.status === "sending" && (
@@ -2475,12 +2337,6 @@ const Conversations = () => {
                               unavailable
                             </span>
                           )}
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="email">
-                        <div className="flex items-center gap-2">
-                          <Mail className="h-3.5 w-3.5 text-blue-500" />
-                          Email
                         </div>
                       </SelectItem>
                     </SelectContent>
@@ -2578,8 +2434,6 @@ const Conversations = () => {
                                   onSelect={() => {
                                     setSelectedTemplate(t.id.toString());
                                     setMessageText(t.body || "");
-                                    if (t.subject && messageType === "email")
-                                      setMessageSubject(t.subject);
                                     setTemplatePickerOpen(false);
                                   }}
                                   className="flex items-start gap-2 cursor-pointer py-2"
@@ -2662,114 +2516,6 @@ const Conversations = () => {
                     </PopoverContent>
                   </Popover>
                 </div>
-
-                {/* Email: From mailbox selector + Subject */}
-                {messageType === "email" && (
-                  <>
-                    {/* From: mailbox row */}
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-[11px] text-muted-foreground shrink-0 w-10 text-right">
-                        From:
-                      </span>
-                      {isLoadingMailboxes ? (
-                        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Loading mailboxes…
-                        </div>
-                      ) : mailboxes.filter((m) => m.status === "active")
-                          .length === 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => setIsMailboxConnectOpen(true)}
-                          className="flex items-center gap-1.5 text-[11px] text-primary hover:underline"
-                        >
-                          <Plus className="h-3 w-3" />
-                          Connect Office365 mailbox
-                        </button>
-                      ) : (
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <Select
-                            value={
-                              selectedMailboxId ? String(selectedMailboxId) : ""
-                            }
-                            onValueChange={(v) =>
-                              setSelectedMailboxId(Number(v))
-                            }
-                          >
-                            <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
-                              <SelectValue placeholder="Choose mailbox…" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {mailboxes
-                                .filter((m) => m.status === "active")
-                                .map((m) => (
-                                  <SelectItem key={m.id} value={String(m.id)}>
-                                    <div className="flex items-center gap-2">
-                                      <Mail className="h-3 w-3 text-blue-500 shrink-0" />
-                                      <span className="truncate">
-                                        {m.display_name
-                                          ? `${m.display_name} <${m.mailbox_email}>`
-                                          : m.mailbox_email}
-                                      </span>
-                                      {m.is_default && (
-                                        <span className="text-[10px] bg-primary/10 text-primary rounded px-1 shrink-0">
-                                          default
-                                        </span>
-                                      )}
-                                    </div>
-                                  </SelectItem>
-                                ))}
-                            </SelectContent>
-                          </Select>
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    selectedMailboxId &&
-                                    handleSyncMailbox(selectedMailboxId)
-                                  }
-                                  disabled={!selectedMailboxId}
-                                  className="shrink-0 rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-                                >
-                                  <RefreshCw className="h-3 w-3" />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="text-xs">
-                                Sync inbox now
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={() => setIsMailboxConnectOpen(true)}
-                                  className="shrink-0 rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                >
-                                  <Plus className="h-3 w-3" />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="text-xs">
-                                Connect another mailbox
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Subject */}
-                    <Input
-                      placeholder="Subject"
-                      value={messageSubject}
-                      onChange={(e) => setMessageSubject(e.target.value)}
-                      className="mb-2 h-8 text-sm"
-                    />
-                  </>
-                )}
 
                 {/* Smart variable preview banner */}
                 {(() => {
@@ -4295,184 +4041,6 @@ const Conversations = () => {
           )}
         </div>
       )}
-
-      {/* ── Connect Office365 Mailbox Dialog ── */}
-      <Dialog
-        open={isMailboxConnectOpen}
-        onOpenChange={setIsMailboxConnectOpen}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Mail className="h-5 w-5 text-blue-500" />
-              Connect Office365 Mailbox
-            </DialogTitle>
-            <DialogDescription>
-              Enter the shared mailbox email address hosted on Microsoft 365
-              (e.g. teamdc@encoremortgage.org). You'll be redirected to
-              Microsoft to authorize access.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            {/* Existing mailboxes */}
-            {mailboxes.length > 0 && (
-              <div className="space-y-2">
-                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Connected mailboxes
-                </Label>
-                <div className="rounded-lg border border-border divide-y divide-border">
-                  {mailboxes.map((mb) => (
-                    <div key={mb.id} className="px-3 py-2.5 space-y-2">
-                      {/* Row 1: status dot + email + status badge + sync */}
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={cn(
-                            "h-2 w-2 rounded-full shrink-0",
-                            mb.status === "active"
-                              ? "bg-green-500"
-                              : mb.status === "pending"
-                                ? "bg-yellow-400"
-                                : mb.status === "error"
-                                  ? "bg-red-500"
-                                  : "bg-muted-foreground",
-                          )}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            {mb.display_name || mb.mailbox_email}
-                          </p>
-                          {mb.display_name && (
-                            <p className="text-[11px] text-muted-foreground truncate">
-                              {mb.mailbox_email}
-                            </p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "text-[10px] px-1.5 py-0",
-                              mb.status === "active"
-                                ? "border-green-300 text-green-700 bg-green-50"
-                                : mb.status === "pending"
-                                  ? "border-yellow-300 text-yellow-700 bg-yellow-50"
-                                  : mb.status === "error"
-                                    ? "border-red-300 text-red-700 bg-red-50"
-                                    : "",
-                            )}
-                          >
-                            {mb.status}
-                          </Badge>
-                          {mb.status === "active" && (
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSyncMailbox(mb.id)}
-                                    className="rounded p-1 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                  >
-                                    <RefreshCw className="h-3 w-3" />
-                                  </button>
-                                </TooltipTrigger>
-                                <TooltipContent className="text-xs">
-                                  Sync inbox
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Row 2: broker assignment dropdown */}
-                      <div className="flex items-center gap-2 pl-5">
-                        <span className="text-[11px] text-muted-foreground shrink-0">
-                          Assigned to:
-                        </span>
-                        <Select
-                          value={
-                            mb.assigned_broker_id
-                              ? String(mb.assigned_broker_id)
-                              : "shared"
-                          }
-                          onValueChange={(val) =>
-                            handleAssignMailbox(
-                              mb.id,
-                              val === "shared" ? null : Number(val),
-                            )
-                          }
-                          disabled={isAssigningMailbox}
-                        >
-                          <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
-                            <SelectValue placeholder="Shared (all bankers)" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="shared" className="text-xs">
-                              Shared — all bankers
-                            </SelectItem>
-                            {brokerList.map((b) => (
-                              <SelectItem
-                                key={b.id}
-                                value={String(b.id)}
-                                className="text-xs"
-                              >
-                                {b.first_name} {b.last_name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Connect new mailbox form */}
-            <div className="space-y-2">
-              <Label
-                htmlFor="mailbox-email-input"
-                className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-              >
-                Add mailbox
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  id="mailbox-email-input"
-                  type="email"
-                  placeholder="teamdc@yourdomain.com"
-                  value={mailboxEmailInput}
-                  onChange={(e) => setMailboxEmailInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleConnectMailbox();
-                  }}
-                  className="h-9 text-sm"
-                />
-                <Button
-                  onClick={handleConnectMailbox}
-                  disabled={
-                    isConnectingMailbox ||
-                    !mailboxEmailInput.trim().includes("@")
-                  }
-                  size="sm"
-                  className="h-9 px-4 shrink-0"
-                >
-                  {isConnectingMailbox ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    "Authorize"
-                  )}
-                </Button>
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                You'll be redirected to Microsoft to sign in and grant access.
-                Make sure the mailbox is a valid Office 365 account.
-              </p>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* ── Phone Numbers Management Panel ── */}
       <PhoneNumbersPanel

@@ -306,6 +306,8 @@ async function sendEmailMessageViaOffice365(options: {
   body: string;
   isHtml: boolean;
   conversationId?: string;
+  cc?: Array<{ email: string; name?: string | null }>;
+  bcc?: Array<{ email: string; name?: string | null }>;
 }): Promise<{
   success: boolean;
   external_id?: string;
@@ -330,18 +332,22 @@ async function sendEmailMessageViaOffice365(options: {
     const mailbox = rows[0];
     const accessToken = await getOffice365AccessToken(mailbox);
 
-    const headers: Array<{ name: string; value: string }> = [];
+    const internetMessageHeaders: Array<{ name: string; value: string }> = [];
     if (options.conversationId) {
-      const domain = mailbox.mailbox_email.split("@")[1] || "example.com";
-      headers.push({
+      // Graph API only allows custom headers starting with 'X-'.
+      // 'Message-ID' is a reserved header and must not be set here.
+      internetMessageHeaders.push({
         name: "X-Conversation-Id",
         value: options.conversationId,
       });
-      headers.push({
-        name: "Message-ID",
-        value: `<enc-${options.conversationId}-${Date.now()}@${domain}>`,
-      });
     }
+
+    const ccRecipients = (options.cc ?? []).map((r) => ({
+      emailAddress: { address: r.email, ...(r.name ? { name: r.name } : {}) },
+    }));
+    const bccRecipients = (options.bcc ?? []).map((r) => ({
+      emailAddress: { address: r.email, ...(r.name ? { name: r.name } : {}) },
+    }));
 
     await axios.post(
       `https://graph.microsoft.com/v1.0/me/sendMail`,
@@ -353,8 +359,10 @@ async function sendEmailMessageViaOffice365(options: {
             content: options.body,
           },
           toRecipients: [{ emailAddress: { address: options.to } }],
+          ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
+          ...(bccRecipients.length > 0 ? { bccRecipients } : {}),
           replyTo: [{ emailAddress: { address: mailbox.mailbox_email } }],
-          internetMessageHeaders: headers,
+          internetMessageHeaders,
         },
         saveToSentItems: true,
       },
@@ -405,7 +413,7 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
           $top: 50,
           $orderby: "receivedDateTime desc",
           $select:
-            "id,subject,from,toRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body",
+            "id,subject,from,toRecipients,ccRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body",
         },
       },
     );
@@ -475,13 +483,9 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
 
       const bodyPreview = String(msg?.bodyPreview || "").trim();
       const bodyContent = String(msg?.body?.content || "").trim();
-      const bodyType = String(msg?.body?.contentType || "").toLowerCase();
-      const cleanBody =
-        bodyPreview ||
-        (bodyType === "html"
-          ? stripHtmlForStorage(bodyContent)
-          : bodyContent) ||
-        "(empty reply)";
+      // Store the full HTML (or plain text) body so it renders correctly in the UI.
+      // bodyPreview is only a truncated plain-text snippet — use it as last resort.
+      const cleanBody = bodyContent || bodyPreview || "(empty reply)";
 
       const [threadRows] = await pool.query<RowDataPacket[]>(
         `SELECT broker_id, client_id, application_id, lead_id
@@ -526,21 +530,6 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         }
       }
 
-      // Only import emails from known clients/leads or replies to existing
-      // threads. Emails from completely unknown senders with no thread are
-      // skipped to prevent inbox noise, BUT the mailbox owner's own sent/received
-      // emails are always allowed (they sent from this account intentionally).
-      const isMailboxOwnerEmail =
-        fromEmail === (mailbox.mailbox_email || "").toLowerCase();
-      if (
-        clientId === null &&
-        leadId === null &&
-        threadRows.length === 0 &&
-        !isMailboxOwnerEmail
-      ) {
-        continue;
-      }
-
       // Always fall back to the mailbox owner so emails are always visible
       if (brokerId === null) {
         brokerId = mailbox.assigned_broker_id ?? null;
@@ -573,6 +562,20 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
             provider: "office365",
             internet_message_id: msg?.internetMessageId || null,
             graph_conversation_id: msg?.conversationId || null,
+            from_email: fromEmail || null,
+            from_name: msg?.from?.emailAddress?.name || null,
+            to_recipients: Array.isArray(msg?.toRecipients)
+              ? msg.toRecipients.map((r: any) => ({
+                  email: r?.emailAddress?.address || "",
+                  name: r?.emailAddress?.name || null,
+                }))
+              : [],
+            cc_recipients: Array.isArray(msg?.ccRecipients)
+              ? msg.ccRecipients.map((r: any) => ({
+                  email: r?.emailAddress?.address || "",
+                  name: r?.emailAddress?.name || null,
+                }))
+              : [],
           }),
         ],
       )) as [ResultSetHeader, any];
@@ -591,6 +594,7 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         direction: "inbound",
         body: cleanBody,
         recipientEmail: fromEmail || null,
+        senderDisplayName: msg?.from?.emailAddress?.name || null,
       });
 
       await markExecutionsRespondedForConversation(
@@ -715,6 +719,8 @@ async function upsertConversationThread(params: {
   inboxNumber?: string | null;
   recipientPhone?: string | null;
   recipientEmail?: string | null;
+  /** Display name from the sending party (e.g. Graph API from.emailAddress.name) */
+  senderDisplayName?: string | null;
 }): Promise<void> {
   try {
     const {
@@ -733,6 +739,7 @@ async function upsertConversationThread(params: {
       inboxNumber,
       recipientPhone,
       recipientEmail,
+      senderDisplayName,
     } = params;
     const resolvedClientId = toUserId ?? fromUserId ?? null;
     let resolvedBrokerId: number | null = fromBrokerId ?? toBrokerId ?? null;
@@ -845,6 +852,59 @@ async function upsertConversationThread(params: {
       resolvedClientId ?? (params as any).resolvedClientIdFromPhone ?? null;
     const finalContactBrokerId: number | null =
       (params as any).resolvedContactBrokerId ?? null;
+
+    // If we still have no name but have an email address, look it up across
+    // clients → leads → brokers so email threads always show a real name.
+    if (!clientName && clientEmail) {
+      const emailLower = clientEmail.toLowerCase();
+      const [cEmailRows] = await pool.query<RowDataPacket[]>(
+        `SELECT CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
+         FROM clients WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
+        [tenantId, emailLower],
+      );
+      if (cEmailRows.length > 0) {
+        clientName = cEmailRows[0].name?.trim() || null;
+        clientPhone = clientPhone ?? cEmailRows[0].phone ?? null;
+        if (
+          resolvedBrokerId == null &&
+          cEmailRows[0].assigned_broker_id != null
+        ) {
+          resolvedBrokerId = cEmailRows[0].assigned_broker_id as number;
+        }
+      } else {
+        const [lEmailRows] = await pool.query<RowDataPacket[]>(
+          `SELECT CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
+           FROM leads WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
+          [tenantId, emailLower],
+        );
+        if (lEmailRows.length > 0) {
+          clientName = lEmailRows[0].name?.trim() || null;
+          clientPhone = clientPhone ?? lEmailRows[0].phone ?? null;
+          if (
+            resolvedBrokerId == null &&
+            lEmailRows[0].assigned_broker_id != null
+          ) {
+            resolvedBrokerId = lEmailRows[0].assigned_broker_id as number;
+          }
+        } else {
+          // Check brokers table — mortgage bankers emailing each other
+          const [brEmailRows] = await pool.query<RowDataPacket[]>(
+            `SELECT CONCAT(first_name, ' ', last_name) AS name
+             FROM brokers WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
+            [tenantId, emailLower],
+          );
+          if (brEmailRows.length > 0) {
+            clientName = brEmailRows[0].name?.trim() || null;
+          }
+        }
+      }
+    }
+
+    // Final fallback: use the sender's display name from the email provider
+    // (e.g. Graph API from.emailAddress.name) for contacts not in the system
+    if (!clientName && senderDisplayName) {
+      clientName = senderDisplayName.trim() || null;
+    }
 
     // Always INSERT — broker_id is now nullable so shared-inbox threads (broker_id=NULL)
     // are also persisted and visible to all brokers.
@@ -977,9 +1037,10 @@ async function upsertConversationThread(params: {
           message: snippet || `New inbound ${channelLabel}`,
           category: category as any,
           type: "info",
-          actionUrl: `/admin/conversations?conversation=${encodeURIComponent(
-            convId,
-          )}`,
+          actionUrl:
+            communicationType === "email"
+              ? `/admin/email?conversation=${encodeURIComponent(convId)}`
+              : `/admin/conversations?conversation=${encodeURIComponent(convId)}`,
         });
       } catch (notifyErr) {
         console.error(
@@ -15798,6 +15859,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       status = "all",
       priority,
       search,
+      folder,
     } = req.query;
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -15865,6 +15927,31 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     if (priority) {
       whereConditions.push("ct.priority = ?");
       queryParams.push(priority);
+    }
+
+    // Folder filter: inbox = has inbound email, sent = broker sent outbound email
+    if (folder === "inbox") {
+      whereConditions.push(
+        `EXISTS (
+           SELECT 1 FROM communications cf
+           WHERE cf.conversation_id = ct.conversation_id
+             AND cf.tenant_id = ct.tenant_id
+             AND cf.communication_type = 'email'
+             AND cf.direction = 'inbound'
+         )`,
+      );
+    } else if (folder === "sent") {
+      whereConditions.push(
+        `EXISTS (
+           SELECT 1 FROM communications cf
+           WHERE cf.conversation_id = ct.conversation_id
+             AND cf.tenant_id = ct.tenant_id
+             AND cf.communication_type = 'email'
+             AND cf.direction = 'outbound'
+             AND cf.from_broker_id = ?
+         )`,
+      );
+      queryParams.push(brokerId);
     }
 
     if (search) {
@@ -16250,6 +16337,8 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       message_type = "text",
       scheduled_at,
       media_url,
+      cc,
+      bcc,
     } = req.body;
 
     // Validation
@@ -16680,7 +16769,14 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         message_type,
         template_id || null,
         mailbox_id
-          ? JSON.stringify({ mailbox_id, provider: "office365" })
+          ? JSON.stringify({
+              mailbox_id,
+              provider: "office365",
+              to_recipients: finalRecipientEmail
+                ? [{ email: finalRecipientEmail }]
+                : [],
+              cc_recipients: Array.isArray(cc) ? cc : [],
+            })
           : null,
         scheduled_at || null,
       ],
@@ -16787,20 +16883,69 @@ const handleSendMessage: RequestHandler = async (req, res) => {
           if (finalRecipientEmail) {
             // Auto-detect HTML content so template-based emails render correctly
             const isHtmlEmail = /<[a-z][\s\S]*>/i.test(processedBody);
+
+            // Build a dynamic fallback subject when none was provided.
+            // Priority: 1) caller-supplied subject  2) "Re: <prior subject>" for replies
+            //           3) "<Broker Name>, from <Company>" personalised greeting
+            let emailSubject = processedSubject;
+            if (!emailSubject) {
+              // Check if there's a prior subject on this thread to use as "Re: …"
+              if (finalConversationId) {
+                const [priorSubjectRows] = await pool.query<RowDataPacket[]>(
+                  `SELECT subject FROM communications
+                   WHERE conversation_id = ? AND tenant_id = ? AND subject IS NOT NULL AND subject <> ''
+                   ORDER BY created_at ASC LIMIT 1`,
+                  [finalConversationId, MORTGAGE_TENANT_ID],
+                );
+                if (priorSubjectRows.length > 0) {
+                  const prior = priorSubjectRows[0].subject as string;
+                  emailSubject = prior.startsWith("Re:")
+                    ? prior
+                    : `Re: ${prior}`;
+                }
+              }
+
+              // Still no subject — build personalised greeting from broker + tenant
+              if (!emailSubject) {
+                const [[brokerRow], [tenantRow]] = await Promise.all([
+                  pool.query<RowDataPacket[]>(
+                    `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+                    [brokerId, MORTGAGE_TENANT_ID],
+                  ),
+                  pool.query<RowDataPacket[]>(
+                    `SELECT company_name, name FROM tenants WHERE id = ? LIMIT 1`,
+                    [MORTGAGE_TENANT_ID],
+                  ),
+                ]);
+                const brokerFirst =
+                  (brokerRow as RowDataPacket[])[0]?.first_name || "";
+                const brokerLast =
+                  (brokerRow as RowDataPacket[])[0]?.last_name || "";
+                const company =
+                  (tenantRow as RowDataPacket[])[0]?.company_name ||
+                  (tenantRow as RowDataPacket[])[0]?.name ||
+                  "Encore Mortgage";
+                const brokerName =
+                  `${brokerFirst} ${brokerLast}`.trim() || "Your Loan Officer";
+                emailSubject = `${brokerName}, from ${company}`;
+              }
+            }
+
             if (mailbox_id) {
               sendResult = await sendEmailMessageViaOffice365({
                 mailboxId: Number(mailbox_id),
                 to: finalRecipientEmail,
-                subject:
-                  processedSubject || "Message from Mortgage Professional",
+                subject: emailSubject,
                 body: processedBody,
                 isHtml: isHtmlEmail,
                 conversationId: finalConversationId,
+                cc: Array.isArray(cc) ? cc : undefined,
+                bcc: Array.isArray(bcc) ? bcc : undefined,
               });
             } else {
               sendResult = await sendEmailMessage(
                 finalRecipientEmail,
-                processedSubject || "Message from Mortgage Professional",
+                emailSubject,
                 processedBody,
                 isHtmlEmail,
                 finalConversationId,

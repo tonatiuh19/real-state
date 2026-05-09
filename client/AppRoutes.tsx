@@ -38,6 +38,7 @@ import SchedulerReschedule from "./pages/SchedulerReschedule";
 import AdminScheduler from "./pages/admin/Scheduler";
 import AdminCalendar from "./pages/admin/Calendar";
 import IncomeCalculator from "./pages/admin/IncomeCalculator";
+import Email from "./pages/admin/Email";
 
 const AppRoutes = () => (
   <Routes>
@@ -237,6 +238,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <Conversations />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/email"
+      element={
+        <AdminLayout>
+          <Email />
         </AdminLayout>
       }
     />

@@ -49,6 +49,7 @@ import { IS_DEV } from "@/lib/env";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
 import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
+import { fetchEmailMailboxes } from "@/store/slices/emailSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   AlertDialog,
@@ -103,6 +104,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   React.useEffect(() => {
     if (sessionToken) {
       dispatch(initAdminSession());
+      dispatch(fetchEmailMailboxes());
     }
   }, [dispatch, sessionToken]);
 
@@ -113,6 +115,8 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   };
 
   const isPartner = user?.role === "broker";
+  const emailMailboxes = useAppSelector((s) => s.email.mailboxes);
+  const hasActiveMailbox = emailMailboxes.some((m) => m.status === "active");
 
   const menuItems = [
     {
@@ -159,6 +163,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       icon: <MessageCircle className="h-4 w-4" />,
       path: "/admin/conversations",
       hidden: isPartner,
+    },
+    {
+      id: "email",
+      label: "Email",
+      icon: <Mail className="h-4 w-4" />,
+      path: "/admin/email",
+      hidden: isPartner || !hasActiveMailbox,
     },
     {
       id: "reminder-flows",
