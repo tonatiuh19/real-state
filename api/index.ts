@@ -14505,8 +14505,18 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       `${reqProto}://${reqHost}/api/conversations/mailboxes/office365/callback`;
 
     if (oauthError) {
+      // Clean up any pending mailbox record created during the connect step
+      // so it doesn't reappear as "Pending authorization" on refresh.
+      const verifiedErr = verifyOffice365State(state);
+      if (verifiedErr.valid && verifiedErr.mailboxId) {
+        await pool.query(
+          `DELETE FROM conversation_email_mailboxes
+           WHERE id = ? AND tenant_id = ? AND status = 'pending'`,
+          [verifiedErr.mailboxId, MORTGAGE_TENANT_ID],
+        ).catch(() => {}); // best-effort
+      }
       return res.redirect(
-        `${adminUrl}/conversations?office365=error&reason=${encodeURIComponent(oauthError)}`,
+        `${adminUrl}/admin/profile?office365=error&reason=${encodeURIComponent(oauthError)}`,
       );
     }
 
@@ -14794,7 +14804,7 @@ const handleGetConversationMailboxes: RequestHandler = async (_req, res) => {
               m.created_at, m.updated_at
        FROM conversation_email_mailboxes m
        LEFT JOIN brokers b ON b.id = m.assigned_broker_id
-       WHERE m.tenant_id = ?
+       WHERE m.tenant_id = ? AND m.status != 'pending'
        ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`,
       [MORTGAGE_TENANT_ID],
     );
