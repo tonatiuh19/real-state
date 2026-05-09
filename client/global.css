@@ -107,6 +107,9 @@
   body,
   #root {
     height: 100%;
+  }
+
+  body.admin-layout-scroll-lock {
     overflow: hidden;
   }
 

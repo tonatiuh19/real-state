@@ -92,6 +92,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     }
   }, [sessionToken, navigate]);
 
+  React.useEffect(() => {
+    document.body.classList.add("admin-layout-scroll-lock");
+    return () => {
+      document.body.classList.remove("admin-layout-scroll-lock");
+    };
+  }, []);
+
   // Single bootstrap call — validates session, loads profile + section controls
   React.useEffect(() => {
     if (sessionToken) {

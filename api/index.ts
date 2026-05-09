@@ -14509,11 +14509,13 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       // so it doesn't reappear as "Pending authorization" on refresh.
       const verifiedErr = verifyOffice365State(state);
       if (verifiedErr.valid && verifiedErr.mailboxId) {
-        await pool.query(
-          `DELETE FROM conversation_email_mailboxes
+        await pool
+          .query(
+            `DELETE FROM conversation_email_mailboxes
            WHERE id = ? AND tenant_id = ? AND status = 'pending'`,
-          [verifiedErr.mailboxId, MORTGAGE_TENANT_ID],
-        ).catch(() => {}); // best-effort
+            [verifiedErr.mailboxId, MORTGAGE_TENANT_ID],
+          )
+          .catch(() => {}); // best-effort
       }
       return res.redirect(
         `${adminUrl}/admin/profile?office365=error&reason=${encodeURIComponent(oauthError)}`,
