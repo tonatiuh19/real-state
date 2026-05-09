@@ -247,7 +247,7 @@ async function refreshOffice365Token(mailbox: ConversationMailboxRow) {
     throw new Error("Office365 OAuth config is incomplete");
   }
 
-  const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+  const tokenUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
   const params = new URLSearchParams();
   params.set("grant_type", "refresh_token");
   params.set("client_id", clientId);
@@ -14459,8 +14459,11 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
     if (mailbox_email) {
       authUrlParams.login_hint = String(mailbox_email).toLowerCase();
     }
+    // Use 'common' instead of the specific tenant ID so personal Microsoft
+    // accounts (hotmail.com, live.com, outlook.com) can also authenticate.
+    // The Azure app must be configured to support multi-tenant + personal accounts.
     const authUrl =
-      `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?` +
+      `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
       new URLSearchParams(authUrlParams).toString();
 
     return res.json({
@@ -14527,7 +14530,8 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
       );
     }
 
-    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+    // Use 'common' to match the authorize endpoint — required for personal MSA accounts.
+    const tokenUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
     const params = new URLSearchParams();
     params.set("grant_type", "authorization_code");
     params.set("client_id", clientId);
