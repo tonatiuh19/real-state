@@ -14762,16 +14762,12 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
       });
     }
 
+    // Hard-delete the record so it doesn't reappear on refresh.
+    // FK references (communications.mailbox_id, conversation_threads.mailbox_id)
+    // are ON DELETE SET NULL so this is safe.
     await pool.query(
-      `UPDATE conversation_email_mailboxes
-       SET oauth_access_token  = NULL,
-           oauth_refresh_token = NULL,
-           oauth_expires_at    = NULL,
-           last_graph_delta_link = NULL,
-           status              = 'disabled',
-           updated_at          = NOW()
+      `DELETE FROM conversation_email_mailboxes
        WHERE id = ? AND tenant_id = ?`,
-      // 'disabled' is the correct ENUM value (valid: pending/active/disabled/error)
       [mailboxId, MORTGAGE_TENANT_ID],
     );
 
