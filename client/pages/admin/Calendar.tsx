@@ -106,6 +106,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchSchedulerSettings,
+  fetchTeamsEligibility,
   updateSchedulerSettings,
   fetchScheduledMeetings,
   updateScheduledMeeting,
@@ -664,7 +665,8 @@ function MeetingCard({
                 </>
               ) : (
                 <>
-                  <Video className="h-3 w-3" /> Video
+                  <Video className="h-3 w-3" />
+                  {meeting.meeting_type === "teams" ? "Teams" : "Video"}
                 </>
               )}
             </span>
@@ -694,17 +696,20 @@ function MeetingCard({
               "{meeting.notes}"
             </p>
           )}
-          {meeting.meeting_type === "video" && meeting.zoom_join_url && (
-            <a
-              href={meeting.zoom_join_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 mt-2 text-xs text-blue-500 hover:text-blue-400 font-medium"
-            >
-              <Video className="h-3 w-3" /> Join Zoom
-            </a>
-          )}
+          {(meeting.meeting_type === "video" ||
+            meeting.meeting_type === "teams") &&
+            (meeting.teams_join_url || meeting.zoom_join_url) && (
+              <a
+                href={meeting.teams_join_url || meeting.zoom_join_url || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 mt-2 text-xs text-blue-500 hover:text-blue-400 font-medium"
+              >
+                <Video className="h-3 w-3" />
+                {meeting.meeting_type === "teams" ? "Join Teams" : "Join Zoom"}
+              </a>
+            )}
         </div>
         <button
           onClick={() => onEdit(meeting)}
@@ -1057,19 +1062,28 @@ function UnifiedCalendarView({
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {formatTime(m.meeting_time)} ·{" "}
-                      {m.meeting_type === "phone" ? "Phone" : "Video (Zoom)"}
+                      {m.meeting_type === "phone"
+                        ? "Phone"
+                        : m.meeting_type === "teams"
+                          ? "Video (Teams)"
+                          : "Video (Zoom)"}
                     </p>
-                    {m.meeting_type === "video" && m.zoom_join_url && (
-                      <a
-                        href={m.zoom_join_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-400 mt-0.5"
-                      >
-                        <Video className="h-3 w-3" /> Join Zoom
-                      </a>
-                    )}
+                    {(m.meeting_type === "video" ||
+                      m.meeting_type === "teams") &&
+                      (m.teams_join_url || m.zoom_join_url) && (
+                        <a
+                          href={m.teams_join_url || m.zoom_join_url || "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-400 mt-0.5"
+                        >
+                          <Video className="h-3 w-3" />
+                          {m.meeting_type === "teams"
+                            ? "Join Teams"
+                            : "Join Zoom"}
+                        </a>
+                      )}
                   </div>
                   <span
                     className={cn(
@@ -1197,16 +1211,21 @@ function EditMeetingDialog({
               {formatDate(meeting.meeting_date)} at{" "}
               {formatTime(meeting.meeting_time)}
             </p>
-            {meeting.meeting_type === "video" && meeting.zoom_join_url && (
-              <a
-                href={meeting.zoom_join_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 mt-2 text-xs text-blue-500 hover:text-blue-400 font-medium"
-              >
-                <Video className="h-3.5 w-3.5" /> Join Zoom Meeting
-              </a>
-            )}
+            {(meeting.meeting_type === "video" ||
+              meeting.meeting_type === "teams") &&
+              (meeting.teams_join_url || meeting.zoom_join_url) && (
+                <a
+                  href={meeting.teams_join_url || meeting.zoom_join_url || "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 mt-2 text-xs text-blue-500 hover:text-blue-400 font-medium"
+                >
+                  <Video className="h-3.5 w-3.5" />
+                  {meeting.meeting_type === "teams"
+                    ? "Join Teams Meeting"
+                    : "Join Zoom Meeting"}
+                </a>
+              )}
           </div>
           <div>
             <Label className="text-foreground/80 text-sm mb-1.5 block">
@@ -1237,7 +1256,7 @@ function EditMeetingDialog({
               Meeting Type
             </Label>
             <div className="grid grid-cols-2 gap-2">
-              {(["phone", "video"] as MeetingType[]).map((t) => {
+              {(["phone", "video", "teams"] as MeetingType[]).map((t) => {
                 return (
                   <button
                     key={t}
@@ -1254,7 +1273,11 @@ function EditMeetingDialog({
                     ) : (
                       <Video className="h-4 w-4" />
                     )}
-                    {t === "phone" ? "Phone" : "Video (Zoom)"}
+                    {t === "phone"
+                      ? "Phone"
+                      : t === "teams"
+                        ? "Video (Teams)"
+                        : "Video (Zoom)"}
                   </button>
                 );
               })}
@@ -1667,7 +1690,7 @@ function EventFormDialog({
 const createMeetingSchema = Yup.object({
   meeting_date: Yup.string().required("Date required"),
   meeting_time: Yup.string().required("Time required"),
-  meeting_type: Yup.string().oneOf(["phone", "video"]).required(),
+  meeting_type: Yup.string().oneOf(["phone", "video", "teams"]).required(),
   notes: Yup.string(),
 });
 
@@ -1847,8 +1870,8 @@ function CreateMeetingDialog({
             <Label className="text-foreground/80 text-sm mb-1.5 block">
               Method *
             </Label>
-            <div className="grid grid-cols-2 gap-2">
-              {(["phone", "video"] as MeetingType[]).map((t) => {
+            <div className="grid grid-cols-3 gap-2">
+              {(["phone", "video", "teams"] as MeetingType[]).map((t) => {
                 return (
                   <button
                     key={t}
@@ -1866,7 +1889,11 @@ function CreateMeetingDialog({
                     ) : (
                       <Video className="h-4 w-4" />
                     )}
-                    {t === "phone" ? "Phone" : "Video (Zoom)"}
+                    {t === "phone"
+                      ? "Phone"
+                      : t === "teams"
+                        ? "Video (Teams)"
+                        : "Video (Zoom)"}
                   </button>
                 );
               })}
@@ -1932,6 +1959,7 @@ function CreateMeetingDialog({
 
 function SettingsPanel() {
   const dispatch = useAppDispatch();
+  const { toast } = useToast();
   const {
     settings,
     availability,
@@ -1942,6 +1970,33 @@ function SettingsPanel() {
     isSavingBlockedRange,
   } = useAppSelector((s) => s.scheduler);
   const { user: authUser } = useAppSelector((s) => s.brokerAuth);
+  const roleLabel = authUser?.role === "admin" ? "Mortgage Banker" : "Partner";
+
+  const getFriendlyTeamsError = (message?: string): string => {
+    if (!message) {
+      return `${roleLabel} email is not eligible for Microsoft Teams meetings.`;
+    }
+
+    const normalized = message.toLowerCase();
+
+    if (normalized.includes("email is missing")) {
+      return `${roleLabel} email is missing. Add an email on your profile before enabling Teams.`;
+    }
+
+    if (normalized.includes("not a microsoft 365 user")) {
+      return `This ${roleLabel.toLowerCase()} email is not connected to your company Microsoft 365 account. Use a work Microsoft 365 email or ask your admin to set up Teams for you.`;
+    }
+
+    if (
+      normalized.includes("cannot verify teams eligibility") ||
+      normalized.includes("permissions are insufficient") ||
+      normalized.includes("directory read")
+    ) {
+      return `We could not verify this ${roleLabel.toLowerCase()} email for Teams yet. Please ask your admin to finish the Teams setup in Microsoft 365.`;
+    }
+
+    return message.replace(/broker/gi, roleLabel);
+  };
   const [localAvailability, setLocalAvailability] = useState<
     SchedulerAvailability[]
   >([]);
@@ -1949,6 +2004,12 @@ function SettingsPanel() {
   const [savedSection, setSavedSection] = useState<string | null>(null);
   const [availabilityDirty, setAvailabilityDirty] = useState(false);
   const [connectionMethodsDirty, setConnectionMethodsDirty] = useState(false);
+  const [isCheckingTeamsEligibility, setIsCheckingTeamsEligibility] =
+    useState(false);
+  const [teamsEligibilityResult, setTeamsEligibilityResult] = useState<{
+    eligible: boolean;
+    policyReady?: boolean;
+  } | null>(null);
 
   // Blocked range form state
   const [blockStart, setBlockStart] = useState("");
@@ -1980,25 +2041,36 @@ function SettingsPanel() {
         settings?.timezone ?? authUser?.timezone ?? "America/Los_Angeles",
       allow_phone: settings?.allow_phone ?? true,
       allow_video: settings?.allow_video ?? true,
+      allow_teams: settings?.allow_teams ?? false,
     },
     enableReinitialize: true,
     onSubmit: async (values) => {
-      await dispatch(
-        updateSchedulerSettings({
-          ...values,
-          availability: localAvailability.map((a) => ({
-            day_of_week: a.day_of_week,
-            start_time: a.start_time,
-            end_time: a.end_time,
-            is_active: a.is_active,
-          })),
-        }),
-      );
-      setSavedSection("form");
-      setAvailabilityDirty(false);
-      setTimeout(() => setSavedSection(null), 2000);
-      dispatch(fetchSchedulerSettings());
-      formik.resetForm({ values });
+      try {
+        await dispatch(
+          updateSchedulerSettings({
+            ...values,
+            availability: localAvailability.map((a) => ({
+              day_of_week: a.day_of_week,
+              start_time: a.start_time,
+              end_time: a.end_time,
+              is_active: a.is_active,
+            })),
+          }),
+        ).unwrap();
+        setSavedSection("form");
+        setAvailabilityDirty(false);
+        setTimeout(() => setSavedSection(null), 2000);
+        dispatch(fetchSchedulerSettings());
+        formik.resetForm({ values });
+      } catch (err) {
+        const message =
+          typeof err === "string" ? err : "Failed to save scheduler settings.";
+        toast({
+          title: "Unable to save settings",
+          description: message,
+          variant: "destructive",
+        });
+      }
     },
   });
 
@@ -2046,24 +2118,35 @@ function SettingsPanel() {
 
   const handleSectionSave = async (section: string) => {
     setSavingSection(section);
-    await dispatch(
-      updateSchedulerSettings({
-        ...formik.values,
-        availability: localAvailability.map((a) => ({
-          day_of_week: a.day_of_week,
-          start_time: a.start_time,
-          end_time: a.end_time,
-          is_active: a.is_active,
-        })),
-      }),
-    );
-    setSavingSection(null);
-    if (section === "availability") setAvailabilityDirty(false);
-    if (section === "connection-methods") setConnectionMethodsDirty(false);
-    formik.resetForm({ values: formik.values });
-    setSavedSection(section);
-    setTimeout(() => setSavedSection(null), 2000);
-    dispatch(fetchSchedulerSettings());
+    try {
+      await dispatch(
+        updateSchedulerSettings({
+          ...formik.values,
+          availability: localAvailability.map((a) => ({
+            day_of_week: a.day_of_week,
+            start_time: a.start_time,
+            end_time: a.end_time,
+            is_active: a.is_active,
+          })),
+        }),
+      ).unwrap();
+      if (section === "availability") setAvailabilityDirty(false);
+      if (section === "connection-methods") setConnectionMethodsDirty(false);
+      formik.resetForm({ values: formik.values });
+      setSavedSection(section);
+      setTimeout(() => setSavedSection(null), 2000);
+      dispatch(fetchSchedulerSettings());
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : "Failed to save scheduler settings.";
+      toast({
+        title: "Unable to save settings",
+        description: message,
+        variant: "destructive",
+      });
+    } finally {
+      setSavingSection(null);
+    }
   };
 
   const SectionSaveBar = ({
@@ -2123,20 +2206,33 @@ function SettingsPanel() {
             onCheckedChange={async (v) => {
               const newValues = { ...formik.values, is_enabled: v };
               formik.setFieldValue("is_enabled", v);
-              await dispatch(
-                updateSchedulerSettings({
-                  ...newValues,
-                  availability: localAvailability.map((a) => ({
-                    day_of_week: a.day_of_week,
-                    start_time: a.start_time,
-                    end_time: a.end_time,
-                    is_active: a.is_active,
-                  })),
-                }),
-              );
-              setSavedSection("booking-status");
-              setTimeout(() => setSavedSection(null), 2000);
-              dispatch(fetchSchedulerSettings());
+              try {
+                await dispatch(
+                  updateSchedulerSettings({
+                    ...newValues,
+                    availability: localAvailability.map((a) => ({
+                      day_of_week: a.day_of_week,
+                      start_time: a.start_time,
+                      end_time: a.end_time,
+                      is_active: a.is_active,
+                    })),
+                  }),
+                ).unwrap();
+                setSavedSection("booking-status");
+                setTimeout(() => setSavedSection(null), 2000);
+                dispatch(fetchSchedulerSettings());
+              } catch (err) {
+                formik.setFieldValue("is_enabled", !v);
+                const message =
+                  typeof err === "string"
+                    ? err
+                    : "Failed to update booking status.";
+                toast({
+                  title: "Unable to update booking status",
+                  description: message,
+                  variant: "destructive",
+                });
+              }
             }}
             className="data-[state=checked]:bg-green-500"
           />
@@ -2398,6 +2494,12 @@ function SettingsPanel() {
             sub: "Creates a Zoom meeting automatically",
             icon: <Video className="h-4 w-4 text-blue-400" />,
           },
+          {
+            key: "allow_teams",
+            label: "Video Call (Teams)",
+            sub: "Creates a Microsoft Teams meeting automatically",
+            icon: <Video className="h-4 w-4 text-indigo-400" />,
+          },
         ].map(({ key, label, sub, icon }, i) => {
           return (
             <div
@@ -2416,7 +2518,56 @@ function SettingsPanel() {
               </div>
               <Switch
                 checked={(formik.values as any)[key]}
-                onCheckedChange={(v) => {
+                disabled={key === "allow_teams" && isCheckingTeamsEligibility}
+                onCheckedChange={async (v) => {
+                  if (key === "allow_teams" && !v) {
+                    formik.setFieldValue(key, false);
+                    setConnectionMethodsDirty(true);
+                    return;
+                  }
+
+                  if (key === "allow_teams" && v && !authUser?.email) {
+                    toast({
+                      title: "Cannot enable Teams",
+                      description: getFriendlyTeamsError("email is missing"),
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+
+                  if (key === "allow_teams" && v) {
+                    setIsCheckingTeamsEligibility(true);
+                    try {
+                      const eligibility = await dispatch(
+                        fetchTeamsEligibility(),
+                      ).unwrap();
+                      if (!eligibility.eligible) {
+                        toast({
+                          title: "Cannot enable Teams",
+                          description: getFriendlyTeamsError(eligibility.error),
+                          variant: "destructive",
+                        });
+                        formik.setFieldValue(key, false);
+                        return;
+                      }
+                      setTeamsEligibilityResult(eligibility);
+                    } catch (err) {
+                      const message =
+                        typeof err === "string"
+                          ? err
+                          : "Unable to validate Teams eligibility right now.";
+                      toast({
+                        title: "Cannot enable Teams",
+                        description: getFriendlyTeamsError(message),
+                        variant: "destructive",
+                      });
+                      formik.setFieldValue(key, false);
+                      return;
+                    } finally {
+                      setIsCheckingTeamsEligibility(false);
+                    }
+                  }
+
                   formik.setFieldValue(key, v);
                   setConnectionMethodsDirty(true);
                 }}
@@ -2424,6 +2575,23 @@ function SettingsPanel() {
             </div>
           );
         })}
+        <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          Turn this on only if this {roleLabel.toLowerCase()} uses a company
+          Microsoft 365 email. If this account was just added, Teams access can
+          take up to 24 hours to activate automatically.
+        </div>
+        {(formik.values as any).allow_teams &&
+          teamsEligibilityResult?.policyReady === false && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+              <span className="mt-0.5 shrink-0">⏳</span>
+              <span>
+                <strong>Teams access is activating.</strong> The account was
+                verified but the meeting policy hasn&apos;t propagated yet —
+                this typically takes up to 1 hour. Bookings will work
+                automatically once active.
+              </span>
+            </div>
+          )}
         <SectionSaveBar
           section="connection-methods"
           isDirty={connectionMethodsDirty}
@@ -3486,18 +3654,28 @@ const AdminCalendar: React.FC = () => {
                                 ) : (
                                   <Video className="h-3.5 w-3.5 text-green-400" />
                                 )}
-                                {m.meeting_type === "phone" ? "Phone" : "Video"}
+                                {m.meeting_type === "phone"
+                                  ? "Phone"
+                                  : m.meeting_type === "teams"
+                                    ? "Teams"
+                                    : "Video"}
                               </span>
-                              {m.meeting_type === "video" &&
-                                m.zoom_join_url && (
+                              {(m.meeting_type === "video" ||
+                                m.meeting_type === "teams") &&
+                                (m.teams_join_url || m.zoom_join_url) && (
                                   <a
-                                    href={m.zoom_join_url}
+                                    href={
+                                      m.teams_join_url || m.zoom_join_url || "#"
+                                    }
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={(e) => e.stopPropagation()}
                                     className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-400 mt-0.5"
                                   >
-                                    <Video className="h-3 w-3" /> Join Zoom
+                                    <Video className="h-3 w-3" />
+                                    {m.meeting_type === "teams"
+                                      ? "Join Teams"
+                                      : "Join Zoom"}
                                   </a>
                                 )}
                             </td>

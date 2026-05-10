@@ -2214,7 +2214,7 @@ export interface GetContactSubmissionsResponse {
 // SCHEDULER TYPES
 // =====================================================
 
-export type MeetingType = "phone" | "video";
+export type MeetingType = "phone" | "video" | "teams";
 export type MeetingStatus =
   | "pending"
   | "confirmed"
@@ -2235,6 +2235,7 @@ export interface SchedulerSettings {
   timezone: string;
   allow_phone: boolean;
   allow_video: boolean;
+  allow_teams: boolean;
 }
 
 export interface SchedulerAvailability {
@@ -2263,6 +2264,8 @@ export interface ScheduledMeeting {
   zoom_meeting_id: string | null;
   zoom_join_url: string | null;
   zoom_start_url: string | null;
+  teams_meeting_id: string | null;
+  teams_join_url: string | null;
   status: MeetingStatus;
   notes: string | null;
   broker_notes: string | null;
@@ -2300,6 +2303,7 @@ export interface PublicSchedulerBrokerInfo {
   timezone: string;
   allow_phone: boolean;
   allow_video: boolean;
+  allow_teams: boolean;
   is_enabled: boolean;
 }
 
@@ -2332,6 +2336,7 @@ export interface BookMeetingResponse {
   booking_token: string;
   zoom_join_url: string | null;
   zoom_start_url: string | null;
+  teams_join_url: string | null;
   meeting_date: string;
   meeting_time: string;
   meeting_type: MeetingType;
@@ -2351,6 +2356,13 @@ export interface GetSchedulerSettingsResponse {
   success: boolean;
   settings: SchedulerSettings;
   availability: SchedulerAvailability[];
+}
+
+export interface GetTeamsEligibilityResponse {
+  success: boolean;
+  eligible: boolean;
+  policyReady?: boolean;
+  error?: string;
 }
 
 export interface GetBlockedRangesResponse {
@@ -2380,6 +2392,7 @@ export interface UpdateSchedulerSettingsRequest {
   timezone?: string;
   allow_phone?: boolean;
   allow_video?: boolean;
+  allow_teams?: boolean;
   availability?: Array<{
     day_of_week: number;
     start_time: string;

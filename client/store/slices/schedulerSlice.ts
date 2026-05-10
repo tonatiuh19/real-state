@@ -21,6 +21,7 @@ import type {
   BookMeetingResponse,
   GetPublicSchedulerResponse,
   GetAvailableSlotsResponse,
+  GetTeamsEligibilityResponse,
   AvailableSlot,
   PublicSchedulerBrokerInfo,
 } from "@shared/api";
@@ -150,7 +151,7 @@ interface PublicRescheduleInfo {
   client_name?: string;
   client_email?: string;
   client_phone?: string | null;
-  meeting_type?: "phone" | "video";
+  meeting_type?: "phone" | "video" | "teams";
   old_meeting_date?: string;
   old_meeting_time?: string;
 }
@@ -178,7 +179,9 @@ interface SubmitRescheduleResponse {
   booking_token?: string;
   meeting_date?: string;
   meeting_time?: string;
+  meeting_type?: "phone" | "video" | "teams";
   zoom_join_url?: string | null;
+  teams_join_url?: string | null;
   broker_name?: string;
 }
 
@@ -264,6 +267,24 @@ export const updateSchedulerSettings = createAsyncThunk(
   },
 );
 
+export const fetchTeamsEligibility = createAsyncThunk(
+  "scheduler/fetchTeamsEligibility",
+  async (_: void, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetTeamsEligibilityResponse>(
+        "/api/scheduler/teams-eligibility",
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to validate Teams eligibility",
+      );
+    }
+  },
+);
+
 export const fetchScheduledMeetings = createAsyncThunk(
   "scheduler/fetchMeetings",
   async (
@@ -326,7 +347,7 @@ export const createScheduledMeeting = createAsyncThunk(
       client_phone?: string;
       meeting_date: string;
       meeting_time: string;
-      meeting_type: "phone" | "video";
+      meeting_type: "phone" | "video" | "teams";
       notes?: string;
       target_broker_id?: number;
     },

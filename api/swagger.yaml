@@ -239,12 +239,14 @@ components:
         meeting_end_time: { type: string, example: "14:30" }
         meeting_type:
           type: string
-          enum: [phone, video]
+          enum: [phone, video, teams]
         status:
           type: string
           enum: [confirmed, completed, cancelled, no_show]
         zoom_join_url: { type: string, nullable: true }
         zoom_start_url: { type: string, nullable: true }
+        teams_meeting_id: { type: string, nullable: true }
+        teams_join_url: { type: string, nullable: true }
         booking_token: { type: string }
         notes: { type: string, nullable: true }
         broker_notes: { type: string, nullable: true }
@@ -4107,6 +4109,7 @@ paths:
       description: |
         Creates a confirmed meeting. Sends confirmation email to client and notification to broker.
         Creates a Zoom meeting automatically if `meeting_type: "video"` and Zoom credentials are configured.
+        Creates a Teams meeting automatically if `meeting_type: "teams"` and Azure credentials are configured.
       requestBody:
         required: true
         content:
@@ -4136,7 +4139,7 @@ paths:
                   description: HH:MM format
                 meeting_type:
                   type: string
-                  enum: [phone, video]
+                  enum: [phone, video, teams]
                 notes: { type: string }
       responses:
         "200":
@@ -4152,6 +4155,7 @@ paths:
                       booking_token: { type: string }
                       zoom_join_url: { type: string, nullable: true }
                       zoom_start_url: { type: string, nullable: true }
+                      teams_join_url: { type: string, nullable: true }
                       meeting_date: { type: string, format: date }
                       meeting_time: { type: string }
                       meeting_type: { type: string }
@@ -4167,7 +4171,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "503":
-          description: Video meeting requested but Zoom meeting could not be created
+          description: Video meeting requested but provider meeting could not be created
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -4226,7 +4230,7 @@ paths:
                       client_name: { type: string }
                       client_email: { type: string, format: email }
                       client_phone: { type: string, nullable: true }
-                      meeting_type: { type: string, enum: [phone, video] }
+                      meeting_type: { type: string, enum: [phone, video, teams] }
                       old_meeting_date: { type: string, format: date }
                       old_meeting_time: { type: string, example: "12:00:00" }
         "404":
@@ -4281,6 +4285,7 @@ paths:
                       meeting_date: { type: string }
                       meeting_time: { type: string }
                       zoom_join_url: { type: string, nullable: true }
+                      teams_join_url: { type: string, nullable: true }
                       broker_name: { type: string }
         "400":
           description: Missing or invalid new_date / new_time, or slot unavailable
@@ -4349,6 +4354,7 @@ paths:
                 timezone: { type: string, example: "America/Chicago" }
                 allow_phone: { type: boolean }
                 allow_video: { type: boolean }
+                allow_teams: { type: boolean }
                 availability:
                   type: array
                   items:
@@ -4364,6 +4370,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /scheduler/teams-eligibility:
+    get:
+      tags: [Scheduler (Admin)]
+      summary: Check if current broker can enable Teams meetings
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Eligibility result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      eligible: { type: boolean }
+                      error: { type: string, nullable: true }
 
   /scheduler/meetings:
     get:
@@ -4426,7 +4451,7 @@ paths:
                 client_phone: { type: string }
                 meeting_date: { type: string, format: date }
                 meeting_time: { type: string, example: "10:00" }
-                meeting_type: { type: string, enum: [phone, video] }
+                meeting_type: { type: string, enum: [phone, video, teams] }
                 notes: { type: string }
                 target_broker_id:
                   type: integer
@@ -4444,7 +4469,7 @@ paths:
                       meeting_id: { type: integer }
                       booking_token: { type: string }
         "503":
-          description: Video meeting requested but Zoom meeting could not be created
+          description: Video meeting requested but provider meeting could not be created
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -4475,7 +4500,7 @@ paths:
                 broker_notes: { type: string }
                 meeting_date: { type: string, format: date }
                 meeting_time: { type: string, example: "15:00" }
-                meeting_type: { type: string, enum: [phone, video] }
+                meeting_type: { type: string, enum: [phone, video, teams] }
                 cancelled_reason: { type: string }
                 cancelled_by: { type: string, enum: [client, broker] }
       responses:
@@ -5004,6 +5029,35 @@ paths:
                   updated: { type: integer }
                   unchanged: { type: integer }
                   errors: { type: integer }
+
+  /cron/sync-teams-policy:
+    get:
+      tags: [Webhooks & Cron]
+      summary: Sync Teams application-access policy for teams-enabled users (cron trigger)
+      description: |
+        Runs the server script that grants Teams app-access policy for active users
+        with `allow_teams = 1`.
+
+        Run daily via cPanel cron:
+        `curl -s "https://yourdomain.com/api/cron/sync-teams-policy?secret=CRON_SECRET"`
+      parameters:
+        - in: query
+          name: secret
+          required: false
+          schema: { type: string }
+          description: Shared secret matching `CRON_SECRET` env var
+      responses:
+        "200":
+          description: Teams policy sync complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+                  output: { type: string, nullable: true }
+                  warnings: { type: string, nullable: true }
 
   # ─── Realtor Prospecting Pipeline ─────────────────────────────────────────
   /realtor-prospects:

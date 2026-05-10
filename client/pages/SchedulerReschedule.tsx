@@ -25,7 +25,7 @@ interface RescheduleInfo {
   client_name: string;
   client_email: string;
   client_phone: string | null;
-  meeting_type: "phone" | "video";
+  meeting_type: "phone" | "video" | "teams";
   old_meeting_date: string;
   old_meeting_time: string;
 }
@@ -35,6 +35,8 @@ interface SuccessInfo {
   meeting_date: string;
   meeting_time: string;
   zoom_join_url: string | null;
+  teams_join_url: string | null;
+  meeting_type: "phone" | "video" | "teams";
   broker_name: string;
 }
 
@@ -76,7 +78,7 @@ export default function SchedulerReschedule() {
         client_name?: string;
         client_email?: string;
         client_phone?: string | null;
-        meeting_type?: "phone" | "video";
+        meeting_type?: "phone" | "video" | "teams";
         old_meeting_date?: string;
         old_meeting_time?: string;
       };
@@ -97,7 +99,8 @@ export default function SchedulerReschedule() {
         client_name: data.client_name!,
         client_email: data.client_email!,
         client_phone: data.client_phone ?? null,
-        meeting_type: (data.meeting_type as "phone" | "video") ?? "phone",
+        meeting_type:
+          (data.meeting_type as "phone" | "video" | "teams") ?? "phone",
         old_meeting_date: data.old_meeting_date!,
         old_meeting_time: data.old_meeting_time!,
       });
@@ -130,6 +133,8 @@ export default function SchedulerReschedule() {
       meeting_date?: string;
       meeting_time?: string;
       zoom_join_url?: string | null;
+      teams_join_url?: string | null;
+      meeting_type?: "phone" | "video" | "teams";
       broker_name?: string;
       error?: string;
     };
@@ -143,6 +148,8 @@ export default function SchedulerReschedule() {
       meeting_date: data.meeting_date!,
       meeting_time: data.meeting_time!,
       zoom_join_url: data.zoom_join_url ?? null,
+      teams_join_url: data.teams_join_url ?? null,
+      meeting_type: data.meeting_type ?? info.meeting_type,
       broker_name:
         data.broker_name ?? info.broker_name ?? "Your Mortgage Banker",
     });
@@ -177,8 +184,12 @@ export default function SchedulerReschedule() {
     return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
   };
 
-  const meetingTypeLabel = (value: "phone" | "video") =>
-    value === "video" ? "Video Call" : "Phone Call";
+  const meetingTypeLabel = (value: "phone" | "video" | "teams") =>
+    value === "teams"
+      ? "Video Call (Teams)"
+      : value === "video"
+        ? "Video Call (Zoom)"
+        : "Phone Call";
 
   return (
     <div className="min-h-screen bg-background">
@@ -269,15 +280,21 @@ export default function SchedulerReschedule() {
                     {formatTime(successInfo.meeting_time)}
                   </span>
                 </div>
-                {successInfo.zoom_join_url && (
+                {(successInfo.teams_join_url || successInfo.zoom_join_url) && (
                   <div className="pt-2 border-t border-border">
                     <a
-                      href={successInfo.zoom_join_url}
+                      href={
+                        successInfo.teams_join_url ||
+                        successInfo.zoom_join_url ||
+                        "#"
+                      }
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center justify-center gap-2 w-full h-9 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-700 transition-colors"
                     >
-                      Join Video Call
+                      {successInfo.meeting_type === "teams"
+                        ? "Join Teams Call"
+                        : "Join Video Call"}
                     </a>
                   </div>
                 )}

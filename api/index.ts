@@ -13,10 +13,15 @@ import jwt from "jsonwebtoken";
 import { Resend } from "resend";
 import twilio from "twilio";
 import crypto from "crypto";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import path from "path";
 import { ImapFlow } from "imapflow";
 import Ably from "ably";
 import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+
+const execFileAsync = promisify(execFile);
 
 // Validate critical environment variables
 if (
@@ -2560,9 +2565,12 @@ const verifyBrokerSession = async (
         });
       }
 
-      // Get broker details
+      // Get broker details with profile avatar so header avatar does not flicker/reset.
       const [brokers] = await pool.query<any[]>(
-        "SELECT * FROM brokers WHERE id = ? AND status = 'active' AND tenant_id = ?",
+        `SELECT b.*, bp.avatar_url
+         FROM brokers b
+         LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
+         WHERE b.id = ? AND b.status = 'active' AND b.tenant_id = ?`,
         [decoded.brokerId, MORTGAGE_TENANT_ID],
       );
 
@@ -14856,8 +14864,9 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
 /**
  * GET /api/conversations/mailboxes
  */
-const handleGetConversationMailboxes: RequestHandler = async (_req, res) => {
+const handleGetConversationMailboxes: RequestHandler = async (req, res) => {
   try {
+    const brokerId = (req as any).brokerId;
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT m.id, m.provider, m.mailbox_email, m.display_name, m.is_shared,
               m.assigned_broker_id,
@@ -14868,8 +14877,9 @@ const handleGetConversationMailboxes: RequestHandler = async (_req, res) => {
        FROM conversation_email_mailboxes m
        LEFT JOIN brokers b ON b.id = m.assigned_broker_id
        WHERE m.tenant_id = ? AND m.status != 'pending'
+         AND (m.is_shared = 1 OR m.assigned_broker_id = ?)
        ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`,
-      [MORTGAGE_TENANT_ID],
+      [MORTGAGE_TENANT_ID, brokerId],
     );
 
     return res.json({ success: true, mailboxes: rows });
@@ -15023,6 +15033,56 @@ const handleCronSyncOffice365Mailboxes: RequestHandler = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, error: "Office365 sync failed" });
+  }
+};
+
+/**
+ * GET /api/cron/sync-teams-policy
+ *
+ * Secret-protected cron endpoint that runs scripts/teams-policy-sync.sh.
+ * Intended for cPanel cron callers that prefer URL-based triggers.
+ */
+const handleCronSyncTeamsPolicy: RequestHandler = async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ||
+        (req.query.secret as string);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    const scriptPath = path.resolve(
+      process.cwd(),
+      "scripts/teams-policy-sync.sh",
+    );
+    const { stdout, stderr } = await execFileAsync("bash", [scriptPath], {
+      timeout: 10 * 60 * 1000,
+      maxBuffer: 1024 * 1024,
+    });
+
+    return res.json({
+      success: true,
+      message: "Teams policy sync completed",
+      output: stdout?.trim() || null,
+      warnings: stderr?.trim() || null,
+    });
+  } catch (error: any) {
+    const stderr =
+      typeof error?.stderr === "string" ? error.stderr.trim() : null;
+    const stdout =
+      typeof error?.stdout === "string" ? error.stdout.trim() : null;
+
+    console.error("Teams policy cron sync error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: stderr || error?.message || "Teams policy sync failed",
+      output: stdout,
+    });
   }
 };
 
@@ -17058,10 +17118,22 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       // sidebar in-place (no full refetch needed).
       const [refreshedThread] = await pool.query<RowDataPacket[]>(
         `SELECT ct.*, la.application_number,
-                CONCAT(cl.first_name, ' ', cl.last_name) as client_full_name
+                COALESCE(
+                  ct.client_name,
+                  CONCAT(cl.first_name, ' ', cl.last_name),
+                  CONCAT(cb.first_name, ' ', cb.last_name),
+                  CONCAT(pb.first_name, ' ', pb.last_name)
+                ) AS client_name,
+                CONCAT(cl.first_name, ' ', cl.last_name) AS client_full_name
          FROM conversation_threads ct
          LEFT JOIN loan_applications la ON ct.application_id = la.id
          LEFT JOIN clients cl ON ct.client_id = cl.id
+         LEFT JOIN brokers cb ON ct.contact_broker_id = cb.id
+         LEFT JOIN brokers pb ON pb.tenant_id = ct.tenant_id
+           AND ct.client_name IS NULL AND ct.client_id IS NULL AND ct.contact_broker_id IS NULL
+           AND ct.client_phone IS NOT NULL
+           AND RIGHT(REGEXP_REPLACE(pb.phone, '[^0-9]', ''), 10)
+               = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
          WHERE ct.conversation_id = ? AND ct.tenant_id = ?
          LIMIT 1`,
         [finalConversationId, MORTGAGE_TENANT_ID],
@@ -17417,12 +17489,24 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
 
     // Get updated thread
     const [updatedThread] = await pool.query<RowDataPacket[]>(
-      `SELECT ct.*, 
+      `SELECT ct.*,
               la.application_number,
-              CONCAT(cl.first_name, ' ', cl.last_name) as client_full_name
+              COALESCE(
+                ct.client_name,
+                CONCAT(cl.first_name, ' ', cl.last_name),
+                CONCAT(cb.first_name, ' ', cb.last_name),
+                CONCAT(pb.first_name, ' ', pb.last_name)
+              ) AS client_name,
+              CONCAT(cl.first_name, ' ', cl.last_name) AS client_full_name
        FROM conversation_threads ct
        LEFT JOIN loan_applications la ON ct.application_id = la.id
        LEFT JOIN clients cl ON ct.client_id = cl.id
+       LEFT JOIN brokers cb ON ct.contact_broker_id = cb.id
+       LEFT JOIN brokers pb ON pb.tenant_id = ct.tenant_id
+         AND ct.client_name IS NULL AND ct.client_id IS NULL AND ct.contact_broker_id IS NULL
+         AND ct.client_phone IS NOT NULL
+         AND RIGHT(REGEXP_REPLACE(pb.phone, '[^0-9]', ''), 10)
+             = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
        WHERE ct.conversation_id = ? AND ct.tenant_id = ?`,
       [conversationId, MORTGAGE_TENANT_ID],
     );
@@ -18866,6 +18950,15 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
           inboxNumber: calledNumber || null,
           recipientPhone: callerNumber,
         }),
+      )
+      .then(() =>
+        // Notify the sidebar so the call appears in real-time.
+        // A partial thread-updated is enough — the UI will full-refetch
+        // if the thread isn't already in the list.
+        publishToAbly("conversations:all", "thread-updated", {
+          conversationId,
+          thread: { status: "active" },
+        }).catch(() => undefined),
       )
       .catch((logErr) =>
         console.error("[handleVoiceIncoming] Log error:", logErr),
@@ -22913,7 +23006,7 @@ function createServer() {
 
       const [rows] = (await pool.query(
         `SELECT sm.id, sm.meeting_date, sm.meeting_time, sm.meeting_end_time,
-                sm.meeting_type, sm.status, sm.zoom_join_url, sm.notes,
+                sm.meeting_type, sm.status, sm.zoom_join_url, sm.teams_join_url, sm.notes,
                 sm.booking_token, sm.cancelled_reason,
                 CONCAT(b.first_name, ' ', b.last_name) AS broker_name,
                 b.phone AS broker_phone
@@ -23072,6 +23165,10 @@ function createServer() {
     "/api/cron/sync-office365-mailboxes",
     handleCronSyncOffice365Mailboxes,
   );
+
+  // Teams application-access policy sync cron — run daily via cPanel cron:
+  //   curl -s "https://yourdomain.com/api/cron/sync-teams-policy?secret=CRON_SECRET"
+  expressApp.get("/api/cron/sync-teams-policy", handleCronSyncTeamsPolicy);
 
   // Reminder flow execution engine cron — run every 5-15 min via cPanel cron:
   //   curl -s "https://yourdomain.com/api/cron/process-reminder-flows?secret=CRON_SECRET"
@@ -23497,8 +23594,9 @@ function createServer() {
     meetingDate: string; // "YYYY-MM-DD"
     meetingTime: string; // "HH:MM"
     meetingEndTime: string;
-    meetingType: "phone" | "video";
+    meetingType: "phone" | "video" | "teams";
     videoRoomUrl: string | null;
+    videoHostUrl: string | null;
     brokerPhone: string | null;
     bookingToken: string;
     notes: string | null;
@@ -23528,27 +23626,31 @@ function createServer() {
       : "";
     const timeLabel = (t: string) =>
       `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
-    const connectionHtml =
-      opts.meetingType === "video"
-        ? opts.videoRoomUrl
-          ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+    const isVideoMeeting =
+      opts.meetingType === "video" || opts.meetingType === "teams";
+    const videoProviderLabel =
+      opts.meetingType === "teams" ? "Microsoft Teams" : "Zoom";
+    const connectionHtml = isVideoMeeting
+      ? opts.videoRoomUrl
+        ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
             <tr>
               <td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:14px 18px;">
-                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 Zoom Video Call Link</p>
+                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 ${videoProviderLabel} Video Call Link</p>
                 <a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:14px;word-break:break-all;">${opts.videoRoomUrl}</a>
+                ${opts.videoHostUrl ? `<p style="margin:8px 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">Host Link</p><a href="${opts.videoHostUrl}" style="color:#2D8CFF;font-size:13px;word-break:break-all;">${opts.videoHostUrl}</a>` : ""}
                 <p style="margin:6px 0 0 0;color:#64748b;font-size:12px;">Click the link above at meeting time — no download required if using a browser.</p>
               </td>
             </tr>
           </table>`
-          : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+        : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
             <tr>
               <td style="background-color:#fff7ed;border-left:4px solid #f97316;border-radius:0 8px 8px 0;padding:14px 18px;">
-                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 Zoom Video Call</p>
-                <p style="margin:0;color:#475569;font-size:13px;">Zoom link is being generated. Please contact your mortgage banker if you don't receive a join link shortly.</p>
+                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">🎥 ${videoProviderLabel} Video Call</p>
+                <p style="margin:0;color:#475569;font-size:13px;">Join link is being generated. Please contact your mortgage banker if you don't receive a join link shortly.</p>
               </td>
             </tr>
           </table>`
-        : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+      : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
             <tr>
               <td style="background-color:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:0 8px 8px 0;padding:14px 18px;">
                 <p style="margin:0 0 4px 0;color:#0f172a;font-size:14px;font-weight:700;">📞 Phone Call</p>
@@ -23560,16 +23662,15 @@ function createServer() {
     const cancelUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/cancel/${opts.bookingToken}`;
     const rescheduleUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/scheduler/reschedule/${opts.rescheduleToken}`;
 
-    const icsLocation =
-      opts.meetingType === "video"
-        ? opts.videoRoomUrl || "Zoom Video Call (join link pending)"
-        : "Phone Call — your mortgage banker will call you";
-    const icsDescription =
-      opts.meetingType === "video"
-        ? opts.videoRoomUrl
-          ? `Join the Zoom meeting: ${opts.videoRoomUrl}`
-          : `Zoom video call with ${opts.brokerName} (join link pending)`
-        : `Phone call meeting with ${opts.brokerName}${opts.brokerPhone ? ` — ${opts.brokerPhone}` : ""}`;
+    const icsLocation = isVideoMeeting
+      ? opts.videoRoomUrl ||
+        `${videoProviderLabel} Video Call (join link pending)`
+      : "Phone Call — your mortgage banker will call you";
+    const icsDescription = isVideoMeeting
+      ? opts.videoRoomUrl
+        ? `Join the ${videoProviderLabel} meeting: ${opts.videoRoomUrl}`
+        : `${videoProviderLabel} video call with ${opts.brokerName} (join link pending)`
+      : `Phone call meeting with ${opts.brokerName}${opts.brokerPhone ? ` — ${opts.brokerPhone}` : ""}`;
     const icsAttachment = generateIcs({
       uid: `meeting-${opts.meetingId}@encoremortgage.org`,
       summary: `Mortgage Meeting with ${opts.brokerName}`,
@@ -23620,7 +23721,7 @@ function createServer() {
                       </td></tr>
                       <tr><td style="padding:6px 0;">
                         <span style="color:#64748b;font-size:13px;display:inline-block;width:130px;">📡 Method</span>
-                        <strong style="color:#0f172a;font-size:14px;">${opts.meetingType === "video" ? "Zoom Video Call" : "Phone Call"}</strong>
+                        <strong style="color:#0f172a;font-size:14px;">${isVideoMeeting ? `${videoProviderLabel} Video Call` : "Phone Call"}</strong>
                       </td></tr>
                     </table>
                   </td></tr>
@@ -23666,9 +23767,9 @@ function createServer() {
     meetingDate: string;
     meetingTime: string;
     meetingEndTime: string;
-    meetingType: "phone" | "video";
+    meetingType: "phone" | "video" | "teams";
     videoRoomUrl: string | null;
-    zoomStartUrl: string | null;
+    videoHostUrl: string | null;
     notes: string | null;
     meetingId: number;
     brokerTimezone?: string;
@@ -23697,6 +23798,11 @@ function createServer() {
     const timeLabel = (t: string) =>
       `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
     const adminUrl = `${process.env.BASE_URL || "https://portal.encoremortgage.org"}/admin/scheduler`;
+
+    const isVideoMeeting =
+      opts.meetingType === "video" || opts.meetingType === "teams";
+    const videoProviderLabel =
+      opts.meetingType === "teams" ? "Microsoft Teams" : "Zoom";
 
     await sendViaResend({
       from: process.env.SMTP_FROM,
@@ -23735,12 +23841,12 @@ function createServer() {
                       </td></tr>
                       <tr><td style="padding:6px 0;">
                         <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">📡 Method</span>
-                        <strong style="color:#0f172a;font-size:14px;">${opts.meetingType === "video" ? "Video Call" : "Phone Call"}</strong>
+                        <strong style="color:#0f172a;font-size:14px;">${isVideoMeeting ? `${videoProviderLabel} Video Call` : "Phone Call"}</strong>
                       </td></tr>
                     </table>
                   </td></tr>
                 </table>
-                ${opts.videoRoomUrl ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">🎥 Zoom — Client Join Link</p><a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:13px;">${opts.videoRoomUrl}</a>${opts.zoomStartUrl ? `<p style="margin:8px 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">▶️ Your Host Start Link</p><a href="${opts.zoomStartUrl}" style="color:#2D8CFF;font-size:13px;">Start the meeting as host</a>` : ""}</td></tr></table>` : ""}
+                ${opts.videoRoomUrl ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">🎥 ${videoProviderLabel} — Client Join Link</p><a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:13px;">${opts.videoRoomUrl}</a>${opts.videoHostUrl ? `<p style="margin:8px 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">Host Link</p><a href="${opts.videoHostUrl}" style="color:#2D8CFF;font-size:13px;">Open host link</a>` : ""}</td></tr></table>` : ""}
                 ${opts.notes ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#f8fafc;border-radius:8px;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;">Client Notes</p><p style="margin:0;color:#475569;font-size:14px;">${opts.notes}</p></td></tr></table>` : ""}
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
                   <tr><td align="center">
@@ -23922,6 +24028,221 @@ function createServer() {
     };
   }
 
+  let _microsoftGraphAccessToken: string | null = null;
+  let _microsoftGraphTokenExpiry = 0;
+
+  async function getMicrosoftGraphAccessToken(): Promise<string | null> {
+    const tenantId = process.env.OFFICE365_TENANT_ID;
+    const clientId = process.env.OFFICE365_CLIENT_ID;
+    const clientSecret = process.env.OFFICE365_CLIENT_SECRET;
+    if (!tenantId || !clientId || !clientSecret) return null;
+
+    if (_microsoftGraphAccessToken && Date.now() < _microsoftGraphTokenExpiry) {
+      return _microsoftGraphAccessToken;
+    }
+
+    const params = new URLSearchParams();
+    params.set("grant_type", "client_credentials");
+    params.set("client_id", clientId);
+    params.set("client_secret", clientSecret);
+    params.set("scope", "https://graph.microsoft.com/.default");
+
+    const resp = await fetch(
+      `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      },
+    );
+
+    if (!resp.ok) {
+      console.error(
+        "Microsoft Graph token fetch failed:",
+        resp.status,
+        await resp.text(),
+      );
+      return null;
+    }
+
+    const json = (await resp.json()) as {
+      access_token: string;
+      expires_in: number;
+    };
+
+    _microsoftGraphAccessToken = json.access_token;
+    _microsoftGraphTokenExpiry = Date.now() + (json.expires_in - 60) * 1000;
+    return _microsoftGraphAccessToken;
+  }
+
+  async function createTeamsMeeting(opts: {
+    organizerEmail: string;
+    subject: string;
+    startDatetime: string;
+    endDatetime: string;
+  }): Promise<
+    | {
+        meeting_id: string;
+        join_url: string;
+        host_url: string | null;
+      }
+    | { policyPending: true }
+    | null
+  > {
+    const normalizeGraphDateTime = (value: string): string => {
+      // Graph onlineMeetings expects timezone-aware ISO datetimes.
+      return /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+    };
+
+    const token = await getMicrosoftGraphAccessToken();
+    if (!token) return null;
+    const configuredOrganizerId =
+      process.env.OFFICE365_TEAMS_ORGANIZER_ID?.trim() || "";
+    const configuredOrganizerEmail =
+      process.env.OFFICE365_TEAMS_ORGANIZER_EMAIL?.trim() || "";
+
+    const organizerCandidates = Array.from(
+      new Set(
+        [configuredOrganizerId, configuredOrganizerEmail, opts.organizerEmail]
+          .map((v) => v.trim())
+          .filter(Boolean),
+      ),
+    );
+
+    if (organizerCandidates.length === 0) {
+      console.error("Teams create meeting failed: no organizer candidate");
+      return null;
+    }
+
+    let lastError: { status: number; body: string; organizer: string } | null =
+      null;
+    let policyPendingDetected = false;
+
+    for (const organizer of organizerCandidates) {
+      const resp = await fetch(
+        `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(organizer)}/onlineMeetings`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            subject: opts.subject,
+            startDateTime: normalizeGraphDateTime(opts.startDatetime),
+            endDateTime: normalizeGraphDateTime(opts.endDatetime),
+          }),
+        },
+      );
+
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          id: string;
+          joinWebUrl: string;
+        };
+        return {
+          meeting_id: data.id,
+          join_url: data.joinWebUrl,
+          host_url: data.joinWebUrl,
+        };
+      }
+
+      const body = await resp.text();
+      console.error(
+        "Teams create meeting attempt failed:",
+        resp.status,
+        "organizer:",
+        organizer,
+        body,
+      );
+      lastError = { status: resp.status, body, organizer };
+
+      if (resp.status === 404) {
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed?.error?.code === "UnknownError") {
+            policyPendingDetected = true;
+          }
+        } catch {
+          // body not JSON — treat as generic 404
+        }
+        continue;
+      }
+      if (resp.status === 403) {
+        continue;
+      }
+    }
+
+    if (lastError) {
+      console.error(
+        "Teams create meeting failed:",
+        lastError.status,
+        "organizer:",
+        lastError.organizer,
+        lastError.body,
+      );
+    }
+    if (policyPendingDetected) return { policyPending: true };
+    return null;
+  }
+
+  async function validateTeamsOrganizerEligibility(opts: {
+    brokerEmail: string;
+  }): Promise<{ ok: true } | { ok: false; error: string }> {
+    const overrideOrganizerId =
+      process.env.OFFICE365_TEAMS_ORGANIZER_ID?.trim() || "";
+    const overrideOrganizerEmail =
+      process.env.OFFICE365_TEAMS_ORGANIZER_EMAIL?.trim() || "";
+
+    // If a global organizer override exists, teams meetings do not depend on
+    // each broker email being a tenant user.
+    if (overrideOrganizerId || overrideOrganizerEmail) {
+      return { ok: true };
+    }
+
+    const token = await getMicrosoftGraphAccessToken();
+    if (!token) {
+      return {
+        ok: false,
+        error:
+          "Teams is not configured in server environment. Set OFFICE365_TENANT_ID, OFFICE365_CLIENT_ID and OFFICE365_CLIENT_SECRET.",
+      };
+    }
+
+    const resp = await fetch(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(opts.brokerEmail)}?$select=id,mail,userPrincipalName`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (resp.ok) {
+      return { ok: true };
+    }
+
+    if (resp.status === 404) {
+      return {
+        ok: false,
+        error:
+          "Cannot enable Teams: this broker email is not a Microsoft 365 user in your tenant. Use a tenant mailbox for the broker or set OFFICE365_TEAMS_ORGANIZER_ID / OFFICE365_TEAMS_ORGANIZER_EMAIL as a global organizer.",
+      };
+    }
+
+    if (resp.status === 403) {
+      return {
+        ok: false,
+        error:
+          "Cannot verify Teams eligibility for this broker email. Azure app permissions are insufficient to read users. Grant directory read permission or configure OFFICE365_TEAMS_ORGANIZER_ID / OFFICE365_TEAMS_ORGANIZER_EMAIL.",
+      };
+    }
+
+    return {
+      ok: false,
+      error:
+        "Unable to validate Teams organizer eligibility right now. Please try again in a moment.",
+    };
+  }
+
   // ---- Helper: compute available slots for a given date ----
 
   async function getAvailableSlotsForDate(
@@ -24071,8 +24392,8 @@ function createServer() {
       // Upsert default settings if missing
       await pool.query(
         `INSERT IGNORE INTO scheduler_settings
-           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video)
-         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1)`,
+           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1, 0)`,
         [MORTGAGE_TENANT_ID, brokerRow.id],
       );
 
@@ -24127,6 +24448,7 @@ function createServer() {
           timezone: settings.timezone,
           allow_phone: !!settings.allow_phone,
           allow_video: !!settings.allow_video,
+          allow_teams: !!settings.allow_teams,
           is_enabled: !!settings.is_enabled,
         },
         available_dates: availableDates,
@@ -24218,7 +24540,7 @@ function createServer() {
         client_phone?: string;
         meeting_date?: string;
         meeting_time?: string;
-        meeting_type?: "phone" | "video";
+        meeting_type?: "phone" | "video" | "teams";
         notes?: string;
       };
 
@@ -24306,6 +24628,11 @@ function createServer() {
           .status(400)
           .json({ success: false, error: "Video meetings are not available" });
       }
+      if (meeting_type === "teams" && !settings.allow_teams) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Teams meetings are not available" });
+      }
 
       // Validate slot is truly available
       const allSlots = await getAvailableSlotsForDate(
@@ -24334,6 +24661,9 @@ function createServer() {
       let zoomMeetingId: string | null = null;
       let zoomJoinUrl: string | null = null;
       let zoomStartUrl: string | null = null;
+      let teamsMeetingId: string | null = null;
+      let teamsJoinUrl: string | null = null;
+      let teamsHostUrl: string | null = null;
 
       if (meeting_type === "video") {
         const zoomMeeting = await createZoomMeeting({
@@ -24354,14 +24684,42 @@ function createServer() {
           });
         }
       }
+      if (meeting_type === "teams") {
+        const [startHour, startMinute] = meeting_time.split(":").map(Number);
+        const endMinutes =
+          startHour * 60 + startMinute + settings.slot_duration_minutes;
+        const endHour = Math.floor(endMinutes / 60);
+        const endMinute = endMinutes % 60;
+        const teamsMeeting = await createTeamsMeeting({
+          organizerEmail: brokerData.email,
+          subject: settings.meeting_title || "Mortgage Consultation",
+          startDatetime: `${meeting_date}T${meeting_time}:00`,
+          endDatetime: `${meeting_date}T${String(endHour).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}:00`,
+        });
+        if (teamsMeeting && !("policyPending" in teamsMeeting)) {
+          teamsMeetingId = teamsMeeting.meeting_id;
+          teamsJoinUrl = teamsMeeting.join_url;
+          teamsHostUrl = teamsMeeting.host_url;
+        } else {
+          const isPending = teamsMeeting && "policyPending" in teamsMeeting;
+          return res.status(503).json({
+            success: false,
+            errorCode: isPending ? "TEAMS_POLICY_PENDING" : undefined,
+            error: isPending
+              ? "Teams meeting setup is still activating. This typically takes up to 1 hour after first setup. Please try again in a few minutes."
+              : "Unable to create Teams meeting right now. Please try again in a moment.",
+          });
+        }
+      }
 
       const [result] = await pool.query<ResultSetHeader>(
         `INSERT INTO scheduled_meetings
            (tenant_id, broker_id, client_name, client_email, client_phone,
             meeting_date, meeting_time, meeting_end_time, meeting_type,
             zoom_meeting_id, zoom_join_url, zoom_start_url,
+            teams_meeting_id, teams_join_url,
             status, notes, booking_token, public_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
         [
           MORTGAGE_TENANT_ID,
           brokerId,
@@ -24375,6 +24733,8 @@ function createServer() {
           zoomMeetingId,
           zoomJoinUrl,
           zoomStartUrl,
+          teamsMeetingId,
+          teamsJoinUrl,
           notes || null,
           bookingToken,
           brokerData.public_token,
@@ -24394,7 +24754,8 @@ function createServer() {
         meetingTime: meeting_time,
         meetingEndTime: requestedSlot.end_time,
         meetingType: meeting_type,
-        videoRoomUrl: zoomJoinUrl,
+        videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+        videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
         brokerPhone: brokerData.phone,
         bookingToken,
         notes: notes || null,
@@ -24412,8 +24773,8 @@ function createServer() {
         meetingTime: meeting_time,
         meetingEndTime: requestedSlot.end_time,
         meetingType: meeting_type,
-        videoRoomUrl: zoomJoinUrl,
-        zoomStartUrl,
+        videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+        videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
         notes: notes || null,
         meetingId: result.insertId,
         brokerTimezone: brokerData.timezone || undefined,
@@ -24451,6 +24812,7 @@ function createServer() {
         booking_token: bookingToken,
         zoom_join_url: zoomJoinUrl,
         zoom_start_url: zoomStartUrl,
+        teams_join_url: teamsJoinUrl,
         meeting_date,
         meeting_time,
         meeting_type,
@@ -24623,6 +24985,9 @@ function createServer() {
       let zoomMeetingId: string | null = null;
       let zoomJoinUrl: string | null = null;
       let zoomStartUrl: string | null = null;
+      let teamsMeetingId: string | null = null;
+      let teamsJoinUrl: string | null = null;
+      let teamsHostUrl: string | null = null;
 
       if (old.meeting_type === "video") {
         const zoomMeeting = await createZoomMeeting({
@@ -24643,6 +25008,33 @@ function createServer() {
           });
         }
       }
+      if (old.meeting_type === "teams") {
+        const [startHour, startMinute] = new_time.split(":").map(Number);
+        const endMinutes =
+          startHour * 60 + startMinute + settings.slot_duration_minutes;
+        const endHour = Math.floor(endMinutes / 60);
+        const endMinute = endMinutes % 60;
+        const teamsMeeting = await createTeamsMeeting({
+          organizerEmail: old.broker_email,
+          subject: settings.meeting_title || "Mortgage Consultation",
+          startDatetime: `${new_date}T${new_time}:00`,
+          endDatetime: `${new_date}T${String(endHour).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}:00`,
+        });
+        if (teamsMeeting && !("policyPending" in teamsMeeting)) {
+          zoomMeetingId = teamsMeeting.meeting_id;
+          zoomJoinUrl = teamsMeeting.join_url;
+          zoomStartUrl = teamsMeeting.host_url;
+        } else {
+          const isPending = teamsMeeting && "policyPending" in teamsMeeting;
+          return res.status(503).json({
+            success: false,
+            errorCode: isPending ? "TEAMS_POLICY_PENDING" : undefined,
+            error: isPending
+              ? "Teams meeting setup is still activating. This typically takes up to 1 hour after first setup. Please try rescheduling again in a few minutes."
+              : "Unable to create Teams meeting right now. Please try rescheduling again in a moment.",
+          });
+        }
+      }
 
       const newBookingToken = crypto.randomUUID();
 
@@ -24652,8 +25044,9 @@ function createServer() {
            (tenant_id, broker_id, client_name, client_email, client_phone,
             meeting_date, meeting_time, meeting_end_time, meeting_type,
             zoom_meeting_id, zoom_join_url, zoom_start_url,
+          teams_meeting_id, teams_join_url,
             status, notes, booking_token, public_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)`,
         [
           MORTGAGE_TENANT_ID,
           old.broker_id,
@@ -24667,6 +25060,8 @@ function createServer() {
           zoomMeetingId,
           zoomJoinUrl,
           zoomStartUrl,
+          old.meeting_type === "teams" ? zoomMeetingId : null,
+          old.meeting_type === "teams" ? zoomJoinUrl : null,
           old.notes,
           newBookingToken,
           old.broker_public_token,
@@ -24687,6 +25082,7 @@ function createServer() {
         meetingEndTime: requestedSlot.end_time,
         meetingType: old.meeting_type,
         videoRoomUrl: zoomJoinUrl,
+        videoHostUrl: zoomStartUrl,
         brokerPhone: old.broker_phone,
         bookingToken: newBookingToken,
         notes: old.notes || null,
@@ -24705,7 +25101,7 @@ function createServer() {
         meetingEndTime: requestedSlot.end_time,
         meetingType: old.meeting_type,
         videoRoomUrl: zoomJoinUrl,
-        zoomStartUrl,
+        videoHostUrl: zoomStartUrl,
         notes: old.notes || null,
         meetingId: result.insertId,
         brokerTimezone: old.broker_timezone || undefined,
@@ -24718,7 +25114,9 @@ function createServer() {
         booking_token: newBookingToken,
         meeting_date: new_date,
         meeting_time: new_time,
+        meeting_type: old.meeting_type,
         zoom_join_url: zoomJoinUrl,
+        teams_join_url: old.meeting_type === "teams" ? zoomJoinUrl : null,
         broker_name: brokerName,
       });
     } catch (err) {
@@ -24798,8 +25196,8 @@ function createServer() {
 
       await pool.query(
         `INSERT INTO scheduler_settings
-           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video)
-         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1)
+           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1, 0)
          ON DUPLICATE KEY UPDATE updated_at = updated_at`,
         [MORTGAGE_TENANT_ID, reqBrokerId],
       );
@@ -24829,6 +25227,7 @@ function createServer() {
           is_enabled: !!settings.is_enabled,
           allow_phone: !!settings.allow_phone,
           allow_video: !!settings.allow_video,
+          allow_teams: !!settings.allow_teams,
         },
         availability: availability.map((a) => ({
           ...a,
@@ -24857,6 +25256,7 @@ function createServer() {
         timezone,
         allow_phone,
         allow_video,
+        allow_teams,
         availability,
       } = req.body as {
         is_enabled?: boolean;
@@ -24869,6 +25269,7 @@ function createServer() {
         timezone?: string;
         allow_phone?: boolean;
         allow_video?: boolean;
+        allow_teams?: boolean;
         availability?: Array<{
           day_of_week: number;
           start_time: string;
@@ -24877,12 +25278,41 @@ function createServer() {
         }>;
       };
 
+      if (allow_teams === true) {
+        const [[brokerRow]] = await pool.query<RowDataPacket[]>(
+          `SELECT email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [reqBrokerId, MORTGAGE_TENANT_ID],
+        );
+
+        if (!brokerRow?.email) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "Cannot enable Teams: broker email is missing. Update broker profile email first.",
+          });
+        }
+
+        const eligibility = await validateTeamsOrganizerEligibility({
+          brokerEmail: String(brokerRow.email),
+        });
+        if (!eligibility.ok) {
+          const eligibilityError =
+            "error" in eligibility
+              ? eligibility.error
+              : "Unable to validate Teams organizer eligibility right now.";
+          return res.status(400).json({
+            success: false,
+            error: eligibilityError,
+          });
+        }
+      }
+
       await pool.query(
         `INSERT INTO scheduler_settings
            (tenant_id, broker_id, is_enabled, meeting_title, meeting_description,
             slot_duration_minutes, buffer_time_minutes, advance_booking_days,
-            min_booking_hours, timezone, allow_phone, allow_video)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            is_enabled = COALESCE(VALUES(is_enabled), is_enabled),
            meeting_title = COALESCE(VALUES(meeting_title), meeting_title),
@@ -24893,7 +25323,8 @@ function createServer() {
            min_booking_hours = COALESCE(VALUES(min_booking_hours), min_booking_hours),
            timezone = COALESCE(VALUES(timezone), timezone),
            allow_phone = COALESCE(VALUES(allow_phone), allow_phone),
-           allow_video = COALESCE(VALUES(allow_video), allow_video)`,
+            allow_video = COALESCE(VALUES(allow_video), allow_video),
+            allow_teams = COALESCE(VALUES(allow_teams), allow_teams)`,
         [
           MORTGAGE_TENANT_ID,
           reqBrokerId,
@@ -24907,6 +25338,7 @@ function createServer() {
           timezone || null,
           allow_phone !== undefined ? (allow_phone ? 1 : 0) : null,
           allow_video !== undefined ? (allow_video ? 1 : 0) : null,
+          allow_teams !== undefined ? (allow_teams ? 1 : 0) : null,
         ],
       );
 
@@ -24942,6 +25374,80 @@ function createServer() {
       return res.json({ success: true, message: "Scheduler settings updated" });
     } catch (err) {
       console.error("handleUpdateSchedulerSettings error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleGetTeamsEligibility: RequestHandler = async (req, res) => {
+    try {
+      const reqBrokerId = (req as any).brokerId as number;
+
+      const [[brokerRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [reqBrokerId, MORTGAGE_TENANT_ID],
+      );
+
+      if (!brokerRow?.email) {
+        return res.json({
+          success: true,
+          eligible: false,
+          error:
+            "Cannot enable Teams: broker email is missing. Update broker profile email first.",
+        });
+      }
+
+      const eligibility = await validateTeamsOrganizerEligibility({
+        brokerEmail: String(brokerRow.email),
+      });
+
+      if (!eligibility.ok) {
+        const eligibilityError =
+          "error" in eligibility
+            ? eligibility.error
+            : "Unable to validate Teams organizer eligibility right now.";
+        return res.json({
+          success: true,
+          eligible: false,
+          error: eligibilityError,
+        });
+      }
+
+      // Non-destructive policy readiness check: attempt to list meetings.
+      // Returns 200 if app access policy is applied, 404/UnknownError if pending.
+      let policyReady = true;
+      const overrideOrg =
+        process.env.OFFICE365_TEAMS_ORGANIZER_ID?.trim() ||
+        process.env.OFFICE365_TEAMS_ORGANIZER_EMAIL?.trim() ||
+        "";
+      if (!overrideOrg) {
+        const policyToken = await getMicrosoftGraphAccessToken();
+        if (policyToken) {
+          const policyResp = await fetch(
+            `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(String(brokerRow.email))}/onlineMeetings?$top=1`,
+            { headers: { Authorization: `Bearer ${policyToken}` } },
+          );
+          if (!policyResp.ok) {
+            const policyBody = await policyResp.text().catch(() => "");
+            try {
+              const parsed = JSON.parse(policyBody);
+              if (
+                parsed?.error?.code === "UnknownError" ||
+                policyResp.status === 404
+              ) {
+                policyReady = false;
+              }
+            } catch {
+              if (policyResp.status === 404) policyReady = false;
+            }
+          }
+        }
+      }
+
+      return res.json({ success: true, eligible: true, policyReady });
+    } catch (err) {
+      console.error("handleGetTeamsEligibility error:", err);
       return res
         .status(500)
         .json({ success: false, error: "Internal server error" });
@@ -25031,7 +25537,7 @@ function createServer() {
         broker_notes?: string;
         meeting_date?: string;
         meeting_time?: string;
-        meeting_type?: "phone" | "video";
+        meeting_type?: "phone" | "video" | "teams";
         cancelled_reason?: string;
         cancelled_by?: "client" | "broker";
       };
@@ -25171,7 +25677,7 @@ function createServer() {
         client_phone?: string;
         meeting_date?: string;
         meeting_time?: string;
-        meeting_type?: "phone" | "video";
+        meeting_type?: "phone" | "video" | "teams";
         notes?: string;
         target_broker_id?: number;
       };
@@ -25230,6 +25736,9 @@ function createServer() {
       let zoomMeetingId: string | null = null;
       let zoomJoinUrl: string | null = null;
       let zoomStartUrl: string | null = null;
+      let teamsMeetingId: string | null = null;
+      let teamsJoinUrl: string | null = null;
+      let teamsHostUrl: string | null = null;
 
       if (meeting_type === "video") {
         try {
@@ -25263,6 +25772,41 @@ function createServer() {
         }
       }
 
+      if (meeting_type === "teams") {
+        try {
+          const teamsMeeting = await createTeamsMeeting({
+            organizerEmail: brokerData.email,
+            subject: `Mortgage Meeting - ${client_name.trim()}`,
+            startDatetime: `${meeting_date}T${meeting_time}:00`,
+            endDatetime: `${meeting_date}T${endTime.slice(0, 5)}:00`,
+          });
+          if (teamsMeeting && !("policyPending" in teamsMeeting)) {
+            teamsMeetingId = teamsMeeting.meeting_id;
+            teamsJoinUrl = teamsMeeting.join_url;
+            teamsHostUrl = teamsMeeting.host_url;
+          } else {
+            const isPending = teamsMeeting && "policyPending" in teamsMeeting;
+            return res.status(503).json({
+              success: false,
+              errorCode: isPending ? "TEAMS_POLICY_PENDING" : undefined,
+              error: isPending
+                ? "Teams meeting setup is still activating. This typically takes up to 1 hour after first setup. Please try again in a few minutes."
+                : "Unable to create Teams meeting right now. Please try again in a moment.",
+            });
+          }
+        } catch (teamsErr) {
+          console.error(
+            "Teams meeting creation error (admin booking):",
+            teamsErr,
+          );
+          return res.status(503).json({
+            success: false,
+            error:
+              "Unable to create Teams meeting right now. Please try again in a moment.",
+          });
+        }
+      }
+
       const bookingToken = crypto.randomUUID();
 
       const [result] = await pool.query<ResultSetHeader>(
@@ -25270,8 +25814,9 @@ function createServer() {
            (tenant_id, broker_id, client_name, client_email, client_phone,
             meeting_date, meeting_time, meeting_end_time, meeting_type,
             zoom_meeting_id, zoom_join_url, zoom_start_url,
+            teams_meeting_id, teams_join_url,
             status, notes, booking_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)`,
         [
           MORTGAGE_TENANT_ID,
           effectiveBrokerId,
@@ -25285,6 +25830,8 @@ function createServer() {
           zoomMeetingId,
           zoomJoinUrl,
           zoomStartUrl,
+          teamsMeetingId,
+          teamsJoinUrl,
           notes || null,
           bookingToken,
         ],
@@ -25306,7 +25853,8 @@ function createServer() {
           meetingTime: meeting_time,
           meetingEndTime: endTime.slice(0, 5),
           meetingType: meeting_type,
-          videoRoomUrl: zoomJoinUrl,
+          videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+          videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
           brokerPhone: brokerData.phone || null,
           bookingToken,
           notes: notes || null,
@@ -25326,8 +25874,8 @@ function createServer() {
           meetingTime: meeting_time,
           meetingEndTime: endTime.slice(0, 5),
           meetingType: meeting_type,
-          videoRoomUrl: zoomJoinUrl,
-          zoomStartUrl,
+          videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+          videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
           notes: notes || null,
           meetingId: result.insertId,
           brokerTimezone: brokerData.timezone || undefined,
@@ -25342,6 +25890,7 @@ function createServer() {
         booking_token: bookingToken,
         zoom_join_url: zoomJoinUrl,
         zoom_start_url: zoomStartUrl,
+        teams_join_url: teamsJoinUrl,
       });
     } catch (err) {
       console.error("handleCreateScheduledMeeting error:", err);
@@ -25403,6 +25952,7 @@ function createServer() {
                 is_enabled: !!settings.is_enabled,
                 allow_phone: !!settings.allow_phone,
                 allow_video: !!settings.allow_video,
+                allow_teams: !!settings.allow_teams,
               }
             : null,
           availability: availability.map((a) => ({
@@ -25422,6 +25972,11 @@ function createServer() {
     "/api/scheduler/settings",
     verifyBrokerSession,
     handleUpdateSchedulerSettings,
+  );
+  expressApp.get(
+    "/api/scheduler/teams-eligibility",
+    verifyBrokerSession,
+    handleGetTeamsEligibility,
   );
   expressApp.get(
     "/api/scheduler/meetings",

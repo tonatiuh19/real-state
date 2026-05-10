@@ -13,6 +13,7 @@ When a client replies, the system detects the response and advances (or stops) t
 | `GET /api/cron/process-reminder-flows`   | Every 10 min (cron) | Advance due flow steps, send messages, handle timeouts        |
 | `GET /api/cron/poll-inbound-email`       | Every 5 min (cron)  | Poll IMAP inbox for email replies → mark executions responded |
 | `GET /api/cron/sync-office365-mailboxes` | Every 5 min (cron)  | Sync all active Office 365 mailboxes into Conversations       |
+| `GET /api/cron/sync-teams-policy`        | Every 24h (cron)    | Grant Teams app-access policy for users with Teams enabled    |
 | `POST /api/webhooks/inbound-sms`         | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
 
 ---
@@ -248,6 +249,7 @@ LIMIT 50;
 | -------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------- |
 | `GET /api/cron/process-reminder-flows` | `*/10 * * * *`                        | Advance flow executions — send SMS/email, evaluate branches, handle timeouts  |
 | `GET /api/cron/poll-inbound-email`     | `*/5 * * * *`                         | Detect email replies → mark executions responded → advance `responded` branch |
+| `GET /api/cron/sync-teams-policy`      | `10 2 * * *`                          | Auto-grant Teams policy for active users with Teams enabled                   |
 | `POST /api/webhooks/inbound-sms`       | Real-time (Twilio)                    | Detect SMS replies → mark executions responded → advance `responded` branch   |
 | `POST /api/webhooks/inbound-email`     | Real-time (Postmark/Mailgun/SendGrid) | Detect email replies (alternative to IMAP poll)                               |
 

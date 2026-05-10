@@ -17,7 +17,8 @@
     "test": "vitest --run",
     "format.fix": "prettier --write .",
     "typecheck": "tsc",
-    "deploy:prod": "tsx scripts/deploy-prod.ts"
+    "deploy:prod": "tsx scripts/deploy-prod.ts",
+    "teams:policy-sync": "bash scripts/teams-policy-sync.sh"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.11.2",

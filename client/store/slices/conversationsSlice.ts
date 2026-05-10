@@ -703,12 +703,18 @@ const conversationsSlice = createSlice({
         state.threads.splice(threadIndex, 1);
         state.threads.unshift(updatedThread);
 
-        // Update current thread if it matches
+        // Update current thread if it matches — preserve resolved client_name
         if (
           state.currentThread &&
           state.currentThread.conversation_id === message.conversation_id
         ) {
-          state.currentThread = updatedThread;
+          state.currentThread = {
+            ...updatedThread,
+            client_name:
+              state.currentThread.client_name ||
+              updatedThread.client_name ||
+              null,
+          };
         }
       }
     },
@@ -772,7 +778,15 @@ const conversationsSlice = createSlice({
         }
       }
       if (state.currentThread?.conversation_id === conversationId) {
-        state.currentThread = { ...state.currentThread, ...thread };
+        // Preserve already-resolved client_name — never overwrite with null
+        // from a raw Ably push that hasn't done the broker JOIN.
+        const resolvedName =
+          state.currentThread.client_name || thread.client_name || null;
+        state.currentThread = {
+          ...state.currentThread,
+          ...thread,
+          client_name: resolvedName,
+        };
       }
     },
 
