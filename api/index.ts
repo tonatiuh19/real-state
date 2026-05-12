@@ -2675,7 +2675,7 @@ async function createBrokerNotification(params: {
     }
     if (ids.length === 0 && params.notifyAllAdminsOnEmpty) {
       const [admins] = await pool.query<any[]>(
-        "SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active' AND role = 'admin'",
+        "SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active' AND role IN ('admin', 'superadmin')",
         [MORTGAGE_TENANT_ID],
       );
       ids = admins.map((a: any) => a.id);
@@ -7125,7 +7125,9 @@ const handleCreateClient: RequestHandler = async (req, res) => {
     const newClientId: number = result.insertId;
 
     const [[client]] = await pool.query<any[]>(
-      `SELECT id, email, first_name, middle_name, last_name, phone, date_of_birth, status, created_at,
+      `SELECT id, email, first_name, middle_name, last_name, phone, date_of_birth,
+              address_street, address_unit, address_city, address_state, address_zip,
+              status, created_at,
               0 as total_applications, 0 as active_applications, 0 as total_conversations
        FROM clients WHERE id = ?`,
       [newClientId],
@@ -18579,17 +18581,179 @@ const handleCallScreen: RequestHandler = (_req, res) => {
   res.set("Content-Type", "text/xml");
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
-  // Give the broker 8 s to press any key; carrier voicemail won't.
-  const gather = twiml.gather({ numDigits: 1, timeout: 8 });
+  // Give the broker 8 s to press any key; carrier voicemail won't answer.
+  // IMPORTANT: the action URL must return empty <Response/> so Twilio bridges
+  // the call after the keypress. Without action, Twilio re-requests this same
+  // URL and the call never connects.
+  const gather = twiml.gather({
+    numDigits: 1,
+    timeout: 8,
+    action: `${getVoiceBaseUrl()}/api/voice/call-screen-accept`,
+    method: "POST",
+  });
   gather.say(
     { voice: "Polly.Joanna" },
     "Incoming call. Press any key to answer.",
   );
-  // No key pressed → hang up this forwarded leg; Twilio keeps ringing
-  // the browser clients and, if still unanswered, triggers CRM voicemail.
+  // No key pressed within timeout → hang up this forwarded leg so Twilio
+  // continues ringing browser clients and eventually hits CRM voicemail.
   twiml.hangup();
   return res.send(twiml.toString());
 };
+
+/**
+ * POST /api/voice/call-screen-accept
+ * Called by Twilio after the broker presses any key in the call-screen prompt.
+ * Returning an empty <Response/> tells Twilio to bridge the call immediately.
+ * No auth — called by Twilio servers.
+ */
+const handleCallScreenAccept: RequestHandler = (_req, res) => {
+  res.set("Content-Type", "text/xml");
+  // Empty response = bridge the call. Any verb here would play to the broker
+  // before connecting; we want instant connection so we return nothing.
+  return res.send("<Response/>");
+};
+
+/**
+ * Builds the HTML email body for the voicemail transcript notification
+ * sent to the mortgage banker assigned to the dialed Twilio number.
+ */
+function buildVoicemailEmailHtml(params: {
+  bankerName: string;
+  callerNumber: string;
+  durationSec: number | null;
+  transcriptionText: string;
+  recordingUrl: string;
+  receivedAt: Date;
+  companyName: string;
+}): string {
+  const {
+    bankerName,
+    callerNumber,
+    durationSec,
+    transcriptionText,
+    recordingUrl,
+    receivedAt,
+    companyName,
+  } = params;
+
+  const timeFormatted = receivedAt.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Los_Angeles",
+  });
+
+  const durationLabel = durationSec
+    ? `${Math.floor(durationSec / 60)}:${String(durationSec % 60).padStart(2, "0")} min`
+    : "—";
+
+  const transcriptBlock =
+    transcriptionText.trim().length > 0
+      ? transcriptionText.trim()
+      : '<em style="color:#94a3b8;">No transcript available.</em>';
+
+  const mp3Url = recordingUrl.endsWith(".mp3")
+    ? recordingUrl
+    : `${recordingUrl}.mp3`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>New Voicemail</title></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f1f5f9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background-color:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+          <!-- Header banner -->
+          <tr>
+            <td style="background-color:#0f172a;padding:24px 32px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td>
+                    <p style="margin:0;color:#e8192c;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Voicemail Notification</p>
+                    <p style="margin:4px 0 0;color:#ffffff;font-size:20px;font-weight:700;">🎙️ New Voicemail Received</p>
+                  </td>
+                  <td style="text-align:right;vertical-align:top;">
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">${companyName}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:28px 32px 0;">
+
+              <p style="margin:0 0 20px;color:#475569;font-size:14px;line-height:1.6;">
+                Hi <strong style="color:#0f172a;">${bankerName}</strong>, you have a new voicemail on your personal line.
+              </p>
+
+              <!-- Caller info card -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                     style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:20px;">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="padding:5px 0;color:#64748b;font-size:13px;width:120px;">Caller</td>
+                        <td style="padding:5px 0;color:#0f172a;font-size:15px;font-weight:700;">${callerNumber}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 0;color:#64748b;font-size:13px;">Received</td>
+                        <td style="padding:5px 0;color:#0f172a;font-size:14px;">${timeFormatted} PT</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 0;color:#64748b;font-size:13px;">Duration</td>
+                        <td style="padding:5px 0;color:#0f172a;font-size:14px;">${durationLabel}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Transcript -->
+              <p style="margin:0 0 8px;color:#0f172a;font-size:14px;font-weight:700;">Transcript</p>
+              <div style="background-color:#f8fafc;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;font-size:14px;color:#334155;line-height:1.7;">
+                ${transcriptBlock}
+              </div>
+
+              <!-- CTA button -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                <tr>
+                  <td align="center">
+                    <a href="${mp3Url}"
+                       style="display:inline-block;background-color:#e8192c;color:#ffffff;font-size:14px;font-weight:700;padding:12px 28px;border-radius:8px;text-decoration:none;">
+                      ▶&nbsp; Listen to Recording
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color:#0f172a;padding:18px 32px;border-radius:0 0 16px 16px;text-align:center;">
+              <p style="margin:0;color:#94a3b8;font-size:12px;">
+                This notification was sent by ${companyName} CRM. The full voicemail thread is available in your Conversations inbox.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
 
 /**
  * POST /api/voice/voicemail-recording
@@ -18764,6 +18928,110 @@ const handleVoicemailTranscription: RequestHandler = async (req, res) => {
         conversationId: rows[0].conversation_id,
         transcription: TranscriptionText || "",
       }).catch(() => {});
+
+      // ── Voicemail transcript email to assigned mortgage banker ──────────
+      // Only fires when the voicemail landed on a personal Twilio line
+      // (twilio_caller_id) assigned to a mortgage banker.
+      try {
+        const conversationId: string = rows[0].conversation_id;
+
+        // 1. Fetch conversation metadata: inbox number + caller + recording info
+        const [threadRows] = await pool.query<RowDataPacket[]>(
+          `SELECT ct.inbox_number, ct.client_phone,
+                  c.recording_url, c.recording_duration, c.created_at
+           FROM conversation_threads ct
+           JOIN communications c ON c.conversation_id = ct.conversation_id
+           WHERE ct.conversation_id = ?
+             AND c.external_id = ?
+           LIMIT 1`,
+          [conversationId, externalId],
+        );
+
+        if (threadRows.length > 0) {
+          const {
+            inbox_number,
+            client_phone,
+            recording_url,
+            recording_duration,
+            created_at,
+          } = threadRows[0] as {
+            inbox_number: string | null;
+            client_phone: string | null;
+            recording_url: string | null;
+            recording_duration: number | null;
+            created_at: Date;
+          };
+
+          if (inbox_number) {
+            // 2. Find the banker whose personal line received the call
+            const [bankerRows] = await pool.query<RowDataPacket[]>(
+              `SELECT email, first_name, last_name
+               FROM brokers
+               WHERE tenant_id = ?
+                 AND status = 'active'
+                 AND twilio_caller_id = ?
+                 AND email NOT LIKE 'noemail_%'
+               LIMIT 1`,
+              [MORTGAGE_TENANT_ID, inbox_number],
+            );
+
+            if (bankerRows.length > 0) {
+              const banker = bankerRows[0] as {
+                email: string;
+                first_name: string;
+                last_name: string;
+              };
+              const bankerName =
+                `${banker.first_name} ${banker.last_name}`.trim();
+
+              // 3. Fetch company name from tenant settings (best-effort)
+              const [settingRows] = await pool.query<RowDataPacket[]>(
+                `SELECT value FROM settings
+                 WHERE tenant_id = ? AND key_name = 'company_name'
+                 LIMIT 1`,
+                [MORTGAGE_TENANT_ID],
+              );
+              const companyName =
+                (settingRows[0]?.value as string | undefined) ||
+                "Encore Mortgage";
+
+              const html = buildVoicemailEmailHtml({
+                bankerName,
+                callerNumber: client_phone || "Unknown",
+                durationSec: recording_duration,
+                transcriptionText: TranscriptionText || "",
+                recordingUrl: recording_url || "",
+                receivedAt:
+                  created_at instanceof Date
+                    ? created_at
+                    : new Date(created_at),
+                companyName,
+              });
+
+              const callerDisplay = client_phone || "Unknown";
+              const durationDisplay = recording_duration
+                ? ` — ${recording_duration}s`
+                : "";
+              const subject = `🎙️ New Voicemail from ${callerDisplay}${durationDisplay}`;
+
+              await sendEmailMessage(banker.email, subject, html, true).catch(
+                (e) =>
+                  console.error(
+                    "[handleVoicemailTranscription] email send failed:",
+                    e,
+                  ),
+              );
+            }
+          }
+        }
+      } catch (emailErr) {
+        // Non-fatal — never block the 204 response to Twilio
+        console.error(
+          "[handleVoicemailTranscription] email notification error:",
+          emailErr,
+        );
+      }
+      // ────────────────────────────────────────────────────────────────────
     }
 
     return res.sendStatus(204);
@@ -23286,6 +23554,7 @@ function createServer() {
   // ── Voicemail webhooks (no auth — called by Twilio servers) ──
   expressApp.post("/api/voice/voicemail-complete", handleVoicemailComplete);
   expressApp.post("/api/voice/call-screen", handleCallScreen); // no auth — Twilio Number url callback
+  expressApp.post("/api/voice/call-screen-accept", handleCallScreenAccept); // no auth — Twilio Gather action callback
   expressApp.post("/api/voice/voicemail-recording", handleVoicemailRecording);
   expressApp.post(
     "/api/voice/voicemail-transcription",

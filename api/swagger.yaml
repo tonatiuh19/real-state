@@ -166,9 +166,20 @@ components:
         id: { type: integer }
         email: { type: string, format: email }
         first_name: { type: string }
+        middle_name: { type: string, nullable: true }
         last_name: { type: string }
         phone: { type: string, nullable: true }
-        tenant_id: { type: integer }
+        date_of_birth: { type: string, format: date, nullable: true }
+        address_street: { type: string, nullable: true }
+        address_unit: { type: string, nullable: true }
+        address_city: { type: string, nullable: true }
+        address_state: { type: string, nullable: true }
+        address_zip: { type: string, nullable: true }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        total_applications: { type: integer }
+        active_applications: { type: integer }
+        total_conversations: { type: integer }
 
     LoanApplication:
       type: object
@@ -1476,12 +1487,18 @@ paths:
           application/json:
             schema:
               type: object
-              required: [first_name, last_name, email]
+              required: [first_name, last_name]
               properties:
                 first_name: { type: string }
+                middle_name: { type: string }
                 last_name: { type: string }
                 email: { type: string, format: email }
                 phone: { type: string }
+                address_street: { type: string }
+                address_unit: { type: string }
+                address_city: { type: string }
+                address_state: { type: string }
+                address_zip: { type: string }
       responses:
         "201":
           description: Client created

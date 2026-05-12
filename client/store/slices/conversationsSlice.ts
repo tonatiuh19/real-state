@@ -764,7 +764,14 @@ const conversationsSlice = createSlice({
         (t) => t.conversation_id === conversationId,
       );
       if (idx >= 0) {
-        const updated = { ...state.threads[idx], ...thread };
+        // Preserve already-resolved client_name in the thread list — never
+        // overwrite with null from a partial Ably push (e.g. { status: 'active' }).
+        const updated = {
+          ...state.threads[idx],
+          ...thread,
+          client_name:
+            state.threads[idx].client_name || thread.client_name || null,
+        };
         // If a closed thread was just reopened, bubble it to the top so
         // brokers see it immediately without scrolling.
         if (
@@ -837,7 +844,20 @@ const conversationsSlice = createSlice({
       .addCase(fetchConversationMessages.fulfilled, (state, action) => {
         state.isLoadingMessages = false;
         state.messages = action.payload.messages;
-        state.currentThread = action.payload.thread;
+        // Preserve the already-resolved client_name from the thread list if the
+        // API somehow returns null for the same conversation (e.g. broker-phone
+        // match timing gap). Only carry forward the name when conversation_id
+        // matches to avoid a race-condition where a different thread's name leaks.
+        const sameConversation =
+          state.currentThread?.conversation_id ===
+          action.payload.thread?.conversation_id;
+        state.currentThread = {
+          ...action.payload.thread,
+          client_name:
+            (sameConversation ? state.currentThread?.client_name : null) ||
+            action.payload.thread?.client_name ||
+            null,
+        };
         state.messagesPagination = action.payload.pagination;
         state.error = null;
       })

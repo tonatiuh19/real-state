@@ -988,6 +988,11 @@ export interface CreateClientResponse {
     last_name: string;
     phone: string | null;
     date_of_birth: string | null;
+    address_street: string | null;
+    address_unit: string | null;
+    address_city: string | null;
+    address_state: string | null;
+    address_zip: string | null;
     status: string;
     created_at: string;
     total_applications: number;

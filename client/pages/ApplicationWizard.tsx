@@ -356,10 +356,12 @@ const ApplicationWizard = () => {
   const fillTestData = () => {
     formik.setValues({
       first_name: "Jane",
+      middle_name: "",
       last_name: "Doe",
       email: "test.client@example.com",
       phone: "(555) 123-4567",
       address_street: "789 Elm Street",
+      address_unit: "",
       address_city: "Los Angeles",
       address_state: "CA",
       address_zip: "90001",
@@ -369,6 +371,7 @@ const ApplicationWizard = () => {
       down_payment: "110000",
       property_type: "single_family",
       property_address: "123 Oak Avenue",
+      property_unit: "",
       property_city: "San Francisco",
       property_state: "CA",
       property_zip: "94102",
@@ -379,6 +382,9 @@ const ApplicationWizard = () => {
       employment_status: "employed",
       employer_name: "Acme Corp",
       years_employed: "5",
+      marital_status: "single",
+      dependent_count: "0",
+      years_at_address: "3",
     });
     toast({
       title: "Test data filled",

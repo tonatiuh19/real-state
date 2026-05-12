@@ -149,7 +149,9 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
         }
       />
       {formik.touched[name] && formik.errors[name] && (
-        <p className="text-xs text-destructive">{formik.errors[name]}</p>
+        <p className="text-xs text-destructive">
+          {String(formik.errors[name])}
+        </p>
       )}
     </div>
   );

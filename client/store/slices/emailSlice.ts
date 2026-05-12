@@ -76,16 +76,7 @@ const initialState: EmailState = {
 
 export const fetchEmailThreads = createAsyncThunk(
   "email/fetchThreads",
-  async (
-    params: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      status?: string;
-      folder?: string;
-    } = {},
-    { getState, rejectWithValue },
-  ) => {
+  async (_: void, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const emailFolder = (getState() as RootState).email.folder;
@@ -93,8 +84,7 @@ export const fetchEmailThreads = createAsyncThunk(
         "/api/conversations/threads",
         {
           headers: { Authorization: `Bearer ${sessionToken}` },
-          // Pass folder so the API can filter by email direction
-          params: { limit: 100, folder: emailFolder, ...params },
+          params: { limit: 100, folder: emailFolder },
         },
       );
       return data;
