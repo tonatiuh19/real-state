@@ -800,6 +800,27 @@ async function upsertConversationThread(params: {
         if (resolvedBrokerId == null && rows[0].assigned_broker_id != null) {
           resolvedBrokerId = rows[0].assigned_broker_id as number;
         }
+        // Defence-in-depth: outbound sender doesn't own this client.
+        // If no loan co-ownership path exists, redirect the thread's broker_id
+        // to the client's actual assigned broker so it never lands in the
+        // wrong inbox — even if the upstream guard was somehow bypassed.
+        if (
+          direction === "outbound" &&
+          resolvedBrokerId !== null &&
+          rows[0].assigned_broker_id !== null &&
+          resolvedBrokerId !== (rows[0].assigned_broker_id as number)
+        ) {
+          const [laOwnerCheck] = await pool.query<RowDataPacket[]>(
+            `SELECT 1 FROM loan_applications la
+             WHERE la.client_user_id = ? AND la.tenant_id = ?
+               AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+             LIMIT 1`,
+            [resolvedClientId, tenantId, resolvedBrokerId, resolvedBrokerId],
+          );
+          if (laOwnerCheck.length === 0) {
+            resolvedBrokerId = rows[0].assigned_broker_id as number;
+          }
+        }
       }
     } else if (clientPhone) {
       // No client ID yet — try to resolve name from phone so threads never
@@ -820,6 +841,26 @@ async function upsertConversationThread(params: {
           clientEmail = cRows[0].email ?? clientEmail;
           if (resolvedBrokerId == null && cRows[0].assigned_broker_id != null) {
             resolvedBrokerId = cRows[0].assigned_broker_id as number;
+          }
+          // Defence-in-depth: outbound to a phone that resolves to a client
+          // owned by a different broker — redirect the thread's broker_id to
+          // the correct owner if no loan co-ownership path exists.
+          if (
+            direction === "outbound" &&
+            resolvedBrokerId !== null &&
+            cRows[0].assigned_broker_id !== null &&
+            resolvedBrokerId !== (cRows[0].assigned_broker_id as number)
+          ) {
+            const [laOwnerCheck] = await pool.query<RowDataPacket[]>(
+              `SELECT 1 FROM loan_applications la
+               WHERE la.client_user_id = ? AND la.tenant_id = ?
+                 AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+               LIMIT 1`,
+              [cRows[0].id, tenantId, resolvedBrokerId, resolvedBrokerId],
+            );
+            if (laOwnerCheck.length === 0) {
+              resolvedBrokerId = cRows[0].assigned_broker_id as number;
+            }
           }
         } else {
           // Fallback: leads table
@@ -16179,50 +16220,24 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-    let whereConditions = [
-      "ct.tenant_id = ?",
-      // Show threads:
-      //   a) assigned to this broker
-      //   b) unassigned (shared inbox — visible to all)
-      //   c) this broker has participated in (sent a message) — handles cross-broker messaging
-      //   d) thread's loan is linked to this broker via broker_user_id, partner_broker_id, or assigned_broker_id
-      `(ct.broker_id = ? OR ct.broker_id IS NULL OR EXISTS (
-         SELECT 1 FROM communications comm
-         WHERE comm.conversation_id = ct.conversation_id
-           AND comm.from_broker_id = ?
-           AND comm.tenant_id = ct.tenant_id
-       ) OR EXISTS (
-         SELECT 1 FROM loan_applications la2
-         LEFT JOIN clients cl2 ON cl2.id = la2.client_user_id
-         WHERE la2.id = ct.application_id
-           AND (la2.broker_user_id = ? OR la2.partner_broker_id = ? OR cl2.assigned_broker_id = ?)
-       ))`,
-    ];
-    let queryParams: any[] = [
-      MORTGAGE_TENANT_ID,
-      brokerId,
-      brokerId,
-      brokerId,
-      brokerId,
-      brokerId,
-    ];
+    let whereConditions = ["ct.tenant_id = ?"];
+    let queryParams: any[] = [MORTGAGE_TENANT_ID];
 
-    // For non-superadmins: if the thread has a known client_id, only show it
-    // if this broker owns that client via the 3-path ownership model.
-    // Threads with no client_id (unknown callers) are always shown.
-    // ALSO always show threads that this broker OWNS (ct.broker_id = ?) or has
-    // participated in — so a broker can always see threads they sent/initiated,
-    // even if the client_id was later resolved to a client assigned to someone else.
+    // For non-superadmins: a thread is visible only if the requesting broker:
+    //   a) is directly assigned to the thread  (ct.broker_id = ?)
+    //   b) the thread has no resolved client   (unknown caller — shared inbox)
+    //   c) owns the client via 3-path ownership (assigned_broker_id, broker_user_id,
+    //      or partner_broker_id on a linked loan)
+    //
+    // NOTE: "participated in" (sent a message) was deliberately removed as a
+    // standalone visibility condition. Allowing visibility purely because a
+    // broker sent one message was the root cause of cross-broker conversation
+    // leakage (a broker could initiate a thread against another broker's client
+    // and then always see it). Ownership is the authoritative gate.
     if (!isSuperAdmin) {
       whereConditions.push(
         `(ct.broker_id = ?
           OR ct.client_id IS NULL
-          OR EXISTS (
-            SELECT 1 FROM communications comm_own
-            WHERE comm_own.conversation_id = ct.conversation_id
-              AND comm_own.from_broker_id = ?
-              AND comm_own.tenant_id = ct.tenant_id
-          )
           OR EXISTS (
            SELECT 1 FROM clients cl_own
            WHERE cl_own.id = ct.client_id
@@ -16238,7 +16253,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
              )
          ))`,
       );
-      queryParams.push(brokerId, brokerId, brokerId, brokerId, brokerId);
+      queryParams.push(brokerId, brokerId, brokerId, brokerId);
     }
 
     if (status !== "all") {
@@ -16409,30 +16424,58 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
     const { conversationId } = req.params;
     const { page = 1, limit = 50 } = req.query;
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const isSuperAdmin = brokerRole === "superadmin";
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
-    // Verify broker has access to this conversation:
-    // - thread is assigned to them, OR unassigned (shared inbox),
-    // - OR they have sent messages in this conversation
-    const [threadCheck] = await pool.query<RowDataPacket[]>(
-      `SELECT id FROM conversation_threads 
-       WHERE conversation_id = ? AND tenant_id = ?
+    // Verify broker has access to this conversation using the same 3-path
+    // ownership model as GET /threads:
+    //   a) thread is directly assigned to this broker
+    //   b) shared inbox — thread has no broker assigned
+    //   c) unknown caller — thread has no resolved client (client_id IS NULL)
+    //   d) broker owns the client via assigned_broker_id or loan co-ownership
+    // Superadmins bypass ownership and see all threads.
+    let threadCheckSql: string;
+    let threadCheckParams: any[];
+    if (isSuperAdmin) {
+      threadCheckSql = `SELECT id FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ?`;
+      threadCheckParams = [conversationId, MORTGAGE_TENANT_ID];
+    } else {
+      threadCheckSql = `SELECT id FROM conversation_threads ct
+       WHERE ct.conversation_id = ? AND ct.tenant_id = ?
          AND (
-           broker_id = ? OR broker_id IS NULL
+           ct.broker_id = ?
+           OR ct.broker_id IS NULL
+           OR ct.client_id IS NULL
            OR EXISTS (
-             SELECT 1 FROM communications
-             WHERE conversation_id = ? AND from_broker_id = ? AND tenant_id = ?
+             SELECT 1 FROM clients cl
+             WHERE cl.id = ct.client_id
+               AND cl.tenant_id = ct.tenant_id
+               AND (
+                 cl.assigned_broker_id = ?
+                 OR EXISTS (
+                   SELECT 1 FROM loan_applications la
+                   WHERE la.client_user_id = ct.client_id
+                     AND la.tenant_id = ct.tenant_id
+                     AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+                 )
+               )
            )
-         )`,
-      [
+         )`;
+      threadCheckParams = [
         conversationId,
         MORTGAGE_TENANT_ID,
         brokerId,
-        conversationId,
         brokerId,
-        MORTGAGE_TENANT_ID,
-      ],
+        brokerId,
+        brokerId,
+      ];
+    }
+    const [threadCheck] = await pool.query<RowDataPacket[]>(
+      threadCheckSql,
+      threadCheckParams,
     );
 
     if (threadCheck.length === 0) {
@@ -16652,6 +16695,8 @@ const handleDeleteConversationMessage: RequestHandler = async (req, res) => {
 const handleSendMessage: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    const isSuperAdmin = brokerRole === "superadmin";
     const {
       conversation_id,
       application_id,
@@ -16758,6 +16803,68 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     console.log(
       `[SMS Trace] Resolved recipients — phone=${finalRecipientPhone ?? "NONE"} email=${finalRecipientEmail ?? "NONE"}`,
     );
+
+    // ── Cross-broker ownership guard ─────────────────────────────────────────
+    // Non-superadmin brokers cannot initiate or continue messages to a client
+    // that belongs to a different broker with no shared loan co-ownership.
+    // This is the primary enforcement point. upsertConversationThread also has
+    // a secondary correction layer as defence-in-depth.
+    if (!isSuperAdmin) {
+      // Prefer the client_id supplied directly; fall back to phone → email lookup.
+      let guardClientId: number | null =
+        typeof client_id === "number" ? client_id : null;
+
+      if (!guardClientId && finalRecipientPhone) {
+        const lastTen = finalRecipientPhone.replace(/\D/g, "").slice(-10);
+        if (lastTen.length === 10) {
+          const [gcPhoneRows] = await pool.query<RowDataPacket[]>(
+            `SELECT id FROM clients
+             WHERE tenant_id = ?
+               AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+             LIMIT 1`,
+            [MORTGAGE_TENANT_ID, lastTen],
+          );
+          if (gcPhoneRows.length > 0)
+            guardClientId = gcPhoneRows[0].id as number;
+        }
+      }
+
+      if (!guardClientId && finalRecipientEmail) {
+        const [gcEmailRows] = await pool.query<RowDataPacket[]>(
+          `SELECT id FROM clients
+           WHERE tenant_id = ? AND LOWER(email) = LOWER(?)
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, finalRecipientEmail],
+        );
+        if (gcEmailRows.length > 0) guardClientId = gcEmailRows[0].id as number;
+      }
+
+      if (guardClientId) {
+        // Check: client belongs to a different broker AND the requesting
+        // broker has no loan_applications co-ownership path.
+        const [ownerCheck] = await pool.query<RowDataPacket[]>(
+          `SELECT 1 FROM clients c
+           WHERE c.id = ? AND c.tenant_id = ?
+             AND c.assigned_broker_id IS NOT NULL
+             AND c.assigned_broker_id != ?
+             AND NOT EXISTS (
+               SELECT 1 FROM loan_applications la
+               WHERE la.client_user_id = c.id
+                 AND la.tenant_id = c.tenant_id
+                 AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+             )
+           LIMIT 1`,
+          [guardClientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
+        );
+        if (ownerCheck.length > 0) {
+          return res.status(403).json({
+            success: false,
+            error:
+              "This contact is assigned to another broker. You do not have permission to message them.",
+          });
+        }
+      }
+    }
 
     // Determine which Twilio number to send from, honoring ownership rules:
     //   Rule 1: Broker with a personal number must ALWAYS use it (absolute priority,
@@ -17751,15 +17858,50 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
     const { status, priority, tags } = req.body;
     const brokerId = (req as any).brokerId;
 
-    // Verify broker has access to this conversation
-    // Admins can update any thread; regular brokers can update their own or unassigned threads
+    // Verify broker has access to this conversation using the same 3-path
+    // ownership model as GET /threads. Superadmins can update any thread.
     const brokerRole = (req as any).brokerRole;
-    const isAdminRole = brokerRole === "admin" || brokerRole === "superadmin";
+    const isSuperAdmin = brokerRole === "superadmin";
+    let threadCheckSql: string;
+    let threadCheckParams: any[];
+    if (isSuperAdmin) {
+      threadCheckSql = `SELECT id FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ?`;
+      threadCheckParams = [conversationId, MORTGAGE_TENANT_ID];
+    } else {
+      threadCheckSql = `SELECT id FROM conversation_threads ct
+       WHERE ct.conversation_id = ? AND ct.tenant_id = ?
+         AND (
+           ct.broker_id = ?
+           OR ct.broker_id IS NULL
+           OR ct.client_id IS NULL
+           OR EXISTS (
+             SELECT 1 FROM clients cl
+             WHERE cl.id = ct.client_id
+               AND cl.tenant_id = ct.tenant_id
+               AND (
+                 cl.assigned_broker_id = ?
+                 OR EXISTS (
+                   SELECT 1 FROM loan_applications la
+                   WHERE la.client_user_id = ct.client_id
+                     AND la.tenant_id = ct.tenant_id
+                     AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+                 )
+               )
+           )
+         )`;
+      threadCheckParams = [
+        conversationId,
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        brokerId,
+        brokerId,
+        brokerId,
+      ];
+    }
     const [threadCheck] = await pool.query<RowDataPacket[]>(
-      `SELECT id FROM conversation_threads 
-       WHERE conversation_id = ? AND tenant_id = ?
-         AND (broker_id = ? OR broker_id IS NULL OR ?)`,
-      [conversationId, MORTGAGE_TENANT_ID, brokerId, isAdminRole],
+      threadCheckSql,
+      threadCheckParams,
     );
 
     if (threadCheck.length === 0) {
