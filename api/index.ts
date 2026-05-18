@@ -20,6 +20,7 @@ import { ImapFlow } from "imapflow";
 import Ably from "ably";
 import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import Groq from "groq-sdk";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,6 +88,21 @@ async function publishToAbly(channel: string, event: string, data: unknown) {
   } catch (err) {
     console.error("❌ Ably publish error:", err);
   }
+}
+
+// Initialize Groq AI client (Mortgi assistant)
+let groqClient: Groq | null = null;
+if (process.env.GROQ_API_KEY) {
+  try {
+    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    console.log("✅ Groq client initialized successfully");
+  } catch (error) {
+    console.warn("⚠️  Warning: Failed to initialize Groq client:", error);
+  }
+} else {
+  console.warn(
+    "⚠️  Warning: GROQ_API_KEY not set. Mortgi AI assistant will be disabled.",
+  );
 }
 
 // Initialize Resend email client
@@ -28410,6 +28426,962 @@ function createServer() {
       }
     },
   );
+
+  // ─── Mortgi AI Assistant ──────────────────────────────────────────────────
+
+  // Helper: load Mortgi config from system_settings
+  async function getMortgiConfig(): Promise<Record<string, string>> {
+    const [rows] = await pool.query<any[]>(
+      `SELECT setting_key, setting_value FROM system_settings
+        WHERE tenant_id = ? AND setting_key LIKE 'mortgi_%'`,
+      [MORTGAGE_TENANT_ID],
+    );
+    const cfg: Record<string, string> = {};
+    for (const r of rows) cfg[r.setting_key] = r.setting_value ?? "";
+    return cfg;
+  }
+
+  // Helper: upsert a system_setting
+  async function upsertSetting(
+    key: string,
+    value: string,
+    type: string,
+    description: string,
+  ) {
+    await pool.query(
+      `INSERT INTO system_settings (tenant_id, setting_key, setting_value, setting_type, description)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), setting_type = VALUES(setting_type)`,
+      [MORTGAGE_TENANT_ID, key, value, type, description],
+    );
+  }
+
+  // Broker tool definitions (what the AI can call)
+  const BROKER_TOOL_DEFINITIONS: Groq.Chat.Completions.ChatCompletionTool[] = [
+    {
+      type: "function",
+      function: {
+        name: "get_pipeline_summary",
+        description:
+          "Get a count of loan applications grouped by status for today's pipeline overview.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_overdue_tasks",
+        description:
+          "Get a list of tasks that are past their due date and not yet completed.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_client_list",
+        description:
+          "Get a summary list of recent clients with their loan status.",
+        parameters: {
+          type: "object",
+          properties: {
+            limit: {
+              type: "number",
+              description:
+                "Max number of clients to return (default 10, max 25)",
+            },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_monthly_metrics",
+        description:
+          "Get key metrics for the current month: total applications, closings, leads, and conversion rate.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_recent_leads",
+        description: "Get the most recent leads with their source and status.",
+        parameters: {
+          type: "object",
+          properties: {
+            limit: {
+              type: "number",
+              description: "Max number of leads to return (default 10, max 25)",
+            },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_communication_activity",
+        description:
+          "Get a count of SMS, email, and WhatsApp messages sent in the last 7 days.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_realtor_prospects",
+        description: "Get a summary of realtor prospecting pipeline by stage.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+  ];
+
+  // Client tool definitions (strictly scoped to the authenticated client)
+  const CLIENT_TOOL_DEFINITIONS: Groq.Chat.Completions.ChatCompletionTool[] = [
+    {
+      type: "function",
+      function: {
+        name: "get_my_loan_status",
+        description:
+          "Get the status and details of the client's loan application(s).",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_my_pending_tasks",
+        description:
+          "Get a list of tasks the client still needs to complete for their loan.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_my_documents",
+        description:
+          "Get the list of documents the client has uploaded and their status.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_my_next_meeting",
+        description:
+          "Get information about the client's next scheduled meeting with their broker.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_pre_approval_info",
+        description:
+          "Get the client's pre-approval letter details including approved amount.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+  ];
+
+  // Execute a broker tool call safely (read-only, scoped to tenant)
+  async function executeBrokerTool(
+    toolName: string,
+    toolArgs: any,
+    brokerId: number,
+  ): Promise<string> {
+    const limit = Math.min(parseInt(toolArgs?.limit ?? "10", 10) || 10, 25);
+    try {
+      switch (toolName) {
+        case "get_pipeline_summary": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT status, COUNT(*) AS count
+               FROM loan_applications
+              WHERE tenant_id = ?
+              GROUP BY status
+              ORDER BY count DESC`,
+            [MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ pipeline: rows });
+        }
+        case "get_overdue_tasks": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT t.id, t.title, t.due_date, t.priority,
+                    la.application_number,
+                    CONCAT(c.first_name, ' ', c.last_name) AS client_name
+               FROM tasks t
+               JOIN loan_applications la ON la.id = t.application_id
+               JOIN clients c ON c.id = la.client_id
+              WHERE la.tenant_id = ?
+                AND t.status NOT IN ('completed','approved','cancelled')
+                AND t.due_date < CURDATE()
+              ORDER BY t.due_date ASC
+              LIMIT 20`,
+            [MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ overdue_tasks: rows, count: rows.length });
+        }
+        case "get_client_list": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT c.id, CONCAT(c.first_name, ' ', c.last_name) AS name,
+                    c.email, c.phone, c.status, c.created_at,
+                    la.status AS loan_status, la.application_number
+               FROM clients c
+               LEFT JOIN loan_applications la ON la.client_id = c.id AND la.tenant_id = ?
+              WHERE c.tenant_id = ?
+              ORDER BY c.created_at DESC
+              LIMIT ?`,
+            [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, limit],
+          );
+          return JSON.stringify({ clients: rows });
+        }
+        case "get_monthly_metrics": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT
+               COUNT(*) AS total_applications,
+               SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closings,
+               SUM(CASE WHEN status = 'funded' THEN 1 ELSE 0 END) AS funded,
+               SUM(CASE WHEN status IN ('pending','processing','approved') THEN 1 ELSE 0 END) AS in_progress
+             FROM loan_applications
+            WHERE tenant_id = ?
+              AND YEAR(created_at) = YEAR(CURDATE())
+              AND MONTH(created_at) = MONTH(CURDATE())`,
+            [MORTGAGE_TENANT_ID],
+          );
+          const [leadsRows] = await pool.query<any[]>(
+            `SELECT COUNT(*) AS total_leads
+               FROM leads
+              WHERE tenant_id = ?
+                AND YEAR(created_at) = YEAR(CURDATE())
+                AND MONTH(created_at) = MONTH(CURDATE())`,
+            [MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ metrics: rows[0], leads: leadsRows[0] });
+        }
+        case "get_recent_leads": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT id, CONCAT(first_name, ' ', last_name) AS name,
+                    email, phone, lead_source, status, created_at
+               FROM leads
+              WHERE tenant_id = ?
+              ORDER BY created_at DESC
+              LIMIT ?`,
+            [MORTGAGE_TENANT_ID, limit],
+          );
+          return JSON.stringify({ leads: rows });
+        }
+        case "get_communication_activity": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT communication_type, direction, COUNT(*) AS count
+               FROM communications
+              WHERE tenant_id = ?
+                AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+              GROUP BY communication_type, direction`,
+            [MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ activity_last_7_days: rows });
+        }
+        case "get_realtor_prospects": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT stage, COUNT(*) AS count
+               FROM realtor_prospects
+              WHERE tenant_id = ?
+              GROUP BY stage
+              ORDER BY count DESC`,
+            [MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ realtor_pipeline: rows });
+        }
+        default:
+          return JSON.stringify({ error: "Unknown tool" });
+      }
+    } catch (err: any) {
+      console.error(`Mortgi broker tool error [${toolName}]:`, err);
+      return JSON.stringify({ error: "Failed to retrieve data" });
+    }
+  }
+
+  // Execute a client tool call safely (strictly scoped to client's own data)
+  async function executeClientTool(
+    toolName: string,
+    _toolArgs: any,
+    clientId: number,
+  ): Promise<string> {
+    try {
+      switch (toolName) {
+        case "get_my_loan_status": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT la.id, la.application_number, la.status, la.loan_type,
+                    la.loan_amount, la.property_address, la.created_at,
+                    la.estimated_close_date,
+                    CONCAT(b.first_name, ' ', b.last_name) AS broker_name,
+                    b.email AS broker_email, b.phone AS broker_phone
+               FROM loan_applications la
+               LEFT JOIN brokers b ON b.id = la.broker_id
+              WHERE la.client_id = ? AND la.tenant_id = ?
+              ORDER BY la.created_at DESC
+              LIMIT 5`,
+            [clientId, MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ loans: rows });
+        }
+        case "get_my_pending_tasks": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT t.id, t.title, t.description, t.status, t.priority, t.due_date
+               FROM tasks t
+               JOIN loan_applications la ON la.id = t.application_id
+              WHERE la.client_id = ? AND la.tenant_id = ?
+                AND t.status NOT IN ('completed','approved','cancelled')
+              ORDER BY t.due_date ASC
+              LIMIT 20`,
+            [clientId, MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ pending_tasks: rows, count: rows.length });
+        }
+        case "get_my_documents": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT d.id, d.document_type, d.file_url, d.created_at,
+                    t.title AS task_title
+               FROM documents d
+               JOIN tasks t ON t.id = d.task_id
+               JOIN loan_applications la ON la.id = t.application_id
+              WHERE la.client_id = ? AND la.tenant_id = ?
+              ORDER BY d.created_at DESC
+              LIMIT 25`,
+            [clientId, MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ documents: rows, count: rows.length });
+        }
+        case "get_my_next_meeting": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT sm.id, sm.start_time, sm.end_time, sm.meeting_type,
+                    sm.notes, sm.meeting_url,
+                    CONCAT(b.first_name, ' ', b.last_name) AS broker_name
+               FROM scheduled_meetings sm
+               LEFT JOIN brokers b ON b.id = sm.broker_id
+              WHERE sm.client_id = ? AND sm.tenant_id = ?
+                AND sm.start_time >= NOW()
+                AND sm.status = 'confirmed'
+              ORDER BY sm.start_time ASC
+              LIMIT 1`,
+            [clientId, MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ next_meeting: rows[0] ?? null });
+        }
+        case "get_pre_approval_info": {
+          const [rows] = await pool.query<any[]>(
+            `SELECT pal.id, pal.approved_amount, pal.expiry_date,
+                    pal.created_at, la.application_number
+               FROM pre_approval_letters pal
+               JOIN loan_applications la ON la.id = pal.application_id
+              WHERE la.client_id = ? AND la.tenant_id = ?
+              ORDER BY pal.created_at DESC
+              LIMIT 1`,
+            [clientId, MORTGAGE_TENANT_ID],
+          );
+          return JSON.stringify({ pre_approval: rows[0] ?? null });
+        }
+        default:
+          return JSON.stringify({ error: "Unknown tool" });
+      }
+    } catch (err: any) {
+      console.error(`Mortgi client tool error [${toolName}]:`, err);
+      return JSON.stringify({ error: "Failed to retrieve data" });
+    }
+  }
+
+  // POST /api/ai/chat — unified for broker and client (tries broker JWT, then client JWT)
+  expressApp.post("/api/ai/chat", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+      const token = authHeader.substring(7);
+
+      let userType: "broker" | "client";
+      let userId: number;
+      let userName: string = "User";
+
+      // Decode JWT to determine user type
+      let decoded: any;
+      try {
+        decoded = jwt.verify(token, JWT_SECRET, {
+          algorithms: ["HS256"],
+        }) as any;
+      } catch {
+        return res.status(401).json({ success: false, error: "Invalid token" });
+      }
+
+      if (decoded.userType === "broker") {
+        userType = "broker";
+        userId = decoded.brokerId;
+        // Quick broker lookup
+        const [brokerRows] = await pool.query<any[]>(
+          `SELECT first_name, last_name, role FROM brokers WHERE id = ? AND status = 'active' AND tenant_id = ?`,
+          [userId, MORTGAGE_TENANT_ID],
+        );
+        if (!brokerRows.length)
+          return res
+            .status(401)
+            .json({ success: false, error: "Broker not found" });
+        userName = `${brokerRows[0].first_name} ${brokerRows[0].last_name}`;
+      } else if (decoded.userType === "client") {
+        userType = "client";
+        userId = decoded.clientId;
+        const [clientRows] = await pool.query<any[]>(
+          `SELECT first_name, last_name FROM clients WHERE id = ? AND status = 'active' AND tenant_id = ?`,
+          [userId, MORTGAGE_TENANT_ID],
+        );
+        if (!clientRows.length)
+          return res
+            .status(401)
+            .json({ success: false, error: "Client not found" });
+        userName = `${clientRows[0].first_name} ${clientRows[0].last_name}`;
+      } else {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      // Validate request body
+      const { message, session_key } = req.body as {
+        message: string;
+        session_key: string;
+      };
+      if (!message?.trim() || message.length > 2000) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid message" });
+      }
+      if (!session_key?.trim() || session_key.length > 64) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid session_key" });
+      }
+
+      // Load Mortgi config
+      const cfg = await getMortgiConfig();
+      if (cfg.mortgi_enabled === "false") {
+        return res.status(503).json({
+          success: false,
+          error: "Mortgi assistant is currently disabled.",
+        });
+      }
+      if (userType === "broker" && cfg.mortgi_broker_enabled === "false") {
+        return res.status(503).json({
+          success: false,
+          error: "Mortgi is disabled for the admin portal.",
+        });
+      }
+      if (userType === "client" && cfg.mortgi_client_enabled === "false") {
+        return res.status(503).json({
+          success: false,
+          error: "Mortgi is disabled for the client portal.",
+        });
+      }
+
+      // Daily rate limit
+      const dailyLimit =
+        parseInt(cfg.mortgi_daily_message_limit ?? "50", 10) || 50;
+      const [limitRows] = await pool.query<any[]>(
+        `SELECT COALESCE(SUM(JSON_LENGTH(messages) / 2), 0) AS msg_count
+           FROM ai_chat_sessions
+          WHERE user_type = ? AND user_id = ? AND tenant_id = ?
+            AND DATE(created_at) = CURDATE()`,
+        [userType, userId, MORTGAGE_TENANT_ID],
+      );
+      const todayCount = Number(limitRows[0]?.msg_count ?? 0);
+      if (todayCount >= dailyLimit) {
+        return res.status(429).json({
+          success: false,
+          error: `Daily message limit of ${dailyLimit} reached. Please try again tomorrow.`,
+        });
+      }
+
+      if (!groqClient) {
+        return res.status(503).json({
+          success: false,
+          error:
+            "AI service not configured. Please contact your administrator.",
+        });
+      }
+
+      // Load or create session
+      const [sessionRows] = await pool.query<any[]>(
+        `SELECT id, messages FROM ai_chat_sessions WHERE session_key = ? AND user_type = ? AND user_id = ?`,
+        [session_key, userType, userId],
+      );
+
+      let sessionId: number | null = null;
+      let history: Array<{ role: string; content: string }> = [];
+
+      if (sessionRows.length > 0) {
+        sessionId = sessionRows[0].id;
+        try {
+          history = JSON.parse(sessionRows[0].messages ?? "[]");
+        } catch {
+          history = [];
+        }
+      }
+
+      // Keep history bounded (last 20 exchanges = 40 messages)
+      if (history.length > 40) history = history.slice(-40);
+
+      // Build system prompt
+      const enabledBrokerTools: string[] = (() => {
+        try {
+          return JSON.parse(cfg.mortgi_broker_tools ?? "[]");
+        } catch {
+          return [];
+        }
+      })();
+      const enabledClientTools: string[] = (() => {
+        try {
+          return JSON.parse(cfg.mortgi_client_tools ?? "[]");
+        } catch {
+          return [];
+        }
+      })();
+
+      const customPrompt = cfg.mortgi_system_prompt?.trim();
+      const todayStr = new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+
+      const brokerSystemPrompt =
+        customPrompt ||
+        `You are Mortgi, an intelligent AI assistant for mortgage professionals. Today is ${todayStr}. You are helping ${userName}, a mortgage banker/broker. You have access to real-time data from the platform through tool calls. Be concise, professional, and data-driven. Format numbers nicely (e.g., dollar amounts with $, percentages). When showing lists, use brief bullet points. Never make up data — always use tools to fetch real information.`;
+
+      const clientSystemPrompt =
+        customPrompt ||
+        `You are Mortgi, a friendly AI assistant for home buyers. Today is ${todayStr}. You are helping ${userName} with their mortgage application. You can look up their loan status, pending tasks, and documents. Be warm, clear, and reassuring. Avoid jargon — use simple language. Never reveal information about other clients. Only answer mortgage-related questions.`;
+
+      const systemPrompt =
+        userType === "broker" ? brokerSystemPrompt : clientSystemPrompt;
+
+      // Filter tools by enabled config
+      const availableTools =
+        userType === "broker"
+          ? BROKER_TOOL_DEFINITIONS.filter((t) =>
+              enabledBrokerTools.includes(t.function.name),
+            )
+          : CLIENT_TOOL_DEFINITIONS.filter((t) =>
+              enabledClientTools.includes(t.function.name),
+            );
+
+      // Build messages for Groq
+      const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+        { role: "system", content: systemPrompt },
+        ...history.map((h) => ({ role: h.role as any, content: h.content })),
+        { role: "user", content: message.trim() },
+      ];
+
+      // First Groq call (may include tool calls)
+      let completion = await groqClient.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages,
+        tools: availableTools.length > 0 ? availableTools : undefined,
+        tool_choice: availableTools.length > 0 ? "auto" : undefined,
+        max_tokens: 1024,
+        temperature: 0.3,
+      });
+
+      let finalReply = "";
+      let tokensUsed = completion.usage?.total_tokens ?? 0;
+
+      // Handle tool calls (up to 5 rounds to prevent infinite loops)
+      let rounds = 0;
+      while (
+        completion.choices[0]?.finish_reason === "tool_calls" &&
+        rounds < 5
+      ) {
+        rounds++;
+        const assistantMessage = completion.choices[0].message;
+        messages.push(assistantMessage as any);
+
+        // Execute each tool call
+        const toolResults: Groq.Chat.Completions.ChatCompletionToolMessageParam[] =
+          [];
+        for (const toolCall of assistantMessage.tool_calls ?? []) {
+          let args: any = {};
+          try {
+            args = JSON.parse(toolCall.function.arguments ?? "{}");
+          } catch {}
+
+          const result =
+            userType === "broker"
+              ? await executeBrokerTool(toolCall.function.name, args, userId)
+              : await executeClientTool(toolCall.function.name, args, userId);
+
+          toolResults.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: result,
+          });
+        }
+
+        messages.push(...toolResults);
+
+        // Follow-up call with tool results
+        completion = await groqClient.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages,
+          tools: availableTools.length > 0 ? availableTools : undefined,
+          tool_choice: availableTools.length > 0 ? "auto" : undefined,
+          max_tokens: 1024,
+          temperature: 0.3,
+        });
+        tokensUsed += completion.usage?.total_tokens ?? 0;
+      }
+
+      finalReply =
+        completion.choices[0]?.message?.content?.trim() ??
+        "I'm sorry, I couldn't generate a response. Please try again.";
+
+      // Update conversation history (store only user/assistant turns, not tool calls)
+      const newHistory = [
+        ...history,
+        { role: "user", content: message.trim() },
+        { role: "assistant", content: finalReply },
+      ];
+
+      // Upsert session
+      if (sessionId) {
+        await pool.query(
+          `UPDATE ai_chat_sessions SET messages = ?, tokens_used = tokens_used + ?, updated_at = NOW()
+            WHERE id = ?`,
+          [JSON.stringify(newHistory), tokensUsed, sessionId],
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO ai_chat_sessions (tenant_id, user_type, user_id, session_key, messages, tokens_used)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            MORTGAGE_TENANT_ID,
+            userType,
+            userId,
+            session_key,
+            JSON.stringify(newHistory),
+            tokensUsed,
+          ],
+        );
+      }
+
+      return res.json({
+        success: true,
+        reply: finalReply,
+        session_key,
+        tokens_used: tokensUsed,
+      });
+    } catch (error: any) {
+      // Groq rate limit / quota exceeded — auto-disable Mortgi
+      if (error?.status === 429) {
+        try {
+          await upsertSetting(
+            "mortgi_enabled",
+            "false",
+            "boolean",
+            "Master switch for Mortgi AI assistant",
+          );
+          await upsertSetting(
+            "mortgi_quota_exceeded",
+            "true",
+            "boolean",
+            "Auto-set to true when Groq API rate limit is hit",
+          );
+          await upsertSetting(
+            "mortgi_quota_exceeded_at",
+            new Date().toISOString(),
+            "string",
+            "ISO timestamp of when the quota was last exceeded",
+          );
+        } catch {
+          /* ignore */
+        }
+        return res.status(503).json({
+          success: false,
+          error:
+            "AI quota exhausted. Mortgi has been automatically disabled. Please contact your system administrator to restore access.",
+        });
+      }
+      console.error("Mortgi chat error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to process your message. Please try again.",
+      });
+    }
+  });
+
+  // GET /api/ai/config — get Mortgi configuration (broker only)
+  expressApp.get("/api/ai/config", verifyBrokerSession, async (req, res) => {
+    try {
+      const cfg = await getMortgiConfig();
+      return res.json({
+        success: true,
+        config: {
+          mortgi_enabled: cfg.mortgi_enabled !== "false",
+          mortgi_client_enabled: cfg.mortgi_client_enabled !== "false",
+          mortgi_broker_enabled: cfg.mortgi_broker_enabled !== "false",
+          mortgi_system_prompt: cfg.mortgi_system_prompt ?? "",
+          mortgi_daily_message_limit:
+            parseInt(cfg.mortgi_daily_message_limit ?? "50", 10) || 50,
+          mortgi_broker_tools: (() => {
+            try {
+              return JSON.parse(cfg.mortgi_broker_tools ?? "[]");
+            } catch {
+              return [];
+            }
+          })(),
+          mortgi_client_tools: (() => {
+            try {
+              return JSON.parse(cfg.mortgi_client_tools ?? "[]");
+            } catch {
+              return [];
+            }
+          })(),
+          mortgi_quota_exceeded: cfg.mortgi_quota_exceeded === "true",
+          mortgi_quota_exceeded_at: cfg.mortgi_quota_exceeded_at ?? "",
+        },
+      });
+    } catch (error: any) {
+      console.error("Mortgi config fetch error:", error);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to load Mortgi config" });
+    }
+  });
+
+  // PUT /api/ai/config — update Mortgi configuration (broker only)
+  expressApp.put("/api/ai/config", verifyBrokerSession, async (req, res) => {
+    try {
+      const broker = (req as any).broker;
+      if (broker.role !== "admin") {
+        return res.status(403).json({
+          success: false,
+          error: "Only admins can update Mortgi config",
+        });
+      }
+
+      const body = req.body as {
+        mortgi_enabled?: boolean;
+        mortgi_client_enabled?: boolean;
+        mortgi_broker_enabled?: boolean;
+        mortgi_system_prompt?: string;
+        mortgi_daily_message_limit?: number;
+        mortgi_broker_tools?: string[];
+        mortgi_client_tools?: string[];
+      };
+
+      const updates: Array<[string, string, string, string]> = [];
+
+      if (body.mortgi_enabled !== undefined)
+        updates.push([
+          "mortgi_enabled",
+          String(body.mortgi_enabled),
+          "boolean",
+          "Master switch for Mortgi AI assistant",
+        ]);
+      if (body.mortgi_client_enabled !== undefined)
+        updates.push([
+          "mortgi_client_enabled",
+          String(body.mortgi_client_enabled),
+          "boolean",
+          "Enable Mortgi for client portal",
+        ]);
+      if (body.mortgi_broker_enabled !== undefined)
+        updates.push([
+          "mortgi_broker_enabled",
+          String(body.mortgi_broker_enabled),
+          "boolean",
+          "Enable Mortgi for admin/broker portal",
+        ]);
+      if (body.mortgi_system_prompt !== undefined)
+        updates.push([
+          "mortgi_system_prompt",
+          body.mortgi_system_prompt.slice(0, 2000),
+          "string",
+          "Custom system prompt override",
+        ]);
+      if (body.mortgi_daily_message_limit !== undefined)
+        updates.push([
+          "mortgi_daily_message_limit",
+          String(Math.max(1, Math.min(500, body.mortgi_daily_message_limit))),
+          "number",
+          "Max messages per user per day",
+        ]);
+      if (body.mortgi_broker_tools !== undefined)
+        updates.push([
+          "mortgi_broker_tools",
+          JSON.stringify(body.mortgi_broker_tools),
+          "json",
+          "Enabled broker tools",
+        ]);
+      if (body.mortgi_client_tools !== undefined)
+        updates.push([
+          "mortgi_client_tools",
+          JSON.stringify(body.mortgi_client_tools),
+          "json",
+          "Enabled client tools",
+        ]);
+
+      for (const [key, value, type, desc] of updates) {
+        await upsertSetting(key, value, type, desc);
+      }
+
+      // If re-enabling Mortgi, clear the quota-exceeded flag
+      if (body.mortgi_enabled === true) {
+        await upsertSetting(
+          "mortgi_quota_exceeded",
+          "false",
+          "boolean",
+          "Auto-set to true when Groq API rate limit is hit",
+        );
+        await upsertSetting(
+          "mortgi_quota_exceeded_at",
+          "",
+          "string",
+          "ISO timestamp of when the quota was last exceeded",
+        );
+      }
+
+      return res.json({
+        success: true,
+        message: "Mortgi configuration updated",
+      });
+    } catch (error: any) {
+      console.error("Mortgi config update error:", error);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to update Mortgi config" });
+    }
+  });
+
+  // GET /api/ai/history — get recent chat sessions (broker only)
+  expressApp.get("/api/ai/history", verifyBrokerSession, async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt((req.query.page as string) || "1", 10));
+      const limit = Math.min(
+        50,
+        parseInt((req.query.limit as string) || "20", 10),
+      );
+      const offset = (page - 1) * limit;
+
+      const [rows] = await pool.query<any[]>(
+        `SELECT s.id, s.user_type, s.user_id, s.tokens_used,
+                JSON_LENGTH(s.messages) AS messages_count,
+                s.created_at, s.updated_at,
+                CASE s.user_type
+                  WHEN 'broker' THEN CONCAT(b.first_name, ' ', b.last_name)
+                  WHEN 'client' THEN CONCAT(c.first_name, ' ', c.last_name)
+                  ELSE 'Unknown'
+                END AS user_name
+           FROM ai_chat_sessions s
+           LEFT JOIN brokers b ON b.id = s.user_id AND s.user_type = 'broker'
+           LEFT JOIN clients c ON c.id = s.user_id AND s.user_type = 'client'
+          WHERE s.tenant_id = ?
+          ORDER BY s.updated_at DESC
+          LIMIT ? OFFSET ?`,
+        [MORTGAGE_TENANT_ID, limit, offset],
+      );
+
+      const [countRows] = await pool.query<any[]>(
+        `SELECT COUNT(*) AS total FROM ai_chat_sessions WHERE tenant_id = ?`,
+        [MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({
+        success: true,
+        sessions: rows.map((r) => ({
+          id: r.id,
+          user_type: r.user_type,
+          user_id: r.user_id,
+          user_name: r.user_name,
+          messages_count: Math.floor((r.messages_count ?? 0) / 2),
+          tokens_used: r.tokens_used,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        })),
+        total: countRows[0]?.total ?? 0,
+      });
+    } catch (error: any) {
+      console.error("Mortgi history fetch error:", error);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch chat history" });
+    }
+  });
+
+  // DELETE /api/ai/history/:id — delete a chat session (broker admin only)
+  expressApp.delete(
+    "/api/ai/history/:id",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const broker = (req as any).broker;
+        if (broker.role !== "admin") {
+          return res.status(403).json({
+            success: false,
+            error: "Only admins can delete chat sessions",
+          });
+        }
+        const sessionId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(sessionId))
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid session id" });
+
+        await pool.query(
+          `DELETE FROM ai_chat_sessions WHERE id = ? AND tenant_id = ?`,
+          [sessionId, MORTGAGE_TENANT_ID],
+        );
+        return res.json({ success: true });
+      } catch (error: any) {
+        console.error("Mortgi delete session error:", error);
+        return res
+          .status(500)
+          .json({ success: false, error: "Failed to delete session" });
+      }
+    },
+  );
+
+  // GET /api/ai/usage — aggregated token and session stats (broker only)
+  expressApp.get("/api/ai/usage", verifyBrokerSession, async (req, res) => {
+    try {
+      const [rows] = await pool.query<any[]>(
+        `SELECT
+           COALESCE(SUM(tokens_used), 0)                                                              AS tokens_total,
+           COALESCE(SUM(CASE WHEN DATE(updated_at) = CURDATE() THEN tokens_used ELSE 0 END), 0)      AS tokens_today,
+           COUNT(*)                                                                                    AS sessions_total,
+           COALESCE(SUM(CASE WHEN DATE(updated_at) = CURDATE() THEN 1 ELSE 0 END), 0)               AS sessions_today
+         FROM ai_chat_sessions WHERE tenant_id = ?`,
+        [MORTGAGE_TENANT_ID],
+      );
+      const cfg = await getMortgiConfig();
+      return res.json({
+        success: true,
+        usage: {
+          tokens_total: Number(rows[0]?.tokens_total ?? 0),
+          tokens_today: Number(rows[0]?.tokens_today ?? 0),
+          sessions_total: Number(rows[0]?.sessions_total ?? 0),
+          sessions_today: Number(rows[0]?.sessions_today ?? 0),
+        },
+        quota_exceeded: cfg.mortgi_quota_exceeded === "true",
+        quota_exceeded_at: cfg.mortgi_quota_exceeded_at ?? "",
+      });
+    } catch (error: any) {
+      console.error("Mortgi usage fetch error:", error);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to load usage stats" });
+    }
+  });
 
   // 404 handler - only for API routes
   expressApp.use("/api", (_req, res, next) => {

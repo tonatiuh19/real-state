@@ -2007,3 +2007,26 @@ CREATE TABLE `realtor_prospects` (
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2026-04-20 19:47:40
+
+--
+-- Mortgi AI assistant tables (added 2026-05-18)
+--
+
+CREATE TABLE IF NOT EXISTS `ai_chat_sessions` (
+  `id`           INT           NOT NULL AUTO_INCREMENT,
+  `tenant_id`    INT           NOT NULL DEFAULT 1,
+  `user_type`    ENUM('broker','client') NOT NULL,
+  `user_id`      INT           NOT NULL,
+  `session_key`  VARCHAR(64)   NOT NULL COMMENT 'Unique per browser tab/day',
+  `messages`     LONGTEXT      NOT NULL COMMENT 'JSON array of {role, content} objects',
+  `tokens_used`  INT           NOT NULL DEFAULT 0,
+  `created_at`   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_session_key` (`session_key`),
+  INDEX `idx_user`   (`user_type`, `user_id`),
+  INDEX `idx_tenant` (`tenant_id`),
+  CONSTRAINT `fk_ai_sessions_tenant`
+    FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='Mortgi AI assistant chat sessions';

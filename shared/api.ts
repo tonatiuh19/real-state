@@ -2593,3 +2593,91 @@ export interface DeleteRealtorProspectResponse {
   success: boolean;
   message?: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mortgi AI Assistant
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type MortgiUserType = "broker" | "client";
+
+export interface MortgiMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface MortgiChatRequest {
+  message: string;
+  session_key: string;
+  /** Passed by the server based on verified JWT — not provided by client */
+  user_type?: MortgiUserType;
+}
+
+export interface MortgiChatResponse {
+  success: boolean;
+  reply: string;
+  session_key: string;
+  tokens_used?: number;
+}
+
+export interface MortgiConfig {
+  mortgi_enabled: boolean;
+  mortgi_client_enabled: boolean;
+  mortgi_broker_enabled: boolean;
+  mortgi_system_prompt: string;
+  mortgi_daily_message_limit: number;
+  mortgi_broker_tools: string[];
+  mortgi_client_tools: string[];
+  mortgi_quota_exceeded: boolean;
+  mortgi_quota_exceeded_at: string;
+}
+
+export interface GetMortgiConfigResponse {
+  success: boolean;
+  config: MortgiConfig;
+}
+
+export interface UpdateMortgiConfigRequest {
+  mortgi_enabled?: boolean;
+  mortgi_client_enabled?: boolean;
+  mortgi_broker_enabled?: boolean;
+  mortgi_system_prompt?: string;
+  mortgi_daily_message_limit?: number;
+  mortgi_broker_tools?: string[];
+  mortgi_client_tools?: string[];
+}
+
+export interface UpdateMortgiConfigResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface MortgiChatHistoryEntry {
+  id: number;
+  user_type: MortgiUserType;
+  user_id: number;
+  user_name: string;
+  messages_count: number;
+  tokens_used: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GetMortgiHistoryResponse {
+  success: boolean;
+  sessions: MortgiChatHistoryEntry[];
+  total: number;
+}
+
+export interface MortgiUsage {
+  tokens_total: number;
+  tokens_today: number;
+  sessions_total: number;
+  sessions_today: number;
+}
+
+export interface GetMortgiUsageResponse {
+  success: boolean;
+  usage: MortgiUsage;
+  quota_exceeded: boolean;
+  quota_exceeded_at: string;
+}

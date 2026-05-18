@@ -29,6 +29,7 @@ import {
   CalendarDays,
   Calculator,
 } from "lucide-react";
+import { LiaRobotSolid } from "react-icons/lia";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
@@ -51,6 +52,7 @@ import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
 import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
 import { fetchEmailMailboxes } from "@/store/slices/emailSlice";
 import { useNavigate, useLocation } from "react-router-dom";
+import { MortgiWidget } from "@/components/MortgiWidget";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -211,6 +213,12 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Income Calculator",
       icon: <Calculator className="h-4 w-4" />,
       path: "/admin/income-calculator",
+    },
+    {
+      id: "mortgi",
+      label: "Mortgi AI",
+      icon: <LiaRobotSolid className="h-4 w-4 text-rose-500" />,
+      path: "/admin/mortgi",
     },
     {
       id: "settings",
@@ -701,6 +709,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
         </AlertDialogContent>
       </AlertDialog>
       <GlobalVoiceManager />
+      <MortgiWidget userType="broker" />
     </div>
   );
 };
