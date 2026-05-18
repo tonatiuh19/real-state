@@ -853,6 +853,12 @@ const conversationsSlice = createSlice({
           action.payload.thread?.conversation_id;
         state.currentThread = {
           ...action.payload.thread,
+          // Always preserve conversation_id — if the API response somehow has it
+          // missing (empty threadInfo row), fall back to the existing value so the
+          // compose box can still thread messages correctly.
+          conversation_id:
+            action.payload.thread?.conversation_id ||
+            state.currentThread?.conversation_id,
           client_name:
             (sameConversation ? state.currentThread?.client_name : null) ||
             action.payload.thread?.client_name ||

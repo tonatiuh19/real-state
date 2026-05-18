@@ -1157,13 +1157,21 @@ const BrokerProfile = () => {
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground">
-                          {vmEnabled === false ? "Disabled" : "Enabled"}
+                          {vmEnabled === null
+                            ? vmData?.tenant.voicemail_enabled
+                              ? "Enabled (team default)"
+                              : "Disabled (team default)"
+                            : vmEnabled
+                              ? "Enabled"
+                              : "Disabled"}
                         </span>
                         <Switch
-                          checked={vmEnabled !== false}
-                          onCheckedChange={(v) =>
-                            setVmEnabled(v ? true : false)
+                          checked={
+                            vmEnabled === null
+                              ? !!vmData?.tenant.voicemail_enabled
+                              : vmEnabled
                           }
+                          onCheckedChange={(v) => setVmEnabled(v)}
                         />
                       </div>
                     </div>

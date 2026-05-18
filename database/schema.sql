@@ -1150,6 +1150,7 @@ CREATE TABLE `reminder_flow_executions` (
   `tenant_id` int NOT NULL DEFAULT '1',
   `flow_id` int NOT NULL,
   `loan_application_id` int DEFAULT NULL,
+  `prospect_id` int DEFAULT NULL COMMENT 'realtor_prospects.id — set for realtor_prospecting flows; NULL for loan flows',
   `client_id` int DEFAULT NULL,
   `conversation_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Conversation thread tied to this execution — conv_client_{clientId}_loan_{loanId}_flow_{flowId}',
   `current_step_key` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -1166,6 +1167,7 @@ CREATE TABLE `reminder_flow_executions` (
   PRIMARY KEY (`id`) /*T![clustered_index] NONCLUSTERED */,
   KEY `idx_executions_flow` (`flow_id`),
   KEY `idx_executions_loan` (`loan_application_id`),
+  KEY `idx_executions_prospect` (`prospect_id`),
   KEY `idx_executions_client` (`client_id`),
   KEY `idx_executions_status` (`status`),
   KEY `idx_executions_next_exec` (`next_execution_at`),
@@ -1173,7 +1175,8 @@ CREATE TABLE `reminder_flow_executions` (
   KEY `idx_rfe_conv_id` (`tenant_id`,`conversation_id`),
   CONSTRAINT `fk_executions_flow` FOREIGN KEY (`flow_id`) REFERENCES `reminder_flows` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_executions_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_executions_loan` FOREIGN KEY (`loan_application_id`) REFERENCES `loan_applications` (`id`) ON DELETE CASCADE
+  CONSTRAINT `fk_executions_loan` FOREIGN KEY (`loan_application_id`) REFERENCES `loan_applications` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_executions_prospect` FOREIGN KEY (`prospect_id`) REFERENCES `realtor_prospects` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=300004;
 /*!40101 SET character_set_client = @saved_cs_client */;
 

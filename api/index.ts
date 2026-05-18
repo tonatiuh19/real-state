@@ -751,7 +751,14 @@ async function upsertConversationThread(params: {
     const convId = conversationId ?? `conv_auto_${commId}`;
     // Build a sidebar preview. For MMS / media-only messages with no text body,
     // fall back to a typed placeholder so the thread list isn't blank.
-    let preview: string | null = body ? body.slice(0, 200) : null;
+    // For email, strip HTML tags so the preview shows plain readable text.
+    const previewSource =
+      body && communicationType === "email"
+        ? stripHtmlForStorage(body)
+        : (body ?? null);
+    let preview: string | null = previewSource
+      ? previewSource.slice(0, 200)
+      : null;
     if (
       !preview &&
       (communicationType === "sms" || communicationType === "whatsapp")
@@ -1131,6 +1138,63 @@ async function sendSMSMessage(
         : {}),
       ...metadata,
     });
+
+    console.log(
+      `[SMS Trace] sendSMSMessage OK — sid=${message.sid} status=${message.status} from=${effectiveFrom} to=${normalizedPhone} price=${message.price}`,
+    );
+
+    const sid = message.sid;
+
+    // Non-blocking delayed status check: after 15 s, fetch the actual delivery
+    // outcome from Twilio and update the DB. This catches failures (undelivered,
+    // failed, carrier-filtered) without relying on the webhook being reachable.
+    setTimeout(async () => {
+      try {
+        const fetched = await twilioClient!.messages(sid).fetch();
+        const statusMap: Record<string, string> = {
+          sent: "sent",
+          delivered: "delivered",
+          read: "read",
+          failed: "failed",
+          undelivered: "failed",
+        };
+        const mapped = statusMap[fetched.status] ?? null;
+        console.log(
+          `[SMS Trace] 15s status check — sid=${sid} twilio_status=${fetched.status} mapped=${mapped} errorCode=${fetched.errorCode ?? "none"} errorMessage=${fetched.errorMessage ?? "none"}`,
+        );
+        if (mapped && mapped !== "sent") {
+          await pool.query(
+            `UPDATE communications
+             SET delivery_status = ?, status = ?
+               ${fetched.errorCode ? ", error_message = ?" : ""}
+             WHERE external_id = ? AND tenant_id = ?`,
+            [
+              mapped,
+              mapped,
+              ...(fetched.errorCode
+                ? [`Twilio ${fetched.errorCode}: ${fetched.errorMessage ?? ""}`]
+                : []),
+              sid,
+              MORTGAGE_TENANT_ID,
+            ],
+          );
+
+          if (mapped === "failed") {
+            // Publish Ably event so the UI can show a failed-delivery indicator
+            publishToAbly("conversations:all", "sms-delivery-failed", {
+              sid,
+              errorCode: fetched.errorCode,
+              errorMessage: fetched.errorMessage,
+            }).catch(() => undefined);
+          }
+        }
+      } catch (checkErr: any) {
+        console.warn(
+          `[SMS Trace] 15s status check failed for sid=${sid}:`,
+          checkErr?.message || checkErr,
+        );
+      }
+    }, 15_000);
 
     return {
       success: true,
@@ -13199,6 +13263,106 @@ async function cancelActiveExecutionsForLoan(
   }
 }
 
+/**
+ * Trigger reminder flows for a realtor prospect stage change.
+ * Mirrors triggerReminderFlows() but targets flow_category='realtor_prospecting'
+ * and stores prospect context (no loan / client FK).
+ */
+async function triggerProspectReminderFlows(
+  prospectId: number,
+  newStage: string,
+  tenantId: number,
+): Promise<void> {
+  try {
+    const triggerEvent = `prospect_${newStage}` as string;
+
+    const [prospectRows] = await pool.query<RowDataPacket[]>(
+      `SELECT rp.id, rp.opportunity_name, rp.contact_name, rp.contact_email,
+              rp.contact_phone, rp.stage, rp.owner_broker_id,
+              b.first_name AS broker_first_name, b.last_name AS broker_last_name
+       FROM realtor_prospects rp
+       LEFT JOIN brokers b ON b.id = rp.owner_broker_id AND b.tenant_id = rp.tenant_id
+       WHERE rp.id = ? AND rp.tenant_id = ?`,
+      [prospectId, tenantId],
+    );
+
+    if (!prospectRows.length) return;
+    const prospect = prospectRows[0];
+
+    const [flows] = await pool.query<RowDataPacket[]>(
+      `SELECT rf.id, rf.trigger_delay_days
+       FROM reminder_flows rf
+       WHERE rf.tenant_id = ?
+         AND rf.trigger_event = ?
+         AND rf.is_active = 1
+         AND rf.flow_category = 'realtor_prospecting'`,
+      [tenantId, triggerEvent],
+    );
+
+    if (!flows.length) return;
+
+    const brokerName = prospect.broker_first_name
+      ? `${prospect.broker_first_name} ${prospect.broker_last_name}`.trim()
+      : "Your Loan Officer";
+
+    // Map prospect fields to the same keys the engine uses (client_name,
+    // client_email, client_phone) so existing send steps work without changes,
+    // plus prospect-specific fields for template variables.
+    const contextData = JSON.stringify({
+      prospect_id: prospectId,
+      opportunity_name: prospect.opportunity_name ?? "",
+      contact_name: prospect.contact_name ?? "",
+      client_name: prospect.contact_name ?? "",
+      client_email: prospect.contact_email ?? null,
+      client_phone: prospect.contact_phone ?? null,
+      broker_name: brokerName,
+      broker_id: prospect.owner_broker_id ?? null,
+      prospect_stage: prospect.stage,
+    });
+
+    for (const flow of flows) {
+      // Skip if an active execution already exists for this (flow, prospect).
+      const [existing] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM reminder_flow_executions
+         WHERE tenant_id = ? AND flow_id = ? AND prospect_id = ? AND status = 'active'
+         LIMIT 1`,
+        [tenantId, flow.id, prospectId],
+      );
+      if (existing.length > 0) {
+        console.log(
+          `⏭️  Prospect reminder flow #${flow.id} — skipping duplicate trigger for prospect #${prospectId} (exec #${existing[0].id} already active)`,
+        );
+        continue;
+      }
+
+      const [triggerSteps] = await pool.query<RowDataPacket[]>(
+        `SELECT step_key FROM reminder_flow_steps
+         WHERE flow_id = ? AND step_type = 'trigger' LIMIT 1`,
+        [flow.id],
+      );
+      const triggerKey = triggerSteps[0]?.step_key ?? null;
+
+      const nextExecAt = new Date();
+      nextExecAt.setDate(nextExecAt.getDate() + (flow.trigger_delay_days || 0));
+
+      await pool.query(
+        `INSERT INTO reminder_flow_executions
+           (tenant_id, flow_id, prospect_id, loan_application_id, client_id,
+            conversation_id, current_step_key, status, next_execution_at,
+            completed_steps, context_data, last_step_started_at, started_at)
+         VALUES (?, ?, ?, NULL, NULL, NULL, ?, 'active', ?, '[]', ?, NOW(), NOW())`,
+        [tenantId, flow.id, prospectId, triggerKey, nextExecAt, contextData],
+      );
+
+      console.log(
+        `🔔 Prospect reminder flow #${flow.id} triggered for prospect #${prospectId} (stage=${newStage})`,
+      );
+    }
+  } catch (err) {
+    console.error("❌ Prospect reminder flow trigger failed:", err);
+  }
+}
+
 // =====================================================
 // FLOW EXECUTION ENGINE — helpers used by the cron
 // =====================================================
@@ -13454,6 +13618,11 @@ async function executeFlowSendStep(
       loan_type: String(contextData.loan_type ?? ""),
       status: String(contextData.loan_status ?? ""),
       broker_name: String(contextData.broker_name ?? "Your Loan Officer"),
+      // Realtor-prospecting extras (harmless for loan flows — empty strings)
+      contact_name: String(
+        contextData.contact_name ?? contextData.client_name ?? "",
+      ),
+      opportunity_name: String(contextData.opportunity_name ?? ""),
     };
 
     let body = config.message ?? "";
@@ -13562,12 +13731,30 @@ async function executeFlowSendStep(
       }
       sendResult = await sendWhatsAppMessage(clientPhone, body);
     } else if (step.step_type === "send_notification") {
-      // Insert in-app notification for client
-      await pool.query(
-        `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, is_read, created_at)
-         VALUES (?, ?, ?, ?, 'info', 0, NOW())`,
-        [MORTGAGE_TENANT_ID, clientId, subject, body],
-      );
+      // For realtor-prospecting flows the step config may set notify_broker=true
+      // (or clientId may be absent), meaning the notification should go to the
+      // owner broker rather than a borrower client.
+      const notifyBroker = !!(config.notify_broker || (!clientId && brokerId));
+      if (notifyBroker && brokerId) {
+        await createBrokerNotification({
+          brokerIds: brokerId,
+          title: subject,
+          message: body,
+          category: "system",
+          type: "info",
+          actionUrl: config.action_url ?? "/realtor-prospecting",
+        });
+      } else if (clientId) {
+        await pool.query(
+          `INSERT INTO notifications (tenant_id, user_id, title, message, notification_type, is_read, created_at)
+           VALUES (?, ?, ?, ?, 'info', 0, NOW())`,
+          [MORTGAGE_TENANT_ID, clientId, subject, body],
+        );
+      } else {
+        console.warn(
+          `⚠️  executeFlowSendStep: exec #${execution.id} step [${step.step_key}] — send_notification skipped: no clientId or brokerId in context`,
+        );
+      }
       sendResult = { success: true };
     }
 
@@ -14144,6 +14331,72 @@ async function processFlowExecution(execution: RowDataPacket): Promise<void> {
  * Schedule: every 10 minutes
  *   curl -s "https://yourdomain.com/api/cron/backfill-message-status?secret=CRON_SECRET"
  */
+
+/**
+ * GET /api/admin/sms-check?sid=SMXXXXXX
+ * Look up a specific Twilio message SID and return the real delivery status.
+ * Useful for diagnosing queued/undelivered messages without waiting for the webhook.
+ */
+const handleAdminSmsCheck: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "superadmin") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Superadmin only" });
+    }
+
+    const { sid } = req.query as { sid?: string };
+    if (!sid) {
+      return res
+        .status(400)
+        .json({ success: false, message: "sid query param required" });
+    }
+
+    if (!twilioClient) {
+      return res
+        .status(503)
+        .json({ success: false, message: "Twilio not configured" });
+    }
+
+    const msg = await twilioClient.messages(sid).fetch();
+
+    // Also pull our DB record
+    const [dbRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, conversation_id, delivery_status, error_message, created_at, sent_at
+       FROM communications WHERE external_id = ? AND tenant_id = ? LIMIT 1`,
+      [sid, MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({
+      success: true,
+      twilio: {
+        sid: msg.sid,
+        status: msg.status,
+        errorCode: msg.errorCode,
+        errorMessage: msg.errorMessage,
+        from: msg.from,
+        to: msg.to,
+        body: msg.body,
+        dateSent: msg.dateSent,
+        dateUpdated: msg.dateUpdated,
+        price: msg.price,
+        priceUnit: msg.priceUnit,
+        direction: msg.direction,
+        numSegments: msg.numSegments,
+      },
+      db: dbRows[0] ?? null,
+    });
+  } catch (err: any) {
+    console.error("[sms-check] error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to fetch SMS status",
+    });
+  }
+};
+
 const handleBackfillMessageStatus: RequestHandler = async (req, res) => {
   try {
     const secret = process.env.CRON_SECRET;
@@ -15957,9 +16210,20 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     // For non-superadmins: if the thread has a known client_id, only show it
     // if this broker owns that client via the 3-path ownership model.
     // Threads with no client_id (unknown callers) are always shown.
+    // ALSO always show threads that this broker OWNS (ct.broker_id = ?) or has
+    // participated in — so a broker can always see threads they sent/initiated,
+    // even if the client_id was later resolved to a client assigned to someone else.
     if (!isSuperAdmin) {
       whereConditions.push(
-        `(ct.client_id IS NULL OR EXISTS (
+        `(ct.broker_id = ?
+          OR ct.client_id IS NULL
+          OR EXISTS (
+            SELECT 1 FROM communications comm_own
+            WHERE comm_own.conversation_id = ct.conversation_id
+              AND comm_own.from_broker_id = ?
+              AND comm_own.tenant_id = ct.tenant_id
+          )
+          OR EXISTS (
            SELECT 1 FROM clients cl_own
            WHERE cl_own.id = ct.client_id
              AND cl_own.tenant_id = ct.tenant_id
@@ -15974,7 +16238,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
              )
          ))`,
       );
-      queryParams.push(brokerId, brokerId, brokerId);
+      queryParams.push(brokerId, brokerId, brokerId, brokerId, brokerId);
     }
 
     if (status !== "all") {
@@ -16281,6 +16545,10 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       }),
       thread: {
         ...threadInfo[0],
+        // Always guarantee conversation_id is present — if threadInfo somehow
+        // returned no row (e.g. race condition after upsert), fall back to the
+        // URL param so the client never loses track of which thread it is in.
+        conversation_id: threadInfo[0]?.conversation_id ?? conversationId,
         client_name:
           threadInfo[0]?.client_name ??
           threadInfo[0]?.resolved_client_name ??
@@ -16403,6 +16671,10 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       bcc,
     } = req.body;
 
+    console.log(
+      `[SMS Trace] handleSendMessage — broker=${brokerId} type=${communication_type} conv=${conversation_id} client_id=${client_id} phone=${recipient_phone} body_len=${body?.length ?? 0} media_url=${media_url ?? "none"}`,
+    );
+
     // Validation
     if (!communication_type || (!body && !media_url)) {
       return res.status(400).json({
@@ -16482,6 +16754,10 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         }
       }
     }
+
+    console.log(
+      `[SMS Trace] Resolved recipients — phone=${finalRecipientPhone ?? "NONE"} email=${finalRecipientEmail ?? "NONE"}`,
+    );
 
     // Determine which Twilio number to send from, honoring ownership rules:
     //   Rule 1: Broker with a personal number must ALWAYS use it (absolute priority,
@@ -16604,17 +16880,48 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       ["sms", "whatsapp"].includes(communication_type) &&
       !finalRecipientPhone
     ) {
+      console.error(
+        `[SMS Trace] BLOCKED — no finalRecipientPhone for ${communication_type}. conv=${conversation_id} client_id=${client_id}`,
+      );
       return res.status(400).json({
         success: false,
         message: "recipient_phone is required for SMS/WhatsApp communications",
       });
     }
 
+    console.log(
+      `[SMS Trace] fromNumber resolved="${fromNumber || "NONE"}" personalNumber="${brokerPersonalNumber ?? "none"}"`,
+    );
+
     // Generate conversation_id if not provided — use canonical per-client ID when possible
     let finalConversationId = conversation_id;
     if (!finalConversationId) {
       if (client_id) {
         finalConversationId = `conv_client_${client_id}`;
+      } else if (finalRecipientPhone) {
+        // Look up the most recent existing thread for this phone+broker combination
+        // so outbound replies thread correctly instead of creating orphan conversations.
+        const [existingThreadRows] = await pool.query<RowDataPacket[]>(
+          `SELECT conversation_id FROM conversation_threads
+           WHERE tenant_id = ? AND client_phone = ?
+             AND (broker_id = ? OR broker_id IS NULL)
+           ORDER BY last_message_at DESC LIMIT 1`,
+          [MORTGAGE_TENANT_ID, finalRecipientPhone, brokerId],
+        );
+        if (
+          existingThreadRows.length > 0 &&
+          existingThreadRows[0].conversation_id
+        ) {
+          finalConversationId = existingThreadRows[0].conversation_id;
+          console.log(
+            `[SMS Trace] Recovered existing conv for phone=${finalRecipientPhone}: ${finalConversationId}`,
+          );
+        } else {
+          finalConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          console.log(
+            `[SMS Trace] No existing conv found for phone=${finalRecipientPhone}, creating new: ${finalConversationId}`,
+          );
+        }
       } else {
         finalConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       }
@@ -16918,6 +17225,9 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       switch (communication_type) {
         case "sms":
           if (finalRecipientPhone) {
+            console.log(
+              `[SMS Trace] Calling sendSMSMessage — to=${finalRecipientPhone} from=${fromNumber || "NONE"} body_len=${processedBody?.length ?? 0} media=${media_url ?? "none"}`,
+            );
             sendResult = await sendSMSMessage(
               finalRecipientPhone,
               processedBody,
@@ -16925,8 +17235,12 @@ const handleSendMessage: RequestHandler = async (req, res) => {
               fromNumber,
               media_url || undefined,
             );
+            console.log(
+              `[SMS Trace] sendSMSMessage result — success=${sendResult.success} external_id=${sendResult.external_id ?? "none"} error=${sendResult.error ?? "none"}`,
+            );
           } else {
             sendResult = { success: false, error: "No phone number available" };
+            console.error(`[SMS Trace] SMS skipped — no finalRecipientPhone`);
           }
           break;
 
@@ -17069,6 +17383,10 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       updateValues,
     );
 
+    console.log(
+      `[SMS Trace] DB updated — comm_id=${communicationId} status=${sendResult.success ? "sent" : "failed"} conv=${finalConversationId}`,
+    );
+
     // Create audit log entry
     await pool.query(
       `INSERT INTO audit_logs (
@@ -17095,6 +17413,9 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     );
 
     if (!sendResult.success) {
+      console.error(
+        `[SMS Trace] Send FAILED — returning 400 to client. type=${communication_type} error="${sendResult.error}" comm_id=${communicationId}`,
+      );
       return res.status(400).json({
         success: false,
         message: `Failed to send ${communication_type}: ${sendResult.error}`,
@@ -18389,8 +18710,28 @@ const handleDialStatus: RequestHandler = async (req, res) => {
     const calledNumber =
       (req.body?.To as string) || (req.body?.Called as string) || "";
 
+    // Log the FULL body so we can diagnose unexpected DialCallStatus values
+    // (e.g. "completed" instead of "answered", or "no-answer" missing).
+    console.log(
+      "[dial-status] received",
+      JSON.stringify({
+        CallSid: callSid,
+        DialCallStatus: dialCallStatus,
+        DialCallDuration: req.body?.DialCallDuration,
+        CallStatus: req.body?.CallStatus,
+        To: req.body?.To,
+        Called: req.body?.Called,
+        From: req.body?.From,
+        Direction: req.body?.Direction,
+      }),
+    );
+
     // Answered → notify and end the call gracefully.
-    if (callSid && dialCallStatus === "answered") {
+    // Note: Twilio may send "completed" for a real answered+finished call.
+    if (
+      callSid &&
+      (dialCallStatus === "answered" || dialCallStatus === "completed")
+    ) {
       await publishToAbly("voice:incoming", "call-answered", { callSid });
       return res.status(200).send("<Response></Response>");
     }
@@ -18402,6 +18743,23 @@ const handleDialStatus: RequestHandler = async (req, res) => {
 
     if (!unanswered) {
       return res.status(200).send("<Response></Response>");
+    }
+
+    // Stamp the original call row so the frontend knows no recording will ever
+    // arrive for this leg — avoids infinite "Recording processing..." spinner.
+    // Map all unanswered Twilio states to the 'failed' ENUM value (the only
+    // valid non-success value in the delivery_status column).
+    if (callSid) {
+      pool
+        .query(
+          `UPDATE communications
+           SET delivery_status = 'failed'
+           WHERE external_id = ? AND communication_type = 'call' AND tenant_id = ?`,
+          [callSid, MORTGAGE_TENANT_ID],
+        )
+        .catch((e) =>
+          console.warn("[handleDialStatus] delivery_status update failed:", e),
+        );
     }
 
     const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -18483,6 +18841,7 @@ async function resolveVoicemailSettings(calledNumber: string): Promise<{
   maxSeconds: number;
   transcribe: boolean;
 }> {
+  console.log("[resolveVoicemailSettings] calledNumber:", calledNumber);
   // Tenant defaults
   const [tenantRows] = await pool.query<RowDataPacket[]>(
     `SELECT voicemail_enabled, voicemail_greeting_text, voicemail_greeting_url,
@@ -18523,6 +18882,11 @@ async function resolveVoicemailSettings(calledNumber: string): Promise<{
   );
   const broker = brokerRows[0];
   if (!broker) {
+    console.log(
+      "[resolveVoicemailSettings] no broker found for calledNumber:",
+      calledNumber,
+      "→ voicemail disabled",
+    );
     return {
       enabled: false,
       greetingUrl: null,
@@ -18531,6 +18895,11 @@ async function resolveVoicemailSettings(calledNumber: string): Promise<{
       transcribe,
     };
   }
+
+  console.log(
+    "[resolveVoicemailSettings] broker match found, voicemail_enabled:",
+    broker.voicemail_enabled,
+  );
 
   // Personal line — broker override falls back to tenant defaults when blank
   const enabled =
@@ -18577,8 +18946,22 @@ const handleVoicemailComplete: RequestHandler = async (_req, res) => {
  * through to the CRM voicemail instead of the carrier's.
  * No auth — called by Twilio servers.
  */
-const handleCallScreen: RequestHandler = (_req, res) => {
+const handleCallScreen: RequestHandler = (req, res) => {
   res.set("Content-Type", "text/xml");
+  // Log every field Twilio sends so we can trace carrier-voicemail intercepts
+  // in Vercel logs. Key fields: CallSid, CallStatus, Called, From, Direction.
+  console.log(
+    "[call-screen] invoked",
+    JSON.stringify({
+      CallSid: req.body?.CallSid,
+      CallStatus: req.body?.CallStatus,
+      Called: req.body?.Called,
+      To: req.body?.To,
+      From: req.body?.From,
+      Direction: req.body?.Direction,
+      CallerCountry: req.body?.CallerCountry,
+    }),
+  );
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
   // Give the broker 8 s to press any key; carrier voicemail won't answer.
@@ -18598,7 +18981,9 @@ const handleCallScreen: RequestHandler = (_req, res) => {
   // No key pressed within timeout → hang up this forwarded leg so Twilio
   // continues ringing browser clients and eventually hits CRM voicemail.
   twiml.hangup();
-  return res.send(twiml.toString());
+  const twimlStr = twiml.toString();
+  console.log("[call-screen] responding with TwiML:", twimlStr);
+  return res.send(twimlStr);
 };
 
 /**
@@ -18607,8 +18992,18 @@ const handleCallScreen: RequestHandler = (_req, res) => {
  * Returning an empty <Response/> tells Twilio to bridge the call immediately.
  * No auth — called by Twilio servers.
  */
-const handleCallScreenAccept: RequestHandler = (_req, res) => {
+const handleCallScreenAccept: RequestHandler = (req, res) => {
   res.set("Content-Type", "text/xml");
+  // Log so we can confirm the broker actually pressed a key (vs timeout+hangup).
+  console.log(
+    "[call-screen-accept] key pressed — bridging call",
+    JSON.stringify({
+      CallSid: req.body?.CallSid,
+      Digits: req.body?.Digits,
+      Called: req.body?.Called,
+      From: req.body?.From,
+    }),
+  );
   // Empty response = bridge the call. Any verb here would play to the broker
   // before connecting; we want instant connection so we return nothing.
   return res.send("<Response/>");
@@ -18832,14 +19227,44 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
       ? `vm_${RecordingSid}`
       : `vm_${CallSid || Date.now()}`;
 
+    // Resolve the broker who owns the dialled Twilio number so we can set
+    // to_broker_id on the communications row. Without this, voicemail rows
+    // are unattributed and inbox attribution relies solely on inbox_number.
+    let voicemailToBrokerId: number | null = null;
+    let voicemailBankerEmail: string | null = null;
+    let voicemailBankerName: string | null = null;
+    if (calledNumber) {
+      try {
+        const [bkRows] = await pool.query<RowDataPacket[]>(
+          `SELECT id, email, first_name, last_name
+           FROM brokers
+           WHERE tenant_id = ? AND status = 'active' AND twilio_caller_id = ?
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, calledNumber],
+        );
+        if (bkRows.length > 0) {
+          voicemailToBrokerId = bkRows[0].id as number;
+          voicemailBankerEmail = (bkRows[0].email as string | null) ?? null;
+          voicemailBankerName =
+            `${bkRows[0].first_name} ${bkRows[0].last_name}`.trim() || null;
+        }
+      } catch (e) {
+        console.warn(
+          "[handleVoicemailRecording] broker lookup failed:",
+          (e as any)?.message,
+        );
+      }
+    }
+
     const [insertResult] = await pool.query<any>(
       `INSERT INTO communications
-         (tenant_id, from_broker_id, to_user_id, communication_type, direction,
+         (tenant_id, from_broker_id, to_user_id, to_broker_id, communication_type, direction,
           body, status, external_id, conversation_id, recording_url,
           recording_duration, is_voicemail, delivery_status, sent_at, created_at)
-       VALUES (?, NULL, NULL, 'call', 'inbound', ?, 'sent', ?, ?, ?, ?, 1, 'sent', NOW(), NOW())`,
+       VALUES (?, NULL, NULL, ?, 'call', 'inbound', ?, 'sent', ?, ?, ?, ?, 1, 'sent', NOW(), NOW())`,
       [
         MORTGAGE_TENANT_ID,
+        voicemailToBrokerId,
         body,
         externalId,
         conversationId,
@@ -18857,7 +19282,7 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
       fromUserId: null,
       fromBrokerId: null,
       toUserId: null,
-      toBrokerId: null,
+      toBrokerId: voicemailToBrokerId,
       communicationType: "call",
       direction: "inbound",
       body,
@@ -18880,6 +19305,48 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
       conversationId,
       tenantId: MORTGAGE_TENANT_ID,
     }).catch(() => {});
+
+    // Send an immediate email notification to the banker so they're alerted
+    // even when auto-transcription is disabled (transcription email fires
+    // separately only when Twilio transcribes). This ensures the banker is
+    // ALWAYS notified on every voicemail.
+    if (voicemailBankerEmail && !voicemailBankerEmail.startsWith("noemail_")) {
+      try {
+        const [settingRows] = await pool.query<RowDataPacket[]>(
+          `SELECT value FROM settings
+           WHERE tenant_id = ? AND key_name = 'company_name' LIMIT 1`,
+          [MORTGAGE_TENANT_ID],
+        );
+        const companyName =
+          (settingRows[0]?.value as string | undefined) || "Encore Mortgage";
+        const html = buildVoicemailEmailHtml({
+          bankerName: voicemailBankerName || "Banker",
+          callerNumber,
+          durationSec,
+          transcriptionText: "", // transcript not yet available
+          recordingUrl: mp3Url,
+          receivedAt: new Date(),
+          companyName,
+        });
+        const durationDisplay = durationSec ? ` — ${durationSec}s` : "";
+        await sendEmailMessage(
+          voicemailBankerEmail,
+          `🎙️ New Voicemail from ${callerNumber}${durationDisplay}`,
+          html,
+          true,
+        ).catch((e) =>
+          console.error(
+            "[handleVoicemailRecording] immediate email failed:",
+            e,
+          ),
+        );
+      } catch (emailErr) {
+        console.error(
+          "[handleVoicemailRecording] email notification error:",
+          emailErr,
+        );
+      }
+    }
 
     return res.sendStatus(204);
   } catch (err) {
@@ -19150,7 +19617,7 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     const twiml = new VoiceResponse();
     const statusCallbackUrl = `${getVoiceBaseUrl()}/api/voice/dial-status`;
     const dial = twiml.dial({
-      timeout: 30,
+      timeout: 10,
       // Twilio fires this URL on our server when any leg is answered — we use it
       // to broadcast the Ably call-answered event so all browsers dismiss instantly,
       // even when the answerer is a personal phone (not a browser).
@@ -19166,8 +19633,9 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     for (const bid of brokerIds) {
       dial.client(`broker_${bid}`);
       // If this broker has call forwarding enabled, also ring their personal phone.
-      // Use a call-screen URL so carrier voicemail won't silently "answer" the
-      // Twilio <Dial>, which would prevent the CRM voicemail from ever triggering.
+      // The call-screen URL requires a keypress before bridging — carrier voicemail
+      // systems won't press a key so their leg hangs up and CRM voicemail triggers
+      // instead. handleCallScreenAccept returns empty <Response/> to bridge instantly.
       const fwdPhone = forwardingMap.get(bid);
       if (fwdPhone) {
         dial.number(
@@ -19183,7 +19651,9 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     // Respond to Twilio immediately — DB logging must NOT block the TwiML response.
     // Any delay here postpones the moment Twilio starts ringing the brokers, causing
     // the caller to hear silence and the call to drop after a single ring.
-    res.send(twiml.toString());
+    const twimlOut = twiml.toString();
+    console.log("[voice-incoming] responding with TwiML:", twimlOut);
+    res.send(twimlOut);
 
     // Fire-and-forget: log the incoming call attempt asynchronously.
     const conversationId = `conv_phone_${callerNumber.replace(/\D/g, "")}`;
@@ -23391,8 +23861,14 @@ function createServer() {
   // SMS delivery status callback from Twilio — updates delivery_status on the communication record
   expressApp.post("/api/webhooks/sms-status", async (req, res) => {
     try {
-      const { MessageSid, MessageStatus, ErrorCode } = req.body;
+      const { MessageSid, MessageStatus, ErrorCode, ErrorMessage, To, From } =
+        req.body;
       if (!MessageSid) return res.sendStatus(204);
+
+      // Log every delivery status so we have a full audit trail
+      console.log(
+        `[SMS Status Webhook] sid=${MessageSid} status=${MessageStatus} from=${From ?? "?"} to=${To ?? "?"} errorCode=${ErrorCode ?? "none"} errorMessage=${ErrorMessage ?? "none"}`,
+      );
 
       // Map Twilio statuses to our enum
       const statusMap: Record<string, string> = {
@@ -23405,16 +23881,48 @@ function createServer() {
       const deliveryStatus = statusMap[MessageStatus] ?? null;
       if (!deliveryStatus) return res.sendStatus(204);
 
+      const updateFields = ["delivery_status = ?", "status = ?"];
+      const updateValues: any[] = [deliveryStatus, deliveryStatus];
+
+      if (ErrorCode) {
+        updateFields.push("error_message = ?");
+        updateValues.push(
+          `Twilio ${ErrorCode}: ${ErrorMessage ?? MessageStatus}`,
+        );
+      }
+
+      updateValues.push(MessageSid, MORTGAGE_TENANT_ID);
+
       await pool.query(
-        `UPDATE communications
-         SET delivery_status = ?, status = ?
-         WHERE external_id = ? AND tenant_id = ?`,
-        [deliveryStatus, deliveryStatus, MessageSid, MORTGAGE_TENANT_ID],
+        `UPDATE communications SET ${updateFields.join(", ")} WHERE external_id = ? AND tenant_id = ?`,
+        updateValues,
       );
 
-      if (deliveryStatus === "failed" && ErrorCode) {
-        console.warn(
-          `[SMS status] ${MessageSid} failed — Twilio error ${ErrorCode}`,
+      if (deliveryStatus === "failed") {
+        console.error(
+          `[SMS Status Webhook] ❌ DELIVERY FAILED — sid=${MessageSid} to=${To ?? "?"} errorCode=${ErrorCode ?? "none"} errorMessage=${ErrorMessage ?? "none"}`,
+        );
+        // Notify brokers in real-time so the UI can show a failed-delivery indicator
+        try {
+          const [commRow] = await pool.query<RowDataPacket[]>(
+            `SELECT conversation_id FROM communications WHERE external_id = ? AND tenant_id = ? LIMIT 1`,
+            [MessageSid, MORTGAGE_TENANT_ID],
+          );
+          if (commRow[0]?.conversation_id) {
+            await publishToAbly("conversations:all", "sms-delivery-failed", {
+              sid: MessageSid,
+              conversationId: commRow[0].conversation_id,
+              errorCode: ErrorCode ?? null,
+              errorMessage: ErrorMessage ?? null,
+              to: To ?? null,
+            });
+          }
+        } catch (ablyErr) {
+          console.warn("[SMS Status Webhook] Ably publish failed:", ablyErr);
+        }
+      } else if (deliveryStatus === "delivered") {
+        console.log(
+          `[SMS Status Webhook] ✅ Delivered — sid=${MessageSid} to=${To ?? "?"}`,
         );
       }
 
@@ -23452,6 +23960,14 @@ function createServer() {
   expressApp.get(
     "/api/cron/backfill-message-status",
     handleBackfillMessageStatus,
+  );
+
+  // Superadmin utility: look up a Twilio message SID live status
+  // GET /api/admin/sms-check?sid=SMXXXXXXXXXXXXXX
+  expressApp.get(
+    "/api/admin/sms-check",
+    verifyBrokerSession,
+    handleAdminSmsCheck,
   );
 
   // Conversation routes
@@ -27336,6 +27852,14 @@ function createServer() {
       await pool.query(
         "UPDATE realtor_prospects SET stage = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?",
         [stage, id, MORTGAGE_TENANT_ID],
+      );
+
+      // Fire prospect reminder flows for the new stage (non-blocking).
+      triggerProspectReminderFlows(id, stage, MORTGAGE_TENANT_ID).catch((err) =>
+        console.error(
+          `❌ triggerProspectReminderFlows failed for prospect #${id} stage=${stage}:`,
+          err,
+        ),
       );
 
       res.json({

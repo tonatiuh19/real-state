@@ -64,6 +64,7 @@ import {
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { uploadMMSMedia } from "@/lib/cdn-upload";
+import { logger } from "@/lib/logger";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import ClientDetailPanel from "@/components/ClientDetailPanel";
 import BrokerDetailPanel from "@/components/BrokerDetailPanel";
@@ -148,6 +149,7 @@ import {
   fetchConversationStats,
   fetchCallHistory,
   setCurrentThread,
+  clearCurrentThread,
   setThreadsFilters,
   markConversationAsRead,
   checkWhatsAppAvailability,
@@ -819,19 +821,41 @@ const Conversations = () => {
         ? parseInt(selectedTemplate)
         : null;
 
+    logger.group("[SMS Trace] handleSendMessage");
+    logger.log(
+      "[SMS Trace] 1/7 — type:",
+      messageType,
+      "| thread:",
+      currentThread?.conversation_id,
+      "| phone:",
+      currentThread?.client_phone,
+      "| text length:",
+      text.length,
+      "| template_id:",
+      sentTemplateId ?? "none",
+    );
+
     // 1. Upload MMS attachment first if present (so we have the public URL)
     let uploadedMediaUrl: string | undefined;
     if (mmsAttachment && messageType === "sms") {
       setIsUploadingMMS(true);
+      logger.log(
+        "[SMS Trace] 2/7 — uploading MMS attachment:",
+        mmsAttachment.file.name,
+        mmsAttachment.contentType,
+      );
       try {
         const result = await uploadMMSMedia(
           mmsAttachment.file,
           sessionToken ?? "",
         );
         uploadedMediaUrl = result.url;
+        logger.log("[SMS Trace] 2/7 — MMS upload OK, url:", uploadedMediaUrl);
       } catch (err) {
+        logger.error("[SMS Trace] 2/7 — MMS upload FAILED:", err);
         setIsUploadingMMS(false);
         setFailedText(text || null);
+        logger.groupEnd();
         return;
       }
       setIsUploadingMMS(false);
@@ -861,21 +885,27 @@ const Conversations = () => {
       setRecentTemplateIds(getRecentTemplateIds());
     }
 
+    const payload = {
+      conversation_id: currentThread?.conversation_id,
+      application_id: currentThread?.application_id || undefined,
+      client_id: currentThread?.client_id || undefined,
+      communication_type: messageType,
+      recipient_phone: currentThread?.client_phone || undefined,
+      recipient_email: currentThread?.client_email || undefined,
+      body: text,
+      message_type: (sentTemplateId ? "template" : "text") as
+        | "template"
+        | "text",
+      template_id: sentTemplateId ?? undefined,
+      media_url: uploadedMediaUrl,
+    };
+
+    logger.log("[SMS Trace] 3/7 — dispatching sendMessage payload:", payload);
+
     try {
-      const result = await dispatch(
-        sendMessage({
-          conversation_id: currentThread?.conversation_id,
-          application_id: currentThread?.application_id || undefined,
-          client_id: currentThread?.client_id || undefined,
-          communication_type: messageType,
-          recipient_phone: currentThread?.client_phone || undefined,
-          recipient_email: currentThread?.client_email || undefined,
-          body: text,
-          message_type: sentTemplateId ? "template" : "text",
-          template_id: sentTemplateId ?? undefined,
-          media_url: uploadedMediaUrl,
-        }),
-      ).unwrap();
+      const result = await dispatch(sendMessage(payload)).unwrap();
+
+      logger.log("[SMS Trace] 4/7 — sendMessage API response:", result);
 
       // 3. Mark as sent and store the real DB id so we can suppress the
       //    optimistic bubble the moment the real message arrives in Redux state.
@@ -887,15 +917,33 @@ const Conversations = () => {
         ),
       );
 
-      if (currentThread) {
+      // Always use the conversation_id confirmed by the API response.
+      // currentThread.conversation_id can be undefined if the thread was loaded
+      // from a stale state — the API is the source of truth.
+      const confirmedConvId =
+        result.conversation_id || currentThread?.conversation_id;
+
+      logger.log(
+        "[SMS Trace] 5/7 — fetching updated messages for conv:",
+        confirmedConvId,
+        "(currentThread had:",
+        currentThread?.conversation_id,
+        ")",
+      );
+
+      if (confirmedConvId) {
         dispatch(
           fetchConversationMessages({
-            conversationId: currentThread.conversation_id,
+            conversationId: confirmedConvId,
           }),
         ).finally(() => {
           // Remove only after the real message is in Redux state.
           // The render-time deduplication below (communicationId check) prevents
           // the double-flash; this is just a cleanup step.
+          logger.log(
+            "[SMS Trace] 6/7 — messages refetch done, removing optimistic msg:",
+            tempId,
+          );
           setOptimisticMessages((prev) =>
             prev.filter((m) => m.tempId !== tempId),
           );
@@ -916,9 +964,14 @@ const Conversations = () => {
           description: "This conversation is now active again.",
         });
       } else {
+        logger.log("[SMS Trace] 7/7 — refreshing thread list");
         dispatch(fetchConversationThreads(threadsFilters));
       }
+
+      logger.groupEnd();
     } catch (error: any) {
+      logger.error("[SMS Trace] FAILED — sendMessage threw:", error);
+      logger.groupEnd();
       // 5. Mark as failed and restore the text so the user can retry
       setOptimisticMessages((prev) =>
         prev.map((m) => (m.tempId === tempId ? { ...m, status: "failed" } : m)),
@@ -1294,7 +1347,11 @@ const Conversations = () => {
                       onClick={() => {
                         if (locked) return;
                         setChannelFilter(key);
-                        if (key !== "calls") setSelectedCall(null);
+                        if (key === "calls") {
+                          dispatch(clearCurrentThread());
+                        } else {
+                          setSelectedCall(null);
+                        }
                       }}
                       disabled={locked}
                       title={locked ? "WhatsApp coming soon" : undefined}
@@ -1760,7 +1817,7 @@ const Conversations = () => {
             mobilePanel === "list" ? "hidden md:flex" : "flex",
           )}
         >
-          {currentThread ? (
+          {currentThread && channelFilter !== "calls" ? (
             <>
               {/* Chat header */}
               <div className="px-4 py-3 border-b border-border bg-card flex-shrink-0">
@@ -2042,7 +2099,9 @@ const Conversations = () => {
                                     </div>
                                   ) : message.communication_type === "call" &&
                                     message.external_id &&
-                                    !(message as any).recording_url ? (
+                                    !(message as any).recording_url &&
+                                    (message as any).delivery_status !==
+                                      "failed" ? (
                                     /* ⏳ Call ended but recording still processing */
                                     <div className="flex flex-col gap-1.5 min-w-[200px]">
                                       <p className="leading-relaxed text-sm">

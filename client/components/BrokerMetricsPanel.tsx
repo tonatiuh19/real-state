@@ -395,6 +395,7 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
     annualLoading,
   } = useAppSelector((state) => state.dashboard);
   const { brokers } = useAppSelector((state) => state.brokers);
+  const { sessionToken } = useAppSelector((state) => state.brokerAuth);
 
   const [selectedBrokerIds, setSelectedBrokerIds] = useState<number[]>([]);
   const [selectorOpen, setSelectorOpen] = useState(false);
@@ -428,8 +429,9 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
     load(selectedBrokerIds);
   }, [load]);
 
-  // Auto-polling every 60s
+  // Auto-polling every 60s — skip if no active session
   useEffect(() => {
+    if (!sessionToken) return;
     pollRef.current = setInterval(
       () => load(selectedBrokerIds),
       POLL_INTERVAL_MS,
@@ -437,7 +439,7 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [load, selectedBrokerIds]);
+  }, [load, selectedBrokerIds, sessionToken]);
 
   const save = useCallback(
     (patch: Partial<UpdateBrokerMetricsRequest>) => {

@@ -582,6 +582,57 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  # ── Admin SMS Diagnostics ─────────────────────────────────────────────────────
+  /admin/sms-check:
+    get:
+      tags: [Admin Bootstrap]
+      summary: Look up a Twilio message SID for real-time delivery status
+      description: |
+        Superadmin-only endpoint. Fetches the message record directly from
+        Twilio and returns the current delivery status, error codes, and the
+        matching database row. Useful for diagnosing queued or undelivered SMS
+        without waiting for the status callback webhook.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: sid
+          required: true
+          schema: { type: string, example: "SM6dd1ecd44a371ebc14f15f3d2e13a263" }
+          description: The Twilio message SID to look up
+      responses:
+        "200":
+          description: Twilio and DB record for the given SID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  twilio:
+                    type: object
+                    properties:
+                      sid: { type: string }
+                      status: { type: string, enum: [queued, sending, sent, delivered, undelivered, failed, read] }
+                      errorCode: { type: integer, nullable: true }
+                      errorMessage: { type: string, nullable: true }
+                      from: { type: string }
+                      to: { type: string }
+                      body: { type: string }
+                      dateSent: { type: string, format: date-time, nullable: true }
+                      dateUpdated: { type: string, format: date-time }
+                      price: { type: string, nullable: true }
+                      priceUnit: { type: string, nullable: true }
+                      direction: { type: string }
+                      numSegments: { type: string }
+                  db:
+                    type: object
+                    nullable: true
+                    description: Matching communications row from the database
+        "400": { description: Missing sid parameter }
+        "403": { description: Superadmin role required }
+        "503": { description: Twilio not configured }
+
   /admin/section-controls:
     get:
       tags: [Admin Bootstrap]

@@ -40,6 +40,7 @@ export const fetchDashboardStats = createAsyncThunk(
   async (_, { getState, rejectWithValue }) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
+      if (!sessionToken) return rejectWithValue("No session");
       const { data } = await axios.get<GetDashboardStatsResponse>(
         "/api/dashboard/stats",
         {
@@ -67,6 +68,7 @@ export const fetchBrokerMetrics = createAsyncThunk(
   ) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
+      if (!sessionToken) return rejectWithValue("No session");
       const now = new Date();
       const year = (params as any)?.year ?? now.getFullYear();
       const month = (params as any)?.month ?? now.getMonth() + 1;
@@ -119,6 +121,7 @@ export const fetchAnnualMetrics = createAsyncThunk(
   ) => {
     try {
       const { sessionToken } = (getState() as RootState).brokerAuth;
+      if (!sessionToken) return rejectWithValue("No session");
       const now = new Date();
       const year = (params as any)?.year ?? now.getFullYear();
       const filterBrokerIds = (params as any)?.filterBrokerIds ?? [];
