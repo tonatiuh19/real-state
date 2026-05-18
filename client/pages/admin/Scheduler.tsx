@@ -1193,8 +1193,7 @@ function SettingsPanel() {
                 Video Call (Teams)
               </p>
               <p className="text-xs text-muted-foreground">
-                Creates a Microsoft Teams meeting automatically. Requires Azure
-                Office365 credentials in server env.
+                Creates a Microsoft Teams meeting automatically.
               </p>
             </div>
           </div>
@@ -1261,11 +1260,6 @@ function SettingsPanel() {
               </span>
             </div>
           )}
-        <div className="rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          Turn this on only if your work email is connected to your company
-          Microsoft 365 account. If your account was just added, Teams access
-          can take up to 24 hours to activate automatically.
-        </div>
       </div>
 
       {/* Availability */}
