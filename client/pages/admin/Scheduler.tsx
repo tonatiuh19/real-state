@@ -71,7 +71,10 @@ import {
   updateScheduledMeeting,
   createScheduledMeeting,
   clearError,
+  checkSlug,
+  updateSlug,
 } from "@/store/slices/schedulerSlice";
+import { setUser } from "@/store/slices/brokerAuthSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import type {
   ScheduledMeeting,
@@ -912,9 +915,10 @@ function SettingsPanel() {
   const handleCopyPartnerLink = (
     brokerId: number,
     token: string | null | undefined,
+    slug?: string | null,
   ) => {
-    if (!token) return;
-    const link = `${window.location.origin}/scheduler/${token}`;
+    if (!token && !slug) return;
+    const link = `${window.location.origin}/scheduler/${slug ?? token}`;
     navigator.clipboard.writeText(link);
     setCopiedBrokerId(brokerId);
     setTimeout(() => setCopiedBrokerId(null), 2000);
@@ -1354,9 +1358,10 @@ function SettingsPanel() {
             {brokers
               .filter((b) => b.status === "active")
               .map((b) => {
-                const link = b.public_token
-                  ? `${window.location.origin}/scheduler/${b.public_token}`
-                  : null;
+                const link =
+                  (b.slug ?? b.public_token)
+                    ? `${window.location.origin}/scheduler/${b.slug ?? b.public_token}`
+                    : null;
                 const isCopied = copiedBrokerId === b.id;
                 return (
                   <div
@@ -1380,7 +1385,7 @@ function SettingsPanel() {
                       variant="ghost"
                       disabled={!link}
                       onClick={() =>
-                        handleCopyPartnerLink(b.id, b.public_token)
+                        handleCopyPartnerLink(b.id, b.public_token, b.slug)
                       }
                       className={cn(
                         "shrink-0 text-xs",
@@ -1493,16 +1498,58 @@ const AdminScheduler: React.FC = () => {
     cancelled: meetings.filter((m) => m.status === "cancelled").length,
   };
 
-  // Broker scheduler share link — personalised with the logged-in broker's public_token
-  const schedulerUrl = user?.public_token
-    ? `${window.location.origin}/scheduler/${user.public_token}`
+  // Broker scheduler share link — personalised with the logged-in broker's slug/public_token
+  const schedulerUrl = user
+    ? `${window.location.origin}/scheduler/${user.slug ?? user.public_token}`
     : `${window.location.origin}/scheduler`;
 
   const [urlCopied, setUrlCopied] = useState(false);
+  const [showSlugEditor, setShowSlugEditor] = useState(false);
+  const [slugInput, setSlugInput] = useState(user?.slug ?? "");
+  const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
+  const [slugChecking, setSlugChecking] = useState(false);
+  const [slugSaving, setSlugSaving] = useState(false);
   const handleCopyUrl = () => {
     navigator.clipboard.writeText(schedulerUrl);
     setUrlCopied(true);
     setTimeout(() => setUrlCopied(false), 2000);
+  };
+
+  const handleSlugInputChange = (value: string) => {
+    const normalized = value.toLowerCase().replace(/[^a-z0-9-]/g, "");
+    setSlugInput(normalized);
+    setSlugAvailable(null);
+    if (normalized.length >= 3) {
+      setSlugChecking(true);
+      // Debounce via setTimeout stored in a ref is not practical here; dispatch immediately
+      dispatch(checkSlug(normalized))
+        .unwrap()
+        .then((res) => setSlugAvailable(res.available))
+        .catch(() => setSlugAvailable(null))
+        .finally(() => setSlugChecking(false));
+    }
+  };
+
+  const handleSaveSlug = async () => {
+    if (!slugAvailable || slugInput.length < 3) return;
+    setSlugSaving(true);
+    try {
+      const res = await dispatch(updateSlug(slugInput)).unwrap();
+      dispatch(setUser({ ...user!, slug: res.slug }));
+      setShowSlugEditor(false);
+      toast({
+        title: "Slug updated",
+        description: `Your link is now /scheduler/${res.slug}`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Error",
+        description: err || "Failed to update slug",
+        variant: "destructive",
+      });
+    } finally {
+      setSlugSaving(false);
+    }
   };
 
   return (
@@ -1587,7 +1634,89 @@ const AdminScheduler: React.FC = () => {
           </div>
         </div>
 
-        {/* Stats */}
+        {/* Slug editor */}
+        <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <Edit2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-xs text-muted-foreground">
+                Custom URL slug:{" "}
+                <span className="font-medium text-foreground/80">
+                  {user?.slug ?? "not set"}
+                </span>
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+              onClick={() => {
+                setSlugInput(user?.slug ?? "");
+                setSlugAvailable(null);
+                setShowSlugEditor((v) => !v);
+              }}
+            >
+              {showSlugEditor ? "Cancel" : "Edit slug"}
+            </Button>
+          </div>
+          <AnimatePresence>
+            {showSlugEditor && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mt-3 flex flex-col sm:flex-row gap-2 items-start sm:items-center overflow-hidden"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center rounded-lg border border-border bg-background overflow-hidden">
+                    <span className="px-3 text-xs text-muted-foreground border-r border-border py-2 shrink-0 bg-muted/40">
+                      /scheduler/
+                    </span>
+                    <input
+                      className="flex-1 px-3 py-2 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+                      placeholder="your-slug"
+                      value={slugInput}
+                      onChange={(e) => handleSlugInputChange(e.target.value)}
+                      maxLength={48}
+                    />
+                    {slugChecking && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground mr-3" />
+                    )}
+                    {!slugChecking && slugAvailable === true && (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-green-400 mr-3" />
+                    )}
+                    {!slugChecking && slugAvailable === false && (
+                      <XCircle className="h-3.5 w-3.5 text-red-400 mr-3" />
+                    )}
+                  </div>
+                  {slugAvailable === false && (
+                    <p className="text-xs text-red-400 mt-1">
+                      That slug is already taken.
+                    </p>
+                  )}
+                  {slugAvailable === true && (
+                    <p className="text-xs text-green-400 mt-1">Available!</p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  disabled={
+                    !slugAvailable || slugInput.length < 3 || slugSaving
+                  }
+                  onClick={handleSaveSlug}
+                  className="shrink-0"
+                >
+                  {slugSaving ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5 mr-1" />
+                  )}
+                  Save
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
             {

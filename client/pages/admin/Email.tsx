@@ -337,7 +337,11 @@ function ThreadItem({
               {(thread.last_message_preview ?? "")
                 .replace(/<style[\s\S]*?<\/style>/gi, " ")
                 .replace(/<script[\s\S]*?<\/script>/gi, " ")
-                .replace(/<[^>]+>/g, " ")
+                .replace(/<!--[\s\S]*?-->/g, " ")
+                .replace(/<[^>]*>/g, " ")
+                .replace(/<[^>]*$/, " ")
+                .replace(/&nbsp;/gi, " ")
+                .replace(/&[a-z]{2,6};/gi, " ")
                 .replace(/\s+/g, " ")
                 .trim()}
             </p>
@@ -1862,7 +1866,7 @@ const Email = () => {
         <button
           onClick={() => setComposeOpen(true)}
           aria-label="Compose new email"
-          className="fixed bottom-20 right-5 z-50 h-14 w-14 rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/30 flex items-center justify-center active:scale-95 transition-all duration-150 hover:bg-primary/90"
+          className="fixed bottom-36 right-5 z-50 h-14 w-14 rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/30 flex items-center justify-center active:scale-95 transition-all duration-150 hover:bg-primary/90"
         >
           <Pencil className="h-5 w-5" />
         </button>

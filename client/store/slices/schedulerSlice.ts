@@ -635,6 +635,53 @@ export const deleteBlockedRange = createAsyncThunk(
   },
 );
 
+// ── Slug management ───────────────────────────────────────────────────────────
+
+/**
+ * Check whether a proposed slug is available for the authenticated broker.
+ * Returns { available: boolean, slug: string }.
+ */
+export const checkSlug = createAsyncThunk(
+  "scheduler/checkSlug",
+  async (slug: string, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<{ available: boolean; slug: string }>(
+        `/api/broker/slug/check?slug=${encodeURIComponent(slug)}`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to check slug availability",
+      );
+    }
+  },
+);
+
+/**
+ * Update the authenticated broker's slug.
+ * Returns { success: boolean, slug: string }.
+ */
+export const updateSlug = createAsyncThunk(
+  "scheduler/updateSlug",
+  async (slug: string, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.put<{ success: boolean; slug: string }>(
+        "/api/broker/slug",
+        { slug },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update slug",
+      );
+    }
+  },
+);
+
 // Patch blocked range reducers into the slice extraReducers
 // (attached below via the builder pattern in the slice definition)
 

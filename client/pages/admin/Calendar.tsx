@@ -3015,8 +3015,8 @@ const AdminCalendar: React.FC = () => {
       ? window.location.origin
       : `https://portal.encoremortgage.org`;
 
-  const schedulerUrl = user?.public_token
-    ? `${portalOrigin}/scheduler/${user.public_token}`
+  const schedulerUrl = user
+    ? `${portalOrigin}/scheduler/${user.slug ?? user.public_token}`
     : `${portalOrigin}/scheduler`;
 
   const handleCopyUrl = () => {
@@ -3937,7 +3937,9 @@ const AdminCalendar: React.FC = () => {
         onClose={() => setShowCreateMeeting(false)}
         onCreated={handleCreateMeeting}
         isCreating={isCreatingMeeting}
-        brokerToken={user?.public_token ?? undefined}
+        brokerToken={
+          user ? (user.slug ?? user.public_token ?? undefined) : undefined
+        }
         schedulerSettings={schedulerSettings}
         schedulerAvailability={schedulerAvailability}
       />

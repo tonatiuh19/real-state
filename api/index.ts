@@ -641,6 +641,51 @@ const getBaseUrl = (): string => {
   return `http://localhost:${process.env.PORT || 8080}`;
 };
 
+// ─── Broker slug helpers ──────────────────────────────────────────────────────
+
+/** Returns true if the string matches the UUID v1-v5 format. */
+const isUUIDToken = (token: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+
+/**
+ * Normalises first + last name to a base slug:
+ *   "Alex" + "Gómez" → "alexgomez"
+ */
+const buildSlugBase = (firstName: string, lastName: string): string =>
+  (firstName + lastName)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // strip diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ""); // keep only alphanumeric
+
+/**
+ * Finds a unique slug for a broker by appending a numeric suffix on collision.
+ * Pass excludeBrokerId so the broker can keep/verify their own current slug.
+ */
+async function generateUniqueSlug(
+  firstName: string,
+  lastName: string,
+  excludeBrokerId?: number,
+): Promise<string> {
+  const base = buildSlugBase(firstName, lastName) || "broker";
+  let candidate = base;
+  let suffix = 2;
+  while (true) {
+    const whereClause = excludeBrokerId
+      ? "WHERE slug = ? AND id != ?"
+      : "WHERE slug = ?";
+    const params: any[] = excludeBrokerId
+      ? [candidate, excludeBrokerId]
+      : [candidate];
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers ${whereClause}`,
+      params,
+    );
+    if ((rows as any[]).length === 0) return candidate;
+    candidate = `${base}${suffix++}`;
+  }
+}
+
 // Database connection pool
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -3165,15 +3210,28 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
         [broker.id, MORTGAGE_TENANT_ID],
       );
       const [refreshed] = await pool.query<any[]>(
-        "SELECT public_token FROM brokers WHERE id = ?",
+        "SELECT public_token, slug FROM brokers WHERE id = ?",
         [broker.id],
       );
       broker.public_token = refreshed[0]?.public_token ?? null;
+      broker.slug = refreshed[0]?.slug ?? null;
     } else {
       await pool.query(
         "UPDATE brokers SET last_login = NOW() WHERE id = ? AND tenant_id = ?",
         [broker.id, MORTGAGE_TENANT_ID],
       );
+    }
+    // Auto-generate slug on first login if missing
+    if (!broker.slug) {
+      broker.slug = await generateUniqueSlug(
+        broker.first_name,
+        broker.last_name,
+        broker.id,
+      );
+      await pool.query("UPDATE brokers SET slug = ? WHERE id = ?", [
+        broker.slug,
+        broker.id,
+      ]);
     }
 
     // Record login in audit log
@@ -3202,6 +3260,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
         is_active: broker.status === "active",
         avatar_url: broker.avatar_url ?? null,
         public_token: broker.public_token ?? null,
+        slug: broker.slug ?? null,
       },
     });
   } catch (error) {
@@ -3273,10 +3332,23 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
           [broker.id],
         );
         const [refreshed] = await pool.query<any[]>(
-          "SELECT public_token FROM brokers WHERE id = ?",
+          "SELECT public_token, slug FROM brokers WHERE id = ?",
           [broker.id],
         );
         broker.public_token = refreshed[0]?.public_token ?? null;
+        broker.slug = refreshed[0]?.slug ?? null;
+      }
+      // Auto-generate slug if missing
+      if (!broker.slug) {
+        broker.slug = await generateUniqueSlug(
+          broker.first_name,
+          broker.last_name,
+          broker.id,
+        );
+        await pool.query("UPDATE brokers SET slug = ? WHERE id = ?", [
+          broker.slug,
+          broker.id,
+        ]);
       }
 
       res.json({
@@ -3291,6 +3363,7 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
           is_active: broker.status === "active",
           avatar_url: broker.avatar_url ?? null,
           public_token: broker.public_token ?? null,
+          slug: broker.slug ?? null,
         },
       });
     } catch (jwtError) {
@@ -4371,8 +4444,9 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     let resolvedBrokerUserId: number | null = null;
     let resolvedPartnerBrokerId: number | null = null;
     if (broker_token) {
+      const tokenField = isUUIDToken(broker_token) ? "public_token" : "slug";
       const [brokerRows] = await connection.query<any[]>(
-        "SELECT id, role, created_by_broker_id FROM brokers WHERE public_token = ? AND status = 'active'",
+        `SELECT id, role, created_by_broker_id FROM brokers WHERE ${tokenField} = ? AND status = 'active'`,
         [broker_token],
       );
       if (brokerRows.length > 0) {
@@ -4834,8 +4908,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
     let resolvedBrokerUserId: number | null = null;
     let resolvedPartnerBrokerId: number | null = null;
     if (broker_token) {
+      const tokenField = isUUIDToken(broker_token) ? "public_token" : "slug";
       const [brokerRows] = await connection.query<any[]>(
-        "SELECT id, role, created_by_broker_id FROM brokers WHERE public_token = ? AND status = 'active'",
+        `SELECT id, role, created_by_broker_id FROM brokers WHERE ${tokenField} = ? AND status = 'active'`,
         [broker_token],
       );
       if (brokerRows.length > 0) {
@@ -5023,14 +5098,14 @@ const handleGetBrokerPublicInfo: RequestHandler = async (req, res) => {
     const [rows] = await pool.query<any[]>(
       `SELECT
         b.id, b.first_name, b.last_name, b.email, b.phone, b.role,
-        b.license_number, b.specializations, b.public_token, b.created_by_broker_id,
+        b.license_number, b.specializations, b.public_token, b.slug, b.created_by_broker_id,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
         bp.office_state, bp.office_zip, bp.years_experience, bp.total_loans_closed,
         bp.facebook_url, bp.instagram_url, bp.linkedin_url, bp.twitter_url,
         bp.youtube_url, bp.website_url
        FROM brokers b
        LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
-       WHERE b.public_token = ? AND b.status = 'active'`,
+       WHERE ${isUUIDToken(token) ? "b.public_token" : "b.slug"} = ? AND b.status = 'active'`,
       [token],
     );
 
@@ -5132,7 +5207,7 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const [rows] = await pool.query<any[]>(
-      "SELECT public_token FROM brokers WHERE id = ?",
+      "SELECT public_token, slug, first_name, last_name FROM brokers WHERE id = ?",
       [brokerId],
     );
 
@@ -5142,6 +5217,7 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
     }
 
     let token = rows[0].public_token;
+    let slug: string | null = rows[0].slug ?? null;
 
     // Auto-generate token if missing
     if (!token) {
@@ -5150,18 +5226,35 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
         [brokerId],
       );
       const [refreshed] = await pool.query<any[]>(
-        "SELECT public_token FROM brokers WHERE id = ?",
+        "SELECT public_token, slug FROM brokers WHERE id = ?",
         [brokerId],
       );
       token = refreshed[0].public_token;
+      slug = refreshed[0].slug ?? null;
+    }
+    // Auto-generate slug if missing
+    if (!slug) {
+      slug = await generateUniqueSlug(
+        rows[0].first_name,
+        rows[0].last_name,
+        brokerId,
+      );
+      await pool.query("UPDATE brokers SET slug = ? WHERE id = ?", [
+        slug,
+        brokerId,
+      ]);
     }
 
     const baseUrl = getBaseUrl();
+    const shareUrl = slug
+      ? `${baseUrl}/apply/${slug}`
+      : `${baseUrl}/apply/${token}`;
 
     res.json({
       success: true,
       public_token: token,
-      share_url: `${baseUrl}/apply/${token}`,
+      slug,
+      share_url: shareUrl,
     });
   } catch (error) {
     console.error("Error fetching share link:", error);
@@ -5189,17 +5282,22 @@ const handleRegenerateShareLink: RequestHandler = async (req, res) => {
     }
 
     const [rows] = await pool.query<any[]>(
-      "SELECT public_token FROM brokers WHERE id = ?",
+      "SELECT public_token, slug FROM brokers WHERE id = ?",
       [brokerId],
     );
 
     const newToken = rows[0].public_token;
+    const slug: string | null = rows[0].slug ?? null;
     const baseUrl = getBaseUrl();
+    const shareUrl = slug
+      ? `${baseUrl}/apply/${slug}`
+      : `${baseUrl}/apply/${newToken}`;
 
     res.json({
       success: true,
       public_token: newToken,
-      share_url: `${baseUrl}/apply/${newToken}`,
+      slug,
+      share_url: shareUrl,
       message: "Share link regenerated successfully",
     });
   } catch (error) {
@@ -5227,7 +5325,7 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
     }
 
     const [rows] = await pool.query<any[]>(
-      "SELECT first_name, last_name, email, public_token FROM brokers WHERE id = ?",
+      "SELECT first_name, last_name, email, public_token, slug FROM brokers WHERE id = ?",
       [brokerId],
     );
 
@@ -5238,7 +5336,9 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
 
     const broker = rows[0];
     const baseUrl = getBaseUrl();
-    const shareUrl = `${baseUrl}/apply/${broker.public_token}`;
+    const shareUrl = broker.slug
+      ? `${baseUrl}/apply/${broker.slug}`
+      : `${baseUrl}/apply/${broker.public_token}`;
     const clientFirstName = client_name ? client_name.split(" ")[0] : "there";
     const brokerFullName = `${broker.first_name} ${broker.last_name}`;
 
@@ -7886,6 +7986,7 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
         license_number,
         specializations,
         public_token,
+        slug,
         created_by_broker_id
       FROM brokers
       WHERE status = 'active' AND tenant_id = ?${searchWhere}${roleWhere}
@@ -8294,6 +8395,75 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
 };
 
 /**
+ * GET /api/broker/slug/check?slug=…
+ * Check whether a proposed slug is available for the authenticated broker.
+ */
+const handleCheckSlug: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const slug = ((req.query.slug as string) || "").toLowerCase().trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/.test(slug)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Invalid slug format. Use 3–48 lowercase letters, numbers, or hyphens.",
+      });
+    }
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM brokers WHERE slug = ? AND id != ?",
+      [slug, brokerId],
+    );
+    return res.json({
+      success: true,
+      available: (rows as any[]).length === 0,
+      slug,
+    });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ success: false, error: "Internal server error" });
+  }
+};
+
+/**
+ * PUT /api/broker/slug
+ * Update the authenticated broker's own slug.
+ */
+const handleUpdateSlug: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const { slug } = req.body as { slug: string };
+    const normalized = (slug || "").toLowerCase().trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/.test(normalized)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Invalid slug format. Use 3–48 lowercase letters, numbers, or hyphens.",
+      });
+    }
+    // Check uniqueness
+    const [existing] = await pool.query<RowDataPacket[]>(
+      "SELECT id FROM brokers WHERE slug = ? AND id != ?",
+      [normalized, brokerId],
+    );
+    if ((existing as any[]).length > 0) {
+      return res
+        .status(409)
+        .json({ success: false, error: "This slug is already taken." });
+    }
+    await pool.query(
+      "UPDATE brokers SET slug = ? WHERE id = ? AND tenant_id = ?",
+      [normalized, brokerId, MORTGAGE_TENANT_ID],
+    );
+    return res.json({ success: true, slug: normalized });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ success: false, error: "Internal server error" });
+  }
+};
+
+/**
  * GET /api/brokers/:brokerId/share-link
  * Admin gets any broker's share link
  */
@@ -8311,7 +8481,7 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
     }
 
     const [rows] = await pool.query<RowDataPacket[]>(
-      "SELECT public_token FROM brokers WHERE id = ? AND tenant_id = ?",
+      "SELECT public_token, slug, first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ?",
       [targetId, MORTGAGE_TENANT_ID],
     );
     if (rows.length === 0) {
@@ -8320,7 +8490,8 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
         .json({ success: false, error: "Broker not found" });
     }
 
-    const token = rows[0].public_token;
+    let token = rows[0].public_token;
+    let slug: string | null = rows[0].slug ?? null;
     if (!token) {
       // Auto-create token
       await pool.query(
@@ -8328,23 +8499,34 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
         [targetId],
       );
       const [refreshed] = await pool.query<RowDataPacket[]>(
-        "SELECT public_token FROM brokers WHERE id = ?",
+        "SELECT public_token, slug FROM brokers WHERE id = ?",
         [targetId],
       );
-      const newToken = refreshed[0].public_token;
-      const baseUrl = getBaseUrl();
-      return res.json({
-        success: true,
-        public_token: newToken,
-        share_url: `${baseUrl}/apply/${newToken}`,
-      });
+      token = refreshed[0].public_token;
+      slug = refreshed[0].slug ?? null;
+    }
+    // Auto-generate slug if missing
+    if (!slug) {
+      slug = await generateUniqueSlug(
+        rows[0].first_name,
+        rows[0].last_name,
+        Number(targetId),
+      );
+      await pool.query("UPDATE brokers SET slug = ? WHERE id = ?", [
+        slug,
+        targetId,
+      ]);
     }
 
     const baseUrl = getBaseUrl();
+    const shareUrl = slug
+      ? `${baseUrl}/apply/${slug}`
+      : `${baseUrl}/apply/${token}`;
     res.json({
       success: true,
       public_token: token,
-      share_url: `${baseUrl}/apply/${token}`,
+      slug,
+      share_url: shareUrl,
     });
   } catch (error) {
     console.error("Error fetching broker share link:", error);
@@ -21455,6 +21637,7 @@ const handleAdminInit: RequestHandler = async (req, res) => {
       `SELECT
         b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
         b.license_number, b.specializations, b.tenant_id,
+        b.public_token, b.slug,
         bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
         bp.office_state, bp.office_zip, bp.years_experience,
         COALESCE(bp.total_loans_closed, 0) AS total_loans_closed
@@ -23569,6 +23752,14 @@ function createServer() {
     handleSendShareLinkEmail,
   );
 
+  // Broker slug management (requires broker auth)
+  expressApp.get(
+    "/api/broker/slug/check",
+    verifyBrokerSession,
+    handleCheckSlug,
+  );
+  expressApp.put("/api/broker/slug", verifyBrokerSession, handleUpdateSlug);
+
   // Broker self-profile routes (require broker session)
   expressApp.get(
     "/api/admin/profile",
@@ -25302,12 +25493,13 @@ function createServer() {
       let brokerRow: RowDataPacket | null = null;
 
       if (token) {
+        const tokenField = isUUIDToken(token) ? "b.public_token" : "b.slug";
         const [rows] = await pool.query<RowDataPacket[]>(
           `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.role, b.tenant_id,
                   bp.avatar_url, bp.years_experience
            FROM brokers b
            LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
-           WHERE b.public_token = ? AND b.status = 'active' AND b.tenant_id = ?`,
+           WHERE ${tokenField} = ? AND b.status = 'active' AND b.tenant_id = ?`,
           [token, MORTGAGE_TENANT_ID],
         );
         brokerRow = rows[0] || null;
@@ -25428,8 +25620,9 @@ function createServer() {
             .json({ success: false, error: "No broker found" });
         brokerId = rows[0].id;
       } else {
+        const tokenField = isUUIDToken(token) ? "public_token" : "slug";
         const [rows] = await pool.query<RowDataPacket[]>(
-          `SELECT id FROM brokers WHERE public_token = ? AND status = 'active' AND tenant_id = ?`,
+          `SELECT id FROM brokers WHERE ${tokenField} = ? AND status = 'active' AND tenant_id = ?`,
           [token, MORTGAGE_TENANT_ID],
         );
         if (!rows[0])

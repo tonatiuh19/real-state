@@ -4659,6 +4659,64 @@ paths:
         "404":
           description: Not found
 
+  /broker/slug/check:
+    get:
+      tags: [Broker]
+      summary: Check broker slug availability
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: slug
+          required: true
+          schema: { type: string }
+          description: Proposed slug to check (3–48 chars, a-z 0-9 -)
+      responses:
+        "200":
+          description: Availability result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  available: { type: boolean }
+                  slug: { type: string }
+        "400":
+          description: Invalid slug format
+
+  /broker/slug:
+    put:
+      tags: [Broker]
+      summary: Update authenticated broker's own slug
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug]
+              properties:
+                slug:
+                  type: string
+                  description: New slug (3–48 lowercase letters, numbers, or hyphens)
+      responses:
+        "200":
+          description: Slug updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  slug: { type: string }
+        "400":
+          description: Invalid slug format
+        "409":
+          description: Slug already taken
+
   /calendar/events:
     get:
       tags: [Calendar]

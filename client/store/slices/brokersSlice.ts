@@ -30,7 +30,11 @@ interface BrokersState {
   selectedBrokerProfile: BrokerProfileDetails | null;
   profileLoading: boolean;
   // Share link for a specific broker (admin view)
-  brokerShareLink: { public_token: string; share_url: string } | null;
+  brokerShareLink: {
+    public_token: string;
+    slug: string | null;
+    share_url: string;
+  } | null;
   shareLinkLoading: boolean;
 }
 
@@ -406,6 +410,7 @@ const brokersSlice = createSlice({
         state.shareLinkLoading = false;
         state.brokerShareLink = {
           public_token: action.payload.public_token,
+          slug: action.payload.slug ?? null,
           share_url: action.payload.share_url,
         };
       })
@@ -421,6 +426,7 @@ const brokersSlice = createSlice({
         state.shareLinkLoading = false;
         state.brokerShareLink = {
           public_token: action.payload.public_token,
+          slug: action.payload.slug ?? null,
           share_url: action.payload.share_url,
         };
       })

@@ -3335,8 +3335,8 @@ const Conversations = () => {
 
       {/* ── Schedule Meeting dialog ── */}
       {(() => {
-        const schedulerUrl = currentUser?.public_token
-          ? `${window.location.origin}/scheduler/${currentUser.public_token}`
+        const schedulerUrl = currentUser
+          ? `${window.location.origin}/scheduler/${currentUser.slug ?? currentUser.public_token}`
           : null;
         return (
           <Dialog

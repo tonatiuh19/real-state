@@ -652,6 +652,7 @@ export interface Broker {
   license_number: string | null;
   specializations: string[] | null;
   public_token?: string | null;
+  slug?: string | null;
   created_by_broker_id?: number | null;
   created_at?: string;
 }
@@ -1593,12 +1594,14 @@ export interface BrokerPublicInfoResponse {
 export interface MyShareLinkResponse {
   success: boolean;
   public_token: string;
+  slug: string | null;
   share_url: string;
 }
 
 export interface RegenerateShareLinkResponse {
   success: boolean;
   public_token: string;
+  slug: string | null;
   share_url: string;
   message: string;
 }
@@ -1709,6 +1712,7 @@ export interface ConvertBrokerToClientResponse {
 export interface AdminBrokerShareLinkResponse {
   success: boolean;
   public_token: string;
+  slug: string | null;
   share_url: string;
 }
 

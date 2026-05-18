@@ -25,6 +25,8 @@ import {
   Plus,
   Voicemail,
   Volume2,
+  Link2,
+  XCircle,
 } from "lucide-react";
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -60,7 +62,9 @@ import {
   updateBrokerProfile,
   uploadBrokerAvatar,
   clearProfileError,
+  setUser,
 } from "@/store/slices/brokerAuthSlice";
+import { checkSlug, updateSlug } from "@/store/slices/schedulerSlice";
 import {
   connectOffice365Mailbox,
   disconnectConversationMailbox,
@@ -202,6 +206,17 @@ const BrokerProfile = () => {
   // ── Voicemail settings ─────────────────────────────────────────────
   const [vmLoading, setVmLoading] = useState(false);
   const [vmSaving, setVmSaving] = useState(false);
+
+  // ── Slug editor state ────────────────────────────────────────────────────
+  const [slugInput, setSlugInput] = useState("");
+  const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
+  const [slugChecking, setSlugChecking] = useState(false);
+  const [slugSaving, setSlugSaving] = useState(false);
+
+  // Sync slugInput when user data loads
+  useEffect(() => {
+    if (user?.slug) setSlugInput(user.slug);
+  }, [user?.slug]);
   const [vmData, setVmData] = useState<VoicemailSettingsResponse | null>(null);
   // null = "inherit tenant default"
   const [vmEnabled, setVmEnabled] = useState<boolean | null>(null);
@@ -490,6 +505,45 @@ const BrokerProfile = () => {
       }
     },
   });
+
+  // ── Slug handlers ──────────────────────────────────────────────────────────
+  const handleSlugInputChange = (value: string) => {
+    const normalized = value.toLowerCase().replace(/[^a-z0-9-]/g, "");
+    setSlugInput(normalized);
+    setSlugAvailable(null);
+    if (normalized.length >= 3 && normalized !== user?.slug) {
+      setSlugChecking(true);
+      dispatch(checkSlug(normalized))
+        .unwrap()
+        .then((res) => setSlugAvailable(res.available))
+        .catch(() => setSlugAvailable(null))
+        .finally(() => setSlugChecking(false));
+    } else if (normalized === user?.slug) {
+      // Same as current — already theirs
+      setSlugAvailable(true);
+    }
+  };
+
+  const handleSaveSlug = async () => {
+    if (!slugAvailable || slugInput.length < 3 || slugSaving) return;
+    setSlugSaving(true);
+    try {
+      const res = await dispatch(updateSlug(slugInput)).unwrap();
+      dispatch(setUser({ ...user!, slug: res.slug }));
+      toast({
+        title: "URL slug updated",
+        description: `Your links now use /${res.slug}`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Update failed",
+        description: err || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSlugSaving(false);
+    }
+  };
 
   const handleAvatarUpload = async (file: File) => {
     const result = await dispatch(uploadBrokerAvatar(file));
@@ -1570,6 +1624,125 @@ const BrokerProfile = () => {
                       />
                     </div>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Public URL Slug */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Link2 className="h-4 w-4 text-primary" />
+                  Public URL Slug
+                </CardTitle>
+                <CardDescription>
+                  Personalise your public-facing links. Both{" "}
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                    /apply/
+                  </code>{" "}
+                  and{" "}
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                    /scheduler/
+                  </code>{" "}
+                  will use this slug. UUID links continue to work.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Current URLs preview */}
+                <div className="rounded-lg border border-border bg-muted/30 divide-y divide-border text-xs">
+                  {[
+                    { label: "Scheduler", path: "/scheduler/" },
+                    { label: "Apply", path: "/apply/" },
+                  ].map(({ label, path }) => (
+                    <div
+                      key={path}
+                      className="flex items-center gap-2 px-4 py-2.5"
+                    >
+                      <span className="text-muted-foreground w-16 shrink-0">
+                        {label}
+                      </span>
+                      <span className="font-mono text-foreground/80 truncate">
+                        {window.location.origin}
+                        {path}
+                        <span className="text-primary font-semibold">
+                          {user?.slug ?? user?.public_token ?? "…"}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Slug input */}
+                <div className="space-y-2">
+                  <Label htmlFor="slug_input">Custom slug</Label>
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-1 items-center rounded-lg border border-border bg-background overflow-hidden focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0">
+                      <span className="px-3 text-xs text-muted-foreground border-r border-border py-2.5 shrink-0 bg-muted/40 select-none">
+                        /apply/
+                      </span>
+                      <input
+                        id="slug_input"
+                        className="flex-1 px-3 py-2.5 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+                        placeholder={user?.slug ?? "your-slug"}
+                        value={slugInput}
+                        onChange={(e) => handleSlugInputChange(e.target.value)}
+                        maxLength={48}
+                      />
+                      <span className="px-3">
+                        {slugChecking && (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                        )}
+                        {!slugChecking && slugAvailable === true && (
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-400" />
+                        )}
+                        {!slugChecking && slugAvailable === false && (
+                          <XCircle className="h-3.5 w-3.5 text-red-400" />
+                        )}
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={
+                        !slugAvailable ||
+                        slugInput.length < 3 ||
+                        slugSaving ||
+                        slugInput === user?.slug
+                      }
+                      onClick={handleSaveSlug}
+                      className="shrink-0 gap-1.5"
+                    >
+                      {slugSaving ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )}
+                      Save
+                    </Button>
+                  </div>
+
+                  {/* Availability feedback */}
+                  {slugAvailable === false && (
+                    <p className="text-xs text-destructive flex items-center gap-1">
+                      <XCircle className="h-3 w-3" />
+                      That slug is already taken. Try a different one.
+                    </p>
+                  )}
+                  {slugAvailable === true && slugInput !== user?.slug && (
+                    <p className="text-xs text-green-500 flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Available!
+                    </p>
+                  )}
+                  {slugInput === user?.slug && (
+                    <p className="text-xs text-muted-foreground">
+                      This is your current slug.
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    3–48 characters. Lowercase letters, numbers, and hyphens
+                    only.
+                  </p>
                 </div>
               </CardContent>
             </Card>
