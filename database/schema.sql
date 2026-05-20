@@ -675,9 +675,8 @@ CREATE TABLE `conversation_email_mailboxes` (
   `provider` enum('office365','imap') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'office365',
   `mailbox_email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `display_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `is_shared` tinyint(1) NOT NULL DEFAULT '1',
-  `assigned_broker_id` int DEFAULT NULL,
-  `status` enum('pending','active','disabled','error') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `assigned_broker_id` int NOT NULL,
+  `status` enum('pending','active','disabled','error','auth_required') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
   `is_default` tinyint(1) NOT NULL DEFAULT '0',
   `office365_tenant_id` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `office365_client_id` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -697,7 +696,7 @@ CREATE TABLE `conversation_email_mailboxes` (
   KEY `idx_conversation_email_mailboxes_assigned` (`assigned_broker_id`),
   KEY `idx_conversation_email_mailboxes_default` (`tenant_id`,`is_default`),
   CONSTRAINT `fk_conversation_email_mailboxes_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_conversation_email_mailboxes_assigned_broker` FOREIGN KEY (`assigned_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_email_mailboxes_broker` FOREIGN KEY (`assigned_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_conversation_email_mailboxes_created_by` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -724,7 +723,7 @@ CREATE TABLE `conversation_threads` (
   `client_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `inbox_number` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio number (To) that received the first inbound message',
   `last_message_at` datetime NOT NULL,
-  `last_message_preview` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `last_message_preview` text COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Always set when thread has communications; NULL only for empty threads. API enforces a typed fallback (Message/Email/📞) so this is never blank.',
   `last_message_type` enum('email','sms','whatsapp','call','internal_note') COLLATE utf8mb4_unicode_ci NOT NULL,
   `message_count` int DEFAULT '0',
   `unread_count` int DEFAULT '0',
@@ -1397,9 +1396,12 @@ CREATE TABLE `scheduler_blocked_ranges` (
   `start_datetime` datetime NOT NULL COMMENT 'Inclusive start of blocked window',
   `end_datetime` datetime NOT NULL COMMENT 'Inclusive end of blocked window',
   `label` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Optional display label e.g. Vacation',
+  `source` enum('manual','o365') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'manual' COMMENT 'Origin of block: manual entry or O365 calendar sync',
+  `external_id` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Graph event ID for O365-synced blocks (used for deduplication)',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */,
   KEY `idx_sbr_broker_range` (`broker_id`,`start_datetime`,`end_datetime`),
+  KEY `idx_sbr_source_broker` (`broker_id`,`source`),
   CONSTRAINT `fk_sbr_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=30001;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -2032,3 +2034,96 @@ CREATE TABLE IF NOT EXISTS `ai_chat_sessions` (
     FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Mortgi AI assistant chat sessions';
+
+--
+-- Table structure for table `email_drafts`
+--
+
+DROP TABLE IF EXISTS `email_drafts`;
+CREATE TABLE `email_drafts` (
+  `id`               int            NOT NULL AUTO_INCREMENT,
+  `tenant_id`        int            NOT NULL DEFAULT '1',
+  `mailbox_id`       int            NOT NULL,
+  `broker_id`        int            NOT NULL,
+  `subject`          varchar(512)   COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `body_html`        mediumtext     COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `to_emails`        json           DEFAULT NULL COMMENT 'Array of {email, name} objects',
+  `cc_emails`        json           DEFAULT NULL COMMENT 'Array of {email, name} objects',
+  `bcc_emails`       json           DEFAULT NULL COMMENT 'Array of {email, name} objects',
+  `reply_to_comm_id` int            DEFAULT NULL COMMENT 'communications.id being replied to',
+  `conversation_id`  varchar(100)   COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at`       datetime       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`       datetime       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_email_drafts_broker`  (`tenant_id`, `broker_id`),
+  KEY `idx_email_drafts_mailbox` (`mailbox_id`),
+  CONSTRAINT `fk_email_drafts_tenant`  FOREIGN KEY (`tenant_id`)  REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_email_drafts_mailbox` FOREIGN KEY (`mailbox_id`) REFERENCES `conversation_email_mailboxes` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_email_drafts_broker`  FOREIGN KEY (`broker_id`)  REFERENCES `brokers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Table structure for table `email_signatures`
+--
+
+DROP TABLE IF EXISTS `email_signatures`;
+CREATE TABLE `email_signatures` (
+  `id`         int            NOT NULL AUTO_INCREMENT,
+  `tenant_id`  int            NOT NULL DEFAULT '1',
+  `broker_id`  int            NOT NULL,
+  `name`       varchar(100)   COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Default',
+  `html`       mediumtext     COLLATE utf8mb4_unicode_ci NOT NULL,
+  `is_default` tinyint(1)     NOT NULL DEFAULT '0',
+  `created_at` datetime       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_email_signatures_broker` (`tenant_id`, `broker_id`),
+  CONSTRAINT `fk_email_signatures_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_email_signatures_broker` FOREIGN KEY (`broker_id`)  REFERENCES `brokers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Table structure for table `email_attachment_cache`
+--
+
+DROP TABLE IF EXISTS `email_attachment_cache`;
+CREATE TABLE `email_attachment_cache` (
+  `id`                  int            NOT NULL AUTO_INCREMENT,
+  `tenant_id`           int            NOT NULL DEFAULT '1',
+  `mailbox_id`          int            NOT NULL,
+  `graph_message_id`    varchar(512)   COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Graph API message ID',
+  `graph_attachment_id` varchar(512)   COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Graph API attachment ID',
+  `comm_id`             int            DEFAULT NULL COMMENT 'communications.id that owns this attachment',
+  `name`                varchar(512)   COLLATE utf8mb4_unicode_ci NOT NULL,
+  `content_type`        varchar(100)   COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `size_bytes`          int            DEFAULT NULL,
+  `cdn_url`             varchar(2048)  COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'CDN URL if already downloaded',
+  `created_at`          datetime       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_email_attachment` (`mailbox_id`, `graph_message_id`(200), `graph_attachment_id`(200)),
+  KEY `idx_email_attachment_comm` (`comm_id`),
+  CONSTRAINT `fk_email_attachment_tenant`  FOREIGN KEY (`tenant_id`)  REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_email_attachment_mailbox` FOREIGN KEY (`mailbox_id`) REFERENCES `conversation_email_mailboxes` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Table structure for table `email_sync_log`
+--
+
+DROP TABLE IF EXISTS `email_sync_log`;
+CREATE TABLE `email_sync_log` (
+  `id`              int      NOT NULL AUTO_INCREMENT,
+  `tenant_id`       int      NOT NULL DEFAULT '1',
+  `mailbox_id`      int      NOT NULL,
+  `trigger`         enum('cron','manual') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'cron',
+  `started_at`      datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `finished_at`     datetime DEFAULT NULL,
+  `messages_synced` int      NOT NULL DEFAULT '0',
+  `errors`          int      NOT NULL DEFAULT '0',
+  `status`          enum('running','ok','error','partial') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'running',
+  `error_detail`    text     COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_email_sync_log_mailbox` (`mailbox_id`, `started_at`),
+  CONSTRAINT `fk_email_sync_log_tenant`  FOREIGN KEY (`tenant_id`)  REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_email_sync_log_mailbox` FOREIGN KEY (`mailbox_id`) REFERENCES `conversation_email_mailboxes` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

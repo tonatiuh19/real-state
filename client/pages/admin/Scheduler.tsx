@@ -1433,6 +1433,7 @@ function SettingsPanel() {
 
 const AdminScheduler: React.FC = () => {
   const dispatch = useAppDispatch();
+  const { toast } = useToast();
 
   const {
     meetings,

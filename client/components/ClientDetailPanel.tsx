@@ -101,6 +101,7 @@ import {
 import { convertClientToBroker } from "@/store/slices/clientsSlice";
 import { useToast } from "@/hooks/use-toast";
 import { logger } from "@/lib/logger";
+import { stripHtml } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -1851,7 +1852,7 @@ export default function ClientDetailPanel({
                                   </div>
                                   {conv.last_message_preview && (
                                     <p className="text-xs text-muted-foreground truncate mt-0.5">
-                                      {conv.last_message_preview}
+                                      {stripHtml(conv.last_message_preview)}
                                     </p>
                                   )}
                                   <p className="text-[10px] text-muted-foreground mt-1">

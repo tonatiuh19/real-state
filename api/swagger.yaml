@@ -105,6 +105,31 @@ components:
           type: boolean
           example: true
 
+    EmailDraft:
+      type: object
+      properties:
+        id: { type: integer }
+        mailbox_id: { type: integer, nullable: true }
+        subject: { type: string, nullable: true }
+        body_html: { type: string, nullable: true }
+        to_emails: { type: array, items: { type: object } }
+        cc_emails: { type: array, items: { type: object } }
+        bcc_emails: { type: array, items: { type: object } }
+        reply_to_comm_id: { type: integer, nullable: true }
+        conversation_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    EmailSignature:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        html: { type: string }
+        is_default: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     SchedulerBlockedRange:
       type: object
       properties:
@@ -3599,7 +3624,6 @@ paths:
                           type: string
                           enum: [pending, active, disabled, error]
                         is_default: { type: boolean }
-                        is_shared: { type: boolean }
 
   /conversations/mailboxes/office365/connect:
     post:
@@ -3617,7 +3641,6 @@ paths:
               properties:
                 mailbox_email: { type: string, format: email }
                 display_name: { type: string }
-                is_shared: { type: boolean }
       responses:
         "200":
           description: OAuth URL generated
@@ -3657,7 +3680,7 @@ paths:
   /conversations/mailboxes/{mailboxId}/assign:
     patch:
       tags: [Conversations]
-      summary: Assign a mailbox to a specific broker or set it as shared
+      summary: Assign a mailbox to a specific broker (strict per-broker ownership)
       security:
         - BrokerAuth: []
       parameters:
@@ -3671,15 +3694,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [assigned_broker_id, is_shared]
+              required: [assigned_broker_id]
               properties:
                 assigned_broker_id:
                   type: integer
-                  nullable: true
-                  description: Broker ID to assign, or null for shared
-                is_shared:
-                  type: boolean
-                  description: True when no specific broker is assigned
+                  description: Broker ID to assign the mailbox to
                 is_default:
                   type: boolean
                   description: Set this mailbox as the default for outbound email
@@ -3693,6 +3712,187 @@ paths:
                 properties:
                   success: { type: boolean }
                   mailbox_id: { type: integer }
+
+  /conversations/mailboxes/{mailboxId}/sync-log:
+    get:
+      tags: [Conversations]
+      summary: Get the sync history log for a mailbox (last 20 entries)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: mailboxId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Sync log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  logs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        mailbox_id: { type: integer }
+                        trigger: { type: string, enum: [cron, manual] }
+                        started_at: { type: string, format: date-time }
+                        finished_at: { type: string, format: date-time, nullable: true }
+                        messages_synced: { type: integer }
+                        errors: { type: integer }
+                        status: { type: string, enum: [running, ok, error, partial] }
+                        error_detail: { type: string, nullable: true }
+
+  /email/drafts:
+    get:
+      tags: [Email]
+      summary: List saved email drafts for the authenticated broker
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: List of drafts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  drafts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EmailDraft"
+    post:
+      tags: [Email]
+      summary: Create or update an email draft
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: integer
+                  description: Provide to update an existing draft
+                mailbox_id: { type: integer }
+                subject: { type: string }
+                body_html: { type: string }
+                to_emails:
+                  type: array
+                  items: { type: object, properties: { email: { type: string }, name: { type: string } } }
+                cc_emails:
+                  type: array
+                  items: { type: object, properties: { email: { type: string }, name: { type: string } } }
+                bcc_emails:
+                  type: array
+                  items: { type: object, properties: { email: { type: string }, name: { type: string } } }
+                reply_to_comm_id: { type: integer }
+                conversation_id: { type: string }
+      responses:
+        "200":
+          description: Draft updated
+        "201":
+          description: Draft created
+
+  /email/drafts/{draftId}:
+    delete:
+      tags: [Email]
+      summary: Delete a saved email draft
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: draftId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Draft deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+
+  /email/signatures:
+    get:
+      tags: [Email]
+      summary: List email signatures for the authenticated broker
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: List of signatures
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  signatures:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EmailSignature"
+    post:
+      tags: [Email]
+      summary: Create or update an email signature
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, html]
+              properties:
+                id:
+                  type: integer
+                  description: Provide to update an existing signature
+                name: { type: string }
+                html: { type: string }
+                is_default: { type: boolean }
+      responses:
+        "200":
+          description: Signature saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  signature:
+                    $ref: "#/components/schemas/EmailSignature"
+
+  /email/signatures/{signatureId}:
+    delete:
+      tags: [Email]
+      summary: Delete an email signature
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: signatureId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Signature deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
 
   # ── Audit Logs ─────────────────────────────────────────────────────────────────
   /audit-logs:
@@ -4659,6 +4859,50 @@ paths:
         "404":
           description: Not found
 
+  /scheduler/calendar-sync/status:
+    get:
+      tags: [Scheduler (Admin)]
+      summary: Get Office 365 calendar sync status
+      description: Returns whether the broker has a connected O365 mailbox and info about the last sync.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: O365 calendar sync status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  connected: { type: boolean }
+                  mailbox_email: { type: string, nullable: true }
+                  synced_count: { type: integer }
+                  last_synced_at: { type: string, format: date-time, nullable: true }
+
+  /scheduler/calendar-sync:
+    post:
+      tags: [Scheduler (Admin)]
+      summary: Sync Office 365 calendar to blocked ranges
+      description: Fetches the broker's Outlook calendar events for the next 60 days and stores them as blocked ranges so clients cannot book during busy times.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Sync completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  synced_count: { type: integer }
+                  message: { type: string }
+        "400":
+          description: No connected O365 mailbox found
+        "500":
+          description: Graph API or database error
+
   /broker/slug/check:
     get:
       tags: [Broker]
@@ -5155,6 +5399,49 @@ paths:
                   updated: { type: integer }
                   unchanged: { type: integer }
                   errors: { type: integer }
+
+  /cron/sync-o365-calendars:
+    get:
+      tags: [Webhooks & Cron]
+      summary: Sync Outlook calendar events into scheduler blocked ranges (cron trigger)
+      description: |
+        Iterates all active Office 365 mailboxes and syncs the next 60 days of
+        calendar events (busy/tentative/oof) into `scheduler_blocked_ranges`.
+        Per-mailbox errors are logged and included in the response but do not
+        fail the overall job. Only `active` mailboxes are processed — mailboxes
+        in `auth_required` state are skipped (delegated token may lack `Calendars.Read`).
+
+        Suggested schedule: every 30 minutes.
+        `curl -s "https://yourdomain.com/api/cron/sync-o365-calendars?secret=CRON_SECRET"`
+      parameters:
+        - in: query
+          name: secret
+          required: false
+          schema: { type: string }
+          description: Shared secret matching `CRON_SECRET` env var
+      responses:
+        "200":
+          description: Calendar sync complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  mailboxes: { type: integer, description: Number of active mailboxes processed }
+                  total_synced: { type: integer, description: Total calendar events synced across all mailboxes }
+                  errors: { type: integer, description: Number of mailboxes that encountered errors }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        mailbox_id: { type: integer }
+                        email: { type: string }
+                        synced_count: { type: integer }
+                        error: { type: string, nullable: true }
+        "401":
+          description: Invalid or missing CRON_SECRET
 
   /cron/sync-teams-policy:
     get:

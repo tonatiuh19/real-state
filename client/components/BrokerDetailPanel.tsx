@@ -438,7 +438,6 @@ export default function BrokerDetailPanel({
       const result = await dispatch(
         connectOffice365Mailbox({
           mailbox_email: email,
-          is_shared: false,
           target_broker_id: brokerId,
         }),
       ).unwrap();

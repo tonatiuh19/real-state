@@ -8,6 +8,7 @@ import {
   Trash2,
   AlertCircle,
   Loader2,
+  ChevronLeft,
 } from "lucide-react";
 import { LiaRobotSolid } from "react-icons/lia";
 import { Button } from "@/components/ui/button";
@@ -167,25 +168,37 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
   };
 
   const panelWidth = expanded ? "w-[520px]" : "w-[360px]";
-  const panelHeight = expanded ? "h-[640px]" : "h-[520px]";
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 max-sm:bottom-20">
-      {/* Chat panel */}
+    <>
+      {/* Backdrop — click to close */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            key="mortgi-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 z-[58] bg-black/20 backdrop-blur-[2px]"
+            onClick={() => dispatch(closeChat())}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Right-side sliding panel */}
       <AnimatePresence>
         {isOpen && (
           <motion.div
             key="chat-panel"
-            initial={{ opacity: 0, y: 20, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            transition={{ duration: 0.22, ease: "easeOut" }}
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ duration: 0.35, ease: [0.32, 0.72, 0, 1] }}
             className={cn(
-              "bg-background border border-border/60 rounded-2xl shadow-2xl flex flex-col overflow-hidden",
+              "fixed top-0 right-0 h-screen z-[59] bg-background border-l border-border/60 shadow-2xl flex flex-col overflow-hidden",
               panelWidth,
-              panelHeight,
-              // Mobile: full width, near full height
-              "max-sm:!w-[calc(100vw-2rem)] max-sm:!h-[calc(100vh-6rem)] max-sm:right-4 max-sm:bottom-20",
+              "max-sm:w-full",
             )}
           >
             {/* Header */}
@@ -334,48 +347,38 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
         )}
       </AnimatePresence>
 
-      {/* Floating trigger button */}
-      <motion.button
-        onClick={() => dispatch(toggleChat())}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        className={cn(
-          "relative h-14 w-14 rounded-2xl shadow-lg flex items-center justify-center transition-all duration-200",
-          isOpen
-            ? "bg-gradient-to-br from-rose-700 to-red-700"
-            : "bg-gradient-to-br from-rose-600 to-red-600 hover:shadow-xl hover:shadow-rose-500/30",
-        )}
-        aria-label="Toggle Mortgi AI assistant"
-      >
-        <AnimatePresence mode="wait">
-          {isOpen ? (
-            <motion.div
-              key="close"
-              initial={{ rotate: -90, opacity: 0 }}
-              animate={{ rotate: 0, opacity: 1 }}
-              exit={{ rotate: 90, opacity: 0 }}
-              transition={{ duration: 0.15 }}
+      {/* Right-edge pull tab — docked to the window edge, hidden when panel is open */}
+      <AnimatePresence>
+        {!isOpen && (
+          <motion.button
+            key="mortgi-tab"
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+            whileHover={{ x: -6 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={() => dispatch(toggleChat())}
+            className="fixed right-0 top-1/2 -translate-y-1/2 z-[60] flex flex-col items-center gap-2 bg-gradient-to-b from-rose-600 to-red-600 px-2 pt-4 pb-3 rounded-l-2xl shadow-xl cursor-pointer select-none"
+            aria-label="Open Mortgi AI assistant"
+          >
+            {messages.length > 0 && (
+              <span className="absolute -top-1 -left-1 h-3.5 w-3.5 rounded-full bg-emerald-500 border-2 border-background" />
+            )}
+            <ChevronLeft className="h-4 w-4 text-white/80" />
+            <LiaRobotSolid className="h-5 w-5 text-white" />
+            <span
+              className="text-[9px] font-bold text-white/80 uppercase tracking-widest"
+              style={{
+                writingMode: "vertical-rl",
+                transform: "rotate(180deg)",
+              }}
             >
-              <X className="h-6 w-6 text-white" />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="open"
-              initial={{ rotate: 90, opacity: 0 }}
-              animate={{ rotate: 0, opacity: 1 }}
-              exit={{ rotate: -90, opacity: 0 }}
-              transition={{ duration: 0.15 }}
-            >
-              <LiaRobotSolid className="h-7 w-7 text-white" />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Unread indicator (shows when closed and there are messages) */}
-        {!isOpen && messages.length > 0 && (
-          <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-500 border-2 border-background" />
+              Mortgi
+            </span>
+          </motion.button>
         )}
-      </motion.button>
-    </div>
+      </AnimatePresence>
+    </>
   );
 }

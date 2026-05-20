@@ -160,9 +160,8 @@ type ConversationMailboxRow = RowDataPacket & {
   provider: "office365" | "imap";
   mailbox_email: string;
   display_name: string | null;
-  is_shared: number;
-  assigned_broker_id: number | null;
-  status: "pending" | "active" | "disabled" | "error";
+  assigned_broker_id: number;
+  status: "pending" | "active" | "disabled" | "error" | "auth_required";
   is_default: number;
   office365_tenant_id: string | null;
   office365_client_id: string | null;
@@ -176,6 +175,7 @@ const OFFICE365_SCOPES = [
   "Mail.Read",
   "Mail.Send",
   "User.Read",
+  "Calendars.Read",
 ];
 
 const getOffice365OAuthConfig = () => {
@@ -257,17 +257,150 @@ const stripHtmlForStorage = (html: string) =>
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<[^>]+>/g, " ")
+    // Decode common HTML entities so stored text is clean plain text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&#160;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
+/**
+ * Strips quoted-reply content from a plain-text email body so previews only
+ * show the new message, not the full reply chain.
+ * Removes "On [date] [name] wrote:" blocks and everything after.
+ */
+const stripEmailReplyQuote = (text: string): string =>
+  text
+    // "On Mon, May 8, 2026 at 8:13 PM Someone <email@x.com> wrote:" — Gmail/Outlook/Apple
+    .replace(/\s*On\s+.{10,300}wrote:\s*[\s\S]*/i, "")
+    // "-----Original Message-----" — classic Outlook
+    .replace(/\s*-{3,}\s*Original Message\s*-{3,}[\s\S]*/i, "")
+    // Lines that start with ">" (quoted text block)
+    .replace(/(\s*>.*)+/g, "")
+    .trim();
+
+/**
+ * Makes a GET request to the Microsoft Graph API for a given mailbox.
+ * Tries the app-level token first (/users/{email}). If that returns
+ * ErrorInvalidUser (personal/Hotmail accounts are not in the org tenant),
+ * it automatically retries with the delegated (user-OAuth) token via /me/.
+ * Returns both the axios response and the resolved {token, base} so callers
+ * can reuse the same token/base for follow-up requests.
+ */
+async function graphGetWithFallback(
+  mailbox: ConversationMailboxRow,
+  buildUrl: (base: string) => string,
+  options: {
+    headers?: Record<string, string>;
+    params?: Record<string, any>;
+  } = {},
+): Promise<{ resp: any; token: string; base: string }> {
+  const { token, useAppToken } = await resolveOffice365Token(mailbox);
+  const appBase = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}`;
+  const meBase = `https://graph.microsoft.com/v1.0/me`;
+  const base = useAppToken ? appBase : meBase;
+
+  try {
+    const resp = await axios.get(buildUrl(base), {
+      headers: { Authorization: `Bearer ${token}`, ...(options.headers ?? {}) },
+      params: options.params,
+    });
+    return { resp, token, base };
+  } catch (err: any) {
+    const errCode: string = err?.response?.data?.error?.code ?? "";
+    if (
+      useAppToken &&
+      (errCode === "ErrorInvalidUser" || err?.response?.status === 404)
+    ) {
+      console.warn(
+        `graphGetWithFallback: app token rejected for ${mailbox.mailbox_email} (${errCode}). Retrying with delegated token.`,
+      );
+      const delegated = await getOffice365AccessToken(mailbox);
+      const resp = await axios.get(buildUrl(meBase), {
+        headers: {
+          Authorization: `Bearer ${delegated}`,
+          ...(options.headers ?? {}),
+        },
+        params: options.params,
+      });
+      return { resp, token: delegated, base: meBase };
+    }
+    throw err;
+  }
+}
+
+/**
+ * PATCH / POST / DELETE to the Microsoft Graph API for a given mailbox, with
+ * the same app-token → delegated-token fallback logic as graphGetWithFallback.
+ */
+async function graphMutateWithFallback(
+  mailbox: ConversationMailboxRow,
+  method: "patch" | "post" | "delete",
+  buildUrl: (base: string) => string,
+  body?: any,
+): Promise<{ resp: any; token: string; base: string }> {
+  const { token, useAppToken } = await resolveOffice365Token(mailbox);
+  const appBase = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}`;
+  const meBase = `https://graph.microsoft.com/v1.0/me`;
+  const base = useAppToken ? appBase : meBase;
+
+  const doRequest = async (t: string, b: string) => {
+    const url = buildUrl(b);
+    const cfg = {
+      headers: {
+        Authorization: `Bearer ${t}`,
+        "Content-Type": "application/json",
+      },
+    };
+    if (method === "delete") {
+      return { resp: await axios.delete(url, cfg), token: t, base: b };
+    }
+    if (method === "patch") {
+      return { resp: await axios.patch(url, body, cfg), token: t, base: b };
+    }
+    return { resp: await axios.post(url, body, cfg), token: t, base: b };
+  };
+
+  try {
+    return await doRequest(token, base);
+  } catch (err: any) {
+    const errCode: string = err?.response?.data?.error?.code ?? "";
+    if (
+      useAppToken &&
+      (errCode === "ErrorInvalidUser" || err?.response?.status === 404)
+    ) {
+      console.warn(
+        `graphMutateWithFallback: app token rejected for ${mailbox.mailbox_email} (${errCode}). Retrying with delegated token.`,
+      );
+      const delegated = await getOffice365AccessToken(mailbox);
+      return await doRequest(delegated, meBase);
+    }
+    throw err;
+  }
+}
+
+class Office365AuthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Office365AuthRequiredError";
+  }
+}
+
 async function refreshOffice365Token(mailbox: ConversationMailboxRow) {
-  const { tenantId, clientId, clientSecret, redirectUri } =
-    getOffice365OAuthConfig();
+  const { clientId, clientSecret, redirectUri } = getOffice365OAuthConfig();
   const refreshToken = mailbox.oauth_refresh_token;
-  if (!tenantId || !clientId || !clientSecret || !refreshToken) {
-    throw new Error("Office365 OAuth config is incomplete");
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Office365AuthRequiredError(
+      "Office365 OAuth config is incomplete",
+    );
   }
 
+  // Use 'common' endpoint so both personal (MSA) and work (AAD) accounts work.
   const tokenUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
   const params = new URLSearchParams();
   params.set("grant_type", "refresh_token");
@@ -277,9 +410,46 @@ async function refreshOffice365Token(mailbox: ConversationMailboxRow) {
   params.set("scope", OFFICE365_SCOPES.join(" "));
   params.set("redirect_uri", redirectUri);
 
-  const { data } = await axios.post(tokenUrl, params.toString(), {
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  });
+  let data: any;
+  try {
+    const response = await axios.post(tokenUrl, params.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    data = response.data;
+  } catch (err: any) {
+    const errData = err?.response?.data;
+    const errCode = errData?.error || "";
+    // invalid_grant = refresh token expired/revoked — user must re-authorize.
+    // interaction_required = Conditional Access / MFA requires user action.
+    if (
+      errCode === "invalid_grant" ||
+      errCode === "interaction_required" ||
+      errCode === "consent_required" ||
+      errCode === "access_denied"
+    ) {
+      // Mark this mailbox as needing re-authorization immediately so the cron
+      // stops retrying and the UI shows the correct "reconnect" state.
+      await pool.query(
+        `UPDATE conversation_email_mailboxes
+         SET status = 'auth_required',
+             last_sync_status = 'error',
+             last_sync_error = ?,
+             last_sync_at = NOW(),
+             updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          `Re-authorization required: ${errCode}`,
+          mailbox.id,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+      throw new Office365AuthRequiredError(
+        `Mailbox ${mailbox.mailbox_email} needs re-authorization: ${errCode}`,
+      );
+    }
+    // Any other error (network, server-side) — re-throw so caller can retry.
+    throw err;
+  }
 
   const expiresIn = Number(data.expires_in || 3600);
   const expiresAt = new Date(Date.now() + Math.max(300, expiresIn - 120) * 1000)
@@ -320,6 +490,105 @@ async function getOffice365AccessToken(mailbox: ConversationMailboxRow) {
   return refreshOffice365Token(mailbox);
 }
 
+// App-level token cache for email operations (client_credentials + Mail scopes).
+// When the Azure App has Mail.Read + Mail.Send Application permissions and admin
+// consent, this eliminates all user refresh-token management for email sync/send.
+let _office365MailAppToken: string | null = null;
+let _office365MailAppTokenExpiry = 0;
+// Tri-state: null = not yet probed, true = confirmed working, false = no permission
+let _office365MailAppPermissionConfirmed: boolean | null = null;
+
+async function getOffice365MailAppToken(): Promise<string | null> {
+  // If we already confirmed no Mail permission, skip entirely.
+  if (_office365MailAppPermissionConfirmed === false) return null;
+
+  if (_office365MailAppToken && Date.now() < _office365MailAppTokenExpiry) {
+    return _office365MailAppToken;
+  }
+
+  const tenantId = process.env.OFFICE365_TENANT_ID;
+  const clientId = process.env.OFFICE365_CLIENT_ID;
+  const clientSecret = process.env.OFFICE365_CLIENT_SECRET;
+  if (!tenantId || !clientId || !clientSecret) return null;
+
+  try {
+    const params = new URLSearchParams();
+    params.set("grant_type", "client_credentials");
+    params.set("client_id", clientId);
+    params.set("client_secret", clientSecret);
+    // .default scope picks up ALL Application permissions granted in Azure,
+    // including Mail.Read and Mail.Send if admin consent was given.
+    params.set("scope", "https://graph.microsoft.com/.default");
+
+    const resp = await axios.post(
+      `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
+      params.toString(),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+    );
+
+    const json = resp.data as { access_token: string; expires_in: number };
+    const candidateToken = json.access_token;
+
+    // On first acquisition (or after permission reset), probe a lightweight
+    // Graph call to confirm Mail.Read Application permission is actually granted.
+    // Without this check, a token from Teams-only permissions would silently
+    // fail every mail sync with 403 instead of falling back to delegated flow.
+    if (_office365MailAppPermissionConfirmed === null) {
+      try {
+        // /me is unavailable for app tokens — use /users to probe Mail.Read.
+        // We just list the first mailbox folder; any 200 confirms Mail.Read.
+        await axios.get(
+          `https://graph.microsoft.com/v1.0/users?$select=mail&$top=1`,
+          { headers: { Authorization: `Bearer ${candidateToken}` } },
+        );
+        _office365MailAppPermissionConfirmed = true;
+        console.log(
+          "[Office365] App-level Mail.Read permission confirmed — using permanent app token for all email sync/send.",
+        );
+      } catch (probeErr: any) {
+        const status = probeErr?.response?.status;
+        if (status === 403 || status === 401) {
+          _office365MailAppPermissionConfirmed = false;
+          console.warn(
+            "[Office365] App token lacks Mail.Read Application permission (HTTP " +
+              status +
+              "). Falling back to per-user delegated tokens. " +
+              "To fix: add Mail.Read + Mail.Send Application permissions in Azure and grant admin consent.",
+          );
+          return null;
+        }
+        // Network/transient error — treat token as usable, retry probe next time.
+        _office365MailAppPermissionConfirmed = null;
+      }
+    }
+
+    _office365MailAppToken = candidateToken;
+    _office365MailAppTokenExpiry = Date.now() + (json.expires_in - 60) * 1000;
+    return _office365MailAppToken;
+  } catch {
+    // Token acquisition failed (bad credentials, network) — fall back to delegated.
+    return null;
+  }
+}
+
+/**
+ * Returns { token, useAppToken } where useAppToken=true means we have an
+ * application-level Mail token (no expiry / re-auth issues).  When false,
+ * callers must use /me/ endpoints with the delegated token.
+ */
+async function resolveOffice365Token(
+  mailbox: ConversationMailboxRow,
+): Promise<{ token: string; useAppToken: boolean }> {
+  // Try app-level token first (client_credentials — permanent, no re-auth).
+  const appToken = await getOffice365MailAppToken();
+  if (appToken) {
+    return { token: appToken, useAppToken: true };
+  }
+  // Fall back to user-delegated refresh token flow.
+  const delegatedToken = await getOffice365AccessToken(mailbox);
+  return { token: delegatedToken, useAppToken: false };
+}
+
 async function sendEmailMessageViaOffice365(options: {
   mailboxId: number;
   to: string;
@@ -338,7 +607,8 @@ async function sendEmailMessageViaOffice365(options: {
   try {
     const [rows] = await pool.query<ConversationMailboxRow[]>(
       `SELECT * FROM conversation_email_mailboxes
-       WHERE id = ? AND tenant_id = ? AND provider = 'office365' AND status = 'active'
+       WHERE id = ? AND tenant_id = ? AND provider = 'office365'
+         AND status IN ('active', 'auth_required')
        LIMIT 1`,
       [options.mailboxId, MORTGAGE_TENANT_ID],
     );
@@ -351,12 +621,15 @@ async function sendEmailMessageViaOffice365(options: {
     }
 
     const mailbox = rows[0];
-    const accessToken = await getOffice365AccessToken(mailbox);
+    const { token: accessToken, useAppToken } =
+      await resolveOffice365Token(mailbox);
+
+    console.log(
+      `[sendO365] mailbox #${mailbox.id} <${mailbox.mailbox_email}> useAppToken=${useAppToken} to=${options.to}`,
+    );
 
     const internetMessageHeaders: Array<{ name: string; value: string }> = [];
     if (options.conversationId) {
-      // Graph API only allows custom headers starting with 'X-'.
-      // 'Message-ID' is a reserved header and must not be set here.
       internetMessageHeaders.push({
         name: "X-Conversation-Id",
         value: options.conversationId,
@@ -370,31 +643,62 @@ async function sendEmailMessageViaOffice365(options: {
       emailAddress: { address: r.email, ...(r.name ? { name: r.name } : {}) },
     }));
 
-    await axios.post(
-      `https://graph.microsoft.com/v1.0/me/sendMail`,
-      {
-        message: {
-          subject: options.subject,
-          body: {
-            contentType: options.isHtml ? "HTML" : "Text",
-            content: options.body,
-          },
-          toRecipients: [{ emailAddress: { address: options.to } }],
-          ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
-          ...(bccRecipients.length > 0 ? { bccRecipients } : {}),
-          replyTo: [{ emailAddress: { address: mailbox.mailbox_email } }],
-          internetMessageHeaders,
+    const buildPayload = () => ({
+      message: {
+        subject: options.subject,
+        body: {
+          contentType: options.isHtml ? "HTML" : "Text",
+          content: options.body,
         },
-        saveToSentItems: true,
+        toRecipients: [{ emailAddress: { address: options.to } }],
+        ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
+        ...(bccRecipients.length > 0 ? { bccRecipients } : {}),
+        replyTo: [{ emailAddress: { address: mailbox.mailbox_email } }],
+        internetMessageHeaders,
       },
-      {
+      saveToSentItems: true,
+    });
+
+    const doPost = async (token: string, base: string) => {
+      const url = `${base}/sendMail`;
+      console.log(`[sendO365] POST ${url}`);
+      await axios.post(url, buildPayload(), {
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-      },
-    );
+      });
+    };
 
+    const appBase = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}`;
+    const meBase = `https://graph.microsoft.com/v1.0/me`;
+
+    try {
+      await doPost(accessToken, useAppToken ? appBase : meBase);
+    } catch (sendErr: any) {
+      const errCode: string = sendErr?.response?.data?.error?.code ?? "";
+      // Personal/Hotmail accounts cannot be accessed via the app-level token.
+      // Retry once with the user's delegated OAuth token using /me/.
+      if (
+        useAppToken &&
+        (errCode === "ErrorInvalidUser" || sendErr?.response?.status === 404)
+      ) {
+        console.warn(
+          `[sendO365] app token rejected (${errCode}) for ${mailbox.mailbox_email} — retrying with delegated token`,
+        );
+        const delegated = await getOffice365AccessToken(mailbox);
+        await doPost(delegated, meBase);
+        console.log(
+          `[sendO365] delegated send succeeded for ${mailbox.mailbox_email}`,
+        );
+      } else {
+        throw sendErr;
+      }
+    }
+
+    console.log(
+      `[sendO365] ✔ sent to ${options.to} from ${mailbox.mailbox_email}`,
+    );
     return {
       success: true,
       provider_response: {
@@ -408,6 +712,10 @@ async function sendEmailMessageViaOffice365(options: {
       error?.response?.data?.error?.message ||
       error?.message ||
       "Office365 send failed";
+    console.error(
+      `[sendO365] ✖ failed — ${detail}`,
+      JSON.stringify(error?.response?.data, null, 2),
+    );
     return {
       success: false,
       error: detail,
@@ -422,215 +730,506 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
 }> {
   let processed = 0;
   let errors = 0;
+  const syncStart = Date.now();
 
-  const accessToken = await getOffice365AccessToken(mailbox);
-  let data: any;
+  console.log(
+    `[syncO365] ▶ Starting sync — mailbox #${mailbox.id} <${mailbox.mailbox_email}>`,
+  );
+
+  // ── Backfill: recover mailbox_id from metadata.mailbox_email ──────────────
+  // Older synced rows may not have mailbox_id set because the column was added
+  // after the initial sync. Use metadata.mailbox_email → mailbox join since
+  // metadata.mailbox_id may also be absent in very old rows.
   try {
-    const response = await axios.get(
-      `https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: {
-          $top: 50,
-          $orderby: "receivedDateTime desc",
-          $select:
-            "id,subject,from,toRecipients,ccRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body",
-        },
-      },
+    const [bfComm] = (await pool.query(
+      `UPDATE communications c
+       JOIN conversation_email_mailboxes m
+         ON m.tenant_id = c.tenant_id
+        AND JSON_UNQUOTE(JSON_EXTRACT(c.metadata, '$.mailbox_email')) = m.mailbox_email
+       SET c.mailbox_id = m.id
+       WHERE c.tenant_id = ?
+         AND c.communication_type = 'email'
+         AND c.external_id IS NOT NULL
+         AND c.mailbox_id IS NULL`,
+      [MORTGAGE_TENANT_ID],
+    )) as [ResultSetHeader, any];
+    console.log(
+      `[syncO365] backfill communications.mailbox_id: ${bfComm.affectedRows} rows updated`,
     );
-    data = response.data;
-  } catch (graphError: any) {
-    const graphErrBody = graphError?.response?.data;
-    console.error(
-      "Graph API error fetching inbox:",
-      JSON.stringify(graphErrBody, null, 2),
+
+    const [bfThreads] = (await pool.query(
+      `UPDATE conversation_threads ct
+       JOIN (
+         SELECT DISTINCT conversation_id, mailbox_id
+         FROM communications
+         WHERE tenant_id = ? AND mailbox_id IS NOT NULL AND communication_type = 'email'
+       ) c ON c.conversation_id = ct.conversation_id
+       SET ct.mailbox_id = c.mailbox_id
+       WHERE ct.mailbox_id IS NULL AND ct.tenant_id = ?`,
+      [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
+    )) as [ResultSetHeader, any];
+    console.log(
+      `[syncO365] backfill conversation_threads.mailbox_id: ${bfThreads.affectedRows} rows updated`,
     );
-    throw graphError;
+  } catch (backfillErr) {
+    console.warn(
+      "[syncO365] mailbox_id backfill failed (non-fatal):",
+      backfillErr,
+    );
   }
 
-  const messages: any[] = Array.isArray(data?.value) ? data.value : [];
-  messages.reverse();
+  // ── Folders to sync ────────────────────────────────────────────────────────
+  // SentItems first so outbound graph_conversation_id is in DB before Inbox replies are matched
+  const foldersToSync: Array<{
+    graphFolder: string;
+    direction: "inbound" | "outbound";
+  }> = [
+    { graphFolder: "SentItems", direction: "outbound" },
+    { graphFolder: "Inbox", direction: "inbound" },
+  ];
 
-  for (const msg of messages) {
+  for (const { graphFolder, direction } of foldersToSync) {
+    const folderStart = Date.now();
+    console.log(
+      `[syncO365] ── folder "${graphFolder}" (${direction}) ──────────────────`,
+    );
+
+    let folderData: any;
     try {
-      const graphId = String(msg?.id || "");
-      if (!graphId) continue;
-
-      const [existing] = await pool.query<RowDataPacket[]>(
-        `SELECT id FROM communications WHERE tenant_id = ? AND external_id = ? LIMIT 1`,
-        [MORTGAGE_TENANT_ID, graphId],
+      const { resp } = await graphGetWithFallback(
+        mailbox,
+        (base) => `${base}/mailFolders/${graphFolder}/messages`,
+        {
+          params: {
+            $top: 50,
+            $orderby: "receivedDateTime desc",
+            $select:
+              "id,subject,from,toRecipients,ccRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body",
+          },
+        },
       );
-      if (existing.length > 0) continue;
-
-      const fromEmail =
-        msg?.from?.emailAddress?.address?.toLowerCase?.() ||
-        msg?.from?.emailAddress?.address ||
-        "";
-      const subject = String(msg?.subject || "(no subject)");
-
-      const headerMap: Record<string, string> = {};
-      const rawHeaders = Array.isArray(msg?.internetMessageHeaders)
-        ? msg.internetMessageHeaders
-        : [];
-      for (const h of rawHeaders) {
-        const key = String(h?.name || "").toLowerCase();
-        const value = String(h?.value || "");
-        if (key) headerMap[key] = value;
-      }
-
-      let conversationId: string | null =
-        headerMap["x-conversation-id"]?.trim() || null;
-      if (!conversationId) {
-        const combined = [
-          msg?.inReplyTo,
-          headerMap["references"],
-          msg?.internetMessageId,
-        ]
-          .filter(Boolean)
-          .join(" ");
-        const match = combined.match(/<enc-([^-]+(?:-[^-]+)*)-\d+@/);
-        if (match) conversationId = match[1];
-      }
-      if (!conversationId) {
-        const fallbackKey =
-          msg?.conversationId ||
-          crypto
-            .createHash("md5")
-            .update(`${fromEmail}:${subject}`)
-            .digest("hex")
-            .slice(0, 20);
-        conversationId = `conv_o365_${mailbox.id}_${fallbackKey}`;
-      }
-
-      const bodyPreview = String(msg?.bodyPreview || "").trim();
-      const bodyContent = String(msg?.body?.content || "").trim();
-      // Store the full HTML (or plain text) body so it renders correctly in the UI.
-      // bodyPreview is only a truncated plain-text snippet — use it as last resort.
-      const cleanBody = bodyContent || bodyPreview || "(empty reply)";
-
-      const [threadRows] = await pool.query<RowDataPacket[]>(
-        `SELECT broker_id, client_id, application_id, lead_id
-         FROM conversation_threads
-         WHERE conversation_id = ? AND tenant_id = ?
-         LIMIT 1`,
-        [conversationId, MORTGAGE_TENANT_ID],
+      folderData = resp.data;
+      console.log(
+        `[syncO365] "${graphFolder}": Graph API returned ${folderData?.value?.length ?? 0} messages`,
       );
+    } catch (fetchErr: any) {
+      console.error(
+        `[syncO365] "${graphFolder}": Graph API fetch failed —`,
+        JSON.stringify(fetchErr?.response?.data ?? fetchErr?.message, null, 2),
+      );
+      errors++;
+      continue; // skip this folder, proceed to the next
+    }
 
-      let brokerId: number | null = null;
-      let clientId: number | null = null;
-      let applicationId: number | null = null;
-      let leadId: number | null = null;
+    const messages: any[] = Array.isArray(folderData?.value)
+      ? folderData.value
+      : [];
+    // Process oldest-first so threads are built in chronological order
+    messages.reverse();
+    console.log(
+      `[syncO365] "${graphFolder}": processing ${messages.length} messages (oldest first)`,
+    );
 
-      if (threadRows.length > 0) {
-        brokerId = threadRows[0].broker_id ?? null;
-        clientId = threadRows[0].client_id ?? null;
-        applicationId = threadRows[0].application_id ?? null;
-        leadId = threadRows[0].lead_id ?? null;
-      } else if (fromEmail) {
-        const [clientRows] = await pool.query<RowDataPacket[]>(
-          `SELECT id, assigned_broker_id FROM clients
-           WHERE tenant_id = ? AND LOWER(email) = ?
-           LIMIT 1`,
-          [MORTGAGE_TENANT_ID, String(fromEmail).toLowerCase()],
-        );
-        if (clientRows.length > 0) {
-          clientId = clientRows[0].id ?? null;
-          brokerId = clientRows[0].assigned_broker_id ?? null;
-        } else {
-          // Also check leads table
-          const [leadRows] = await pool.query<RowDataPacket[]>(
-            `SELECT id, assigned_broker_id FROM leads
-             WHERE tenant_id = ? AND LOWER(email) = ?
-             LIMIT 1`,
-            [MORTGAGE_TENANT_ID, String(fromEmail).toLowerCase()],
+    for (const msg of messages) {
+      try {
+        const graphId = String(msg?.id || "");
+        if (!graphId) {
+          console.warn(
+            `[syncO365] "${graphFolder}": skipping message with no id`,
           );
-          if (leadRows.length > 0) {
-            leadId = leadRows[0].id ?? null;
-            brokerId = leadRows[0].assigned_broker_id ?? null;
+          continue;
+        }
+
+        // Skip already-synced messages
+        const [existing] = await pool.query<RowDataPacket[]>(
+          `SELECT id FROM communications WHERE tenant_id = ? AND external_id = ? LIMIT 1`,
+          [MORTGAGE_TENANT_ID, graphId],
+        );
+        if (existing.length > 0) {
+          console.log(
+            `[syncO365] "${graphFolder}": skip ${graphId.slice(0, 20)}… (already comm #${existing[0].id})`,
+          );
+          continue;
+        }
+
+        const subject = String(msg?.subject || "(no subject)");
+
+        // For inbound: sender is the external party.
+        // For outbound: sender is the mailbox owner; recipient is the external party.
+        const fromEmail: string =
+          msg?.from?.emailAddress?.address?.toLowerCase?.() || "";
+        const fromName: string = msg?.from?.emailAddress?.name || "";
+
+        const firstToEmail: string | null =
+          Array.isArray(msg?.toRecipients) && msg.toRecipients.length > 0
+            ? (msg.toRecipients[0]?.emailAddress?.address?.toLowerCase?.() ??
+              null)
+            : null;
+
+        // Email to look up in clients/leads to resolve clientId & brokerId
+        const lookupEmail =
+          direction === "inbound" ? fromEmail : (firstToEmail ?? "");
+
+        // ── Build conversation ID ─────────────────────────────────────────
+        const headerMap: Record<string, string> = {};
+        const rawHeaders = Array.isArray(msg?.internetMessageHeaders)
+          ? msg.internetMessageHeaders
+          : [];
+        for (const h of rawHeaders) {
+          const key = String(h?.name || "").toLowerCase();
+          if (key) headerMap[key] = String(h?.value || "");
+        }
+
+        let conversationId: string | null =
+          headerMap["x-conversation-id"]?.trim() || null;
+        if (!conversationId) {
+          const combined = [headerMap["references"], msg?.internetMessageId]
+            .filter(Boolean)
+            .join(" ");
+          const match = combined.match(/<enc-([^-]+(?:-[^-]+)*)-\d+@/);
+          if (match) conversationId = match[1];
+        }
+        if (!conversationId) {
+          // Use the Graph API conversationId (same for all emails in a thread)
+          // so inbox + sent items in the same Outlook thread share a CRM thread.
+          const fallbackKey =
+            msg?.conversationId ||
+            crypto
+              .createHash("md5")
+              .update(`${fromEmail}:${subject}`)
+              .digest("hex")
+              .slice(0, 20);
+          conversationId = `conv_o365_${mailbox.id}_${fallbackKey}`;
+
+          // Cross-reference: if a prior communication already stored this Graph
+          // conversationId in its metadata, reuse that CRM conversation_id.
+          // This ensures external replies (which lack X-Conversation-Id) land in
+          // the same thread as the outbound email we sent via handleEmailSend.
+          if (msg?.conversationId) {
+            const [crossRef] = await pool.query<RowDataPacket[]>(
+              `SELECT conversation_id FROM communications
+               WHERE tenant_id = ?
+                 AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.graph_conversation_id')) = ?
+               LIMIT 1`,
+              [MORTGAGE_TENANT_ID, msg.conversationId],
+            );
+            if (crossRef.length > 0) {
+              console.log(
+                `[syncO365] cross-ref: graph_conv=${msg.conversationId} → reusing conv=${crossRef[0].conversation_id} (was: ${conversationId})`,
+              );
+              conversationId = crossRef[0].conversation_id as string;
+            }
           }
         }
-      }
 
-      // Always fall back to the mailbox owner so emails are always visible
-      if (brokerId === null) {
-        brokerId = mailbox.assigned_broker_id ?? null;
-      }
+        const bodyContent = String(msg?.body?.content || "").trim();
+        const bodyPreview = String(msg?.bodyPreview || "").trim();
+        const cleanBody = bodyContent || bodyPreview || "(empty)";
 
-      const [insertResult] = (await pool.query(
-        `INSERT INTO communications (
-          tenant_id, application_id, lead_id,
-          from_user_id, to_broker_id,
-          communication_type, direction,
-          subject, body, status,
-          conversation_id, message_type,
-          delivery_status, external_id,
-          metadata,
-          sent_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'email', 'inbound', ?, ?, 'delivered', ?, 'text', 'delivered', ?, ?, NOW(), NOW())`,
-        [
-          MORTGAGE_TENANT_ID,
+        // ── Resolve brokerId / clientId ───────────────────────────────────
+        const [threadRows] = await pool.query<RowDataPacket[]>(
+          `SELECT broker_id, client_id, application_id, lead_id
+           FROM conversation_threads
+           WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+          [conversationId, MORTGAGE_TENANT_ID],
+        );
+
+        let brokerId: number | null = null;
+        let clientId: number | null = null;
+        let applicationId: number | null = null;
+        let leadId: number | null = null;
+
+        if (threadRows.length > 0) {
+          brokerId = threadRows[0].broker_id ?? null;
+          clientId = threadRows[0].client_id ?? null;
+          applicationId = threadRows[0].application_id ?? null;
+          leadId = threadRows[0].lead_id ?? null;
+          console.log(
+            `[syncO365] "${graphFolder}": existing thread for conv=${conversationId} → broker=${brokerId} client=${clientId}`,
+          );
+        } else if (lookupEmail) {
+          const [clientRows] = await pool.query<RowDataPacket[]>(
+            `SELECT id, assigned_broker_id FROM clients
+             WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
+            [MORTGAGE_TENANT_ID, lookupEmail],
+          );
+          if (clientRows.length > 0) {
+            clientId = clientRows[0].id ?? null;
+            brokerId = clientRows[0].assigned_broker_id ?? null;
+            console.log(
+              `[syncO365] "${graphFolder}": resolved client #${clientId} from email <${lookupEmail}>`,
+            );
+          } else {
+            const [leadRows] = await pool.query<RowDataPacket[]>(
+              `SELECT id, assigned_broker_id FROM leads
+               WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
+              [MORTGAGE_TENANT_ID, lookupEmail],
+            );
+            if (leadRows.length > 0) {
+              leadId = leadRows[0].id ?? null;
+              brokerId = leadRows[0].assigned_broker_id ?? null;
+              console.log(
+                `[syncO365] "${graphFolder}": resolved lead #${leadId} from email <${lookupEmail}>`,
+              );
+            } else {
+              console.log(
+                `[syncO365] "${graphFolder}": no client/lead match for <${lookupEmail}> — will use mailbox owner`,
+              );
+            }
+          }
+        }
+
+        // Always fall back to the mailbox owner so emails are always visible
+        if (brokerId === null) {
+          brokerId = mailbox.assigned_broker_id ?? null;
+        }
+
+        console.log(
+          `[syncO365] "${graphFolder}": INSERT comm | graphId=${graphId.slice(0, 20)}… | subj="${subject.slice(0, 40)}" | conv=${conversationId} | broker=${brokerId} | client=${clientId} | lead=${leadId}`,
+        );
+
+        // ── Dedup SentItems: stamp external_id on pending outbound comm ──
+        // handleEmailSend inserts the comm before sending (no external_id).
+        // The Graph sendMail API returns no body, so we never capture the
+        // Graph message ID at send time. When the SentItems sync runs, stamp
+        // the external_id on the existing record to prevent a duplicate row.
+        if (direction === "outbound") {
+          const [pendingOutbound] = await pool.query<RowDataPacket[]>(
+            `SELECT id FROM communications
+             WHERE tenant_id = ? AND direction = 'outbound' AND communication_type = 'email'
+               AND external_id IS NULL AND conversation_id = ? AND subject = ?
+               AND created_at > NOW() - INTERVAL 7 DAY
+             LIMIT 1`,
+            [MORTGAGE_TENANT_ID, conversationId, subject],
+          );
+          if (pendingOutbound.length > 0) {
+            const existingId = pendingOutbound[0].id as number;
+            await pool.query(
+              `UPDATE communications
+               SET external_id = ?, delivery_status = 'delivered', status = 'sent',
+                 metadata = JSON_SET(COALESCE(metadata, '{}'),
+                   '$.graph_conversation_id', ?,
+                   '$.folder', ?,
+                   '$.internet_message_id', ?)
+               WHERE id = ?`,
+              [
+                graphId,
+                msg?.conversationId || null,
+                graphFolder,
+                msg?.internetMessageId || null,
+                existingId,
+              ],
+            );
+            console.log(
+              `[syncO365] "${graphFolder}": dedup — stamped external_id on existing comm #${existingId}, skipping INSERT`,
+            );
+            processed++;
+            continue;
+          }
+        }
+
+        // ── Insert communication ──────────────────────────────────────────
+        const [insertResult] = (await pool.query(
+          `INSERT INTO communications (
+             tenant_id, application_id, lead_id,
+             from_user_id, from_broker_id, to_user_id, to_broker_id,
+             communication_type, direction,
+             subject, body, status,
+             conversation_id, message_type,
+             delivery_status, external_id,
+             mailbox_id, metadata,
+             sent_at, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'email', ?, ?, ?, 'delivered', ?, 'text', 'delivered', ?, ?, ?, NOW(), NOW())`,
+          [
+            MORTGAGE_TENANT_ID,
+            applicationId,
+            leadId,
+            direction === "inbound" ? clientId : null, // from_user_id
+            direction === "outbound" ? brokerId : null, // from_broker_id
+            direction === "outbound" ? clientId : null, // to_user_id
+            direction === "inbound" ? brokerId : null, // to_broker_id
+            direction,
+            subject,
+            cleanBody,
+            conversationId,
+            graphId,
+            mailbox.id,
+            JSON.stringify({
+              mailbox_id: mailbox.id,
+              mailbox_email: mailbox.mailbox_email,
+              provider: "office365",
+              folder: graphFolder,
+              internet_message_id: msg?.internetMessageId || null,
+              graph_conversation_id: msg?.conversationId || null,
+              from_email: fromEmail || null,
+              from_name: fromName || null,
+              to_recipients: Array.isArray(msg?.toRecipients)
+                ? msg.toRecipients.map((r: any) => ({
+                    email: r?.emailAddress?.address || "",
+                    name: r?.emailAddress?.name || null,
+                  }))
+                : [],
+              cc_recipients: Array.isArray(msg?.ccRecipients)
+                ? msg.ccRecipients.map((r: any) => ({
+                    email: r?.emailAddress?.address || "",
+                    name: r?.emailAddress?.name || null,
+                  }))
+                : [],
+            }),
+          ],
+        )) as [ResultSetHeader, any];
+
+        console.log(
+          `[syncO365] "${graphFolder}": inserted comm #${insertResult.insertId} → calling upsertConversationThread`,
+        );
+
+        // ── Upsert conversation thread ────────────────────────────────────
+        // Pass bodyPreview (Graph's plain-text summary) for the thread snippet
+        // so the preview and notification never contain raw HTML. Fall back to
+        // cleanBody only if bodyPreview is absent (bodyPreview is stripped by
+        // Microsoft Graph and is always ≤255 chars of readable text).
+        await upsertConversationThread({
+          tenantId: MORTGAGE_TENANT_ID,
+          commId: insertResult.insertId,
+          conversationId,
           applicationId,
           leadId,
-          clientId,
-          brokerId,
-          subject,
-          cleanBody,
+          fromUserId: direction === "inbound" ? clientId : null,
+          fromBrokerId: direction === "outbound" ? brokerId : null,
+          toUserId: direction === "outbound" ? clientId : null,
+          toBrokerId: direction === "inbound" ? brokerId : null,
+          communicationType: "email",
+          direction,
+          body: bodyPreview || cleanBody,
+          recipientEmail:
+            direction === "inbound" ? fromEmail || null : firstToEmail,
+          senderDisplayName: direction === "inbound" ? fromName || null : null,
+          mailboxId: mailbox.id,
+        });
+
+        await markExecutionsRespondedForConversation(
           conversationId,
-          graphId,
-          JSON.stringify({
-            mailbox_id: mailbox.id,
-            mailbox_email: mailbox.mailbox_email,
-            provider: "office365",
-            internet_message_id: msg?.internetMessageId || null,
-            graph_conversation_id: msg?.conversationId || null,
-            from_email: fromEmail || null,
-            from_name: msg?.from?.emailAddress?.name || null,
-            to_recipients: Array.isArray(msg?.toRecipients)
-              ? msg.toRecipients.map((r: any) => ({
-                  email: r?.emailAddress?.address || "",
-                  name: r?.emailAddress?.name || null,
-                }))
-              : [],
-            cc_recipients: Array.isArray(msg?.ccRecipients)
-              ? msg.ccRecipients.map((r: any) => ({
-                  email: r?.emailAddress?.address || "",
-                  name: r?.emailAddress?.name || null,
-                }))
-              : [],
-          }),
-        ],
-      )) as [ResultSetHeader, any];
+          MORTGAGE_TENANT_ID,
+        );
 
-      await upsertConversationThread({
-        tenantId: MORTGAGE_TENANT_ID,
-        commId: insertResult.insertId,
-        conversationId,
-        applicationId,
-        leadId,
-        fromUserId: clientId,
-        fromBrokerId: null,
-        toUserId: null,
-        toBrokerId: brokerId,
-        communicationType: "email",
-        direction: "inbound",
-        body: cleanBody,
-        recipientEmail: fromEmail || null,
-        senderDisplayName: msg?.from?.emailAddress?.name || null,
-      });
+        processed++;
+      } catch (err) {
+        errors++;
+        console.error(`[syncO365] "${graphFolder}": message error —`, err);
+      }
+    }
 
-      await markExecutionsRespondedForConversation(
-        conversationId,
-        MORTGAGE_TENANT_ID,
-      );
+    console.log(
+      `[syncO365] "${graphFolder}": done in ${Date.now() - folderStart}ms`,
+    );
+  }
 
-      processed++;
-    } catch (err) {
-      errors++;
-      console.error("Office365 sync message error:", err);
+  console.log(
+    `[syncO365] ✔ Finished mailbox #${mailbox.id} in ${Date.now() - syncStart}ms | processed=${processed} errors=${errors}`,
+  );
+  return { processed, errors };
+}
+
+/**
+ * Syncs Outlook calendar events for a single broker into scheduler_blocked_ranges.
+ * Fetches the next 60 days of calendar events via Microsoft Graph calendarView,
+ * filters to busy/tentative/oof entries, then replaces all existing o365-sourced
+ * blocked ranges for that broker with the fresh set.
+ *
+ * @throws On Graph API errors (including 403 Calendars.Read permission denied)
+ */
+async function syncO365CalendarForBroker(
+  mailbox: ConversationMailboxRow,
+  brokerId: number,
+): Promise<{ synced_count: number }> {
+  const now = new Date();
+  const startDt = now.toISOString();
+  const endDt = new Date(
+    now.getTime() + 60 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  const calendarQuery =
+    `?startDateTime=${encodeURIComponent(startDt)}&endDateTime=${encodeURIComponent(endDt)}` +
+    `&$select=id,subject,start,end,showAs&$top=100`;
+
+  type GraphEvent = {
+    id: string;
+    subject: string;
+    start: { dateTime: string; timeZone: string };
+    end: { dateTime: string; timeZone: string };
+    showAs: string;
+  };
+
+  let allEvents: GraphEvent[] = [];
+  let nextRelativePath: string | null = `/calendarView${calendarQuery}`;
+
+  while (nextRelativePath) {
+    const currentPath = nextRelativePath;
+    const { resp } = await graphGetWithFallback(
+      mailbox,
+      (base) => `${base}${currentPath}`,
+      { headers: { Prefer: 'outlook.timezone="UTC"' } },
+    );
+    const body = resp.data as {
+      value?: GraphEvent[];
+      "@odata.nextLink"?: string;
+    };
+    if (Array.isArray(body.value)) {
+      allEvents = allEvents.concat(body.value);
+    }
+    const rawNext = body["@odata.nextLink"] ?? null;
+    if (rawNext) {
+      nextRelativePath = rawNext
+        .replace(/^https:\/\/graph\.microsoft\.com\/v1\.0\/users\/[^/]+/, "")
+        .replace(/^https:\/\/graph\.microsoft\.com\/v1\.0\/me/, "");
+    } else {
+      nextRelativePath = null;
     }
   }
 
-  return { processed, errors };
+  // Only busy/tentative/oof events block scheduler slots — free/working elsewhere skip
+  const blockingEvents = allEvents.filter((e) =>
+    ["busy", "tentative", "oof"].includes((e.showAs ?? "").toLowerCase()),
+  );
+
+  // Replace all existing O365 blocks for this broker with the fresh set
+  await pool.query(
+    `DELETE FROM scheduler_blocked_ranges
+     WHERE broker_id = ? AND tenant_id = ? AND source = 'o365'`,
+    [brokerId, MORTGAGE_TENANT_ID],
+  );
+
+  if (blockingEvents.length > 0) {
+    const fmtDt = (d: Date) =>
+      d
+        .toISOString()
+        .replace("T", " ")
+        .replace(/\.\d+Z$/, "");
+
+    const values = blockingEvents.map((e) => {
+      // Graph returns UTC times (Prefer: outlook.timezone="UTC" header); append Z for safe parsing
+      const startUtc = new Date(e.start.dateTime.slice(0, 19) + "Z");
+      const endUtc = new Date(e.end.dateTime.slice(0, 19) + "Z");
+      return [
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        fmtDt(startUtc),
+        fmtDt(endUtc),
+        (e.subject ?? "Meeting").slice(0, 255),
+        "o365",
+        e.id,
+      ];
+    });
+
+    await pool.query(
+      `INSERT INTO scheduler_blocked_ranges
+         (tenant_id, broker_id, start_datetime, end_datetime, label, source, external_id)
+       VALUES ?`,
+      [values],
+    );
+  }
+
+  return { synced_count: blockingEvents.length };
 }
 
 // Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
@@ -787,6 +1386,8 @@ async function upsertConversationThread(params: {
   recipientEmail?: string | null;
   /** Display name from the sending party (e.g. Graph API from.emailAddress.name) */
   senderDisplayName?: string | null;
+  /** Mailbox that received/sent this email (sets mailbox_id on the thread) */
+  mailboxId?: number | null;
 }): Promise<void> {
   try {
     const {
@@ -806,16 +1407,18 @@ async function upsertConversationThread(params: {
       recipientPhone,
       recipientEmail,
       senderDisplayName,
+      mailboxId = null,
     } = params;
     const resolvedClientId = toUserId ?? fromUserId ?? null;
     let resolvedBrokerId: number | null = fromBrokerId ?? toBrokerId ?? null;
     const convId = conversationId ?? `conv_auto_${commId}`;
     // Build a sidebar preview. For MMS / media-only messages with no text body,
     // fall back to a typed placeholder so the thread list isn't blank.
-    // For email, strip HTML tags so the preview shows plain readable text.
+    // For email, strip HTML tags and quoted reply chains so the preview shows
+    // only the new message content — same as what email clients display.
     const previewSource =
       body && communicationType === "email"
-        ? stripHtmlForStorage(body)
+        ? stripEmailReplyQuote(stripHtmlForStorage(body))
         : (body ?? null);
     let preview: string | null = previewSource
       ? previewSource.slice(0, 200)
@@ -841,6 +1444,14 @@ async function upsertConversationThread(params: {
       } catch {
         /* non-fatal */
       }
+    }
+    // Final fallback — last_message_preview must never be NULL so the thread
+    // list always has a meaningful sidebar snippet. NULL would silently break
+    // the data-quality invariant tested by the smoke suite.
+    if (!preview) {
+      if (communicationType === "call") preview = "📞 Voice call";
+      else if (communicationType === "email") preview = "(Email)";
+      else preview = "(Message)";
     }
     const unreadDelta = direction === "inbound" ? 1 : 0;
 
@@ -1026,10 +1637,10 @@ async function upsertConversationThread(params: {
       `INSERT INTO conversation_threads
          (tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
           contact_broker_id,
-          client_name, client_phone, client_email, inbox_number,
+          client_name, client_phone, client_email, inbox_number, mailbox_id,
           last_message_at, last_message_preview, last_message_type,
           message_count, unread_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
        ON DUPLICATE KEY UPDATE
          -- Always update preview/type/timestamp for the new message.
          -- (Out-of-order delivery is rare; the previous IF(NOW()>last_message_at)
@@ -1047,9 +1658,25 @@ async function upsertConversationThread(params: {
          client_phone         = COALESCE(client_phone, ?),
          client_email         = COALESCE(client_email, ?),
          inbox_number         = COALESCE(inbox_number, ?),
-         -- Auto-reopen closed threads when a client sends a new inbound message.
-         -- This ensures the conversation reappears in the active list immediately.
-         status               = IF(? = 'inbound', 'active', status),
+         mailbox_id           = COALESCE(mailbox_id, ?),
+         -- Auto-reopen closed threads when a client sends a new inbound message,
+         -- BUT only if the thread was not closed in the last 5 minutes.
+         -- The 5-minute guard prevents two known bugs:
+         --   1. Race condition: broker closes a thread while the async
+         --      fire-and-forget handler in handleVoiceIncoming is still running —
+         --      the handler would otherwise immediately reopen it.
+         --   2. Twilio webhook retries (or repeated calls from the same unknown
+         --      number) keep reopening a conversation the broker just dismissed.
+         -- After 5 minutes, any genuinely new inbound activity will still reopen
+         -- the thread as expected.
+         status               = IF(
+           ? = 'inbound'
+           AND (status != 'closed'
+                OR archived_at IS NULL
+                OR archived_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)),
+           'active',
+           status
+         ),
          updated_at           = NOW()`,
       [
         tenantId,
@@ -1063,6 +1690,7 @@ async function upsertConversationThread(params: {
         clientPhone,
         clientEmail,
         inboxNumber ?? null,
+        mailboxId ?? null,
         preview,
         communicationType,
         unreadDelta,
@@ -1077,6 +1705,7 @@ async function upsertConversationThread(params: {
         clientPhone,
         clientEmail,
         inboxNumber ?? null,
+        mailboxId ?? null,
         direction,
       ],
     );
@@ -1095,7 +1724,12 @@ async function upsertConversationThread(params: {
                   ? "voice"
                   : "message";
         const who = clientName || clientPhone || clientEmail || "a contact";
-        const snippet = (body || "").trim().slice(0, 120);
+        // Use the same preview that was written to conversation_threads.last_message_preview
+        // so the notification bell always shows the identical text as the thread list.
+        // preview is already stripped of HTML and sliced to 200 chars above.
+        const snippet =
+          (preview ?? "").slice(0, 120).trim() ||
+          (senderDisplayName ? `Email from ${senderDisplayName}` : "");
         const category = communicationType === "voice" ? "call" : "message";
         // Strict ownership rules for who gets the bell notification:
         //   A. If the inbound activity arrived on a broker's PERSONAL Twilio
@@ -1155,6 +1789,12 @@ async function upsertConversationThread(params: {
             communicationType === "email"
               ? `/admin/email?conversation=${encodeURIComponent(convId)}`
               : `/admin/conversations?conversation=${encodeURIComponent(convId)}`,
+        });
+        // Notify the Email page thread list to refresh so new threads appear
+        // immediately without requiring a manual sync click.
+        await publishToAbly("conversations:all", "thread-updated", {
+          conversationId: convId,
+          communicationType,
         });
       } catch (notifyErr) {
         console.error(
@@ -1329,27 +1969,49 @@ async function sendSMSMessage(
  * Dynamically picks the first voice-capable "All Mortgage Bankers" number (i.e. a
  * Twilio number that is NOT exclusively assigned to any individual broker).
  */
+/** 60-second in-process cache — mirrors getSharedSmsNumber() to avoid a Twilio
+ * REST round-trip on every outbound call TwiML request. */
+let _sharedVoiceNumberCache: { value: string | null; at: number } | null = null;
+
 async function getSharedVoiceNumber(): Promise<string | null> {
   if (!twilioClient) return null;
+  const now = Date.now();
+  if (_sharedVoiceNumberCache && now - _sharedVoiceNumberCache.at < 60_000) {
+    return _sharedVoiceNumberCache.value;
+  }
   try {
-    // Collect all SIDs that are exclusively assigned to individual brokers
+    // Collect all SIDs AND phone numbers exclusively assigned to individual brokers
+    // (mirrors getSharedSmsNumber — must filter by both to avoid returning a broker's
+    //  personal line when only twilio_caller_id is set and twilio_phone_sid is NULL)
     const [assignedRows] = await pool.query<RowDataPacket[]>(
-      `SELECT twilio_phone_sid FROM brokers
-       WHERE tenant_id = ? AND twilio_phone_sid IS NOT NULL AND twilio_phone_sid != ''`,
+      `SELECT twilio_phone_sid, twilio_caller_id FROM brokers
+       WHERE tenant_id = ?
+         AND ((twilio_phone_sid IS NOT NULL AND twilio_phone_sid != '')
+              OR (twilio_caller_id IS NOT NULL AND twilio_caller_id != ''))`,
       [MORTGAGE_TENANT_ID],
     );
     const assignedSids = new Set(
-      (assignedRows as RowDataPacket[]).map(
-        (r) => r.twilio_phone_sid as string,
-      ),
+      (assignedRows as RowDataPacket[])
+        .map((r) => r.twilio_phone_sid as string)
+        .filter(Boolean),
+    );
+    const assignedNumbers = new Set(
+      (assignedRows as RowDataPacket[])
+        .map((r) => r.twilio_caller_id as string)
+        .filter(Boolean),
     );
 
     // List all Twilio numbers and return the first voice-capable unassigned one
     const numbers = await twilioClient.incomingPhoneNumbers.list({ limit: 50 });
     const shared = numbers.find(
-      (n: any) => n.capabilities?.voice && !assignedSids.has(n.sid),
+      (n: any) =>
+        n.capabilities?.voice &&
+        !assignedSids.has(n.sid) &&
+        !assignedNumbers.has(n.phoneNumber),
     );
-    return shared?.phoneNumber ?? null;
+    const value = shared?.phoneNumber ?? null;
+    _sharedVoiceNumberCache = { value, at: now };
+    return value;
   } catch (err) {
     console.error("❌ getSharedVoiceNumber failed:", err);
     return null;
@@ -2862,6 +3524,13 @@ async function createBrokerNotification(params: {
         params.actionUrl ?? null,
       );
     }
+    // Strip any HTML from notification messages before storage so the bell
+    // and toast always show readable plain text regardless of the caller.
+    const safeMessage = stripHtmlForStorage(params.message ?? "").slice(0, 500);
+    for (let i = 0; i < values.length; i++) {
+      // Each placeholder has 7 params; index 3 is 'message'
+      if (i % 7 === 3) values[i] = safeMessage;
+    }
     await pool.query(
       `INSERT INTO notifications
          (tenant_id, user_id, recipient_type, title, message, notification_type, category, action_url)
@@ -2877,7 +3546,7 @@ async function createBrokerNotification(params: {
       ids.map((brokerId) =>
         publishToAbly(`broker-notifications:${brokerId}`, "new", {
           title: params.title,
-          message: params.message,
+          message: safeMessage,
           notification_type: type,
           category: params.category,
           action_url: params.actionUrl ?? null,
@@ -3891,6 +4560,15 @@ const handleUpdateBrokerProfile: RequestHandler = async (req, res) => {
       await pool.query(
         `UPDATE brokers SET ${brokerUpdates.join(", ")}, updated_at = NOW() WHERE id = ? AND tenant_id = ?`,
         brokerValues,
+      );
+    }
+
+    // Keep scheduler_settings.timezone in sync with the profile timezone so
+    // that the public scheduler always uses the broker's current timezone.
+    if (timezone !== undefined) {
+      await pool.query(
+        `UPDATE scheduler_settings SET timezone = ? WHERE broker_id = ? AND tenant_id = ?`,
+        [timezone || "America/Los_Angeles", brokerId, MORTGAGE_TENANT_ID],
       );
     }
 
@@ -14914,19 +15592,13 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const {
-      mailbox_email,
-      display_name,
-      is_shared = true,
-      target_broker_id,
-      return_path,
-    } = req.body || {};
+    const { mailbox_email, display_name, target_broker_id, return_path } =
+      req.body || {};
 
-    // Admin can assign to another broker; otherwise use self
+    // Admin can assign to another broker; otherwise always assign to self.
     const assignedBrokerId =
-      !is_shared &&
       target_broker_id &&
-      (brokerRole === "admin" || brokerRole === "mortgage_banker")
+      (brokerRole === "admin" || brokerRole === "superadmin")
         ? Number(target_broker_id)
         : brokerId;
 
@@ -14958,13 +15630,12 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
 
     await pool.query(
       `INSERT INTO conversation_email_mailboxes (
-         tenant_id, provider, mailbox_email, display_name, is_shared,
+         tenant_id, provider, mailbox_email, display_name,
          assigned_broker_id, status, office365_tenant_id, office365_client_id,
          created_by_broker_id, created_at, updated_at
-       ) VALUES (?, 'office365', ?, ?, ?, ?, 'pending', ?, ?, ?, NOW(), NOW())
+       ) VALUES (?, 'office365', ?, ?, ?, 'pending', ?, ?, ?, NOW(), NOW())
        ON DUPLICATE KEY UPDATE
          display_name = VALUES(display_name),
-         is_shared = VALUES(is_shared),
          assigned_broker_id = VALUES(assigned_broker_id),
          status = 'pending',
          office365_tenant_id = VALUES(office365_tenant_id),
@@ -14974,8 +15645,7 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
         MORTGAGE_TENANT_ID,
         String(mailbox_email).toLowerCase(),
         display_name || null,
-        is_shared ? 1 : 0,
-        is_shared ? null : assignedBrokerId,
+        assignedBrokerId,
         tenantId,
         clientId,
         brokerId,
@@ -15222,8 +15892,8 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
 /**
  * PATCH /api/conversations/mailboxes/:mailboxId/assign
  *
- * Assign a mailbox to a specific broker, or mark it as shared (broker_id = null).
- * Body: { assigned_broker_id: number | null, is_shared: boolean, is_default?: boolean }
+ * Re-assign a mailbox to a specific broker (admin only in practice).
+ * Body: { assigned_broker_id: number, is_default?: boolean }
  */
 const handleAssignConversationMailbox: RequestHandler = async (req, res) => {
   try {
@@ -15234,23 +15904,20 @@ const handleAssignConversationMailbox: RequestHandler = async (req, res) => {
         .json({ success: false, message: "Invalid mailboxId" });
     }
 
-    const { assigned_broker_id, is_shared, is_default } = req.body as {
-      assigned_broker_id: number | null;
-      is_shared: boolean;
+    const { assigned_broker_id, is_default } = req.body as {
+      assigned_broker_id: number;
       is_default?: boolean;
     };
 
-    // Validate broker exists if provided
-    if (assigned_broker_id !== null && assigned_broker_id !== undefined) {
-      const [brokerRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
-        [assigned_broker_id, MORTGAGE_TENANT_ID],
-      );
-      if (brokerRows.length === 0) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Broker not found" });
-      }
+    // Validate broker exists
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [assigned_broker_id, MORTGAGE_TENANT_ID],
+    );
+    if (brokerRows.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Broker not found" });
     }
 
     // If setting as default, unset current default first
@@ -15264,24 +15931,17 @@ const handleAssignConversationMailbox: RequestHandler = async (req, res) => {
     await pool.query(
       `UPDATE conversation_email_mailboxes
        SET assigned_broker_id = ?,
-           is_shared = ?,
            ${is_default !== undefined ? "is_default = ?," : ""}
            updated_at = NOW()
        WHERE id = ? AND tenant_id = ?`,
       is_default !== undefined
         ? [
-            assigned_broker_id ?? null,
-            is_shared ? 1 : 0,
+            assigned_broker_id,
             is_default ? 1 : 0,
             mailboxId,
             MORTGAGE_TENANT_ID,
           ]
-        : [
-            assigned_broker_id ?? null,
-            is_shared ? 1 : 0,
-            mailboxId,
-            MORTGAGE_TENANT_ID,
-          ],
+        : [assigned_broker_id, mailboxId, MORTGAGE_TENANT_ID],
     );
 
     return res.json({ success: true, mailbox_id: mailboxId });
@@ -15316,7 +15976,7 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
 
     // Fetch mailbox to check ownership
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, assigned_broker_id, is_shared FROM conversation_email_mailboxes
+      `SELECT id, assigned_broker_id FROM conversation_email_mailboxes
        WHERE id = ? AND tenant_id = ? LIMIT 1`,
       [mailboxId, MORTGAGE_TENANT_ID],
     );
@@ -15327,10 +15987,11 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
     }
 
     const mb = rows[0];
-    const isAdmin = brokerRole === "admin" || brokerRole === "mortgage_banker";
+    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
     const isOwner = mb.assigned_broker_id === brokerId;
 
-    if (!isAdmin && !isOwner && !mb.is_shared) {
+    // Only the owning broker or an admin can disconnect a mailbox.
+    if (!isAdmin && !isOwner) {
       return res.status(403).json({
         success: false,
         message: "Not authorized to disconnect this mailbox",
@@ -15356,13 +16017,261 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
 };
 
 /**
+ * GET /api/conversations/mailboxes/:mailboxId/folders
+ *
+ * Returns all mail folders for a mailbox via Graph API (live, not DB-synced).
+ * Supports the folder browser in the Email UI.
+ */
+const handleGetMailFolders: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const mailboxId = Number(req.params.mailboxId);
+    if (!Number.isFinite(mailboxId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid mailboxId" });
+    }
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ?
+         AND assigned_broker_id = ?
+       LIMIT 1`,
+      [mailboxId, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Mailbox not found" });
+    }
+    const mailbox = rows[0];
+
+    // Fetch top-level folders plus their child count and unread count.
+    // Uses graphGetWithFallback so personal accounts (Hotmail/Outlook.com)
+    // automatically retry with the delegated token when the app token fails.
+    const SELECT =
+      "id,displayName,totalItemCount,unreadItemCount,childFolderCount";
+    const {
+      resp,
+      token: resolvedToken,
+      base: resolvedBase,
+    } = await graphGetWithFallback(
+      mailbox,
+      (base) => `${base}/mailFolders?$top=100&$select=${SELECT}`,
+    );
+    const topLevel: any[] = resp.data?.value ?? [];
+
+    // Also fetch child folders for every top-level folder that has children
+    // (typical Outlook setup: custom folders live inside Inbox)
+    const childRequests = topLevel
+      .filter((f: any) => (f.childFolderCount ?? 0) > 0)
+      .map((f: any) =>
+        axios
+          .get(
+            `${resolvedBase}/mailFolders/${encodeURIComponent(f.id)}/childFolders?$top=100&$select=${SELECT}`,
+            { headers: { Authorization: `Bearer ${resolvedToken}` } },
+          )
+          .then((r) => ({ parentId: f.id, children: r.data?.value ?? [] }))
+          .catch(() => ({ parentId: f.id, children: [] })),
+      );
+    const childResults = await Promise.all(childRequests);
+
+    const SYSTEM_FOLDER_NAMES = new Set([
+      "inbox",
+      "sent items",
+      "drafts",
+      "deleted items",
+      "junk email",
+      "outbox",
+      "archive",
+      "conversation history",
+    ]);
+
+    const mapFolder = (f: any, parentId?: string) => ({
+      id: f.id,
+      displayName: f.displayName,
+      totalItemCount: f.totalItemCount ?? 0,
+      unreadItemCount: f.unreadItemCount ?? 0,
+      childFolderCount: f.childFolderCount ?? 0,
+      parentId: parentId ?? null,
+      isSystemFolder: SYSTEM_FOLDER_NAMES.has(
+        f.displayName?.toLowerCase?.() ?? "",
+      ),
+    });
+
+    const folders = [
+      ...topLevel.map((f) => mapFolder(f)),
+      ...childResults.flatMap(({ parentId, children }) =>
+        children.map((c: any) => mapFolder(c, parentId)),
+      ),
+    ];
+
+    return res.json({ success: true, folders });
+  } catch (error: any) {
+    console.error("Get mail folders error:", error?.response?.data ?? error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch mail folders" });
+  }
+};
+
+/**
+ * GET /api/conversations/mailboxes/:mailboxId/folders/:folderId/messages
+ *
+ * Returns messages from a specific mail folder via Graph API.
+ * Query params: ?top=50&skip=0&search=
+ */
+const handleGetMailFolderMessages: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const mailboxId = Number(req.params.mailboxId);
+    const folderId = String(req.params.folderId || "");
+    if (!Number.isFinite(mailboxId) || !folderId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid params" });
+    }
+
+    const top = Math.min(Number(req.query.top) || 50, 100);
+    const skip = Number(req.query.skip) || 0;
+    const search = String(req.query.search || "").trim();
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ?
+         AND assigned_broker_id = ?
+       LIMIT 1`,
+      [mailboxId, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Mailbox not found" });
+    }
+    const mailbox = rows[0];
+
+    const params: Record<string, string | number> = {
+      $top: top,
+      $skip: skip,
+      $orderby: "receivedDateTime desc",
+      $select:
+        "id,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments",
+    };
+    if (search) params.$search = `"${search}"`;
+
+    const { resp } = await graphGetWithFallback(
+      mailbox,
+      (base) => `${base}/mailFolders/${encodeURIComponent(folderId)}/messages`,
+      {
+        headers: search ? { ConsistencyLevel: "eventual" } : {},
+        params,
+      },
+    );
+
+    const messages = (resp.data?.value ?? []).map((m: any) => ({
+      id: m.id,
+      subject: m.subject || "(no subject)",
+      from: {
+        name: m.from?.emailAddress?.name || "",
+        email: m.from?.emailAddress?.address || "",
+      },
+      receivedDateTime: m.receivedDateTime,
+      bodyPreview: m.bodyPreview || "",
+      isRead: m.isRead ?? true,
+      hasAttachments: m.hasAttachments ?? false,
+    }));
+
+    return res.json({
+      success: true,
+      messages,
+      nextPageToken: resp.data?.["@odata.nextLink"] ? String(skip + top) : null,
+    });
+  } catch (error: any) {
+    console.error("Get folder messages error:", error?.response?.data ?? error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch folder messages" });
+  }
+};
+
+/**
+ * GET /api/conversations/mailboxes/:mailboxId/folders/:folderId/messages/:messageId
+ *
+ * Returns full body of a single message from a folder.
+ */
+const handleGetMailFolderMessage: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const mailboxId = Number(req.params.mailboxId);
+    const folderId = String(req.params.folderId || "");
+    const messageId = String(req.params.messageId || "");
+    if (!Number.isFinite(mailboxId) || !folderId || !messageId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid params" });
+    }
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ?
+         AND assigned_broker_id = ?
+       LIMIT 1`,
+      [mailboxId, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Mailbox not found" });
+    }
+    const mailbox = rows[0];
+
+    const { resp } = await graphGetWithFallback(
+      mailbox,
+      (base) =>
+        `${base}/mailFolders/${encodeURIComponent(folderId)}/messages/${encodeURIComponent(messageId)}?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,isRead,hasAttachments`,
+    );
+
+    const m = resp.data;
+    return res.json({
+      success: true,
+      message: {
+        id: m.id,
+        subject: m.subject || "(no subject)",
+        from: {
+          name: m.from?.emailAddress?.name || "",
+          email: m.from?.emailAddress?.address || "",
+        },
+        to: (m.toRecipients ?? []).map((r: any) => ({
+          name: r.emailAddress?.name || "",
+          email: r.emailAddress?.address || "",
+        })),
+        cc: (m.ccRecipients ?? []).map((r: any) => ({
+          name: r.emailAddress?.name || "",
+          email: r.emailAddress?.address || "",
+        })),
+        receivedDateTime: m.receivedDateTime,
+        body: m.body?.content || "",
+        bodyType: m.body?.contentType || "text",
+        isRead: m.isRead ?? true,
+        hasAttachments: m.hasAttachments ?? false,
+      },
+    });
+  } catch (error: any) {
+    console.error("Get folder message error:", error?.response?.data ?? error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch message" });
+  }
+};
+
+/**
  * GET /api/conversations/mailboxes
  */
 const handleGetConversationMailboxes: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT m.id, m.provider, m.mailbox_email, m.display_name, m.is_shared,
+      `SELECT m.id, m.provider, m.mailbox_email, m.display_name,
               m.assigned_broker_id,
               CONCAT(b.first_name, ' ', b.last_name) AS assigned_broker_name,
               m.status, m.is_default,
@@ -15371,7 +16280,7 @@ const handleGetConversationMailboxes: RequestHandler = async (req, res) => {
        FROM conversation_email_mailboxes m
        LEFT JOIN brokers b ON b.id = m.assigned_broker_id
        WHERE m.tenant_id = ? AND m.status != 'pending'
-         AND (m.is_shared = 1 OR m.assigned_broker_id = ?)
+         AND m.assigned_broker_id = ?
        ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`,
       [MORTGAGE_TENANT_ID, brokerId],
     );
@@ -15385,11 +16294,868 @@ const handleGetConversationMailboxes: RequestHandler = async (req, res) => {
   }
 };
 
+// ─── Email Drafts ─────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/email/send
+ *
+ * Dedicated email-only send endpoint. Completely separate from the SMS/WhatsApp
+ * /api/conversations/send handler — no Twilio number resolution, no phone logic.
+ *
+ * Supports:
+ *   - Office365 mailbox send (with automatic Hotmail/delegated fallback)
+ *   - Resend SMTP fallback when no mailbox_id is supplied
+ *   - Full [emailSend] trace logging throughout
+ */
+const handleEmailSend: RequestHandler = async (req, res) => {
+  const brokerId = (req as any).brokerId;
+  const t0 = Date.now();
+
+  try {
+    const {
+      mailbox_id,
+      recipient_email,
+      subject,
+      body,
+      cc,
+      bcc,
+      conversation_id,
+      application_id,
+      lead_id,
+      client_id,
+    } = req.body;
+
+    console.log(
+      `[emailSend] ▶ broker=${brokerId} mailbox=${mailbox_id ?? "none"} to=${recipient_email} conv=${conversation_id ?? "new"} body_len=${body?.length ?? 0} cc=${JSON.stringify(cc ?? [])} bcc=${JSON.stringify(bcc ?? [])}`,
+    );
+
+    if (!body || !body.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "body is required" });
+    }
+
+    // ── Resolve recipient email ───────────────────────────────────────────────
+    let finalTo: string | null = recipient_email?.trim() || null;
+
+    if (!finalTo && client_id) {
+      const [cRows] = await pool.query<RowDataPacket[]>(
+        `SELECT email FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [client_id, MORTGAGE_TENANT_ID],
+      );
+      finalTo = cRows[0]?.email ?? null;
+      console.log(
+        `[emailSend] resolved email from client #${client_id}: ${finalTo}`,
+      );
+    }
+
+    if (!finalTo && application_id) {
+      const [aRows] = await pool.query<RowDataPacket[]>(
+        `SELECT c.email FROM clients c JOIN loan_applications la ON c.id = la.client_user_id
+         WHERE la.id = ? AND la.tenant_id = ? LIMIT 1`,
+        [application_id, MORTGAGE_TENANT_ID],
+      );
+      finalTo = aRows[0]?.email ?? null;
+      console.log(
+        `[emailSend] resolved email from app #${application_id}: ${finalTo}`,
+      );
+    }
+
+    if (!finalTo && conversation_id) {
+      const [tRows] = await pool.query<RowDataPacket[]>(
+        `SELECT client_email FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+        [conversation_id, MORTGAGE_TENANT_ID],
+      );
+      finalTo = tRows[0]?.client_email ?? null;
+      console.log(
+        `[emailSend] resolved email from thread ${conversation_id}: ${finalTo}`,
+      );
+    }
+
+    if (!finalTo) {
+      console.error(`[emailSend] ✖ no recipient email resolved`);
+      return res
+        .status(400)
+        .json({ success: false, message: "recipient_email is required" });
+    }
+
+    // ── Resolve conversation ID ───────────────────────────────────────────────
+    let finalConvId: string = conversation_id?.trim() || "";
+    if (!finalConvId) {
+      if (client_id) {
+        finalConvId = `conv_email_client_${client_id}`;
+      } else {
+        finalConvId = `conv_email_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      }
+      console.log(`[emailSend] generated new conversation_id: ${finalConvId}`);
+    }
+
+    // ── Resolve subject ───────────────────────────────────────────────────────
+    let finalSubject = (subject || "").trim();
+    if (!finalSubject) {
+      const [priorRows] = await pool.query<RowDataPacket[]>(
+        `SELECT subject FROM communications
+         WHERE conversation_id = ? AND tenant_id = ? AND subject IS NOT NULL AND subject <> ''
+         ORDER BY created_at ASC LIMIT 1`,
+        [finalConvId, MORTGAGE_TENANT_ID],
+      );
+      if (priorRows.length > 0) {
+        const prior = priorRows[0].subject as string;
+        finalSubject = prior.startsWith("Re:") ? prior : `Re: ${prior}`;
+        console.log(`[emailSend] using thread subject: "${finalSubject}"`);
+      }
+    }
+    if (!finalSubject) {
+      const [[brokerRow], [tenantRow]] = await Promise.all([
+        pool.query<RowDataPacket[]>(
+          `SELECT first_name, last_name FROM brokers WHERE id = ? LIMIT 1`,
+          [brokerId],
+        ),
+        pool.query<RowDataPacket[]>(
+          `SELECT COALESCE(company_name, name) AS name FROM tenants WHERE id = ? LIMIT 1`,
+          [MORTGAGE_TENANT_ID],
+        ),
+      ]);
+      const bn =
+        `${(brokerRow as RowDataPacket[])[0]?.first_name || ""} ${(brokerRow as RowDataPacket[])[0]?.last_name || ""}`.trim() ||
+        "Your Loan Officer";
+      const tn = (tenantRow as RowDataPacket[])[0]?.name || "Encore Mortgage";
+      finalSubject = `${bn}, from ${tn}`;
+      console.log(`[emailSend] generated fallback subject: "${finalSubject}"`);
+    }
+
+    // ── Resolve clientId for thread linking ──────────────────────────────────
+    let resolvedClientId: number | null =
+      typeof client_id === "number" ? client_id : null;
+    let resolvedBrokerId: number | null = brokerId;
+    let resolvedAppId: number | null =
+      typeof application_id === "number" ? application_id : null;
+    let resolvedLeadId: number | null =
+      typeof lead_id === "number" ? lead_id : null;
+
+    if (!resolvedClientId) {
+      const [cLookup] = await pool.query<RowDataPacket[]>(
+        `SELECT id, assigned_broker_id FROM clients WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
+        [MORTGAGE_TENANT_ID, finalTo.toLowerCase()],
+      );
+      if (cLookup.length > 0) {
+        resolvedClientId = cLookup[0].id;
+        console.log(
+          `[emailSend] matched recipient to client #${resolvedClientId}`,
+        );
+      }
+    }
+
+    // ── Insert communication record ───────────────────────────────────────────
+    const isHtml = /<[a-z][\s\S]*>/i.test(body);
+
+    const [insertResult] = (await pool.query(
+      `INSERT INTO communications (
+         tenant_id, application_id, lead_id,
+         from_broker_id, to_user_id,
+         communication_type, direction, subject, body, status,
+         conversation_id, message_type, delivery_status,
+         mailbox_id, metadata, sent_at, created_at
+       ) VALUES (?, ?, ?, ?, ?, 'email', 'outbound', ?, ?, 'pending', ?, 'text', 'pending', ?, ?, NOW(), NOW())`,
+      [
+        MORTGAGE_TENANT_ID,
+        resolvedAppId,
+        resolvedLeadId,
+        brokerId,
+        resolvedClientId,
+        finalSubject,
+        body,
+        finalConvId,
+        mailbox_id ? Number(mailbox_id) : null,
+        JSON.stringify({
+          mailbox_id: mailbox_id ? Number(mailbox_id) : null,
+          mailbox_email: null, // resolved after send
+          provider: mailbox_id ? "office365" : "resend",
+          // Use the same field names the UI and sync code expect
+          to_recipients: [{ email: finalTo, name: null }],
+          cc_recipients: Array.isArray(cc) ? cc : [],
+          bcc_recipients: Array.isArray(bcc) ? bcc : [],
+        }),
+      ],
+    )) as [ResultSetHeader, any];
+
+    const commId = insertResult.insertId;
+    console.log(`[emailSend] inserted comm #${commId}`);
+
+    // ── Upsert conversation thread ────────────────────────────────────────────
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId,
+      conversationId: finalConvId,
+      applicationId: resolvedAppId,
+      leadId: resolvedLeadId,
+      fromUserId: null,
+      fromBrokerId: brokerId,
+      toUserId: resolvedClientId,
+      toBrokerId: null,
+      communicationType: "email",
+      direction: "outbound",
+      body,
+      recipientEmail: finalTo,
+      mailboxId: mailbox_id ? Number(mailbox_id) : null,
+    });
+
+    console.log(`[emailSend] thread upserted for conv=${finalConvId}`);
+
+    // ── Send via Office365 or Resend ─────────────────────────────────────────
+    let sendResult: {
+      success: boolean;
+      external_id?: string;
+      error?: string;
+      provider_response?: any;
+    };
+
+    if (mailbox_id) {
+      console.log(`[emailSend] routing to Office365 mailbox #${mailbox_id}`);
+      sendResult = await sendEmailMessageViaOffice365({
+        mailboxId: Number(mailbox_id),
+        to: finalTo,
+        subject: finalSubject,
+        body,
+        isHtml,
+        conversationId: finalConvId,
+        cc: Array.isArray(cc) ? cc : undefined,
+        bcc: Array.isArray(bcc) ? bcc : undefined,
+      });
+    } else {
+      console.log(`[emailSend] no mailbox — routing to Resend SMTP`);
+      sendResult = await sendEmailMessage(
+        finalTo,
+        finalSubject,
+        body,
+        isHtml,
+        finalConvId,
+      );
+    }
+
+    console.log(
+      `[emailSend] send result: success=${sendResult.success} error=${sendResult.error ?? "none"} in ${Date.now() - t0}ms`,
+    );
+
+    // ── Update communication record with result ───────────────────────────────
+    if (sendResult.success) {
+      // Stamp the mailbox_email into metadata so the UI can show "from" address
+      const senderEmail: string | undefined = (
+        sendResult.provider_response as any
+      )?.mailbox_email;
+      const metaUpdate = senderEmail
+        ? `, metadata = JSON_SET(COALESCE(metadata, '{}'), '$.mailbox_email', ?)`
+        : "";
+      const updateParams = sendResult.external_id
+        ? senderEmail
+          ? [sendResult.external_id, senderEmail, commId]
+          : [sendResult.external_id, commId]
+        : senderEmail
+          ? [senderEmail, commId]
+          : [commId];
+      await pool.query(
+        `UPDATE communications SET status='sent', delivery_status='sent', sent_at=NOW()
+         ${sendResult.external_id ? ", external_id=?" : ""}
+         ${metaUpdate}
+         WHERE id=?`,
+        updateParams,
+      );
+    } else {
+      await pool.query(
+        `UPDATE communications SET status='failed', delivery_status='failed', error_message=? WHERE id=?`,
+        [sendResult.error, commId],
+      );
+    }
+
+    if (!sendResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: sendResult.error || "Failed to send email",
+        comm_id: commId,
+        conversation_id: finalConvId,
+      });
+    }
+
+    return res.json({
+      success: true,
+      comm_id: commId,
+      conversation_id: finalConvId,
+      message: "Email sent",
+    });
+  } catch (err: any) {
+    console.error(
+      `[emailSend] ✖ unhandled error in ${Date.now() - t0}ms —`,
+      err,
+    );
+    return res
+      .status(500)
+      .json({ success: false, message: "Internal error sending email" });
+  }
+};
+
+/**
+ * GET /api/email/drafts
+ * Returns all drafts for the authenticated broker.
+ */
+const handleGetEmailDrafts: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, mailbox_id, broker_id, subject, body_html,
+              to_emails, cc_emails, bcc_emails,
+              reply_to_comm_id, conversation_id, created_at, updated_at
+       FROM email_drafts
+       WHERE tenant_id = ? AND broker_id = ?
+       ORDER BY updated_at DESC`,
+      [MORTGAGE_TENANT_ID, brokerId],
+    );
+    return res.json({ success: true, drafts: rows });
+  } catch (error) {
+    console.error("Get email drafts error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch drafts" });
+  }
+};
+
+/**
+ * POST /api/email/drafts
+ * Create a new draft or update an existing one (pass id in body to update).
+ */
+const handleSaveEmailDraft: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const {
+      id,
+      mailbox_id,
+      subject,
+      body_html,
+      to_emails,
+      cc_emails,
+      bcc_emails,
+      reply_to_comm_id,
+      conversation_id,
+    } = req.body || {};
+
+    if (!mailbox_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "mailbox_id is required" });
+    }
+    if (subject != null && subject.length > 512) {
+      return res.status(400).json({
+        success: false,
+        message: "subject must be 512 characters or fewer",
+      });
+    }
+
+    // Verify the mailbox belongs to this broker
+    const [mbRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ? AND assigned_broker_id = ? LIMIT 1`,
+      [mailbox_id, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (mbRows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "Mailbox not found or not authorized",
+      });
+    }
+
+    const toJson = to_emails ? JSON.stringify(to_emails) : null;
+    const ccJson = cc_emails ? JSON.stringify(cc_emails) : null;
+    const bccJson = bcc_emails ? JSON.stringify(bcc_emails) : null;
+
+    if (id) {
+      // Update existing draft (must belong to this broker)
+      const [upd] = await pool.query<any>(
+        `UPDATE email_drafts
+         SET subject = ?, body_html = ?, to_emails = ?, cc_emails = ?, bcc_emails = ?,
+             reply_to_comm_id = ?, conversation_id = ?, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ? AND broker_id = ?`,
+        [
+          subject ?? null,
+          body_html ?? null,
+          toJson,
+          ccJson,
+          bccJson,
+          reply_to_comm_id ?? null,
+          conversation_id ?? null,
+          id,
+          MORTGAGE_TENANT_ID,
+          brokerId,
+        ],
+      );
+      if (upd.affectedRows === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Draft not found" });
+      }
+      const [updated] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM email_drafts WHERE id = ? LIMIT 1`,
+        [id],
+      );
+      return res.json({ success: true, draft: updated[0] });
+    }
+
+    // Create new draft
+    const [ins] = await pool.query<any>(
+      `INSERT INTO email_drafts
+         (tenant_id, mailbox_id, broker_id, subject, body_html, to_emails, cc_emails, bcc_emails,
+          reply_to_comm_id, conversation_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        mailbox_id,
+        brokerId,
+        subject ?? null,
+        body_html ?? null,
+        toJson,
+        ccJson,
+        bccJson,
+        reply_to_comm_id ?? null,
+        conversation_id ?? null,
+      ],
+    );
+    const [newDraft] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM email_drafts WHERE id = ? LIMIT 1`,
+      [ins.insertId],
+    );
+    return res.status(201).json({ success: true, draft: newDraft[0] });
+  } catch (error: any) {
+    console.error("Save email draft error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to save draft" });
+  }
+};
+
+/**
+ * DELETE /api/email/drafts/:draftId
+ */
+const handleDeleteEmailDraft: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const draftId = Number(req.params.draftId);
+    if (!Number.isFinite(draftId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid draftId" });
+    }
+    const [del] = await pool.query<any>(
+      `DELETE FROM email_drafts WHERE id = ? AND tenant_id = ? AND broker_id = ?`,
+      [draftId, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (del.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Draft not found" });
+    }
+    return res.json({ success: true, draft_id: draftId });
+  } catch (error: any) {
+    console.error("Delete email draft error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to delete draft" });
+  }
+};
+
+// ─── Email Signatures ─────────────────────────────────────────────────────────
+
+/**
+ * GET /api/email/signatures
+ */
+const handleGetEmailSignatures: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, broker_id, name, html, is_default, created_at, updated_at
+       FROM email_signatures
+       WHERE tenant_id = ? AND broker_id = ?
+       ORDER BY is_default DESC, name ASC`,
+      [MORTGAGE_TENANT_ID, brokerId],
+    );
+    return res.json({ success: true, signatures: rows });
+  } catch (error) {
+    console.error("Get email signatures error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch signatures" });
+  }
+};
+
+/**
+ * POST /api/email/signatures
+ * Create a new signature or update an existing one (pass id in body to update).
+ */
+const handleSaveEmailSignature: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const { id, name, html, is_default } = req.body || {};
+
+    if (!name || !html) {
+      return res
+        .status(400)
+        .json({ success: false, message: "name and html are required" });
+    }
+
+    // If setting as default, clear existing default first
+    if (is_default) {
+      await pool.query(
+        `UPDATE email_signatures SET is_default = 0
+         WHERE tenant_id = ? AND broker_id = ? AND is_default = 1`,
+        [MORTGAGE_TENANT_ID, brokerId],
+      );
+    }
+
+    if (id) {
+      const [upd] = await pool.query<any>(
+        `UPDATE email_signatures SET name = ?, html = ?, is_default = ?, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ? AND broker_id = ?`,
+        [name, html, is_default ? 1 : 0, id, MORTGAGE_TENANT_ID, brokerId],
+      );
+      if (upd.affectedRows === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Signature not found" });
+      }
+      const [updated] = await pool.query<RowDataPacket[]>(
+        `SELECT * FROM email_signatures WHERE id = ? LIMIT 1`,
+        [id],
+      );
+      return res.json({ success: true, signature: updated[0] });
+    }
+
+    const [ins] = await pool.query<any>(
+      `INSERT INTO email_signatures (tenant_id, broker_id, name, html, is_default)
+       VALUES (?, ?, ?, ?, ?)`,
+      [MORTGAGE_TENANT_ID, brokerId, name, html, is_default ? 1 : 0],
+    );
+    const [newSig] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM email_signatures WHERE id = ? LIMIT 1`,
+      [ins.insertId],
+    );
+    return res.status(201).json({ success: true, signature: newSig[0] });
+  } catch (error: any) {
+    console.error("Save email signature error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to save signature" });
+  }
+};
+
+/**
+ * DELETE /api/email/signatures/:signatureId
+ */
+const handleDeleteEmailSignature: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const signatureId = Number(req.params.signatureId);
+    if (!Number.isFinite(signatureId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid signatureId" });
+    }
+    const [del] = await pool.query<any>(
+      `DELETE FROM email_signatures WHERE id = ? AND tenant_id = ? AND broker_id = ?`,
+      [signatureId, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (del.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Signature not found" });
+    }
+    return res.json({ success: true, signature_id: signatureId });
+  } catch (error: any) {
+    console.error("Delete email signature error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to delete signature" });
+  }
+};
+
+// ─── Email Thread Actions ─────────────────────────────────────────────────────
+
+/**
+ * PATCH /api/email/threads/:conversationId/action
+ * Body: { action: "archive"|"delete"|"mark_read"|"mark_unread"|"flag"|"unflag"|"move", folderId?: string }
+ *
+ * Applies the action both in the CRM database AND in Microsoft 365 via
+ * the Graph API so the two stay in sync.
+ */
+const handleEmailThreadAction: RequestHandler = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { action, folderId } = req.body || {};
+
+    const VALID_ACTIONS = [
+      "archive",
+      "delete",
+      "mark_read",
+      "mark_unread",
+      "flag",
+      "unflag",
+      "move",
+    ] as const;
+    type ThreadAction = (typeof VALID_ACTIONS)[number];
+
+    if (!conversationId || !VALID_ACTIONS.includes(action as ThreadAction)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid conversationId or action" });
+    }
+    if (action === "move" && !folderId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "folderId is required for move" });
+    }
+
+    const brokerId = (req as any).brokerId;
+
+    // ── 1. Fetch thread + mailbox ─────────────────────────────────────────
+    const [threadRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, conversation_id, mailbox_id, status, unread_count, priority
+       FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+    if (threadRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Thread not found" });
+    }
+    const thread = threadRows[0];
+
+    let mailbox: ConversationMailboxRow | null = null;
+    if (thread.mailbox_id) {
+      const [mbRows] = await pool.query<ConversationMailboxRow[]>(
+        `SELECT * FROM conversation_email_mailboxes
+         WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [thread.mailbox_id, MORTGAGE_TENANT_ID],
+      );
+      if (mbRows.length > 0) mailbox = mbRows[0];
+    }
+
+    // Ownership check — mailboxes are strictly per-broker regardless of role
+    if (mailbox && mailbox.assigned_broker_id !== brokerId) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to act on this thread",
+      });
+    }
+    // If thread has no mailbox, check direct broker ownership via broker_id column
+    if (!mailbox) {
+      const [[tb]] = await pool.query<RowDataPacket[]>(
+        `SELECT broker_id FROM conversation_threads WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+      if (tb?.broker_id && tb.broker_id !== brokerId) {
+        return res.status(403).json({
+          success: false,
+          message: "Not authorized to act on this thread",
+        });
+      }
+    }
+
+    // ── 2. Collect Graph message IDs from communications ──────────────────
+    const [commRows] = await pool.query<RowDataPacket[]>(
+      `SELECT external_id FROM communications
+       WHERE conversation_id = ? AND tenant_id = ?
+         AND communication_type = 'email' AND external_id IS NOT NULL`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+    const graphMessageIds = commRows.map((r) => r.external_id as string);
+
+    // ── 3. Mirror action to Microsoft 365 via Graph API ───────────────────
+    if (mailbox && graphMessageIds.length > 0) {
+      for (const msgId of graphMessageIds) {
+        try {
+          const encId = encodeURIComponent(msgId);
+          if (action === "archive") {
+            await graphMutateWithFallback(
+              mailbox,
+              "post",
+              (b) => `${b}/messages/${encId}/move`,
+              { destinationId: "archive" },
+            );
+          } else if (action === "delete") {
+            // Move to Deleted Items (soft delete — recoverable from trash)
+            await graphMutateWithFallback(
+              mailbox,
+              "post",
+              (b) => `${b}/messages/${encId}/move`,
+              { destinationId: "deleteditems" },
+            );
+          } else if (action === "mark_read") {
+            await graphMutateWithFallback(
+              mailbox,
+              "patch",
+              (b) => `${b}/messages/${encId}`,
+              { isRead: true },
+            );
+          } else if (action === "mark_unread") {
+            await graphMutateWithFallback(
+              mailbox,
+              "patch",
+              (b) => `${b}/messages/${encId}`,
+              { isRead: false },
+            );
+          } else if (action === "flag") {
+            await graphMutateWithFallback(
+              mailbox,
+              "patch",
+              (b) => `${b}/messages/${encId}`,
+              { flag: { flagStatus: "flagged" } },
+            );
+          } else if (action === "unflag") {
+            await graphMutateWithFallback(
+              mailbox,
+              "patch",
+              (b) => `${b}/messages/${encId}`,
+              { flag: { flagStatus: "notFlagged" } },
+            );
+          } else if (action === "move") {
+            await graphMutateWithFallback(
+              mailbox,
+              "post",
+              (b) => `${b}/messages/${encId}/move`,
+              { destinationId: folderId },
+            );
+          }
+        } catch (graphErr: any) {
+          // Log and continue — don't let one failed Graph call block the DB update
+          console.error(
+            `[emailThreadAction] Graph error for msg ${msgId.slice(0, 20)}…:`,
+            graphErr?.response?.data?.error ?? graphErr?.message,
+          );
+        }
+      }
+    } else {
+      console.warn(
+        `[emailThreadAction] No mailbox or Graph IDs for conv=${conversationId} — DB-only update`,
+      );
+    }
+
+    // ── 4. Update local DB ────────────────────────────────────────────────
+    if (action === "archive") {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET status = 'closed', archived_at = NOW(), updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+    } else if (action === "delete") {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET status = 'closed', archived_at = NOW(), updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+    } else if (action === "mark_read") {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET unread_count = 0, updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+      await pool.query(
+        `UPDATE communications
+         SET status = 'read', read_timestamp = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?
+           AND communication_type = 'email' AND status != 'read'`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+    } else if (action === "mark_unread") {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET unread_count = 1, updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+    } else if (action === "flag") {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET priority = 'urgent', updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+    } else if (action === "unflag") {
+      await pool.query(
+        `UPDATE conversation_threads
+         SET priority = 'normal', updated_at = NOW()
+         WHERE conversation_id = ? AND tenant_id = ?`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+    }
+    // "move" has no local status change — the thread stays in the DB as-is
+
+    // ── 5. Return updated thread ──────────────────────────────────────────
+    const [updatedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+
+    return res.json({ success: true, thread: updatedRows[0] ?? null });
+  } catch (err: any) {
+    console.error("[handleEmailThreadAction] error:", err?.message);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to perform action" });
+  }
+};
+
+// ─── Email Sync Log ───────────────────────────────────────────────────────────
+
+/**
+ * GET /api/conversations/mailboxes/:mailboxId/sync-log
+ * Returns the last 20 sync runs for a mailbox.
+ */
+const handleGetEmailSyncLog: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const mailboxId = Number(req.params.mailboxId);
+    if (!Number.isFinite(mailboxId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid mailboxId" });
+    }
+    // Verify mailbox ownership
+    const [mbRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_email_mailboxes
+       WHERE id = ? AND tenant_id = ? AND assigned_broker_id = ? LIMIT 1`,
+      [mailboxId, MORTGAGE_TENANT_ID, brokerId],
+    );
+    if (mbRows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Mailbox not found" });
+    }
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, mailbox_id, \`trigger\`, started_at, finished_at,
+              messages_synced, errors, status, error_detail
+       FROM email_sync_log
+       WHERE mailbox_id = ? AND tenant_id = ?
+       ORDER BY started_at DESC
+       LIMIT 20`,
+      [mailboxId, MORTGAGE_TENANT_ID],
+    );
+    return res.json({ success: true, logs: rows });
+  } catch (error) {
+    console.error("Get email sync log error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch sync log" });
+  }
+};
+
 /**
  * POST /api/conversations/mailboxes/:mailboxId/sync
  */
 const handleSyncConversationMailbox: RequestHandler = async (req, res) => {
   try {
+    const brokerId = (req as any).brokerId;
     const mailboxId = Number(req.params.mailboxId);
     if (!Number.isFinite(mailboxId)) {
       return res
@@ -15411,7 +17177,28 @@ const handleSyncConversationMailbox: RequestHandler = async (req, res) => {
     }
 
     const mailbox = rows[0];
+
+    // Ownership check — mailboxes are strictly per-broker regardless of role
+    if (mailbox.assigned_broker_id !== brokerId) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to sync this mailbox",
+      });
+    }
+
+    // Open a sync log entry
+    const [logResult] = await pool.query<any>(
+      `INSERT INTO email_sync_log (tenant_id, mailbox_id, \`trigger\`, started_at, status)
+       VALUES (?, ?, 'manual', NOW(), 'running')`,
+      [MORTGAGE_TENANT_ID, mailbox.id],
+    );
+    const syncLogId: number = logResult.insertId;
+
     const result = await syncOffice365Mailbox(mailbox);
+    const syncStatus =
+      result.errors > 0 ? (result.processed > 0 ? "partial" : "error") : "ok";
+    const syncError =
+      result.errors > 0 ? `Encountered ${result.errors} message errors` : null;
 
     await pool.query(
       `UPDATE conversation_email_mailboxes
@@ -15423,13 +17210,19 @@ const handleSyncConversationMailbox: RequestHandler = async (req, res) => {
        WHERE id = ? AND tenant_id = ?`,
       [
         result.errors > 0 ? "error" : "ok",
-        result.errors > 0
-          ? `Encountered ${result.errors} message errors`
-          : null,
+        syncError,
         "active",
         mailbox.id,
         MORTGAGE_TENANT_ID,
       ],
+    );
+
+    // Close the sync log entry
+    await pool.query(
+      `UPDATE email_sync_log
+       SET finished_at = NOW(), messages_synced = ?, errors = ?, status = ?, error_detail = ?
+       WHERE id = ?`,
+      [result.processed, result.errors, syncStatus, syncError, syncLogId],
     );
 
     return res.json({
@@ -15465,9 +17258,18 @@ const handleCronSyncOffice365Mailboxes: RequestHandler = async (req, res) => {
       }
     }
 
+    // Determine if an app-level token is available — if so, we can also sync
+    // mailboxes that are in 'auth_required' state (their delegated token is
+    // revoked, but the app token doesn't require per-user consent).
+    const hasAppToken = !!(await getOffice365MailAppToken());
+
+    const statusFilter = hasAppToken
+      ? "('active', 'error', 'auth_required')"
+      : "('active', 'error')";
+
     const [rows] = await pool.query<ConversationMailboxRow[]>(
       `SELECT * FROM conversation_email_mailboxes
-       WHERE tenant_id = ? AND provider = 'office365' AND status IN ('active', 'error')`,
+       WHERE tenant_id = ? AND provider = 'office365' AND status IN ${statusFilter}`,
       [MORTGAGE_TENANT_ID],
     );
 
@@ -15475,6 +17277,12 @@ const handleCronSyncOffice365Mailboxes: RequestHandler = async (req, res) => {
     let totalErrors = 0;
 
     for (const mailbox of rows) {
+      // Skip auth_required mailboxes when no app token is available — the
+      // delegated refresh token is dead and only user re-auth can fix it.
+      if (mailbox.status === "auth_required" && !hasAppToken) {
+        continue;
+      }
+
       try {
         const result = await syncOffice365Mailbox(mailbox);
         totalProcessed += result.processed;
@@ -15499,16 +17307,20 @@ const handleCronSyncOffice365Mailboxes: RequestHandler = async (req, res) => {
         );
       } catch (mailboxErr: any) {
         totalErrors++;
+        // If it's an auth error, preserve auth_required status instead of
+        // overwriting with generic 'error' so the UI shows the correct state.
+        const isAuthErr = mailboxErr instanceof Office365AuthRequiredError;
         await pool.query(
           `UPDATE conversation_email_mailboxes
            SET last_sync_at = NOW(),
                last_sync_status = 'error',
                last_sync_error = ?,
-               status = 'error',
+               status = ?,
                updated_at = NOW()
            WHERE id = ? AND tenant_id = ?`,
           [
             mailboxErr?.message || "Mailbox sync failed",
+            isAuthErr ? "auth_required" : "error",
             mailbox.id,
             MORTGAGE_TENANT_ID,
           ],
@@ -15531,10 +17343,202 @@ const handleCronSyncOffice365Mailboxes: RequestHandler = async (req, res) => {
 };
 
 /**
- * GET /api/cron/sync-teams-policy
+ * GET /api/cron/sync-o365-calendars
  *
- * Secret-protected cron endpoint that runs scripts/teams-policy-sync.sh.
- * Intended for cPanel cron callers that prefer URL-based triggers.
+ * Secret-protected cron endpoint that syncs Outlook calendar events into
+ * scheduler_blocked_ranges for every active Office 365 mailbox.
+ * Only active mailboxes are processed — auth_required mailboxes are skipped
+ * because the delegated token may lack the Calendars.Read scope granted
+ * during reconnect. Errors per-mailbox are logged but don't fail the whole job.
+ *
+ * Suggested schedule: every 30 minutes.
+ *   curl -s "https://yourdomain.com/api/cron/sync-o365-calendars?secret=CRON_SECRET"
+ */
+const handleCronSyncO365Calendars: RequestHandler = async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ||
+        (req.query.secret as string);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE tenant_id = ? AND provider = 'office365' AND status = 'active'
+         AND assigned_broker_id IS NOT NULL`,
+      [MORTGAGE_TENANT_ID],
+    );
+
+    let totalSynced = 0;
+    let totalErrors = 0;
+    const results: Array<{
+      mailbox_id: number;
+      email: string;
+      synced_count: number;
+      error?: string;
+    }> = [];
+
+    for (const mailbox of rows) {
+      const brokerId = mailbox.assigned_broker_id;
+      try {
+        const { synced_count } = await syncO365CalendarForBroker(
+          mailbox,
+          brokerId,
+        );
+        totalSynced += synced_count;
+        results.push({
+          mailbox_id: mailbox.id,
+          email: mailbox.mailbox_email,
+          synced_count,
+        });
+        // Notify broker's client in real-time
+        publishToAbly(
+          `broker-notifications:${brokerId}`,
+          "o365_calendar_synced",
+          { synced_count },
+        ).catch(() => {
+          /* non-fatal */
+        });
+      } catch (mailboxErr: any) {
+        totalErrors++;
+        const errMsg =
+          mailboxErr?.response?.data?.error?.message ||
+          mailboxErr?.message ||
+          "Unknown error";
+        console.error(
+          `[cronSyncO365Calendars] mailbox #${mailbox.id} <${mailbox.mailbox_email}> failed:`,
+          errMsg,
+        );
+        results.push({
+          mailbox_id: mailbox.id,
+          email: mailbox.mailbox_email,
+          synced_count: 0,
+          error: errMsg,
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      mailboxes: rows.length,
+      total_synced: totalSynced,
+      errors: totalErrors,
+      results,
+    });
+  } catch (error) {
+    console.error("[cronSyncO365Calendars] fatal error:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Calendar cron sync failed" });
+  }
+};
+
+/**
+ * GET /api/cron/reactivate-office365-mailboxes
+ *
+ * One-shot (or cron-able) endpoint that attempts to reactivate all mailboxes
+ * in 'error' or 'auth_required' state by syncing them via the app-level token.
+ * If the Azure App has Mail.Read Application permission, broken mailboxes are
+ * healed automatically without any user re-authorization.
+ */
+const handleCronReactivateOffice365Mailboxes: RequestHandler = async (
+  req,
+  res,
+) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const authHeader = req.headers.authorization;
+      const provided =
+        (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null) ||
+        (req.query.secret as string);
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+    }
+
+    // First verify the app token has Mail.Read — this also primes the cache.
+    const appToken = await getOffice365MailAppToken();
+    if (!appToken) {
+      return res.status(200).json({
+        success: false,
+        message:
+          "App token unavailable or Mail.Read Application permission not granted. " +
+          "Add Mail.Read + Mail.Send Application permissions in Azure Portal and grant admin consent.",
+        healed: 0,
+      });
+    }
+
+    const [rows] = await pool.query<ConversationMailboxRow[]>(
+      `SELECT * FROM conversation_email_mailboxes
+       WHERE tenant_id = ? AND provider = 'office365'
+         AND status IN ('error', 'auth_required')`,
+      [MORTGAGE_TENANT_ID],
+    );
+
+    let healed = 0;
+    let failed = 0;
+    const details: Array<{ email: string; result: string }> = [];
+
+    for (const mailbox of rows) {
+      try {
+        // Quick probe: list top 1 message to confirm app token works for this mailbox.
+        await axios.get(
+          `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox.mailbox_email)}/mailFolders/Inbox/messages?$top=1&$select=id`,
+          { headers: { Authorization: `Bearer ${appToken}` } },
+        );
+
+        // Probe passed — reset mailbox to active.
+        await pool.query(
+          `UPDATE conversation_email_mailboxes
+           SET status = 'active',
+               last_sync_status = 'ok',
+               last_sync_error = NULL,
+               last_sync_at = NOW(),
+               updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [mailbox.id, MORTGAGE_TENANT_ID],
+        );
+        healed++;
+        details.push({ email: mailbox.mailbox_email, result: "reactivated" });
+      } catch (err: any) {
+        failed++;
+        details.push({
+          email: mailbox.mailbox_email,
+          result: `failed: ${err?.response?.data?.error?.code || err?.message}`,
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      total: rows.length,
+      healed,
+      failed,
+      details,
+      message:
+        healed > 0
+          ? `${healed} mailbox(es) reactivated via app token — no re-authorization needed.`
+          : rows.length === 0
+            ? "No broken mailboxes found — all good."
+            : "App token obtained but Graph API calls failed. Check Mail.Read Application permission and admin consent.",
+    });
+  } catch (error: any) {
+    console.error("Reactivate office365 mailboxes error:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Internal error",
+    });
+  }
+};
+
+/**
+ * GET /api/cron/sync-teams-policy
  */
 const handleCronSyncTeamsPolicy: RequestHandler = async (req, res) => {
   try {
@@ -15894,7 +17898,12 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
       rawPayload.headers?.["Message-Id"] ||
       "";
 
-    const body = textBody || htmlBody || "(empty message)";
+    // Always prefer the plain-text body. If only HTML is available, strip tags
+    // so downstream storage and notifications never contain raw markup.
+    const body =
+      textBody ||
+      (htmlBody ? stripHtmlForStorage(htmlBody) : "") ||
+      "(empty message)";
 
     // ---- Extract conversation_id ----
     // Look for reply+{conversation_id}@domain in the To address first,
@@ -15935,9 +17944,16 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
       });
     }
 
+    // ---- Resolve mailbox_id from conversationId pattern (conv_o365_{mailboxId}_…)
+    // or from the existing thread record so the communication is always associated
+    // with the correct mailbox and shows up in the inbox.
+    let webhookMailboxId: number | null = null;
+    const mbMatch = conversationId.match(/^conv_o365_(\d+)_/);
+    if (mbMatch) webhookMailboxId = parseInt(mbMatch[1], 10);
+
     // ---- Look up the conversation thread to get broker + client context ----
     const [threadRows] = await pool.query<RowDataPacket[]>(
-      `SELECT ct.broker_id, ct.client_id, ct.application_id, ct.lead_id
+      `SELECT ct.broker_id, ct.client_id, ct.application_id, ct.lead_id, ct.mailbox_id
        FROM conversation_threads ct
        WHERE ct.conversation_id = ? AND ct.tenant_id = ?
        LIMIT 1`,
@@ -15954,6 +17970,8 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
       clientId = threadRows[0].client_id;
       applicationId = threadRows[0].application_id;
       leadId = threadRows[0].lead_id;
+      // Prefer the already-stored mailbox_id if available
+      if (threadRows[0].mailbox_id) webhookMailboxId = threadRows[0].mailbox_id;
     } else {
       // Thread doesn't exist yet — try matching by sender email to find the client
       const senderEmail = fromAddress.match(/<([^>]+)>/)?.[1] || fromAddress;
@@ -15979,8 +17997,9 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
         subject, body, status,
         conversation_id, message_type,
         delivery_status, external_id,
+        mailbox_id,
         sent_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'email', 'inbound', ?, ?, 'delivered', ?, 'text', 'delivered', ?, NOW(), NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, 'email', 'inbound', ?, ?, 'delivered', ?, 'text', 'delivered', ?, ?, NOW(), NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationId || null,
@@ -15991,6 +18010,7 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
         body,
         conversationId,
         messageId || null,
+        webhookMailboxId,
       ],
     );
 
@@ -16008,6 +18028,7 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
         communicationType: "email",
         direction: "inbound",
         body,
+        mailboxId: webhookMailboxId ?? undefined,
       });
     } catch (upsertErr) {
       console.error(
@@ -16414,6 +18435,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       priority,
       search,
       folder,
+      mailbox_id,
     } = req.query;
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -16469,6 +18491,13 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     }
 
     // Folder filter: inbox = has inbound email, sent = broker sent outbound email
+    // Mailbox filter: show threads for the selected mailbox OR threads with no
+    // mailbox_id (received via inbound webhook before mailbox was resolved).
+    if (mailbox_id) {
+      whereConditions.push("(ct.mailbox_id = ? OR ct.mailbox_id IS NULL)");
+      queryParams.push(Number(mailbox_id));
+    }
+
     if (folder === "inbox") {
       whereConditions.push(
         `EXISTS (
@@ -16548,23 +18577,24 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
           ct.client_name,
           CONCAT(c.first_name, ' ', c.last_name),
           CONCAT(cb.first_name, ' ', cb.last_name),
-          CONCAT(pb.first_name, ' ', pb.last_name)
+          (SELECT CONCAT(pb.first_name, ' ', pb.last_name)
+           FROM brokers pb
+           WHERE pb.tenant_id = ct.tenant_id
+             AND ct.client_name IS NULL
+             AND ct.client_id IS NULL
+             AND ct.contact_broker_id IS NULL
+             AND ct.client_phone IS NOT NULL
+             AND RIGHT(REGEXP_REPLACE(pb.phone, '[^0-9]', ''), 10)
+                 = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
+           LIMIT 1)
         ) AS resolved_client_name,
         CASE WHEN ct.client_id IS NOT NULL THEN 1 ELSE 0 END AS can_view_client
       FROM conversation_threads ct
       LEFT JOIN loan_applications la ON ct.application_id = la.id
       LEFT JOIN clients c ON ct.client_id = c.id
       LEFT JOIN brokers cb ON ct.contact_broker_id = cb.id
-      -- Phone-based broker match for threads with no stored name/client/contact_broker_id
-      LEFT JOIN brokers pb ON pb.tenant_id = ct.tenant_id
-        AND ct.client_name IS NULL
-        AND ct.client_id IS NULL
-        AND ct.contact_broker_id IS NULL
-        AND ct.client_phone IS NOT NULL
-        AND RIGHT(REGEXP_REPLACE(pb.phone, '[^0-9]', ''), 10)
-            = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
       WHERE ${whereClause}
-      ORDER BY ct.last_message_at DESC
+      ORDER BY ct.last_message_at DESC, ct.id DESC
       LIMIT ${parseInt(limit as string)} OFFSET ${offset}
     `;
 
@@ -16695,7 +18725,7 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       LEFT JOIN brokers b ON c.from_broker_id = b.id
       LEFT JOIN clients cl ON c.to_user_id = cl.id
       WHERE c.conversation_id = ? AND c.tenant_id = ?
-      ORDER BY c.created_at DESC
+      ORDER BY c.created_at DESC, c.id DESC
       LIMIT ${parseInt(limit as string)} OFFSET ${offset}`,
       [conversationId, MORTGAGE_TENANT_ID],
     );
@@ -16865,13 +18895,14 @@ const handleDeleteConversationMessage: RequestHandler = async (req, res) => {
       [messageId, MORTGAGE_TENANT_ID],
     );
 
-    // Recount thread stats
+    // Recount thread stats — strip HTML from preview so it never shows raw markup
     await pool.query(
       `UPDATE conversation_threads ct
        SET
          message_count = (SELECT COUNT(*) FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id),
          last_message_at = (SELECT MAX(c.created_at) FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id),
-         last_message_preview = (SELECT c.body FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id ORDER BY c.created_at DESC LIMIT 1),
+         last_message_preview = (SELECT LEFT(REGEXP_REPLACE(REGEXP_REPLACE(c.body, '<[^>]*>', ' '), '\\s+', ' '), 200)
+                                  FROM communications c WHERE c.conversation_id = ct.conversation_id AND c.tenant_id = ct.tenant_id ORDER BY c.created_at DESC LIMIT 1),
          updated_at = NOW()
        WHERE ct.conversation_id = ? AND ct.tenant_id = ?`,
       [conversationId, MORTGAGE_TENANT_ID],
@@ -18517,6 +20548,35 @@ function getVoiceBaseUrl(): string {
   );
 }
 
+/**
+ * Express middleware that validates the Twilio request signature for voice
+ * webhook endpoints. Only active when BOTH TWILIO_AUTH_TOKEN and APP_URL are
+ * set (i.e. production). Local dev / ngrok environments skip validation to
+ * avoid URL-mismatch false positives.
+ */
+const twilioWebhookGuard: RequestHandler = (req, res, next) => {
+  const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+  const baseUrl = process.env.APP_URL; // only validate when canonical URL is known
+  if (!twilioAuthToken || !baseUrl) return next();
+
+  const twilioSignature = (req.headers["x-twilio-signature"] as string) ?? "";
+  const webhookUrl = `${baseUrl}${req.originalUrl}`;
+  const isValid = twilio.validateRequest(
+    twilioAuthToken,
+    twilioSignature,
+    webhookUrl,
+    req.body as Record<string, string>,
+  );
+  if (!isValid) {
+    console.warn(
+      `⚠️  Twilio webhook rejected — invalid signature: ${req.path}`,
+    );
+    res.set("Content-Type", "text/xml");
+    return res.status(403).send("<Response></Response>");
+  }
+  return next();
+};
+
 async function getOrCreateTwimlAppSid(): Promise<string | null> {
   if (!twilioClient) return null;
 
@@ -18657,7 +20717,12 @@ const handleVoiceTwiml: RequestHandler = async (req, res) => {
     );
   }
 
-  // Resolve caller ID: prefer the broker's assigned number, fall back to first available in DB
+  // Resolve caller ID:
+  //  1. Broker's own personal line (twilio_caller_id in brokers table)
+  //  2. First shared "All Mortgage Bankers" number (not assigned to any broker)
+  //  3. TWILIO_PHONE_NUMBER env var as last resort
+  // NEVER fall back to another broker's personal line — that causes the
+  // recipient to see the wrong number and that broker to get missed-call alerts.
   let callerId = "";
   try {
     const brokerIdMatch = identity.match(/broker_(\d+)/);
@@ -18670,15 +20735,10 @@ const handleVoiceTwiml: RequestHandler = async (req, res) => {
         callerId = rows[0].twilio_caller_id;
       }
     }
-    // Last resort: first assigned number in the DB
+    // Broker has no personal line — use a shared (All Mortgage Bankers) number
     if (!callerId) {
-      const [fallbackRows] = await pool.query<any>(
-        `SELECT twilio_caller_id FROM brokers
-         WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL
-         ORDER BY id ASC LIMIT 1`,
-        [MORTGAGE_TENANT_ID],
-      );
-      if (fallbackRows.length > 0) callerId = fallbackRows[0].twilio_caller_id;
+      callerId =
+        (await getSharedVoiceNumber()) ?? process.env.TWILIO_PHONE_NUMBER ?? "";
     }
   } catch {
     // Non-critical — callerId stays empty, Twilio will use account default
@@ -19778,6 +21838,7 @@ const handleVoicemailTranscription: RequestHandler = async (req, res) => {
                  AND status = 'active'
                  AND twilio_caller_id = ?
                  AND email NOT LIKE 'noemail_%'
+               ORDER BY id ASC
                LIMIT 1`,
               [MORTGAGE_TENANT_ID, inbox_number],
             );
@@ -20031,11 +22092,15 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
       )
       .then(() =>
         // Notify the sidebar so the call appears in real-time.
-        // A partial thread-updated is enough — the UI will full-refetch
-        // if the thread isn't already in the list.
+        // Do NOT include { thread: { status: 'active' } } here — if the broker
+        // closed the conversation before this async handler completed, sending
+        // status:'active' would patch the Redux store and cause the thread to
+        // reappear immediately in the UI even though the DB upsert honours the
+        // 5-minute reopen guard above.  The client will re-fetch on its next
+        // poll cycle if the thread genuinely needs to appear.
         publishToAbly("conversations:all", "thread-updated", {
           conversationId,
-          thread: { status: "active" },
+          communicationType: "call",
         }).catch(() => undefined),
       )
       .catch((logErr) =>
@@ -20321,12 +22386,45 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
       ? phone
       : `+1${phone.replace(/\D/g, "")}`;
 
+    // If the frontend didn't pass a client_id (e.g. call dialled from the
+    // dialpad by typing a raw number), resolve the client from the phone so
+    // the conversation thread is linked to the correct contact.
+    let resolvedClientId: number | null = client_id ?? null;
+    if (!resolvedClientId) {
+      const lastTen = normalizedPhone.replace(/\D/g, "").slice(-10);
+      if (lastTen.length === 10) {
+        const [cRows] = await pool.query<RowDataPacket[]>(
+          `SELECT id FROM clients
+           WHERE tenant_id = ? AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, lastTen],
+        );
+        if (cRows.length > 0) {
+          resolvedClientId = cRows[0].id as number;
+        }
+      }
+    }
+
+    // Idempotency guard: if this call_sid was already logged, skip the insert
+    // and return success. Prevents double-records when the frontend calls this
+    // endpoint twice (e.g. from both the call 'disconnect' and 'ended' events).
+    if (call_sid) {
+      const [[existing]] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM communications
+         WHERE tenant_id = ? AND external_id = ? AND communication_type = 'call' LIMIT 1`,
+        [MORTGAGE_TENANT_ID, call_sid],
+      );
+      if (existing) {
+        return res.json({ success: true }); // already logged — idempotent
+      }
+    }
+
     const durationSec = duration ?? 0;
     const statusLabel = call_status ?? "completed";
     const body = `📞 Voice call — ${durationSec}s (${statusLabel})`;
 
-    const conversationId = client_id
-      ? `conv_client_${client_id}`
+    const conversationId = resolvedClientId
+      ? `conv_client_${resolvedClientId}`
       : `conv_phone_${normalizedPhone.replace(/\D/g, "")}`;
 
     const [commResult] = await pool.query<any>(
@@ -20337,7 +22435,7 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
       [
         MORTGAGE_TENANT_ID,
         brokerId,
-        client_id ?? null,
+        resolvedClientId,
         direction ?? "outbound",
         body,
         call_sid ?? null,
@@ -20353,11 +22451,14 @@ const handleVoiceLog: RequestHandler = async (req, res) => {
       leadId: null,
       fromUserId: null,
       fromBrokerId: brokerId,
-      toUserId: client_id ?? null,
+      toUserId: resolvedClientId,
       toBrokerId: null,
       communicationType: "call",
       direction: "outbound",
       body,
+      // Pass the normalised phone so upsertConversationThread can always do
+      // its own phone→client fallback lookup even when resolvedClientId is null.
+      recipientPhone: normalizedPhone,
     });
 
     return res.json({ success: true });
@@ -20442,21 +22543,28 @@ const handleGetRecording: RequestHandler = async (req, res) => {
     if (!sessionToken) {
       return res.status(401).json({ success: false, error: "Unauthorized" });
     }
+    let brokerId: number | undefined;
     try {
       const decoded = jwt.verify(sessionToken, JWT_SECRET, {
         algorithms: ["HS256"],
       }) as any;
       if (decoded.userType !== "broker") throw new Error("not a broker");
+      brokerId = decoded.brokerId as number;
     } catch {
       return res.status(401).json({ success: false, error: "Invalid session" });
     }
 
-    // --- Fetch recording URL from DB ---
+    // --- Fetch recording URL from DB (ownership-checked) ---
+    // Broker must be associated with the call: either as the outbound caller
+    // (from_broker_id) or as the assigned broker on the conversation thread.
+    // This prevents cross-broker recording leakage within the same tenant.
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT recording_url FROM communications
-       WHERE external_id = ? AND communication_type = 'call' AND tenant_id = ?
+      `SELECT c.recording_url FROM communications c
+       LEFT JOIN conversation_threads ct ON ct.conversation_id = c.conversation_id
+       WHERE c.external_id = ? AND c.communication_type = 'call' AND c.tenant_id = ?
+         AND (c.from_broker_id = ? OR ct.broker_id = ?)
        LIMIT 1`,
-      [callSid, MORTGAGE_TENANT_ID],
+      [callSid, MORTGAGE_TENANT_ID, brokerId, brokerId],
     );
 
     if (rows.length === 0 || !rows[0].recording_url) {
@@ -24291,6 +26399,18 @@ function createServer() {
     handleCronSyncOffice365Mailboxes,
   );
 
+  // O365 calendar sync cron — syncs Outlook events into scheduler_blocked_ranges
+  // Suggested schedule: every 30 minutes
+  //   curl -s "https://yourdomain.com/api/cron/sync-o365-calendars?secret=CRON_SECRET"
+  expressApp.get("/api/cron/sync-o365-calendars", handleCronSyncO365Calendars);
+
+  // Office365 mailbox self-heal — reactivates error/auth_required mailboxes
+  // using the app-level token (no user re-auth needed if Mail.Read app permission is granted).
+  expressApp.get(
+    "/api/cron/reactivate-office365-mailboxes",
+    handleCronReactivateOffice365Mailboxes,
+  );
+
   // Teams application-access policy sync cron — run daily via cPanel cron:
   //   curl -s "https://yourdomain.com/api/cron/sync-teams-policy?secret=CRON_SECRET"
   expressApp.get("/api/cron/sync-teams-policy", handleCronSyncTeamsPolicy);
@@ -24330,6 +26450,21 @@ function createServer() {
     verifyBrokerSession,
     handleGetConversationMailboxes,
   );
+  expressApp.get(
+    "/api/conversations/mailboxes/:mailboxId/folders",
+    verifyBrokerSession,
+    handleGetMailFolders,
+  );
+  expressApp.get(
+    "/api/conversations/mailboxes/:mailboxId/folders/:folderId/messages",
+    verifyBrokerSession,
+    handleGetMailFolderMessages,
+  );
+  expressApp.get(
+    "/api/conversations/mailboxes/:mailboxId/folders/:folderId/messages/:messageId",
+    verifyBrokerSession,
+    handleGetMailFolderMessage,
+  );
   expressApp.post(
     "/api/conversations/mailboxes/office365/connect",
     verifyBrokerSession,
@@ -24353,6 +26488,51 @@ function createServer() {
     "/api/conversations/mailboxes/:mailboxId",
     verifyBrokerSession,
     handleDisconnectConversationMailbox,
+  );
+  expressApp.get(
+    "/api/conversations/mailboxes/:mailboxId/sync-log",
+    verifyBrokerSession,
+    handleGetEmailSyncLog,
+  );
+  // Email: dedicated send endpoint (separate from SMS/conversations handler)
+  expressApp.post("/api/email/send", verifyBrokerSession, handleEmailSend);
+  // Email drafts
+  expressApp.get(
+    "/api/email/drafts",
+    verifyBrokerSession,
+    handleGetEmailDrafts,
+  );
+  expressApp.post(
+    "/api/email/drafts",
+    verifyBrokerSession,
+    handleSaveEmailDraft,
+  );
+  expressApp.delete(
+    "/api/email/drafts/:draftId",
+    verifyBrokerSession,
+    handleDeleteEmailDraft,
+  );
+  // Email signatures
+  expressApp.get(
+    "/api/email/signatures",
+    verifyBrokerSession,
+    handleGetEmailSignatures,
+  );
+  expressApp.post(
+    "/api/email/signatures",
+    verifyBrokerSession,
+    handleSaveEmailSignature,
+  );
+  expressApp.delete(
+    "/api/email/signatures/:signatureId",
+    verifyBrokerSession,
+    handleDeleteEmailSignature,
+  );
+  // Email thread actions (archive, delete, mark read/unread, flag, move) — synced to M365
+  expressApp.patch(
+    "/api/email/threads/:conversationId/action",
+    verifyBrokerSession,
+    handleEmailThreadAction,
   );
   expressApp.get(
     "/api/conversations/:conversationId/messages",
@@ -24412,17 +26592,46 @@ function createServer() {
 
   // Voice / Calling routes
   expressApp.post("/api/voice/token", verifyBrokerSession, handleVoiceToken);
-  expressApp.post("/api/voice/twiml", handleVoiceTwiml); // no auth — called by Twilio
-  expressApp.post("/api/voice/incoming", handleVoiceIncoming); // no auth — Twilio webhook for inbound calls
-  expressApp.post("/api/voice/dial-status", handleDialStatus); // no auth — Twilio statusCallback
-  expressApp.post("/api/voice/recording-status", handleRecordingStatus); // no auth — Twilio recording webhook
-  // ── Voicemail webhooks (no auth — called by Twilio servers) ──
-  expressApp.post("/api/voice/voicemail-complete", handleVoicemailComplete);
-  expressApp.post("/api/voice/call-screen", handleCallScreen); // no auth — Twilio Number url callback
-  expressApp.post("/api/voice/call-screen-accept", handleCallScreenAccept); // no auth — Twilio Gather action callback
-  expressApp.post("/api/voice/voicemail-recording", handleVoicemailRecording);
+  expressApp.post("/api/voice/twiml", twilioWebhookGuard, handleVoiceTwiml); // Twilio webhook — signature-validated
+  expressApp.post(
+    "/api/voice/incoming",
+    twilioWebhookGuard,
+    handleVoiceIncoming,
+  ); // Twilio webhook — signature-validated
+  expressApp.post(
+    "/api/voice/dial-status",
+    twilioWebhookGuard,
+    handleDialStatus,
+  ); // Twilio statusCallback — signature-validated
+  expressApp.post(
+    "/api/voice/recording-status",
+    twilioWebhookGuard,
+    handleRecordingStatus,
+  ); // Twilio recording webhook — signature-validated
+  // ── Voicemail webhooks (Twilio servers — signature-validated) ──
+  expressApp.post(
+    "/api/voice/voicemail-complete",
+    twilioWebhookGuard,
+    handleVoicemailComplete,
+  );
+  expressApp.post(
+    "/api/voice/call-screen",
+    twilioWebhookGuard,
+    handleCallScreen,
+  ); // Twilio Number url callback
+  expressApp.post(
+    "/api/voice/call-screen-accept",
+    twilioWebhookGuard,
+    handleCallScreenAccept,
+  ); // Twilio Gather action callback
+  expressApp.post(
+    "/api/voice/voicemail-recording",
+    twilioWebhookGuard,
+    handleVoicemailRecording,
+  );
   expressApp.post(
     "/api/voice/voicemail-transcription",
+    twilioWebhookGuard,
     handleVoicemailTranscription,
   );
   expressApp.get("/api/voice/recording/:callSid", handleGetRecording);
@@ -25377,6 +27586,23 @@ function createServer() {
     };
   }
 
+  // ---- Helper: convert a UTC Date to minutes-from-midnight in a given IANA timezone ----
+  function utcDateToLocalMinutes(date: Date, timezone: string): number {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(date);
+    const h =
+      parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10) % 24;
+    const m = parseInt(
+      parts.find((p) => p.type === "minute")?.value ?? "0",
+      10,
+    );
+    return h * 60 + m;
+  }
+
   // ---- Helper: compute available slots for a given date ----
 
   async function getAvailableSlotsForDate(
@@ -25385,6 +27611,7 @@ function createServer() {
     slotMinutes: number,
     bufferMinutes: number,
     minBookingHours: number,
+    brokerTimezone = "America/Chicago",
   ): Promise<Array<{ time: string; end_time: string; available: boolean }>> {
     const date = new Date(dateStr + "T00:00:00");
     const dayOfWeek = date.getDay();
@@ -25403,13 +27630,14 @@ function createServer() {
       [brokerId, dateStr],
     );
 
-    // Fetch blocked ranges that overlap this date
-    const dayStart = `${dateStr} 00:00:00`;
-    const dayEnd = `${dateStr} 23:59:59`;
+    // Fetch blocked ranges that overlap this date.
+    // Use a ±1-day window so events near UTC midnight (but on the broker's local date) are included.
     const [blockedRows] = await pool.query<RowDataPacket[]>(
       `SELECT start_datetime, end_datetime FROM scheduler_blocked_ranges
-       WHERE broker_id = ? AND start_datetime <= ? AND end_datetime >= ?`,
-      [brokerId, dayEnd, dayStart],
+       WHERE broker_id = ?
+         AND start_datetime < DATE_ADD(?, INTERVAL 1 DAY)
+         AND end_datetime   > DATE_SUB(?, INTERVAL 1 DAY)`,
+      [brokerId, `${dateStr} 23:59:59`, `${dateStr} 00:00:00`],
     );
 
     const now = new Date();
@@ -25449,25 +27677,22 @@ function createServer() {
         });
 
         // Check for conflict with broker-blocked ranges.
-        // mysql2 returns DATETIME columns as UTC Date objects (timezone: '+00:00'),
-        // so use getUTC* to recover the original stored hour/minute values.
+        // Convert stored UTC datetimes to broker-local minutes to match the cursor.
         const blocked = blockedRows.some((br) => {
           const brStart =
             br.start_datetime instanceof Date
               ? br.start_datetime
-              : new Date(br.start_datetime as string);
+              : new Date((br.start_datetime as string).replace(" ", "T") + "Z");
           const brEnd =
             br.end_datetime instanceof Date
               ? br.end_datetime
-              : new Date(br.end_datetime as string);
-          const brStartMin =
-            brStart.getUTCHours() * 60 + brStart.getUTCMinutes();
-          const brEndMin = brEnd.getUTCHours() * 60 + brEnd.getUTCMinutes();
-          // Treat as a whole-day block if it spans the entire calendar day
-          const isWholeDay =
-            brStart <= new Date(`${dateStr}T00:00:00.000Z`) &&
-            brEnd >= new Date(`${dateStr}T23:59:59.000Z`);
-          if (isWholeDay) return true;
+              : new Date((br.end_datetime as string).replace(" ", "T") + "Z");
+          const brStartMin = utcDateToLocalMinutes(brStart, brokerTimezone);
+          const brEndMin = utcDateToLocalMinutes(brEnd, brokerTimezone);
+          // Handle events that cross midnight in broker timezone
+          if (brEndMin <= brStartMin) {
+            return cursor < brEndMin || cursor + slotMinutes > brStartMin;
+          }
           return cursor < brEndMin && cursor + slotMinutes > brStartMin;
         });
 
@@ -25496,7 +27721,7 @@ function createServer() {
         const tokenField = isUUIDToken(token) ? "b.public_token" : "b.slug";
         const [rows] = await pool.query<RowDataPacket[]>(
           `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.role, b.tenant_id,
-                  bp.avatar_url, bp.years_experience
+                  b.timezone, bp.avatar_url, bp.years_experience
            FROM brokers b
            LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
            WHERE ${tokenField} = ? AND b.status = 'active' AND b.tenant_id = ?`,
@@ -25507,7 +27732,7 @@ function createServer() {
         // Default: first active admin broker
         const [rows] = await pool.query<RowDataPacket[]>(
           `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.role, b.tenant_id,
-                  bp.avatar_url, bp.years_experience
+                  b.timezone, bp.avatar_url, bp.years_experience
            FROM brokers b
            LEFT JOIN broker_profiles bp ON bp.broker_id = b.id
            WHERE b.status = 'active' AND b.role = 'admin' AND b.tenant_id = ?
@@ -25528,8 +27753,12 @@ function createServer() {
       await pool.query(
         `INSERT IGNORE INTO scheduler_settings
            (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
-         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1, 0)`,
-        [MORTGAGE_TENANT_ID, brokerRow.id],
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, ?, 1, 1, 0)`,
+        [
+          MORTGAGE_TENANT_ID,
+          brokerRow.id,
+          (brokerRow as any).timezone || "America/Chicago",
+        ],
       );
 
       const [[settings]] = await pool.query<RowDataPacket[]>(
@@ -25558,6 +27787,7 @@ function createServer() {
           settings.slot_duration_minutes,
           settings.buffer_time_minutes,
           settings.min_booking_hours,
+          settings.timezone || (brokerRow as any).timezone || "America/Chicago",
         );
         if (slots.some((s) => s.available)) {
           availableDates.push(dateStr);
@@ -25580,7 +27810,10 @@ function createServer() {
           slot_duration_minutes: settings.slot_duration_minutes,
           advance_booking_days: settings.advance_booking_days,
           min_booking_hours: settings.min_booking_hours,
-          timezone: settings.timezone,
+          timezone:
+            settings.timezone ||
+            (brokerRow as any).timezone ||
+            "America/Chicago",
           allow_phone: !!settings.allow_phone,
           allow_video: !!settings.allow_video,
           allow_teams: !!settings.allow_teams,
@@ -25633,7 +27866,11 @@ function createServer() {
       }
 
       const [[settings]] = await pool.query<RowDataPacket[]>(
-        `SELECT slot_duration_minutes, buffer_time_minutes, min_booking_hours FROM scheduler_settings WHERE broker_id = ? AND tenant_id = ?`,
+        `SELECT ss.slot_duration_minutes, ss.buffer_time_minutes, ss.min_booking_hours,
+                COALESCE(ss.timezone, b.timezone, 'America/Chicago') AS timezone
+         FROM scheduler_settings ss
+         JOIN brokers b ON b.id = ss.broker_id AND b.tenant_id = ss.tenant_id
+         WHERE ss.broker_id = ? AND ss.tenant_id = ?`,
         [brokerId, MORTGAGE_TENANT_ID],
       );
       if (!settings)
@@ -25647,6 +27884,7 @@ function createServer() {
         settings.slot_duration_minutes,
         settings.buffer_time_minutes,
         settings.min_booking_hours,
+        settings.timezone || "America/Chicago",
       );
 
       return res.json({ success: true, slots });
@@ -25777,6 +28015,7 @@ function createServer() {
         settings.slot_duration_minutes,
         settings.buffer_time_minutes,
         settings.min_booking_hours,
+        settings.timezone || brokerData.timezone || "America/Chicago",
       );
 
       const requestedSlot = allSlots.find((s) => s.time === meeting_time);
@@ -25806,7 +28045,8 @@ function createServer() {
           topic: settings.meeting_title || "Mortgage Consultation",
           startDatetime: `${meeting_date}T${meeting_time}:00`,
           durationMinutes: settings.slot_duration_minutes,
-          timezone: settings.timezone || "America/Chicago",
+          timezone:
+            settings.timezone || brokerData.timezone || "America/Chicago",
         });
         if (zoomMeeting) {
           zoomMeetingId = zoomMeeting.meeting_id;
@@ -26094,6 +28334,7 @@ function createServer() {
         settings.slot_duration_minutes,
         settings.buffer_time_minutes,
         settings.min_booking_hours,
+        settings.timezone || old.broker_timezone || "America/Chicago",
       );
 
       const requestedSlot = allSlots.find((s) => s.time === new_time);
@@ -26130,7 +28371,8 @@ function createServer() {
           topic: settings.meeting_title || "Mortgage Consultation",
           startDatetime: `${new_date}T${new_time}:00`,
           durationMinutes: settings.slot_duration_minutes,
-          timezone: settings.timezone || "America/Chicago",
+          timezone:
+            settings.timezone || old.broker_timezone || "America/Chicago",
         });
         if (zoomMeeting) {
           zoomMeetingId = zoomMeeting.meeting_id;
@@ -26414,6 +28656,25 @@ function createServer() {
         }>;
       };
 
+      // Validate numeric fields
+      const _numericFields: Record<string, unknown> = {
+        slot_duration_minutes,
+        buffer_time_minutes,
+        advance_booking_days,
+        min_booking_hours,
+      };
+      for (const [key, val] of Object.entries(_numericFields)) {
+        if (val !== undefined && val !== null) {
+          const n = Number(val);
+          if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
+            return res.status(400).json({
+              success: false,
+              error: `${key} must be a positive integer`,
+            });
+          }
+        }
+      }
+
       if (allow_teams === true) {
         const [[brokerRow]] = await pool.query<RowDataPacket[]>(
           `SELECT email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
@@ -26443,40 +28704,63 @@ function createServer() {
         }
       }
 
-      await pool.query(
-        `INSERT INTO scheduler_settings
-           (tenant_id, broker_id, is_enabled, meeting_title, meeting_description,
-            slot_duration_minutes, buffer_time_minutes, advance_booking_days,
-            min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           is_enabled = COALESCE(VALUES(is_enabled), is_enabled),
-           meeting_title = COALESCE(VALUES(meeting_title), meeting_title),
-           meeting_description = VALUES(meeting_description),
-           slot_duration_minutes = COALESCE(VALUES(slot_duration_minutes), slot_duration_minutes),
-           buffer_time_minutes = COALESCE(VALUES(buffer_time_minutes), buffer_time_minutes),
-           advance_booking_days = COALESCE(VALUES(advance_booking_days), advance_booking_days),
-           min_booking_hours = COALESCE(VALUES(min_booking_hours), min_booking_hours),
-           timezone = COALESCE(VALUES(timezone), timezone),
-           allow_phone = COALESCE(VALUES(allow_phone), allow_phone),
-            allow_video = COALESCE(VALUES(allow_video), allow_video),
-            allow_teams = COALESCE(VALUES(allow_teams), allow_teams)`,
+      const [_updateResult] = await pool.query<ResultSetHeader>(
+        `UPDATE scheduler_settings SET
+           is_enabled = COALESCE(?, is_enabled),
+           meeting_title = COALESCE(?, meeting_title),
+           meeting_description = ?,
+           slot_duration_minutes = COALESCE(?, slot_duration_minutes),
+           buffer_time_minutes = COALESCE(?, buffer_time_minutes),
+           advance_booking_days = COALESCE(?, advance_booking_days),
+           min_booking_hours = COALESCE(?, min_booking_hours),
+           timezone = COALESCE(?, timezone),
+           allow_phone = COALESCE(?, allow_phone),
+           allow_video = COALESCE(?, allow_video),
+           allow_teams = COALESCE(?, allow_teams)
+         WHERE broker_id = ? AND tenant_id = ?`,
         [
-          MORTGAGE_TENANT_ID,
-          reqBrokerId,
           is_enabled !== undefined ? (is_enabled ? 1 : 0) : null,
           meeting_title || null,
-          meeting_description || null,
-          slot_duration_minutes || null,
-          buffer_time_minutes || null,
-          advance_booking_days || null,
-          min_booking_hours || null,
+          meeting_description !== undefined
+            ? meeting_description?.trim() || null
+            : undefined,
+          slot_duration_minutes ?? null,
+          buffer_time_minutes ?? null,
+          advance_booking_days ?? null,
+          min_booking_hours ?? null,
           timezone || null,
           allow_phone !== undefined ? (allow_phone ? 1 : 0) : null,
           allow_video !== undefined ? (allow_video ? 1 : 0) : null,
           allow_teams !== undefined ? (allow_teams ? 1 : 0) : null,
+          reqBrokerId,
+          MORTGAGE_TENANT_ID,
         ],
       );
+
+      if (_updateResult.affectedRows === 0) {
+        await pool.query(
+          `INSERT INTO scheduler_settings
+             (tenant_id, broker_id, is_enabled, meeting_title, meeting_description,
+              slot_duration_minutes, buffer_time_minutes, advance_booking_days,
+              min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            MORTGAGE_TENANT_ID,
+            reqBrokerId,
+            is_enabled !== undefined ? (is_enabled ? 1 : 0) : 1,
+            meeting_title || "Mortgage Consultation",
+            meeting_description?.trim() || null,
+            slot_duration_minutes ?? 30,
+            buffer_time_minutes ?? 15,
+            advance_booking_days ?? 30,
+            min_booking_hours ?? 2,
+            timezone || "America/Chicago",
+            allow_phone !== undefined ? (allow_phone ? 1 : 0) : 1,
+            allow_video !== undefined ? (allow_video ? 1 : 0) : 0,
+            allow_teams !== undefined ? (allow_teams ? 1 : 0) : 0,
+          ],
+        );
+      }
 
       if (availability && Array.isArray(availability)) {
         // Replace all availability rows for this broker
@@ -26593,12 +28877,21 @@ function createServer() {
   const handleGetScheduledMeetings: RequestHandler = async (req, res) => {
     try {
       const broker = (req as any).broker as { id: number; role: string };
-      const { status, from, to, broker_id } = req.query as {
+      const { status, from, to, broker_id, page, limit } = req.query as {
         status?: string;
         from?: string;
         to?: string;
         broker_id?: string;
+        page?: string;
+        limit?: string;
       };
+
+      const pageNum = Math.max(1, parseInt(page || "1", 10) || 1);
+      const limitNum = Math.min(
+        100,
+        Math.max(1, parseInt(limit || "50", 10) || 50),
+      );
+      const offset = (pageNum - 1) * limitNum;
 
       let whereClause = `sm.tenant_id = ?`;
       const params: any[] = [MORTGAGE_TENANT_ID];
@@ -26625,13 +28918,20 @@ function createServer() {
         params.push(to);
       }
 
+      const [[countRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS total FROM scheduled_meetings sm WHERE ${whereClause}`,
+        params,
+      );
+      const total = Number(countRow?.total ?? 0);
+
       const [meetings] = await pool.query<RowDataPacket[]>(
         `SELECT sm.*, b.first_name AS broker_first_name, b.last_name AS broker_last_name
          FROM scheduled_meetings sm
          LEFT JOIN brokers b ON b.id = sm.broker_id
          WHERE ${whereClause}
-         ORDER BY sm.meeting_date ASC, sm.meeting_time ASC`,
-        params,
+         ORDER BY sm.meeting_date ASC, sm.meeting_time ASC
+         LIMIT ? OFFSET ?`,
+        [...params, limitNum, offset],
       );
 
       return res.json({
@@ -26643,7 +28943,7 @@ function createServer() {
               ? m.meeting_date.toISOString().split("T")[0]
               : m.meeting_date,
         })),
-        total: meetings.length,
+        total,
       });
     } catch (err) {
       console.error("handleGetScheduledMeetings error:", err);
@@ -26656,8 +28956,8 @@ function createServer() {
   const handleUpdateScheduledMeeting: RequestHandler = async (req, res) => {
     try {
       const { meetingId } = req.params as { meetingId: string };
-      const { brokerId: reqBrokerId, role } = (req as any).broker as {
-        brokerId: number;
+      const { id: reqBrokerId, role } = (req as any).broker as {
+        id: number;
         role: string;
       };
       const {
@@ -27139,22 +29439,28 @@ function createServer() {
   // local time and displays the value the broker originally entered.
   const dtStr = (d: Date | string | null | undefined): string => {
     if (!d) return "";
-    if (typeof d === "string") return d;
+    // Always return an unambiguous UTC ISO string (with Z suffix)
+    const date =
+      typeof d === "string"
+        ? new Date(d.replace(" ", "T") + (d.endsWith("Z") ? "" : "Z"))
+        : d;
     const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+    return `${date.getUTCFullYear()}-${p(date.getUTCMonth() + 1)}-${p(date.getUTCDate())}T${p(date.getUTCHours())}:${p(date.getUTCMinutes())}:${p(date.getUTCSeconds())}Z`;
   };
 
   const serializeBlockedRange = (row: RowDataPacket) => ({
     ...row,
     start_datetime: dtStr(row.start_datetime as Date | string),
     end_datetime: dtStr(row.end_datetime as Date | string),
+    source: (row.source as string) ?? "manual",
+    external_id: row.external_id ?? null,
   });
 
   const handleGetBlockedRanges: RequestHandler = async (req, res) => {
     try {
       const broker = (req as any).broker as { id: number };
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, broker_id, start_datetime, end_datetime, label, created_at
+        `SELECT id, broker_id, start_datetime, end_datetime, label, source, external_id, created_at
          FROM scheduler_blocked_ranges
          WHERE broker_id = ? AND tenant_id = ?
          ORDER BY start_datetime ASC`,
@@ -27195,6 +29501,14 @@ function createServer() {
         });
       }
 
+      // Normalize to MySQL UTC format regardless of whether the client sent a
+      // local ISO string ("2026-05-22T13:00") or a UTC string ("...Z").
+      const toMySQLUtc = (s: string) =>
+        new Date(s)
+          .toISOString()
+          .replace("T", " ")
+          .replace(/\.\d+Z$/, "");
+
       const [result] = await pool.query<ResultSetHeader>(
         `INSERT INTO scheduler_blocked_ranges
            (tenant_id, broker_id, start_datetime, end_datetime, label)
@@ -27202,14 +29516,14 @@ function createServer() {
         [
           MORTGAGE_TENANT_ID,
           broker.id,
-          start_datetime,
-          end_datetime,
+          toMySQLUtc(start_datetime),
+          toMySQLUtc(end_datetime),
           label || null,
         ],
       );
 
       const [[newRow]] = await pool.query<RowDataPacket[]>(
-        `SELECT id, broker_id, start_datetime, end_datetime, label, created_at
+        `SELECT id, broker_id, start_datetime, end_datetime, label, source, external_id, created_at
          FROM scheduler_blocked_ranges WHERE id = ?`,
         [result.insertId],
       );
@@ -27268,6 +29582,122 @@ function createServer() {
     handleDeleteBlockedRange,
   );
 
+  // ─── O365 Calendar Sync ───────────────────────────────────────────────────
+
+  const handleSyncO365Calendar: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as { id: number };
+      const brokerId = broker.id;
+
+      // Find active O365 mailbox for this broker
+      const [mailboxRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, mailbox_email, office365_tenant_id, office365_client_id,
+                oauth_refresh_token, oauth_access_token, oauth_expires_at
+         FROM conversation_email_mailboxes
+         WHERE assigned_broker_id = ? AND tenant_id = ? AND provider = 'office365'
+           AND status IN ('active','auth_required')
+         LIMIT 1`,
+        [brokerId, MORTGAGE_TENANT_ID],
+      );
+
+      if (!mailboxRows.length) {
+        return res.status(404).json({
+          success: false,
+          error: "No connected Office 365 mailbox found for this account",
+        });
+      }
+
+      const mailbox = mailboxRows[0] as ConversationMailboxRow;
+      const { synced_count } = await syncO365CalendarForBroker(
+        mailbox,
+        brokerId,
+      );
+
+      // Notify the broker's client in real-time so the calendar grid refreshes
+      await publishToAbly(
+        `broker-notifications:${brokerId}`,
+        "o365_calendar_synced",
+        { synced_count },
+      );
+
+      return res.json({
+        success: true,
+        synced_count,
+        message: `Synced ${synced_count} event${synced_count !== 1 ? "s" : ""} from your Outlook calendar`,
+      });
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      if (status === 403) {
+        console.warn(
+          "handleSyncO365Calendar: calendar permission denied — mailbox needs reconnect",
+          err?.response?.data,
+        );
+        return res.status(403).json({
+          success: false,
+          error:
+            "Calendar access is not permitted with your current connection. Please reconnect your Outlook mailbox (Settings → Email) to grant calendar permissions, then try again.",
+        });
+      }
+      console.error("handleSyncO365Calendar error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  const handleGetO365CalendarStatus: RequestHandler = async (req, res) => {
+    try {
+      const broker = (req as any).broker as { id: number };
+
+      const [mailboxRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, mailbox_email, status
+         FROM conversation_email_mailboxes
+         WHERE assigned_broker_id = ? AND tenant_id = ? AND provider = 'office365'
+           AND status IN ('active','auth_required')
+         LIMIT 1`,
+        [broker.id, MORTGAGE_TENANT_ID],
+      );
+
+      const connected = mailboxRows.length > 0;
+
+      // Get count and last sync time of O365 blocks
+      const [[syncInfo]] = await pool.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS count, MAX(created_at) AS last_synced_at
+         FROM scheduler_blocked_ranges
+         WHERE broker_id = ? AND tenant_id = ? AND source = 'o365'`,
+        [broker.id, MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({
+        success: true,
+        connected,
+        mailbox_email: connected
+          ? (mailboxRows[0].mailbox_email as string)
+          : null,
+        synced_count: Number(syncInfo?.count ?? 0),
+        last_synced_at: syncInfo?.last_synced_at
+          ? dtStr(syncInfo.last_synced_at as Date | string)
+          : null,
+      });
+    } catch (err) {
+      console.error("handleGetO365CalendarStatus error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  };
+
+  expressApp.get(
+    "/api/scheduler/calendar-sync/status",
+    verifyBrokerSession,
+    handleGetO365CalendarStatus,
+  );
+  expressApp.post(
+    "/api/scheduler/calendar-sync",
+    verifyBrokerSession,
+    handleSyncO365Calendar,
+  );
+
   // ─── Calendar Events ─────────────────────────────────────────────────────
 
   const handleGetCalendarEvents: RequestHandler = async (req, res) => {
@@ -27306,12 +29736,17 @@ function createServer() {
       const isCalendarView = !!(
         calendar_month && /^\d{4}-\d{2}$/.test(calendar_month)
       );
+      const _parsedPage = parseInt(page ?? "1", 10);
+      const _parsedLimit = parseInt(limit ?? "25", 10);
       const pageNum = isCalendarView
         ? 1
-        : Math.max(1, parseInt(page ?? "1", 10));
+        : Math.max(1, Number.isFinite(_parsedPage) ? _parsedPage : 1);
       const limitNum = isCalendarView
         ? 1000
-        : Math.min(100, Math.max(1, parseInt(limit ?? "25", 10)));
+        : Math.min(
+            100,
+            Math.max(1, Number.isFinite(_parsedLimit) ? _parsedLimit : 25),
+          );
       const offset = (pageNum - 1) * limitNum;
 
       const conditions: string[] = ["ce.tenant_id = ?"];
@@ -27452,6 +29887,13 @@ function createServer() {
         return res.status(400).json({
           success: false,
           error: "event_type, title, and event_date are required",
+        });
+      }
+
+      if (title.trim().length > 255) {
+        return res.status(400).json({
+          success: false,
+          error: "title must be 255 characters or less",
         });
       }
 
@@ -27634,8 +30076,9 @@ function createServer() {
 
       let created = 0;
       let updated = 0;
+      const _SYNC_CHUNK = 200;
 
-      // ── 1. Clients ──────────────────────────────────────────────────────
+      // ── 1. Clients (batched) ────────────────────────────────────────────
       const [clientRows] = (await pool.query(
         `SELECT id, first_name, last_name, date_of_birth
          FROM clients
@@ -27643,38 +30086,82 @@ function createServer() {
         [broker.tenant_id],
       )) as [any[], any];
 
-      for (const c of clientRows) {
-        const title = `${c.first_name} ${c.last_name}'s Birthday`;
-        const raw = c.date_of_birth as Date | string;
-        const eventDate =
-          raw instanceof Date
-            ? raw.toISOString().slice(0, 10)
-            : String(raw).slice(0, 10);
+      if (clientRows.length > 0) {
+        const clientIds = clientRows.map((c: any) => Number(c.id));
 
-        const [[existing]] = (await pool.query(
-          `SELECT id FROM calendar_events
-           WHERE tenant_id = ? AND event_type = 'birthday' AND linked_client_id = ?
-           LIMIT 1`,
-          [broker.tenant_id, c.id],
+        // Single query: find all clients that already have a birthday event
+        const [existingRows] = (await pool.query(
+          `SELECT linked_client_id FROM calendar_events
+           WHERE tenant_id = ? AND event_type = 'birthday'
+             AND linked_client_id IN (?)`,
+          [broker.tenant_id, clientIds],
         )) as [any[], any];
+        const existingClientIds = new Set<number>(
+          existingRows.map((r: any) => Number(r.linked_client_id)),
+        );
 
-        if (existing) {
-          await pool.query(
-            `UPDATE calendar_events
-             SET title = ?, event_date = ?, updated_at = NOW()
-             WHERE id = ?`,
-            [title, eventDate, existing.id],
-          );
-          updated++;
-        } else {
+        const toInsert: any[][] = [];
+        const toUpdate: {
+          clientId: number;
+          title: string;
+          eventDate: string;
+        }[] = [];
+
+        for (const c of clientRows) {
+          const title = `${c.first_name} ${c.last_name}'s Birthday`;
+          const raw = c.date_of_birth as Date | string;
+          const eventDate =
+            raw instanceof Date
+              ? raw.toISOString().slice(0, 10)
+              : String(raw).slice(0, 10);
+          if (existingClientIds.has(Number(c.id))) {
+            toUpdate.push({ clientId: Number(c.id), title, eventDate });
+          } else {
+            toInsert.push([
+              broker.tenant_id,
+              broker.id,
+              "birthday",
+              title,
+              eventDate,
+              1,
+              "yearly",
+              Number(c.id),
+            ]);
+          }
+        }
+
+        // Batch INSERT (chunked)
+        for (let i = 0; i < toInsert.length; i += _SYNC_CHUNK) {
+          const chunk = toInsert.slice(i, i + _SYNC_CHUNK);
           await pool.query(
             `INSERT INTO calendar_events
                (tenant_id, broker_id, event_type, title, event_date,
                 all_day, recurrence, linked_client_id)
-             VALUES (?, ?, 'birthday', ?, ?, 1, 'yearly', ?)`,
-            [broker.tenant_id, broker.id, title, eventDate, c.id],
+             VALUES ?`,
+            [chunk],
           );
-          created++;
+          created += chunk.length;
+        }
+
+        // Batch UPDATE via CASE WHEN linked_client_id (chunked)
+        for (let i = 0; i < toUpdate.length; i += _SYNC_CHUNK) {
+          const chunk = toUpdate.slice(i, i + _SYNC_CHUNK);
+          const whenClauses = chunk.map(() => "WHEN ? THEN ?").join(" ");
+          const params: any[] = [];
+          chunk.forEach((u) => params.push(u.clientId, u.title));
+          chunk.forEach((u) => params.push(u.clientId, u.eventDate));
+          params.push(broker.tenant_id);
+          params.push(chunk.map((u) => u.clientId));
+          await pool.query(
+            `UPDATE calendar_events
+             SET title      = CASE linked_client_id ${whenClauses} END,
+                 event_date = CASE linked_client_id ${whenClauses} END,
+                 updated_at = NOW()
+             WHERE tenant_id = ? AND event_type = 'birthday'
+               AND linked_client_id IN (?)`,
+            params,
+          );
+          updated += chunk.length;
         }
       }
 

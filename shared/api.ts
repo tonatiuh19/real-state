@@ -1365,10 +1365,9 @@ export interface ConversationMailbox {
   provider: "office365" | "imap";
   mailbox_email: string;
   display_name?: string | null;
-  is_shared: boolean;
-  assigned_broker_id?: number | null;
+  assigned_broker_id: number;
   assigned_broker_name?: string | null;
-  status: "pending" | "active" | "disabled" | "error";
+  status: "pending" | "active" | "disabled" | "error" | "auth_required";
   is_default: boolean;
   last_sync_at?: string | null;
   last_sync_status?: "ok" | "error" | null;
@@ -1378,8 +1377,7 @@ export interface ConversationMailbox {
 }
 
 export interface AssignConversationMailboxRequest {
-  assigned_broker_id: number | null;
-  is_shared: boolean;
+  assigned_broker_id: number;
   is_default?: boolean;
 }
 
@@ -1396,9 +1394,9 @@ export interface GetConversationMailboxesResponse {
 export interface ConnectOffice365MailboxRequest {
   mailbox_email: string;
   display_name?: string;
-  is_shared?: boolean;
   /** Admin only — assign mailbox to a different broker */
   target_broker_id?: number;
+  return_path?: string;
 }
 
 export interface ConnectOffice365MailboxResponse {
@@ -1412,6 +1410,127 @@ export interface SyncConversationMailboxResponse {
   mailbox_id: number;
   processed: number;
   errors: number;
+}
+
+export interface MailFolder {
+  id: string;
+  displayName: string;
+  totalItemCount: number;
+  unreadItemCount: number;
+  childFolderCount: number;
+  parentId: string | null;
+  isSystemFolder: boolean;
+}
+
+export interface GetMailFoldersResponse {
+  success: boolean;
+  folders: MailFolder[];
+}
+
+export interface MailFolderMessage {
+  id: string;
+  subject: string;
+  from: { name: string; email: string };
+  receivedDateTime: string;
+  bodyPreview: string;
+  isRead: boolean;
+  hasAttachments: boolean;
+}
+
+export interface GetMailFolderMessagesResponse {
+  success: boolean;
+  messages: MailFolderMessage[];
+  nextPageToken?: string | null;
+}
+
+// ─── Email Drafts ─────────────────────────────────────────────────────────────
+
+export interface EmailRecipientEntry {
+  email: string;
+  name?: string;
+}
+
+export interface EmailDraft {
+  id: number;
+  mailbox_id: number;
+  broker_id: number;
+  subject: string | null;
+  body_html: string | null;
+  to_emails: EmailRecipientEntry[] | null;
+  cc_emails: EmailRecipientEntry[] | null;
+  bcc_emails: EmailRecipientEntry[] | null;
+  reply_to_comm_id: number | null;
+  conversation_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaveEmailDraftRequest {
+  mailbox_id: number;
+  subject?: string;
+  body_html?: string;
+  to_emails?: EmailRecipientEntry[];
+  cc_emails?: EmailRecipientEntry[];
+  bcc_emails?: EmailRecipientEntry[];
+  reply_to_comm_id?: number;
+  conversation_id?: string;
+}
+
+export interface SaveEmailDraftResponse {
+  success: boolean;
+  draft: EmailDraft;
+}
+
+export interface GetEmailDraftsResponse {
+  success: boolean;
+  drafts: EmailDraft[];
+}
+
+// ─── Email Signatures ─────────────────────────────────────────────────────────
+
+export interface EmailSignature {
+  id: number;
+  broker_id: number;
+  name: string;
+  html: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaveEmailSignatureRequest {
+  name: string;
+  html: string;
+  is_default?: boolean;
+}
+
+export interface SaveEmailSignatureResponse {
+  success: boolean;
+  signature: EmailSignature;
+}
+
+export interface GetEmailSignaturesResponse {
+  success: boolean;
+  signatures: EmailSignature[];
+}
+
+// ─── Email Sync Log ───────────────────────────────────────────────────────────
+
+export interface EmailSyncLogEntry {
+  id: number;
+  mailbox_id: number;
+  trigger: "cron" | "manual";
+  started_at: string;
+  finished_at: string | null;
+  messages_synced: number;
+  errors: number;
+  status: "running" | "ok" | "error" | "partial";
+  error_detail: string | null;
+}
+
+export interface GetEmailSyncLogResponse {
+  success: boolean;
+  logs: EmailSyncLogEntry[];
 }
 
 export interface UpdateConversationRequest {
@@ -2358,7 +2477,23 @@ export interface SchedulerBlockedRange {
   start_datetime: string; // ISO string "YYYY-MM-DDTHH:MM:SS"
   end_datetime: string;
   label: string | null;
+  source: "manual" | "o365";
+  external_id?: string | null;
   created_at: string;
+}
+
+export interface SyncO365CalendarResponse {
+  success: boolean;
+  synced_count: number;
+  message: string;
+}
+
+export interface GetO365CalendarStatusResponse {
+  success: boolean;
+  connected: boolean;
+  mailbox_email: string | null;
+  synced_count: number;
+  last_synced_at: string | null;
 }
 
 export interface GetSchedulerSettingsResponse {

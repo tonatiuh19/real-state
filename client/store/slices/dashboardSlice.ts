@@ -83,6 +83,8 @@ export const fetchBrokerMetrics = createAsyncThunk(
       );
       return data.metrics;
     } catch (error: any) {
+      if (error.response?.status === 401)
+        return rejectWithValue("UNAUTHORIZED");
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch broker metrics",
       );
@@ -135,6 +137,8 @@ export const fetchAnnualMetrics = createAsyncThunk(
       );
       return data.annual;
     } catch (error: any) {
+      if (error.response?.status === 401)
+        return rejectWithValue("UNAUTHORIZED");
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch annual metrics",
       );

@@ -13,6 +13,7 @@ When a client replies, the system detects the response and advances (or stops) t
 | `GET /api/cron/process-reminder-flows`   | Every 10 min (cron) | Advance due flow steps, send messages, handle timeouts        |
 | `GET /api/cron/poll-inbound-email`       | Every 5 min (cron)  | Poll IMAP inbox for email replies → mark executions responded |
 | `GET /api/cron/sync-office365-mailboxes` | Every 5 min (cron)  | Sync all active Office 365 mailboxes into Conversations       |
+| `GET /api/cron/sync-o365-calendars`      | Every 30 min (cron) | Sync Outlook calendar events into scheduler blocked ranges    |
 | `GET /api/cron/sync-teams-policy`        | Every 24h (cron)    | Grant Teams app-access policy for users with Teams enabled    |
 | `POST /api/webhooks/inbound-sms`         | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
 
@@ -94,6 +95,43 @@ curl -s "https://yourdomain.com/api/cron/poll-inbound-email?secret=YOUR_CRON_SEC
 ```bash
 curl -s "https://admin.encoremortgage.org/api/cron/sync-office365-mailboxes?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
 ```
+
+### 2d. Sync Outlook calendar events into scheduler — every 30 minutes
+
+Keeps broker availability blocks in sync with their Outlook calendars.
+Only `active` mailboxes are processed — mailboxes in `auth_required` state are
+skipped (their delegated token may lack the `Calendars.Read` scope granted on reconnect).
+
+| Field   | Value  |
+| ------- | ------ |
+| Minute  | `*/30` |
+| Hour    | `*`    |
+| Day     | `*`    |
+| Month   | `*`    |
+| Weekday | `*`    |
+
+```bash
+curl -s "https://admin.encoremortgage.org/api/cron/sync-o365-calendars?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
+```
+
+Sample response:
+
+```json
+{
+  "success": true,
+  "mailboxes": 3,
+  "total_synced": 12,
+  "errors": 0,
+  "results": [
+    { "mailbox_id": 1, "email": "broker@contoso.com", "synced_count": 5 },
+    { "mailbox_id": 2, "email": "agent@contoso.com", "synced_count": 7 }
+  ]
+}
+```
+
+> **Note:** The first time a broker connects their Outlook mailbox, the manual
+> "Sync Now" button in the Calendar settings tab provides an immediate sync.
+> The cron keeps it fresh automatically after that.
 
 ---
 

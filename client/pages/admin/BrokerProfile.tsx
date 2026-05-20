@@ -64,7 +64,11 @@ import {
   clearProfileError,
   setUser,
 } from "@/store/slices/brokerAuthSlice";
-import { checkSlug, updateSlug } from "@/store/slices/schedulerSlice";
+import {
+  checkSlug,
+  updateSlug,
+  fetchO365CalendarStatus,
+} from "@/store/slices/schedulerSlice";
 import {
   connectOffice365Mailbox,
   disconnectConversationMailbox,
@@ -92,6 +96,11 @@ const TIMEZONES = [
     value: "America/Chicago",
     label: "Central Time (CT)",
     cities: "Chicago, Dallas, Houston",
+  },
+  {
+    value: "America/Mexico_City",
+    label: "Central Time – no DST (CT)",
+    cities: "Mexico City, Guadalajara, Monterrey",
   },
   {
     value: "America/Denver",
@@ -232,9 +241,7 @@ const BrokerProfile = () => {
   // ── Email mailbox state ──────────────────────────────────────────────────
   const myMailbox = useAppSelector((s) =>
     (s.conversations.mailboxes as ConversationMailbox[]).find(
-      (m) =>
-        m.assigned_broker_id === user?.id ||
-        (m.is_shared && m.status === "active"),
+      (m) => m.assigned_broker_id === user?.id,
     ),
   );
   const myOwnMailbox = useAppSelector((s) =>
@@ -263,7 +270,6 @@ const BrokerProfile = () => {
       const result = await dispatch(
         connectOffice365Mailbox({
           mailbox_email: email,
-          is_shared: false,
           return_path: "/admin/profile",
         }),
       ).unwrap();
@@ -283,6 +289,8 @@ const BrokerProfile = () => {
     setIsDisconnecting(true);
     try {
       await dispatch(disconnectConversationMailbox(mailboxId)).unwrap();
+      // Reset calendar sync state immediately so the sync card disappears
+      dispatch(fetchO365CalendarStatus());
       toast({
         title: "Mailbox disconnected",
         description: "You can connect a new account at any time.",
