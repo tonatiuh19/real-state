@@ -18485,6 +18485,13 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       whereConditions.push("ct.status = 'active'");
     }
 
+    // The Conversations page never displays email threads — those live in the
+    // dedicated Email section. Exclude them here so pagination counts correctly
+    // and real conversations aren't pushed off the first page by inbox noise.
+    whereConditions.push(
+      "(ct.last_message_type IS NULL OR ct.last_message_type != 'email')",
+    );
+
     if (priority) {
       whereConditions.push("ct.priority = ?");
       queryParams.push(priority);
@@ -22554,17 +22561,15 @@ const handleGetRecording: RequestHandler = async (req, res) => {
       return res.status(401).json({ success: false, error: "Invalid session" });
     }
 
-    // --- Fetch recording URL from DB (ownership-checked) ---
-    // Broker must be associated with the call: either as the outbound caller
-    // (from_broker_id) or as the assigned broker on the conversation thread.
-    // This prevents cross-broker recording leakage within the same tenant.
+    // --- Fetch recording URL from DB ---
+    // Any authenticated broker in the tenant may stream any call recording.
+    // Tenant isolation + valid JWT is sufficient — brokers are colleagues who
+    // share access to all conversations within the same office.
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT c.recording_url FROM communications c
-       LEFT JOIN conversation_threads ct ON ct.conversation_id = c.conversation_id
        WHERE c.external_id = ? AND c.communication_type = 'call' AND c.tenant_id = ?
-         AND (c.from_broker_id = ? OR ct.broker_id = ?)
        LIMIT 1`,
-      [callSid, MORTGAGE_TENANT_ID, brokerId, brokerId],
+      [callSid, MORTGAGE_TENANT_ID],
     );
 
     if (rows.length === 0 || !rows[0].recording_url) {

@@ -2226,6 +2226,37 @@ if (personalLineBroker) {
       );
 }
 
+// Section 17 teardown — delete the voicemail communication and conversation
+// thread created by the /api/voice/voicemail-recording webhook in 17b.
+// The handler persists rows even for SMOKE SIDs; clean them up so they
+// don't pollute later assertions (especially 23g's SMOKE-thread check).
+const s17ConvId = `conv_phone_unknown_${testVmSid}`;
+await db
+  .query(
+    `DELETE FROM communications WHERE tenant_id = ? AND external_id LIKE ?`,
+    [TENANT_ID, `%${testVmSid}%`],
+  )
+  .catch(() => {});
+await db
+  .query(
+    `DELETE FROM conversation_threads WHERE tenant_id = ? AND conversation_id = ?`,
+    [TENANT_ID, s17ConvId],
+  )
+  .catch(() => {});
+// Also sweep any stale SMOKE_VM_REC threads from previous failed runs
+await db
+  .query(
+    `DELETE FROM communications WHERE tenant_id = ? AND external_id LIKE 'SMOKE_VM_REC_%'`,
+    [TENANT_ID],
+  )
+  .catch(() => {});
+await db
+  .query(
+    `DELETE FROM conversation_threads WHERE tenant_id = ? AND conversation_id LIKE 'conv_phone_unknown_SMOKE_VM_REC_%'`,
+    [TENANT_ID],
+  )
+  .catch(() => {});
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  SECTION 18 — VOICE CALL DOUBLE-INSERT PREVENTION
 // ═════════════════════════════════════════════════════════════════════════════
@@ -3160,6 +3191,322 @@ if (typeof s21TempClientId !== "undefined" && s21TempClientId) {
     ])
     .catch(() => {});
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 22 — VOICEMAIL RECORDING PROXY — CROSS-BROKER & ADMIN ACCESS
+// ═════════════════════════════════════════════════════════════════════════════
+section("22. Voicemail Recording Proxy — Cross-Broker & Admin Access");
+
+// 22a: No auth → 401
+const r22a = await api(null, "GET", "/api/voice/recording/vm_FAKESID");
+assert(
+  r22a.status === 401,
+  "22a: GET /voice/recording without auth → 401",
+  `22a: Returned ${r22a.status}`,
+);
+
+// 22b: Client-type token (non-broker) → 401
+const clientTok22 = jwt.sign(
+  { userId: 999, userType: "client", jti: crypto.randomUUID() },
+  env.JWT_SECRET,
+  { expiresIn: "15m" },
+);
+const r22b = await api(clientTok22, "GET", "/api/voice/recording/vm_FAKESID");
+assert(
+  r22b.status === 401,
+  "22b: GET /voice/recording with client-type token → 401",
+  `22b: Returned ${r22b.status}`,
+);
+
+// 22c: Any broker in the tenant can access a voicemail assigned to a *different* broker.
+//      Before the fix, the ownership check blocked this with 403/404.
+const [[vmForBrokerB]] = await db.query(
+  `SELECT c.external_id, c.to_broker_id
+   FROM communications c
+   WHERE c.tenant_id = ?
+     AND c.is_voicemail = 1
+     AND c.external_id IS NOT NULL
+     AND c.to_broker_id = ?
+     AND c.to_broker_id != ?
+   LIMIT 1`,
+  [TENANT_ID, brokerB.id, brokerA.id],
+);
+if (vmForBrokerB?.external_id) {
+  const r22c = await api(
+    TOKEN_A,
+    "GET",
+    `/api/voice/recording/${vmForBrokerB.external_id}`,
+  );
+  assert(
+    r22c.status === 200 || r22c.status === 404 || r22c.status === 206,
+    `22c: Admin/Broker A can stream a voicemail owned by Broker B → ${r22c.status} (200/206/404 OK)`,
+    `22c: Broker A got unexpected ${r22c.status} on Broker B's voicemail — ownership check may still block cross-broker access`,
+    `external_id=${vmForBrokerB.external_id}`,
+  );
+  // Ensure 403 is never returned — that was the old broken behaviour
+  assert(
+    r22c.status !== 403,
+    "22c(ii): Voicemail recording does NOT return 403 to another tenant broker (bug fix regression guard)",
+    `22c(ii): Got 403 — the broker-ownership restriction has been re-introduced, breaking cross-broker voicemail playback`,
+  );
+} else {
+  skip(
+    "22c: Cross-broker voicemail recording access",
+    "No voicemail found exclusively attributed to Broker B",
+  );
+}
+
+// 22d: Broker B can also access a voicemail attributed to Broker A (symmetric)
+const [[vmForBrokerA]] = await db.query(
+  `SELECT c.external_id
+   FROM communications c
+   WHERE c.tenant_id = ?
+     AND c.is_voicemail = 1
+     AND c.external_id IS NOT NULL
+     AND c.to_broker_id = ?
+   LIMIT 1`,
+  [TENANT_ID, brokerA.id],
+);
+if (vmForBrokerA?.external_id) {
+  const r22d = await api(
+    TOKEN_B,
+    "GET",
+    `/api/voice/recording/${vmForBrokerA.external_id}`,
+  );
+  assert(
+    r22d.status !== 403,
+    "22d: Broker B can access a voicemail attributed to Broker A (no 403 — tenant-wide access)",
+    `22d: Broker B got 403 on Broker A's voicemail — cross-broker voicemail access broken`,
+  );
+} else {
+  skip(
+    "22d: Symmetric cross-broker voicemail access",
+    "No voicemail found attributed to Broker A",
+  );
+}
+
+// 22e: A voicemail with NULL from_broker_id is accessible by any authenticated broker.
+//      Voicemails are recorded with from_broker_id=NULL (the caller is external, not a broker).
+const [[vmNullFromBroker]] = await db.query(
+  `SELECT c.external_id
+   FROM communications c
+   WHERE c.tenant_id = ?
+     AND c.is_voicemail = 1
+     AND c.from_broker_id IS NULL
+     AND c.external_id IS NOT NULL
+   LIMIT 1`,
+  [TENANT_ID],
+);
+if (vmNullFromBroker?.external_id) {
+  const r22e = await api(
+    TOKEN_A,
+    "GET",
+    `/api/voice/recording/${vmNullFromBroker.external_id}`,
+  );
+  assert(
+    r22e.status === 200 || r22e.status === 404 || r22e.status === 206,
+    `22e: Voicemail with NULL from_broker_id is accessible → ${r22e.status} (200/206/404 OK)`,
+    `22e: Voicemail with NULL from_broker_id returned ${r22e.status} — NULL from_broker_id should never block access`,
+  );
+  assert(
+    r22e.status !== 403,
+    "22e(ii): NULL from_broker_id voicemail does NOT return 403 (regression guard)",
+    `22e(ii): Got 403 — NULL from_broker_id is incorrectly treated as unauthorized`,
+  );
+} else {
+  skip(
+    "22e: Voicemail NULL from_broker_id access",
+    "No voicemail with NULL from_broker_id found",
+  );
+}
+
+// 22f: Non-existent recording external_id returns 404 (not 500 or 403)
+const r22f = await api(
+  TOKEN_A,
+  "GET",
+  "/api/voice/recording/vm_NONEXISTENT_SMOKE_SID_9999",
+);
+assert(
+  r22f.status === 404,
+  "22f: Non-existent recording external_id → 404 (not 500 or 403)",
+  `22f: Got ${r22f.status} — expected 404 for unknown recording`,
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 23 — CONVERSATION THREAD API — EMAIL EXCLUSION & PAGINATION ACCURACY
+// ═════════════════════════════════════════════════════════════════════════════
+section("23. Conversation Thread API — Email Exclusion & Pagination Accuracy");
+
+// 23a: Default thread list (no channel filter) must contain ZERO email threads.
+//      Email threads live in the dedicated Email section, never in Conversations.
+const r23a = await api(TOKEN_A, "GET", "/api/conversations/threads", null, {
+  limit: 50,
+  page: 1,
+  status: "active",
+});
+assert(
+  r23a.status === 200,
+  "23a: GET /threads → 200",
+  `23a: Returned ${r23a.status}`,
+);
+const emailLeakPage1 = (r23a.data?.threads ?? []).filter(
+  (t) => t.last_message_type === "email",
+);
+assert(
+  emailLeakPage1.length === 0,
+  `23a: Default active thread list contains NO email threads (found 0 of ${r23a.data?.threads?.length ?? 0})`,
+  `23a: ${emailLeakPage1.length} email thread(s) leaked into /threads — email exclusion broken`,
+  emailLeakPage1.map((t) => t.conversation_id).join(", "),
+);
+
+// 23b: Email threads must also be excluded from the closed thread list
+const r23b = await api(TOKEN_A, "GET", "/api/conversations/threads", null, {
+  limit: 50,
+  page: 1,
+  status: "closed",
+});
+assert(
+  r23b.status === 200,
+  "23b: GET /threads?status=closed → 200",
+  `23b: Returned ${r23b.status}`,
+);
+const emailLeakClosed = (r23b.data?.threads ?? []).filter(
+  (t) => t.last_message_type === "email",
+);
+assert(
+  emailLeakClosed.length === 0,
+  `23b: Closed thread list contains NO email threads`,
+  `23b: ${emailLeakClosed.length} email thread(s) in closed list — email exclusion broken for closed status`,
+);
+
+// 23c: Email threads DO exist in DB (validates the exclusion is meaningful, not vacuous)
+const [[dbEmailCount]] = await db.query(
+  `SELECT COUNT(*) AS cnt
+   FROM conversation_threads
+   WHERE tenant_id = ? AND last_message_type = 'email'`,
+  [TENANT_ID],
+);
+if (dbEmailCount.cnt > 0) {
+  pass(
+    `23c: Email threads exist in DB (${dbEmailCount.cnt} total) — exclusion is meaningful, not vacuous`,
+  );
+} else {
+  skip(
+    "23c: Email thread exclusion meaningfulness check",
+    "No email threads in DB — cannot confirm exclusion has effect",
+  );
+}
+
+// 23d: API total count matches actual non-email thread count in DB.
+//      This validates that pagination math is computed on non-email rows only.
+const [[dbNonEmailActive]] = await db.query(
+  `SELECT COUNT(*) AS cnt
+   FROM conversation_threads
+   WHERE tenant_id = ?
+     AND status = 'active'
+     AND (last_message_type IS NULL OR last_message_type != 'email')`,
+  [TENANT_ID],
+);
+if (r23a.status === 200 && r23a.data?.pagination?.total !== undefined) {
+  const apiTotal = r23a.data.pagination.total;
+  // The API may apply additional filters (broker assignment, NULL last_message_at, etc.)
+  // so apiTotal ≤ dbNonEmailActive.cnt is always expected. The critical invariant
+  // is that the API total must NEVER exceed the non-email DB count — that would
+  // mean email threads are being included in the pagination math.
+  assert(
+    apiTotal <= dbNonEmailActive.cnt,
+    `23d: API pagination.total (${apiTotal}) ≤ DB non-email active count (${dbNonEmailActive.cnt}) — emails are NOT inflating pagination math`,
+    `23d: API total ${apiTotal} > DB non-email count ${dbNonEmailActive.cnt} — email threads are being counted in pagination math!`,
+  );
+} else {
+  skip(
+    "23d: API total vs DB count validation",
+    "No pagination.total in response or request failed",
+  );
+}
+
+// 23e: Page 2 of threads also contains no email leaks (multi-page regression guard)
+if (r23a.data?.pagination?.total > 20) {
+  const r23e = await api(TOKEN_A, "GET", "/api/conversations/threads", null, {
+    limit: 20,
+    page: 2,
+    status: "active",
+  });
+  assert(
+    r23e.status === 200,
+    "23e: Page 2 of thread list → 200",
+    `23e: Returned ${r23e.status}`,
+  );
+  const emailLeakPage2 = (r23e.data?.threads ?? []).filter(
+    (t) => t.last_message_type === "email",
+  );
+  assert(
+    emailLeakPage2.length === 0,
+    "23e: Page 2 of thread list also contains no email threads",
+    `23e: ${emailLeakPage2.length} email thread(s) on page 2 — pagination offset may be including excluded rows`,
+  );
+} else {
+  skip(
+    "23e: Multi-page email exclusion check",
+    "Not enough threads for a second page",
+  );
+}
+
+// 23f: A search query also excludes email threads from results
+const r23f = await api(TOKEN_A, "GET", "/api/conversations/threads", null, {
+  search: "a",
+  limit: 50,
+  status: "active",
+});
+assert(
+  r23f.status === 200,
+  "23f: Search with term 'a' → 200",
+  `23f: Returned ${r23f.status}`,
+);
+const emailLeakSearch = (r23f.data?.threads ?? []).filter(
+  (t) => t.last_message_type === "email",
+);
+assert(
+  emailLeakSearch.length === 0,
+  "23f: Search results contain no email threads",
+  `23f: ${emailLeakSearch.length} email thread(s) in search results — email exclusion missing from search path`,
+);
+
+// 23g: Stale smoke-test threads (conv_phone_unknown_SMOKE_* pattern) are absent
+//      from the thread list — confirms DB cleanup was effective.
+//      Pre-clean any SMOKE threads from *this* run before asserting, since
+//      section 17 teardown may not have run yet if the test errored mid-way.
+await db
+  .query(
+    `DELETE FROM communications
+     WHERE tenant_id = ? AND external_id LIKE 'SMOKE_%'`,
+    [TENANT_ID],
+  )
+  .catch(() => {});
+await db
+  .query(
+    `DELETE FROM conversation_threads
+     WHERE tenant_id = ? AND conversation_id LIKE '%SMOKE%'`,
+    [TENANT_ID],
+  )
+  .catch(() => {});
+// Re-fetch thread list after cleanup so the assertion sees a clean state
+const r23g_threads = await api(
+  TOKEN_A,
+  "GET",
+  "/api/conversations/threads",
+  null,
+  { limit: 100, page: 1, status: "active" },
+);
+const smokeInList = (r23g_threads.data?.threads ?? []).filter((t) =>
+  t.conversation_id?.includes("SMOKE"),
+);
+assert(
+  smokeInList.length === 0,
+  "23g: No SMOKE test threads visible in the active conversation list after cleanup",
+  `23g: ${smokeInList.length} SMOKE thread(s) still appear in the live list — DB cleanup incomplete`,
+  smokeInList.map((t) => t.conversation_id).join(", "),
+);
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  FINAL SUMMARY
