@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Mail,
   MessageSquare,
@@ -8,6 +8,7 @@ import {
   Eye,
   Save,
   X,
+  Loader2,
 } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -19,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import VariableTextarea from "@/components/ui/VariableTextarea";
 import {
   Card,
   CardContent,
@@ -69,11 +71,64 @@ import {
   deleteWhatsappTemplate,
 } from "@/store/slices/communicationTemplatesSlice";
 import type { CommunicationType } from "@shared/api";
-import ReactQuill from "react-quill";
-import "react-quill/dist/quill.snow.css";
+import ReactQuill from "react-quill-new";
+import "react-quill-new/dist/quill.snow.css";
 import { cn } from "@/lib/utils";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+
+const EMAIL_VARIABLES = [
+  "first_name",
+  "client_name",
+  "application_number",
+  "application_id",
+  "broker_name",
+  "loan_amount",
+  "interest_rate",
+  "closing_date",
+  "loan_type",
+  "status",
+];
+
+const SMS_VARIABLES = [
+  "first_name",
+  "client_name",
+  "application_number",
+  "application_id",
+  "broker_name",
+  "status_message",
+  "document_count",
+  "loan_type",
+];
+
+const WA_VARIABLES = [
+  "client_name",
+  "first_name",
+  "application_number",
+  "broker_name",
+  "status",
+  "missing_documents",
+  "portal_link",
+  "due_date",
+];
+
+const VARIABLE_HINTS: Record<string, string> = {
+  first_name: "Client's first name only",
+  client_name: "Client's full name (first + last)",
+  application_number: "Loan application reference number",
+  application_id: "Internal application ID",
+  broker_name: "Your full name (loan officer)",
+  loan_amount: "Total requested loan amount",
+  interest_rate: "Loan interest rate",
+  closing_date: "Estimated or confirmed closing date",
+  loan_type: "Type of loan (e.g. Conventional, FHA)",
+  status: "Current application status",
+  status_message: "Human-readable status update message",
+  document_count: "Number of pending documents",
+  missing_documents: "List of missing documents",
+  portal_link: "Link to the client portal",
+  due_date: "Document or task due date",
+};
 
 const CHANNELS: {
   value: CommunicationType;
@@ -120,6 +175,7 @@ const CommunicationTemplates = () => {
   } | null>(null);
   const [editingTemplate, setEditingTemplate] = useState<any>(null);
   const [previewContent, setPreviewContent] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   // Email form
   const [emailFormData, setEmailFormData] = useState({
@@ -160,6 +216,92 @@ const CommunicationTemplates = () => {
       .split("_")
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
       .join(" ");
+
+  const quillRef = useRef<any>(null);
+  const quillContainerRef = useRef<HTMLDivElement>(null);
+  const [quillVarDropdown, setQuillVarDropdown] = useState<{
+    open: boolean;
+    filter: string;
+    selectedIndex: number;
+  }>({ open: false, filter: "", selectedIndex: 0 });
+
+  const insertQuillVariable = (varName: string) => {
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    const range = editor.getSelection(true);
+    const index = range ? range.index : editor.getLength();
+    editor.insertText(index, `{{${varName}}}`, "user");
+    editor.setSelection(index + `{{${varName}}}`.length, 0);
+  };
+
+  const insertQuillVariableFromDropdown = (varName: string) => {
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    const selection = editor.getSelection();
+    if (!selection) {
+      insertQuillVariable(varName);
+      setQuillVarDropdown({ open: false, filter: "", selectedIndex: 0 });
+      return;
+    }
+    const cursorIndex = selection.index;
+    const textBeforeCursor = editor.getText(0, cursorIndex);
+    const match = textBeforeCursor.match(/\{\{([a-z_]*)$/);
+    if (match) {
+      editor.deleteText(cursorIndex - match[0].length, match[0].length, "user");
+      const insertAt = cursorIndex - match[0].length;
+      editor.insertText(insertAt, `{{${varName}}}`, "user");
+      editor.setSelection(insertAt + `{{${varName}}}`.length, 0);
+    } else {
+      insertQuillVariable(varName);
+    }
+    setQuillVarDropdown({ open: false, filter: "", selectedIndex: 0 });
+  };
+
+  const handleQuillChange = (content: string) => {
+    setEmailFormData((prev) => ({ ...prev, body_html: content }));
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    const sel = editor.getSelection();
+    if (!sel) return;
+    const textBefore = editor.getText(0, sel.index);
+    const match = textBefore.match(/\{\{([a-z_]*)$/);
+    if (match) {
+      setQuillVarDropdown({
+        open: true,
+        filter: match[1] || "",
+        selectedIndex: 0,
+      });
+    } else {
+      setQuillVarDropdown((prev) => ({ ...prev, open: false }));
+    }
+  };
+
+  const handleQuillKeyDown = (e: React.KeyboardEvent) => {
+    if (!quillVarDropdown.open) return;
+    const filtered = EMAIL_VARIABLES.filter((v) =>
+      v.startsWith(quillVarDropdown.filter),
+    );
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setQuillVarDropdown((prev) => ({
+        ...prev,
+        selectedIndex: Math.min(prev.selectedIndex + 1, filtered.length - 1),
+      }));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setQuillVarDropdown((prev) => ({
+        ...prev,
+        selectedIndex: Math.max(prev.selectedIndex - 1, 0),
+      }));
+    } else if ((e.key === "Enter" || e.key === "Tab") && filtered.length > 0) {
+      e.preventDefault();
+      insertQuillVariableFromDropdown(
+        filtered[quillVarDropdown.selectedIndex] ?? filtered[0],
+      );
+    } else if (e.key === "Escape") {
+      setQuillVarDropdown((prev) => ({ ...prev, open: false }));
+    }
+  };
 
   const quillModules = {
     toolbar: [
@@ -225,6 +367,7 @@ const CommunicationTemplates = () => {
 
   const handleSave = async () => {
     try {
+      setIsSaving(true);
       const type = editingTemplate?.type || channelTab;
       if (type === "email") {
         if (editingTemplate) {
@@ -259,17 +402,19 @@ const CommunicationTemplates = () => {
           await dispatch(createWhatsappTemplate(waFormData)).unwrap();
         }
       }
+      setIsEditorOpen(false);
       toast({
         title: "Success",
         description: `${formatLabel(type)} template ${editingTemplate ? "updated" : "created"} successfully`,
       });
-      setIsEditorOpen(false);
     } catch (error: any) {
       toast({
         title: "Error",
         description: error || "Failed to save template",
         variant: "destructive",
       });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -432,10 +577,7 @@ const CommunicationTemplates = () => {
                 <MessageSquare className="h-4 w-4" />
                 SMS ({smsTemplates.length})
               </TabsTrigger>
-              <TabsTrigger value="whatsapp" className="gap-2">
-                <FaWhatsapp className="h-4 w-4" />
-                WhatsApp ({whatsappTemplates.length})
-              </TabsTrigger>
+              {/* WhatsApp tab hidden — feature not enabled */}
             </TabsList>
             <Button onClick={() => openEditor(channelTab)} className="gap-2">
               <Plus className="h-4 w-4" />
@@ -473,7 +615,8 @@ const CommunicationTemplates = () => {
             )}
           </TabsContent>
 
-          <TabsContent value="whatsapp" className="mt-0">
+          {/* WhatsApp tab content hidden */}
+          <TabsContent value="whatsapp" className="mt-0 hidden">
             {isLoading ? (
               <div className="text-center py-12 text-muted-foreground">
                 Loading WhatsApp templates…
@@ -505,6 +648,38 @@ const CommunicationTemplates = () => {
                     : "WhatsApp message template (supports emoji and *bold* formatting)"}
               </DialogDescription>
             </DialogHeader>
+
+            {/* Channel selector — only shown when creating a new template */}
+            {!editingTemplate && (
+              <div className="flex items-center gap-2 p-1 bg-muted rounded-lg w-fit">
+                <button
+                  type="button"
+                  onClick={() => openEditor("email")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                    channelTab === "email"
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openEditor("sms")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                    channelTab === "sms"
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  SMS
+                </button>
+              </div>
+            )}
 
             {/* EMAIL FORM */}
             {(editingTemplate?.type || channelTab) === "email" && (
@@ -564,24 +739,82 @@ const CommunicationTemplates = () => {
                 </div>
                 <div className="space-y-2">
                   <Label>Body (HTML)</Label>
-                  <div className="border rounded-md">
+                  <div
+                    className="relative border rounded-md"
+                    ref={quillContainerRef}
+                    onKeyDown={handleQuillKeyDown}
+                  >
                     <ReactQuill
+                      ref={quillRef}
                       theme="snow"
                       value={emailFormData.body_html}
-                      onChange={(content) =>
-                        setEmailFormData({
-                          ...emailFormData,
-                          body_html: content,
-                        })
-                      }
+                      onChange={handleQuillChange}
                       modules={quillModules}
                       className="h-64"
                     />
+                    {quillVarDropdown.open &&
+                      (() => {
+                        const filtered = EMAIL_VARIABLES.filter((v) =>
+                          v.startsWith(quillVarDropdown.filter),
+                        );
+                        if (filtered.length === 0) return null;
+                        return (
+                          <div className="absolute z-50 bottom-full mb-1 left-2 w-64 rounded-lg border border-border bg-popover shadow-xl overflow-hidden">
+                            <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border bg-muted/50">
+                              Insert variable
+                            </div>
+                            <div className="max-h-44 overflow-y-auto">
+                              {filtered.map((v, i) => (
+                                <button
+                                  key={v}
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    insertQuillVariableFromDropdown(v);
+                                  }}
+                                  className={cn(
+                                    "w-full text-left px-3 py-2 text-sm font-mono flex items-center gap-1 transition-colors",
+                                    i === quillVarDropdown.selectedIndex
+                                      ? "bg-primary text-primary-foreground"
+                                      : "hover:bg-muted",
+                                  )}
+                                >
+                                  <span className="opacity-50 text-xs">
+                                    {"{{"}
+                                  </span>
+                                  <span>{v}</span>
+                                  <span className="opacity-50 text-xs">
+                                    {"}}"[0]}
+                                    {"}}"[1]}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                            <div className="px-3 py-1 text-[10px] text-muted-foreground border-t border-border bg-muted/30">
+                              ↑↓ navigate · Enter to insert · Esc to dismiss
+                            </div>
+                          </div>
+                        );
+                      })()}
                   </div>
-                  <p className="text-xs text-muted-foreground pt-16">
-                    Variables: {"{{client_name}}"}, {"{{application_id}}"},{" "}
-                    {"{{broker_name}}"}, {"{{loan_amount}}"}
-                  </p>
+                  <div className="pt-16 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Click to insert variable:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EMAIL_VARIABLES.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => insertQuillVariable(v)}
+                          title={VARIABLE_HINTS[v]}
+                          className="inline-flex items-center rounded px-2 py-0.5 text-xs font-mono bg-muted hover:bg-primary hover:text-primary-foreground transition-colors border border-border"
+                        >
+                          {`{{${v}}}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Switch
@@ -647,18 +880,23 @@ const CommunicationTemplates = () => {
                       {smsFormData.body.length} / 1600
                     </span>
                   </div>
-                  <Textarea
+                  <VariableTextarea
                     value={smsFormData.body}
-                    onChange={(e) =>
-                      setSmsFormData({ ...smsFormData, body: e.target.value })
+                    onChange={(v) =>
+                      setSmsFormData({ ...smsFormData, body: v })
                     }
-                    placeholder="Enter your SMS message…"
-                    className="h-48 resize-none"
+                    variables={SMS_VARIABLES}
+                    variableHints={VARIABLE_HINTS}
+                    placeholder="Enter your SMS message… Type {{ to insert a variable"
+                    className="h-48"
                     maxLength={1600}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Variables: {"{{client_name}}"}, {"{{application_id}}"},{" "}
-                    {"{{broker_name}}"}
+                    Type{" "}
+                    <code className="font-mono bg-muted px-1 rounded">
+                      {"{{"}
+                    </code>{" "}
+                    to insert a variable
                   </p>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -709,19 +947,22 @@ const CommunicationTemplates = () => {
                 </div>
                 <div className="space-y-2">
                   <Label>Message</Label>
-                  <Textarea
+                  <VariableTextarea
                     value={waFormData.body}
-                    onChange={(e) =>
-                      setWaFormData({ ...waFormData, body: e.target.value })
-                    }
+                    onChange={(v) => setWaFormData({ ...waFormData, body: v })}
+                    variables={WA_VARIABLES}
+                    variableHints={VARIABLE_HINTS}
                     placeholder={
-                      "Hi {{client_name}} 👋\n\nYour application has been updated…"
+                      "Hi {{client_name}} 👋\n\nYour application has been updated… Type {{ to insert a variable"
                     }
-                    className="h-48 resize-none"
+                    className="h-48"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Supports emoji and *bold* text. Variables:{" "}
-                    {"{{client_name}}"}, {"{{status}}"}, {"{{broker_name}}"}
+                    Supports emoji and *bold* text. Type{" "}
+                    <code className="font-mono bg-muted px-1 rounded">
+                      {"{{"}
+                    </code>{" "}
+                    to insert a variable
                   </p>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -741,9 +982,18 @@ const CommunicationTemplates = () => {
                 <X className="h-4 w-4 mr-2" />
                 Cancel
               </Button>
-              <Button onClick={handleSave}>
-                <Save className="h-4 w-4 mr-2" />
-                {editingTemplate ? "Update" : "Create"} Template
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    {editingTemplate ? "Update" : "Create"} Template
+                  </>
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>

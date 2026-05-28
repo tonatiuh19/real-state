@@ -2158,10 +2158,14 @@ assert(
   `Returned ${r17c.status}`,
 );
 
-// 17d: DB — voicemails in inbox: all have is_voicemail=1 AND a conversation_thread record
+// 17d: DB — voicemails in inbox: all have is_voicemail=1 AND a conversation_thread record.
+//       Exclude SMOKE test records — the voicemail-recording webhook stores the
+//       RecordingSid as 'vm_RE' + CallSid, so stale smoke runs leave orphaned
+//       communications with external_id LIKE 'vm_RESMOKE_VM_REC_%'.
 const [[vmOrphaned]] = await db.query(
   `SELECT COUNT(*) AS cnt FROM communications c
    WHERE c.tenant_id = ? AND c.is_voicemail = 1
+     AND (c.external_id IS NULL OR c.external_id NOT LIKE '%SMOKE%')
      AND NOT EXISTS (
        SELECT 1 FROM conversation_threads ct
        WHERE ct.conversation_id = c.conversation_id AND ct.tenant_id = c.tenant_id
@@ -2243,16 +2247,19 @@ await db
     [TENANT_ID, s17ConvId],
   )
   .catch(() => {});
-// Also sweep any stale SMOKE_VM_REC threads from previous failed runs
+// Also sweep any stale SMOKE_VM_REC debris from previous failed runs.
+// The handler stores external_id = 'vm_' + RecordingSid, where RecordingSid is
+// 'RE' + testVmSid, so the actual stored value is 'vm_RESMOKE_VM_REC_...'.
+// Use a broader %SMOKE_VM_REC% pattern to catch all permutations.
 await db
   .query(
-    `DELETE FROM communications WHERE tenant_id = ? AND external_id LIKE 'SMOKE_VM_REC_%'`,
+    `DELETE FROM communications WHERE tenant_id = ? AND external_id LIKE '%SMOKE_VM_REC%'`,
     [TENANT_ID],
   )
   .catch(() => {});
 await db
   .query(
-    `DELETE FROM conversation_threads WHERE tenant_id = ? AND conversation_id LIKE 'conv_phone_unknown_SMOKE_VM_REC_%'`,
+    `DELETE FROM conversation_threads WHERE tenant_id = ? AND conversation_id LIKE '%SMOKE_VM_REC%'`,
     [TENANT_ID],
   )
   .catch(() => {});
@@ -3506,6 +3513,825 @@ assert(
   "23g: No SMOKE test threads visible in the active conversation list after cleanup",
   `23g: ${smokeInList.length} SMOKE thread(s) still appear in the live list — DB cleanup incomplete`,
   smokeInList.map((t) => t.conversation_id).join(", "),
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 24 — NORMALIZED PHONE COLUMN INTEGRITY
+//  Validates the TiDB-compatible phone index migration applied 2026-05-21.
+//  TiDB Cloud Serverless does not support STORED generated columns, so we
+//  maintain normalized_phone / normalized_client_phone as regular columns and
+//  write them explicitly on every INSERT / UPDATE.
+// ═════════════════════════════════════════════════════════════════════════════
+section("24. Normalized Phone Column Integrity (TiDB Index Migration)");
+
+// 24a: clients.normalized_phone column exists
+const [[normPhoneCol]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM information_schema.columns
+   WHERE table_schema = ? AND table_name = 'clients' AND column_name = 'normalized_phone'`,
+  [env.DB_NAME],
+);
+assert(
+  normPhoneCol.cnt === 1,
+  "24a: clients.normalized_phone column exists (migration applied)",
+  "24a: clients.normalized_phone column MISSING — phone index migration not applied",
+);
+
+// 24b: conversation_threads.normalized_client_phone column exists
+const [[normCtPhoneCol]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM information_schema.columns
+   WHERE table_schema = ? AND table_name = 'conversation_threads' AND column_name = 'normalized_client_phone'`,
+  [env.DB_NAME],
+);
+assert(
+  normCtPhoneCol.cnt === 1,
+  "24b: conversation_threads.normalized_client_phone column exists (migration applied)",
+  "24b: conversation_threads.normalized_client_phone MISSING — phone index migration not applied",
+);
+
+// 24c: Index idx_clients_tenant_norm_phone exists on clients
+const [[normPhoneIdx]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM information_schema.statistics
+   WHERE table_schema = ? AND table_name = 'clients' AND index_name = 'idx_clients_tenant_norm_phone'`,
+  [env.DB_NAME],
+);
+assert(
+  normPhoneIdx.cnt >= 1,
+  "24c: idx_clients_tenant_norm_phone index exists on clients",
+  "24c: idx_clients_tenant_norm_phone index MISSING — full table scan on every inbound message",
+);
+
+// 24d: Index idx_ct_tenant_norm_client_phone exists on conversation_threads
+const [[normCtPhoneIdx]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM information_schema.statistics
+   WHERE table_schema = ? AND table_name = 'conversation_threads' AND index_name = 'idx_ct_tenant_norm_client_phone'`,
+  [env.DB_NAME],
+);
+assert(
+  normCtPhoneIdx.cnt >= 1,
+  "24d: idx_ct_tenant_norm_client_phone index exists on conversation_threads",
+  "24d: idx_ct_tenant_norm_client_phone index MISSING — JIT phone lookup does full table scan",
+);
+
+// 24e: No client with a non-null phone has NULL normalized_phone (data consistency)
+//      A NULL means the backfill UPDATE didn't run or the app code isn't writing it.
+const [[clientMissingNormPhone]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM clients
+   WHERE tenant_id = ? AND phone IS NOT NULL AND phone != '' AND normalized_phone IS NULL`,
+  [TENANT_ID],
+);
+assert(
+  clientMissingNormPhone.cnt === 0,
+  "24e: All clients with a phone number have normalized_phone populated",
+  `24e: ${clientMissingNormPhone.cnt} client(s) have phone but NULL normalized_phone — index is stale for those rows`,
+);
+
+// 24f: normalized_phone length is always 10 digits when set (validates the slice(-10) logic)
+const [[badNormPhoneLen]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM clients
+   WHERE tenant_id = ? AND normalized_phone IS NOT NULL AND CHAR_LENGTH(normalized_phone) != 10`,
+  [TENANT_ID],
+);
+assert(
+  badNormPhoneLen.cnt === 0,
+  "24f: All normalized_phone values are exactly 10 digits",
+  `24f: ${badNormPhoneLen.cnt} client(s) have normalized_phone with length ≠ 10 — normalization bug`,
+);
+
+// 24g: No conversation_thread with a non-null client_phone has NULL normalized_client_phone
+const [[ctMissingNormPhone]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads
+   WHERE tenant_id = ? AND client_phone IS NOT NULL AND client_phone != ''
+     AND normalized_client_phone IS NULL`,
+  [TENANT_ID],
+);
+assert(
+  ctMissingNormPhone.cnt === 0,
+  "24g: All conversation_threads with client_phone have normalized_client_phone populated",
+  `24g: ${ctMissingNormPhone.cnt} thread(s) have client_phone but NULL normalized_client_phone — index is stale`,
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 25 — CLIENT-THREAD BACKFILL COMPLETENESS (PHONE + EMAIL)
+//  Validates the three-layer backfill strategy:
+//    Layer 1 — migration: retroactively linked existing threads
+//    Layer 2 — JIT: handleGetConversationThreads resolves client_name at read-time
+//    Layer 3 — hooks: handleCreateClient / handleUpdateClient fire-and-forget backfill
+//  Also validates that the new email backfill (P2 fix) and broker_id stamping (P3 fix)
+//  are working correctly.
+// ═════════════════════════════════════════════════════════════════════════════
+section("25. Client-Thread Backfill Completeness (Phone + Email)");
+
+// 25a: No conv_phone_* thread has a null client_id where the phone matches a known client.
+//      This is the root cause of the original "Unknown Client" bug — repeating from
+//      section 4 because it's the single most important regression guard.
+const [[orphanedPhoneThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   WHERE ct.tenant_id = ?
+     AND ct.client_id IS NULL
+     AND ct.conversation_id LIKE 'conv_phone_%'
+     AND EXISTS (
+       SELECT 1 FROM clients c
+       WHERE c.tenant_id = ct.tenant_id
+         AND c.phone IS NOT NULL
+         AND RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10)
+             = RIGHT(REGEXP_REPLACE(ct.conversation_id, '[^0-9]', ''), 10)
+     )`,
+  [TENANT_ID],
+);
+assert(
+  orphanedPhoneThreads.cnt === 0,
+  "25a: No conv_phone_* threads with unlinked client despite matching phone in clients table",
+  `25a: ${orphanedPhoneThreads.cnt} conv_phone_* thread(s) have resolvable client but client_id IS NULL — backfill incomplete`,
+);
+
+// 25b: No email thread has client_id IS NULL when a client exists with the same email.
+//      This validates the new email backfill in handleCreateClient (P2 fix).
+const [[orphanedEmailThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   WHERE ct.tenant_id = ?
+     AND ct.client_id IS NULL
+     AND ct.last_message_type = 'email'
+     AND ct.client_email IS NOT NULL
+     AND ct.client_email NOT LIKE 'noemail_%'
+     AND EXISTS (
+       SELECT 1 FROM clients c
+       WHERE c.tenant_id = ct.tenant_id
+         AND c.email IS NOT NULL
+         AND LOWER(c.email) = LOWER(ct.client_email)
+     )`,
+  [TENANT_ID],
+);
+assert(
+  orphanedEmailThreads.cnt === 0,
+  "25b: No email threads with unlinked client despite matching email in clients table (email backfill working)",
+  `25b: ${orphanedEmailThreads.cnt} email thread(s) have resolvable client by email but client_id IS NULL — email backfill missing`,
+);
+
+// 25c: All threads with client_id set also have broker_id consistent with client ownership.
+//      Validates the P3 fix (broker_id stamping in backfill queries).
+//      A thread can have: broker_id = client.assigned_broker_id, OR broker_id = loan broker,
+//      OR broker_id = NULL (thread predates the broker_id stamping fix and hasn't been
+//      touched again — warn only, since ownership check via EXISTS still works at read time).
+const [[threadWithClientNoBroker]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   JOIN clients c ON c.id = ct.client_id AND c.tenant_id = ct.tenant_id
+   WHERE ct.tenant_id = ?
+     AND ct.client_id IS NOT NULL
+     AND ct.broker_id IS NULL
+     AND c.assigned_broker_id IS NOT NULL`,
+  [TENANT_ID],
+);
+threadWithClientNoBroker.cnt === 0
+  ? pass(
+      "25c: All threads with client_id have broker_id stamped (no broker attribution gap)",
+    )
+  : warn(
+      `25c: ${threadWithClientNoBroker.cnt} thread(s) have client_id but broker_id IS NULL — pre-fix threads not yet re-touched`,
+      `These threads ARE still visible via the ownership EXISTS check but broker bell notifications may route to all admins`,
+    );
+
+// 25d: The conv_unknown_* threads (inbound SMS from unknown sender) are linked
+//      when a matching client phone exists. Validates the backfill covers both
+//      conversation_id LIKE 'conv_phone_%' AND client_phone match paths.
+const [[orphanedUnknownThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   WHERE ct.tenant_id = ?
+     AND ct.client_id IS NULL
+     AND ct.conversation_id LIKE 'conv_unknown_%'
+     AND ct.client_phone IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM clients c
+       WHERE c.tenant_id = ct.tenant_id
+         AND c.phone IS NOT NULL
+         AND RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10)
+             = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
+     )`,
+  [TENANT_ID],
+);
+assert(
+  orphanedUnknownThreads.cnt === 0,
+  "25d: No conv_unknown_* threads with unlinked client despite matching client_phone",
+  `25d: ${orphanedUnknownThreads.cnt} conv_unknown_* thread(s) have resolvable client by client_phone but client_id IS NULL`,
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 26 — PERSONAL INBOX THREAD ISOLATION (client_id IS NULL threads)
+//  Validates the P0 visibility fix applied 2026-05-21:
+//    OLD rule: OR ct.client_id IS NULL          ← leaked ALL unknown-caller threads
+//    NEW rule: OR (ct.client_id IS NULL AND ct.broker_id IS NULL)  ← shared inbox only
+//
+//  The root scenario: Daniel Carrillo (broker_id=3) had a thread with realtor
+//  Albert Araujo (contact_broker_id=30160, broker_id=3, client_id=NULL).
+//  Under the old rule, Alex Gomez (broker_id=1) was incorrectly seeing this
+//  personal realtor conversation in his Conversations list.
+// ═════════════════════════════════════════════════════════════════════════════
+section("26. Personal Inbox Thread Isolation (client_id=NULL threads)");
+
+// 26a: DB — Count threads with broker_id IS NOT NULL AND client_id IS NULL
+//      (personal inbox threads — should NOT be visible to other brokers).
+const [[personalInboxThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads
+   WHERE tenant_id = ? AND client_id IS NULL AND broker_id IS NOT NULL AND status = 'active'`,
+  [TENANT_ID],
+);
+console.log(
+  `  ℹ  Personal inbox threads (broker_id≠NULL, client_id=NULL): ${personalInboxThreads.cnt}`,
+);
+
+// 26b: DB — No personal inbox thread is also visible to a different broker
+//      via the shared-inbox path (broker_id IS NULL). They are mutually exclusive.
+const [[personalAndShared]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads
+   WHERE tenant_id = ?
+     AND client_id IS NULL
+     AND broker_id IS NOT NULL
+     AND status = 'active'
+     -- broker_id IS NOT NULL already excludes shared-inbox, so this should always be 0
+     -- but it validates no data corruption where broker_id = 0 (falsy) sneaked in
+     AND broker_id = 0`,
+  [TENANT_ID],
+);
+assert(
+  personalAndShared.cnt === 0,
+  "26b: No thread has broker_id = 0 (would be treated as shared inbox by accident)",
+  `26b: ${personalAndShared.cnt} thread(s) have broker_id = 0 — NULL/0 boundary bug`,
+);
+
+// 26c: API — Broker B's thread list must NOT include any thread that has
+//      broker_id = Broker A's ID AND client_id IS NULL (Broker A's personal unknown-caller threads).
+if (personalInboxThreads.cnt > 0) {
+  // Find a thread exclusively owned by Broker A with no client link
+  const [[aPersonalThread]] = await db.query(
+    `SELECT conversation_id FROM conversation_threads
+     WHERE tenant_id = ? AND broker_id = ? AND client_id IS NULL AND status = 'active'
+     LIMIT 1`,
+    [TENANT_ID, brokerA.id],
+  );
+  if (aPersonalThread) {
+    const r26c = await api(TOKEN_B, "GET", "/api/conversations/threads", null, {
+      limit: 200,
+      status: "active",
+    });
+    if (r26c.status === 200) {
+      const bThreadIds = new Set(
+        (r26c.data?.threads ?? []).map((t) => t.conversation_id),
+      );
+      assert(
+        !bThreadIds.has(aPersonalThread.conversation_id),
+        `26c: Broker B's thread list does NOT include Broker A's personal inbox thread (client_id=NULL, broker_id=A)`,
+        `26c: Broker B CAN see Broker A's personal thread ${aPersonalThread.conversation_id} — personal inbox isolation BROKEN`,
+      );
+    } else {
+      skip(
+        "26c: API personal inbox isolation",
+        `Threads API returned ${r26c.status}`,
+      );
+    }
+  } else {
+    skip(
+      "26c: API personal inbox isolation",
+      "No personal (client_id=NULL) thread for Broker A",
+    );
+  }
+} else {
+  skip("26c: API personal inbox isolation", "No personal inbox threads in DB");
+}
+
+// 26d: Shared inbox threads (broker_id IS NULL AND client_id IS NULL) ARE visible to all brokers.
+//      This validates the correct half of the visibility rule.
+const [[sharedInboxThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads
+   WHERE tenant_id = ? AND client_id IS NULL AND broker_id IS NULL AND status = 'active'`,
+  [TENANT_ID],
+);
+console.log(
+  `  ℹ  Shared inbox threads (both broker_id=NULL AND client_id=NULL): ${sharedInboxThreads.cnt}`,
+);
+
+if (sharedInboxThreads.cnt > 0) {
+  const [[sharedThread]] = await db.query(
+    `SELECT conversation_id FROM conversation_threads
+     WHERE tenant_id = ? AND client_id IS NULL AND broker_id IS NULL AND status = 'active'
+     LIMIT 1`,
+    [TENANT_ID],
+  );
+  if (sharedThread) {
+    // Both Broker A and Broker B should see this thread
+    const r26d_a = await api(
+      TOKEN_A,
+      "GET",
+      "/api/conversations/threads",
+      null,
+      {
+        limit: 200,
+        status: "active",
+      },
+    );
+    const r26d_b = await api(
+      TOKEN_B,
+      "GET",
+      "/api/conversations/threads",
+      null,
+      {
+        limit: 200,
+        status: "active",
+      },
+    );
+    const aHasShared = (r26d_a.data?.threads ?? []).some(
+      (t) => t.conversation_id === sharedThread.conversation_id,
+    );
+    const bHasShared = (r26d_b.data?.threads ?? []).some(
+      (t) => t.conversation_id === sharedThread.conversation_id,
+    );
+    assert(
+      aHasShared,
+      "26d: Broker A can see a genuine shared-inbox thread (broker_id=NULL, client_id=NULL)",
+      `26d: Broker A cannot see shared thread ${sharedThread.conversation_id} — shared inbox filter too restrictive`,
+    );
+    assert(
+      bHasShared,
+      "26d: Broker B can also see the same shared-inbox thread",
+      `26d: Broker B cannot see shared thread ${sharedThread.conversation_id} — shared inbox filter too restrictive`,
+    );
+  }
+} else {
+  skip(
+    "26d: Shared inbox visibility test",
+    "No shared inbox (broker_id=NULL, client_id=NULL) threads in DB",
+  );
+}
+
+// 26e: contact_broker_id isolation — threads with a realtor contact (contact_broker_id IS NOT NULL)
+//      must follow the same broker_id ownership rule, not leak to other brokers.
+const [[contactBrokerThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads
+   WHERE tenant_id = ? AND contact_broker_id IS NOT NULL AND client_id IS NULL
+     AND broker_id IS NOT NULL AND status = 'active'`,
+  [TENANT_ID],
+);
+console.log(
+  `  ℹ  Realtor-contact threads (contact_broker_id≠NULL, client_id=NULL, broker_id≠NULL): ${contactBrokerThreads.cnt}`,
+);
+
+if (contactBrokerThreads.cnt > 0) {
+  // Find one such thread and ensure it belongs to a specific broker (not in shared inbox)
+  const [[realtorThread]] = await db.query(
+    `SELECT ct.conversation_id, ct.broker_id, b.first_name, b.last_name
+     FROM conversation_threads ct
+     JOIN brokers b ON b.id = ct.broker_id AND b.tenant_id = ct.tenant_id
+     WHERE ct.tenant_id = ? AND ct.contact_broker_id IS NOT NULL
+       AND ct.client_id IS NULL AND ct.broker_id IS NOT NULL AND ct.status = 'active'
+     LIMIT 1`,
+    [TENANT_ID],
+  );
+  if (realtorThread && realtorThread.broker_id !== brokerA.id) {
+    // Broker A should NOT see this realtor thread (it's owned by a different broker)
+    const r26e = await api(TOKEN_A, "GET", "/api/conversations/threads", null, {
+      limit: 200,
+      status: "active",
+    });
+    const aSeesRealtor = (r26e.data?.threads ?? []).some(
+      (t) => t.conversation_id === realtorThread.conversation_id,
+    );
+    assert(
+      !aSeesRealtor,
+      `26e: Realtor-contact thread (${realtorThread.conversation_id}) owned by ${realtorThread.first_name} is NOT visible to Broker A`,
+      `26e: Broker A can see realtor thread ${realtorThread.conversation_id} belonging to ${realtorThread.first_name} — ISOLATION BROKEN (the Albert Araujo bug)`,
+    );
+  } else {
+    skip(
+      "26e: Realtor thread cross-broker isolation",
+      "Realtor thread broker_id matches Broker A or not found",
+    );
+  }
+} else {
+  skip(
+    "26e: Realtor contact thread isolation",
+    "No realtor-contact (contact_broker_id≠NULL) threads in DB",
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 27 — ADMIN INACTIVE-BROKER THREAD RECOVERY
+//  Validates the P4 fix: admin-role brokers can see threads whose assigned
+//  broker is inactive/suspended, preventing "lost thread" scenarios when a
+//  banker leaves the company.
+// ═════════════════════════════════════════════════════════════════════════════
+section("27. Admin Inactive-Broker Thread Recovery");
+
+// 27a: DB — count threads with inactive/suspended broker_id (potential lost threads)
+const [[inactiveBrokerThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   WHERE ct.tenant_id = ?
+     AND ct.broker_id IS NOT NULL
+     AND ct.client_id IS NULL
+     AND ct.status = 'active'
+     AND NOT EXISTS (
+       SELECT 1 FROM brokers b
+       WHERE b.id = ct.broker_id AND b.tenant_id = ct.tenant_id AND b.status = 'active'
+     )`,
+  [TENANT_ID],
+);
+console.log(
+  `  ℹ  Threads with inactive/suspended broker (potential lost threads): ${inactiveBrokerThreads.cnt}`,
+);
+if (inactiveBrokerThreads.cnt === 0) {
+  pass(
+    "27a: No active threads with inactive/suspended broker (no lost-thread risk currently)",
+  );
+} else {
+  warn(
+    `27a: ${inactiveBrokerThreads.cnt} active thread(s) have an inactive/suspended broker`,
+    `Admin brokers can now recover these via the Conversations section (P4 fix). Re-assign or close them.`,
+  );
+}
+
+// 27b: Identify admin-role brokers for the visibility check
+const [[adminBroker]] = await db.query(
+  `SELECT id, email, first_name, last_name, role FROM brokers
+   WHERE tenant_id = ? AND status = 'active' AND role = 'admin'
+   ORDER BY id ASC LIMIT 1`,
+  [TENANT_ID],
+);
+if (adminBroker) {
+  console.log(
+    `  ℹ  Admin broker for recovery test: ${adminBroker.first_name} ${adminBroker.last_name} (id=${adminBroker.id}, role=${adminBroker.role})`,
+  );
+} else {
+  skip(
+    "27b-27d: Admin inactive-broker recovery tests",
+    "No admin-role broker found in DB",
+  );
+}
+
+// 27c: Create a synthetic inactive-broker thread and verify an admin can see it.
+//      Also verify a regular broker CANNOT see it (it's not in their shared inbox).
+if (adminBroker && inactiveBrokerThreads.cnt === 0) {
+  // Temporarily create an inactive broker + a thread owned by them to simulate the scenario
+  const [synBrokerRes] = await db.query(
+    `INSERT INTO brokers
+       (tenant_id, email, first_name, last_name, role, status, public_token)
+     VALUES (?, ?, 'Smoke', 'InactiveBroker', 'broker', 'inactive', UUID())`,
+    [TENANT_ID, `smoke_inactive_${Date.now()}@smoke.test`],
+  );
+  const synInactiveBrokerId = synBrokerRes.insertId;
+  const synThreadId = `conv_smoke_inactive_${Date.now()}`;
+  await db.query(
+    `INSERT INTO conversation_threads
+       (tenant_id, conversation_id, client_phone, last_message_at,
+        last_message_preview, last_message_type, message_count,
+        unread_count, status, broker_id)
+     VALUES (?, ?, '+10000007777', NOW(), 'Inactive broker test', 'sms', 1, 1, 'active', ?)`,
+    [TENANT_ID, synThreadId, synInactiveBrokerId],
+  );
+
+  const TOKEN_ADMIN = signToken(adminBroker);
+
+  // Admin should see the inactive-broker thread
+  const r27c_admin = await api(
+    TOKEN_ADMIN,
+    "GET",
+    "/api/conversations/threads",
+    null,
+    {
+      limit: 300,
+      status: "active",
+    },
+  );
+  const adminSeesThread = (r27c_admin.data?.threads ?? []).some(
+    (t) => t.conversation_id === synThreadId,
+  );
+  assert(
+    adminSeesThread,
+    "27c: Admin broker can see a thread whose assigned broker is inactive (lost-thread recovery working)",
+    "27c: Admin broker CANNOT see inactive-broker thread — P4 fix not active for this admin",
+  );
+
+  // A regular broker (brokerB) should NOT see the inactive-broker thread
+  // (unless brokerB is also admin — check role first)
+  if (brokerB.role !== "admin") {
+    const r27c_broker = await api(
+      TOKEN_B,
+      "GET",
+      "/api/conversations/threads",
+      null,
+      {
+        limit: 300,
+        status: "active",
+      },
+    );
+    const brokerSeesThread = (r27c_broker.data?.threads ?? []).some(
+      (t) => t.conversation_id === synThreadId,
+    );
+    assert(
+      !brokerSeesThread,
+      "27c: Regular broker cannot see inactive-broker thread (admin-only recovery)",
+      "27c: Regular broker CAN see inactive-broker thread — recovery filter not scoped to admin role",
+    );
+  } else {
+    skip(
+      "27c: Regular broker inactive-thread visibility",
+      "Broker B is also admin — cannot distinguish admin vs broker visibility",
+    );
+  }
+
+  // Cleanup
+  await db
+    .query(
+      `DELETE FROM conversation_threads WHERE tenant_id = ? AND conversation_id = ?`,
+      [TENANT_ID, synThreadId],
+    )
+    .catch(() => {});
+  await db
+    .query(`DELETE FROM brokers WHERE id = ? AND tenant_id = ?`, [
+      synInactiveBrokerId,
+      TENANT_ID,
+    ])
+    .catch(() => {});
+} else if (adminBroker && inactiveBrokerThreads.cnt > 0) {
+  // There are already inactive-broker threads — check API visibility directly
+  const TOKEN_ADMIN = signToken(adminBroker);
+  const [[inactiveBrokerThread]] = await db.query(
+    `SELECT ct.conversation_id FROM conversation_threads ct
+     WHERE ct.tenant_id = ?
+       AND ct.broker_id IS NOT NULL
+       AND ct.client_id IS NULL
+       AND ct.status = 'active'
+       AND NOT EXISTS (
+         SELECT 1 FROM brokers b
+         WHERE b.id = ct.broker_id AND b.tenant_id = ct.tenant_id AND b.status = 'active'
+       )
+     LIMIT 1`,
+    [TENANT_ID],
+  );
+  if (inactiveBrokerThread) {
+    const r27c = await api(
+      TOKEN_ADMIN,
+      "GET",
+      "/api/conversations/threads",
+      null,
+      {
+        limit: 300,
+        status: "active",
+      },
+    );
+    const adminSees = (r27c.data?.threads ?? []).some(
+      (t) => t.conversation_id === inactiveBrokerThread.conversation_id,
+    );
+    assert(
+      adminSees,
+      "27c: Admin broker can see existing inactive-broker thread (lost-thread recovery working)",
+      "27c: Admin broker CANNOT see inactive-broker thread — P4 fix not working for real data",
+    );
+  } else {
+    skip(
+      "27c: Admin recovery API test",
+      "Could not fetch inactive-broker thread",
+    );
+  }
+} else {
+  skip("27c: Inactive-broker thread recovery test", "No admin broker found");
+}
+
+// 27d: DB-level invariant — no truly "lost" threads exist where neither
+//      an active broker nor any client ownership path can see the thread.
+//      "Lost" = broker_id IS NOT NULL AND active broker doesn't exist
+//               AND client_id IS NULL (no client ownership path applies)
+const [[trulyLostThreads]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   WHERE ct.tenant_id = ?
+     AND ct.broker_id IS NOT NULL
+     AND ct.client_id IS NULL
+     AND ct.status = 'active'
+     AND NOT EXISTS (
+       SELECT 1 FROM brokers b
+       WHERE b.id = ct.broker_id AND b.tenant_id = ct.tenant_id AND b.status = 'active'
+     )`,
+  [TENANT_ID],
+);
+trulyLostThreads.cnt === 0
+  ? pass(
+      "27d: No truly lost threads (inactive-broker, no client link) in production DB",
+    )
+  : warn(
+      `27d: ${trulyLostThreads.cnt} thread(s) have an inactive broker and no client link`,
+      `These are accessible to admin brokers via the P4 fix. Re-assign or close them via Conversations.`,
+    );
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SECTION 28 — MORTGAGE BANKER CONVERSATION INTEGRITY
+//  End-to-end checks for the mortgage-specific use cases: loan officer
+//  referral conversations, partner broker co-ownership, and the
+//  broker/realtor thread routing that caused the Albert Araujo visibility leak.
+// ═════════════════════════════════════════════════════════════════════════════
+section("28. Mortgage Banker Conversation Integrity");
+
+// 28a: Loan co-ownership — a thread for a client with a partner_broker_id on their
+//      loan should be visible to BOTH the primary broker and the partner broker.
+const [[loanCoOwned]] = await db.query(
+  `SELECT ct.conversation_id, la.broker_user_id, la.partner_broker_id, la.client_user_id
+   FROM conversation_threads ct
+   JOIN loan_applications la ON la.client_user_id = ct.client_id AND la.tenant_id = ct.tenant_id
+   WHERE ct.tenant_id = ?
+     AND la.partner_broker_id IS NOT NULL
+     AND la.broker_user_id != la.partner_broker_id
+     AND ct.status = 'active'
+   LIMIT 1`,
+  [TENANT_ID],
+);
+if (loanCoOwned) {
+  // The thread must be visible to both the primary broker and the partner broker
+  const primaryToken = signToken({
+    id: loanCoOwned.broker_user_id,
+    email: `broker${loanCoOwned.broker_user_id}@test`,
+    role: "broker",
+  });
+  const partnerToken = signToken({
+    id: loanCoOwned.partner_broker_id,
+    email: `broker${loanCoOwned.partner_broker_id}@test`,
+    role: "broker",
+  });
+  const r28a_primary = await api(
+    primaryToken,
+    "GET",
+    "/api/conversations/threads",
+    null,
+    {
+      limit: 200,
+      status: "active",
+    },
+  );
+  const r28a_partner = await api(
+    partnerToken,
+    "GET",
+    "/api/conversations/threads",
+    null,
+    {
+      limit: 200,
+      status: "active",
+    },
+  );
+  const primarySees = (r28a_primary.data?.threads ?? []).some(
+    (t) => t.conversation_id === loanCoOwned.conversation_id,
+  );
+  const partnerSees = (r28a_partner.data?.threads ?? []).some(
+    (t) => t.conversation_id === loanCoOwned.conversation_id,
+  );
+  assert(
+    primarySees,
+    "28a: Primary loan broker can see co-owned client thread",
+    `28a: Primary broker (id=${loanCoOwned.broker_user_id}) CANNOT see co-owned thread ${loanCoOwned.conversation_id}`,
+  );
+  assert(
+    partnerSees,
+    "28a: Partner broker can see co-owned client thread (loan co-ownership path)",
+    `28a: Partner broker (id=${loanCoOwned.partner_broker_id}) CANNOT see co-owned thread ${loanCoOwned.conversation_id} — loan co-ownership visibility broken`,
+  );
+} else {
+  skip(
+    "28a: Loan co-ownership thread visibility",
+    "No loan with partner_broker_id found in DB",
+  );
+}
+
+// 28b: Assigned broker can see their own client threads even when broker_id on the thread
+//      is NULL (thread was created before broker_id stamping fix and hasn't been touched).
+//      This validates the ownership EXISTS path in the visibility filter.
+const [[clientThreadNoBroker]] = await db.query(
+  `SELECT ct.conversation_id, c.assigned_broker_id
+   FROM conversation_threads ct
+   JOIN clients c ON c.id = ct.client_id AND c.tenant_id = ct.tenant_id
+   WHERE ct.tenant_id = ?
+     AND ct.broker_id IS NULL
+     AND ct.client_id IS NOT NULL
+     AND ct.status = 'active'
+     AND c.assigned_broker_id IS NOT NULL
+   LIMIT 1`,
+  [TENANT_ID],
+);
+if (clientThreadNoBroker) {
+  const assignedToken = signToken({
+    id: clientThreadNoBroker.assigned_broker_id,
+    email: `broker${clientThreadNoBroker.assigned_broker_id}@test`,
+    role: "broker",
+  });
+  const r28b = await api(
+    assignedToken,
+    "GET",
+    "/api/conversations/threads",
+    null,
+    {
+      limit: 300,
+      status: "active",
+    },
+  );
+  const assignedSees = (r28b.data?.threads ?? []).some(
+    (t) => t.conversation_id === clientThreadNoBroker.conversation_id,
+  );
+  assert(
+    assignedSees,
+    "28b: Assigned broker sees client thread even when thread.broker_id IS NULL (ownership EXISTS path)",
+    `28b: Assigned broker (id=${clientThreadNoBroker.assigned_broker_id}) CANNOT see their own client's thread that has broker_id=NULL`,
+  );
+} else {
+  skip(
+    "28b: Ownership EXISTS path visibility",
+    "No client thread with broker_id=NULL found",
+  );
+}
+
+// 28c: No thread is visible to a broker purely because they sent ONE outbound message.
+//      The "participated in" path was explicitly removed as a visibility condition
+//      because it was the root cause of cross-broker leakage.
+//      Proxy check: find threads where from_broker_id on a communication ≠ thread.broker_id
+//      and the thread.client_id is NOT the participant's client.
+const [[participantLeakRisk]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM communications c
+   JOIN conversation_threads ct
+     ON ct.conversation_id = c.conversation_id AND ct.tenant_id = c.tenant_id
+   JOIN clients cl ON cl.id = ct.client_id AND cl.tenant_id = ct.tenant_id
+   WHERE c.tenant_id = ?
+     AND c.from_broker_id IS NOT NULL
+     AND c.from_broker_id != ct.broker_id
+     AND cl.assigned_broker_id != c.from_broker_id
+     AND ct.status = 'active'
+     AND NOT EXISTS (
+       SELECT 1 FROM loan_applications la
+       WHERE la.client_user_id = ct.client_id AND la.tenant_id = ct.tenant_id
+         AND (la.broker_user_id = c.from_broker_id OR la.partner_broker_id = c.from_broker_id)
+     )`,
+  [TENANT_ID],
+);
+if (participantLeakRisk.cnt > 0) {
+  warn(
+    `28c: ${participantLeakRisk.cnt} communication(s) sent by a broker who doesn't own the thread or client`,
+    `These won't leak to that broker (participant path is removed from visibility filter) but may indicate data anomalies`,
+  );
+} else {
+  pass(
+    "28c: No communications sent by brokers who lack ownership of the thread — no participant-path leak risk",
+  );
+}
+
+// 28d: All active threads for clients with a phone number have client_phone stored
+//      in the thread (denormalized). Validates the write path in upsertConversationThread.
+const [[clientPhoneMissingInThread]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   JOIN clients c ON c.id = ct.client_id AND c.tenant_id = ct.tenant_id
+   WHERE ct.tenant_id = ?
+     AND ct.status = 'active'
+     AND c.phone IS NOT NULL AND c.phone != ''
+     AND (ct.client_phone IS NULL OR ct.client_phone = '')
+     AND ct.last_message_type != 'email'`,
+  [TENANT_ID],
+);
+clientPhoneMissingInThread.cnt === 0
+  ? pass(
+      "28d: All active non-email threads with a client phone have client_phone stored in the thread",
+    )
+  : warn(
+      `28d: ${clientPhoneMissingInThread.cnt} active thread(s) for clients with phones are missing client_phone on the thread`,
+      `Run: UPDATE conversation_threads ct JOIN clients c ON c.id=ct.client_id SET ct.client_phone=c.phone WHERE ct.client_phone IS NULL AND c.phone IS NOT NULL`,
+    );
+
+// 28e: All active email threads have client_email stored on the thread.
+//      Validates upsertEmailThread writes client_email correctly.
+const [[emailThreadMissingEmail]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM conversation_threads ct
+   JOIN clients c ON c.id = ct.client_id AND c.tenant_id = ct.tenant_id
+   WHERE ct.tenant_id = ?
+     AND ct.status = 'active'
+     AND ct.last_message_type = 'email'
+     AND c.email IS NOT NULL AND c.email NOT LIKE 'noemail_%'
+     AND (ct.client_email IS NULL OR ct.client_email = '')`,
+  [TENANT_ID],
+);
+emailThreadMissingEmail.cnt === 0
+  ? pass(
+      "28e: All active email threads with a linked client have client_email stored on the thread",
+    )
+  : warn(
+      `28e: ${emailThreadMissingEmail.cnt} email thread(s) for clients with emails are missing client_email on the thread`,
+      `This can prevent email backfill from matching future phone-only clients`,
+    );
+
+// 28f: No active email thread appears in the SMS/voice Conversations section.
+//      Verifies the upsertEmailThread / upsertConversationThread split is complete
+//      and no email communication is stored with a non-email last_message_type.
+const [[emailCommWrongType]] = await db.query(
+  `SELECT COUNT(*) AS cnt FROM communications c
+   JOIN conversation_threads ct
+     ON ct.conversation_id = c.conversation_id AND ct.tenant_id = c.tenant_id
+   WHERE c.tenant_id = ?
+     AND c.communication_type = 'email'
+     AND ct.last_message_type != 'email'
+     AND ct.status = 'active'`,
+  [TENANT_ID],
+);
+assert(
+  emailCommWrongType.cnt === 0,
+  "28f: No email communications are stored in threads with non-email last_message_type",
+  `28f: ${emailCommWrongType.cnt} email communication(s) are in threads marked as SMS/call — upsertEmailThread split incomplete`,
 );
 
 // ═════════════════════════════════════════════════════════════════════════════

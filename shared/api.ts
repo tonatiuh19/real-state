@@ -327,6 +327,11 @@ export interface EmailTemplate {
   body_text: string | null;
   template_type:
     | "welcome"
+    | "reminder"
+    | "update"
+    | "follow_up"
+    | "marketing"
+    | "system"
     | "status_update"
     | "document_request"
     | "approval"
@@ -347,7 +352,8 @@ export interface CreateEmailTemplateRequest {
   subject: string;
   body_html: string;
   body_text?: string;
-  template_type: string;
+  template_type?: string;
+  category?: string;
   is_active?: boolean;
 }
 
@@ -357,6 +363,7 @@ export interface UpdateEmailTemplateRequest {
   body_html?: string;
   body_text?: string;
   template_type?: string;
+  category?: string;
   is_active?: boolean;
 }
 
@@ -373,7 +380,16 @@ export interface SmsTemplate {
   id: number;
   name: string;
   body: string;
-  template_type: "reminder" | "status_update" | "document_request" | "custom";
+  template_type:
+    | "welcome"
+    | "reminder"
+    | "update"
+    | "follow_up"
+    | "marketing"
+    | "system"
+    | "status_update"
+    | "document_request"
+    | "custom";
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -387,7 +403,8 @@ export interface GetSmsTemplatesResponse {
 export interface CreateSmsTemplateRequest {
   name: string;
   body: string;
-  template_type: string;
+  template_type?: string;
+  category?: string;
   is_active?: boolean;
 }
 
@@ -395,6 +412,7 @@ export interface UpdateSmsTemplateRequest {
   name?: string;
   body?: string;
   template_type?: string;
+  category?: string;
   is_active?: boolean;
 }
 
@@ -412,10 +430,14 @@ export interface WhatsappTemplate {
   name: string;
   body: string;
   template_type:
+    | "welcome"
     | "reminder"
-    | "status_update"
     | "update"
     | "follow_up"
+    | "marketing"
+    | "system"
+    | "status_update"
+    | "document_request"
     | "custom";
   is_active: boolean;
   created_at: string;
@@ -430,7 +452,8 @@ export interface GetWhatsappTemplatesResponse {
 export interface CreateWhatsappTemplateRequest {
   name: string;
   body: string;
-  template_type: string;
+  template_type?: string;
+  category?: string;
   is_active?: boolean;
 }
 
@@ -438,6 +461,7 @@ export interface UpdateWhatsappTemplateRequest {
   name?: string;
   body?: string;
   template_type?: string;
+  category?: string;
   is_active?: boolean;
 }
 
@@ -849,6 +873,14 @@ export interface GetClientsResponse {
   pagination: PaginationInfo;
 }
 
+export interface ClientConflictInfo {
+  client_id: number;
+  client_name: string;
+  broker_id: number | null;
+  broker_name: string | null;
+  conflict_field: "email" | "phone";
+}
+
 export interface CreateClientRequest {
   first_name: string;
   middle_name?: string;
@@ -862,12 +894,17 @@ export interface CreateClientRequest {
   address_zip?: string;
 }
 
+export interface ReassignClientResponse {
+  success: boolean;
+  message: string;
+}
+
 export interface UpdateClientRequest {
   first_name?: string;
   middle_name?: string;
   last_name?: string;
   email?: string;
-  phone?: string;
+  phone?: string | null;
   alternate_phone?: string;
   date_of_birth?: string;
   address_street?: string;
@@ -1231,7 +1268,13 @@ export interface Communication {
   from_broker_id?: number | null;
   to_user_id?: number | null;
   to_broker_id?: number | null;
-  communication_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
+  communication_type:
+    | "email"
+    | "sms"
+    | "whatsapp"
+    | "call"
+    | "internal_note"
+    | "system_event";
   direction: "inbound" | "outbound";
   subject?: string | null;
   body: string;
@@ -1245,6 +1288,8 @@ export interface Communication {
   media_url?: string | null;
   /** MIME type of the primary media attachment (e.g. image/jpeg, video/mp4) */
   media_content_type?: string | null;
+  /** Original filename of the MMS media attachment (e.g. contract.pdf) */
+  media_filename?: string | null;
   conversation_id?: string | null;
   mailbox_id?: number | null;
   /** ID of the reminder_flow_execution that sent this message (null = manual send) */
@@ -1345,6 +1390,10 @@ export interface SendMessageRequest {
   scheduled_at?: string;
   /** Public URL of an MMS media attachment (image, video, document) */
   media_url?: string;
+  /** MIME type of the MMS attachment — passed from upload response to avoid guessing from URL */
+  media_content_type?: string;
+  /** Original filename of the MMS attachment (e.g. contract.pdf) */
+  media_filename?: string;
   /** CC recipients for email */
   cc?: EmailRecipient[];
   /** BCC recipients for email */

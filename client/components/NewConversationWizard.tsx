@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Send,
-  Mail,
   MessageSquare,
-  MessageCircle,
   X,
   Loader2,
   FileText,
   Hash,
+  Mail,
   User,
   ChevronDown,
-  Lock,
+  Paperclip,
+  ImageIcon,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchClients } from "@/store/slices/clientsSlice";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -34,6 +33,13 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
+import { uploadMMSMedia } from "@/lib/cdn-upload";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface Template {
   id: number;
@@ -58,11 +64,12 @@ interface NewConversationWizardProps {
     message_type: "text" | "template";
     template_id?: number;
     client_id?: number;
+    media_url?: string;
+    media_content_type?: string;
+    media_filename?: string;
   }) => Promise<void>;
   isSending: boolean;
 }
-
-type ChannelType = "sms" | "whatsapp" | "email";
 
 type SelectedRecipient =
   | {
@@ -72,23 +79,9 @@ type SelectedRecipient =
       phone?: string;
       email?: string;
     }
-  | { kind: "raw_phone"; value: string }
-  | { kind: "raw_email"; value: string };
+  | { kind: "raw_phone"; value: string };
 
 const PHONE_RE = /^[\d\s+\-()+]{7,}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const channelMeta: Record<
-  ChannelType,
-  { label: string; icon: React.ReactNode }
-> = {
-  sms: { label: "SMS", icon: <MessageSquare className="h-3.5 w-3.5" /> },
-  whatsapp: {
-    label: "WhatsApp",
-    icon: <MessageCircle className="h-3.5 w-3.5" />,
-  },
-  email: { label: "Email", icon: <Mail className="h-3.5 w-3.5" /> },
-};
 
 const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   isOpen,
@@ -101,6 +94,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   const { clients, isLoading: clientsLoading } = useAppSelector(
     (s) => s.clients,
   );
+  const { sessionToken } = useAppSelector((s) => s.brokerAuth);
 
   // ── Recipient state ──────────────────────────────────────────────────────────
   const [search, setSearch] = useState("");
@@ -108,9 +102,16 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   const [recipient, setRecipient] = useState<SelectedRecipient | null>(null);
 
   // ── Compose state ────────────────────────────────────────────────────────────
-  const [channel, setChannel] = useState<ChannelType>("sms");
-  const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+
+  // ── MMS attachment state ─────────────────────────────────────────────────────
+  const [mmsAttachment, setMmsAttachment] = useState<{
+    file: File;
+    previewUrl: string;
+    contentType: string;
+  } | null>(null);
+  const [isUploadingMMS, setIsUploadingMMS] = useState(false);
+  const mmsFileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Template picker state ─────────────────────────────────────────────────────
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -133,40 +134,19 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
       setSearch("");
       setDropdownOpen(false);
       setRecipient(null);
-      setChannel("sms");
-      setSubject("");
       setBody("");
       setTemplateOpen(false);
+      setMmsAttachment(null);
     }
   }, [isOpen]);
 
-  // ── Auto-select best channel when recipient changes ───────────────────────────
+  // ── Focus textarea when recipient changes ─────────────────────────────────────
   useEffect(() => {
     if (!recipient) return;
-    const avail = getAvailableChannels(recipient);
-    if (!avail.includes(channel)) {
-      setChannel(avail[0] ?? "sms");
-    }
     setTimeout(() => textareaRef.current?.focus(), 80);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipient]);
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
-  const getAvailableChannels = (r: SelectedRecipient): ChannelType[] => {
-    if (r.kind === "client") {
-      const ch: ChannelType[] = [];
-      if (r.phone) ch.push("sms", "whatsapp");
-      if (r.email) ch.push("email");
-      return ch.length > 0 ? ch : ["sms"];
-    }
-    if (r.kind === "raw_phone") return ["sms", "whatsapp"];
-    if (r.kind === "raw_email") return ["email"];
-    return ["sms"];
-  };
-
-  const availableChannels: ChannelType[] = recipient
-    ? getAvailableChannels(recipient)
-    : (["sms", "whatsapp", "email"] as ChannelType[]);
 
   const filteredClients = clients
     .filter((c) => {
@@ -182,10 +162,13 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     .slice(0, 8);
 
   const isRawPhone = PHONE_RE.test(search.trim());
-  const isRawEmail = EMAIL_RE.test(search.trim());
-  const canSendToRaw = isRawPhone || isRawEmail;
+  const canSendToRaw = isRawPhone;
 
-  const canSend = Boolean(recipient) && body.trim().length > 0 && !isSending;
+  const canSend =
+    Boolean(recipient) &&
+    (body.trim().length > 0 || !!mmsAttachment) &&
+    !isSending &&
+    !isUploadingMMS;
 
   const getRecipientValue = (): {
     phone?: string;
@@ -201,7 +184,6 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
       };
     }
     if (recipient.kind === "raw_phone") return { phone: recipient.value };
-    if (recipient.kind === "raw_email") return { email: recipient.value };
     return {};
   };
 
@@ -220,16 +202,11 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   const clearRecipient = () => {
     setRecipient(null);
     setSearch("");
-    setChannel("sms");
     setTimeout(() => searchInputRef.current?.focus(), 50);
   };
 
   const applyTemplate = (t: Template) => {
     setBody(t.body);
-    if (t.subject) setSubject(t.subject);
-    if (availableChannels.includes(t.template_type)) {
-      setChannel(t.template_type);
-    }
     setTemplateOpen(false);
     setTimeout(() => textareaRef.current?.focus(), 50);
   };
@@ -238,32 +215,54 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     if (!canSend) return;
     const rv = getRecipientValue();
 
-    const phoneForChannel =
-      channel !== "email" ? (rv.phone ?? undefined) : undefined;
-    const emailForChannel =
-      channel === "email" ? (rv.email ?? undefined) : undefined;
-
-    if ((channel === "sms" || channel === "whatsapp") && !phoneForChannel) {
-      logger.warn("No phone number available for selected channel");
+    if (!rv.phone) {
+      logger.warn("No phone number available");
       return;
     }
-    if (channel === "email" && !emailForChannel) {
-      logger.warn("No email available for selected channel");
-      return;
+
+    // Upload MMS attachment first if present
+    let mediaUrl: string | undefined;
+    let mediaContentType: string | undefined;
+    let mediaFilename: string | undefined;
+    if (mmsAttachment) {
+      setIsUploadingMMS(true);
+      try {
+        const result = await uploadMMSMedia(
+          mmsAttachment.file,
+          sessionToken ?? "",
+        );
+        mediaUrl = result.url;
+        mediaContentType = result.content_type;
+        mediaFilename = result.filename;
+      } catch (err) {
+        setIsUploadingMMS(false);
+        logger.error("[NewConversationWizard] MMS upload failed:", err);
+        return;
+      }
+      setIsUploadingMMS(false);
     }
 
     await onSendMessage({
-      communication_type: channel,
-      recipient_phone: phoneForChannel,
-      recipient_email: emailForChannel,
-      subject: channel === "email" ? subject || undefined : undefined,
+      communication_type: "sms",
+      recipient_phone: rv.phone,
       body: body.trim(),
       message_type: "text",
       client_id: rv.clientId,
+      media_url: mediaUrl,
+      media_content_type: mediaContentType,
+      media_filename: mediaFilename,
     });
     onClose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSend, channel, subject, body, recipient, onSendMessage, onClose]);
+  }, [
+    canSend,
+    body,
+    recipient,
+    mmsAttachment,
+    sessionToken,
+    onSendMessage,
+    onClose,
+  ]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -272,9 +271,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     }
   };
 
-  const relevantTemplates = recipient
-    ? templates.filter((t) => t.template_type === channel)
-    : templates;
+  const relevantTemplates = templates.filter((t) => t.template_type === "sms");
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -380,12 +377,10 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                               "border-t border-border/50",
                           )}
                           onMouseDown={() => {
-                            const v = search.trim();
-                            selectRecipient(
-                              isRawPhone
-                                ? { kind: "raw_phone", value: v }
-                                : { kind: "raw_email", value: v },
-                            );
+                            selectRecipient({
+                              kind: "raw_phone",
+                              value: search.trim(),
+                            });
                           }}
                         >
                           <div className="h-8 w-8 rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400 flex items-center justify-center shrink-0">
@@ -400,8 +395,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                               Send to "{search.trim()}"
                             </p>
                             <p className="text-[11px] text-muted-foreground">
-                              {isRawPhone ? "SMS / WhatsApp" : "Email"} · Not in
-                              your contacts
+                              SMS · Not in your contacts
                             </p>
                           </div>
                         </button>
@@ -425,37 +419,56 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
           )}
         </div>
 
-        {/* ── Channel selector ─────────────────────────────────────────────── */}
+        {/* ── Toolbar ──────────────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 px-5 py-2.5 border-b border-border/60 bg-muted/20">
-          {(["sms", "whatsapp", "email"] as ChannelType[])
-            .filter((ch) => availableChannels.includes(ch))
-            .map((ch) => {
-              const meta = channelMeta[ch];
-              const active = channel === ch;
-              const locked = ch === "whatsapp";
-              return (
+          {/* Paperclip / MMS attachment button */}
+          <input
+            ref={mmsFileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/3gpp,video/quicktime,audio/mpeg,audio/ogg,audio/wav,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              setMmsAttachment({
+                file: f,
+                previewUrl: f.type.startsWith("image/")
+                  ? URL.createObjectURL(f)
+                  : "",
+                contentType: f.type,
+              });
+              e.target.value = "";
+            }}
+          />
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <button
-                  key={ch}
-                  onClick={() => !locked && setChannel(ch)}
-                  disabled={locked}
-                  title={locked ? "WhatsApp coming soon" : undefined}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium transition-all duration-150",
-                    locked
-                      ? "opacity-50 cursor-not-allowed bg-background text-muted-foreground border border-dashed border-border"
-                      : active
-                        ? "bg-primary text-primary-foreground shadow-sm"
-                        : "bg-background text-muted-foreground hover:bg-muted border border-border/60",
-                  )}
+                  type="button"
+                  onClick={() => mmsFileInputRef.current?.click()}
+                  disabled={isUploadingMMS}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium bg-background text-muted-foreground hover:bg-muted border border-border/60 transition-all disabled:opacity-50"
+                  aria-label="Attach media"
                 >
-                  {meta.icon}
-                  {meta.label}
-                  {locked && (
-                    <Lock className="h-2.5 w-2.5 ml-0.5 text-muted-foreground/60" />
-                  )}
+                  <Paperclip className="h-3.5 w-3.5" />
+                  Attach
                 </button>
-              );
-            })}
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="max-w-[220px] text-xs leading-relaxed"
+              >
+                <p className="font-semibold mb-1">Attach MMS media</p>
+                <p>
+                  Max <span className="font-medium">5 MB</span> · Link expires
+                  in <span className="font-medium">72 h</span>
+                </p>
+                <p className="text-muted-foreground mt-1">
+                  JPG · PNG · GIF · WebP · MP4 · MOV · MP3 · OGG · WAV · PDF
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
           {/* Template picker */}
           {templates.length > 0 && (
@@ -501,15 +514,33 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
           )}
         </div>
 
-        {/* ── Email subject ──────────────────────────────────────────────────── */}
-        {channel === "email" && (
-          <div className="px-5 py-2.5 border-b border-border/60">
-            <Input
-              placeholder="Subject"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              className="border-0 px-0 text-[13px] h-auto focus-visible:ring-0 bg-transparent placeholder:text-muted-foreground/60"
-            />
+        {/* ── Attachment preview ─────────────────────────────────────────────── */}
+        {mmsAttachment && (
+          <div className="px-5 pt-3">
+            <div className="inline-flex items-center gap-2 pl-2 pr-1.5 py-1.5 rounded-lg border border-border/60 bg-muted/40 text-[12px]">
+              {mmsAttachment.previewUrl ? (
+                <img
+                  src={mmsAttachment.previewUrl}
+                  alt="attachment preview"
+                  className="h-10 w-10 rounded object-cover shrink-0"
+                />
+              ) : (
+                <div className="h-10 w-10 rounded bg-muted flex items-center justify-center shrink-0">
+                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                </div>
+              )}
+              <span className="text-muted-foreground max-w-[160px] truncate">
+                {mmsAttachment.file.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMmsAttachment(null)}
+                className="ml-1 rounded-full p-0.5 hover:bg-muted-foreground/20 transition-colors"
+                aria-label="Remove attachment"
+              >
+                <X className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -519,9 +550,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
             ref={textareaRef}
             placeholder={
               recipient
-                ? channel === "email"
-                  ? "Write your email…"
-                  : "Write a message…"
+                ? "Write a message…"
                 : "Select a recipient to start typing…"
             }
             disabled={!recipient}
@@ -535,7 +564,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
         {/* ── Footer ────────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-border/60">
           <div>
-            {channel === "sms" && body.length > 0 && (
+            {body.length > 0 && (
               <span className="text-[11px] text-muted-foreground tabular-nums">
                 {body.length} chars · {Math.ceil(body.length / 160)} SMS
               </span>
@@ -552,7 +581,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
               size="sm"
               className="rounded-full px-4 h-9 gap-1.5 bg-primary hover:bg-primary/90 transition-all duration-150"
             >
-              {isSending ? (
+              {isSending || isUploadingMMS ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <>

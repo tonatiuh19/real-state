@@ -78,12 +78,19 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [avatarErr, setAvatarErr] = useState(false);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const location = useLocation();
   const { user, sessionToken, isAuthenticated } = useAppSelector(
     (state) => state.brokerAuth,
   );
+  const userAvatarUrl = user?.avatar_url ?? undefined;
+
+  // Reset avatar error state whenever the URL changes (e.g. after a new upload)
+  React.useEffect(() => {
+    setAvatarErr(false);
+  }, [userAvatarUrl]);
   const sectionControlsMap = useAppSelector(selectSectionControlsMap);
   const { isLoading: isLoadingControls, isInitialized: controlsInitialized } =
     useAppSelector((s) => s.adminSectionControls);
@@ -372,14 +379,18 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                 className="focus:outline-none"
               >
                 <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
-                  <AvatarImage
-                    src={user?.avatar_url ?? undefined}
-                    alt="Profile"
-                    className="object-cover"
-                  />
-                  <AvatarFallback className="bg-primary text-primary-foreground">
-                    {user?.first_name?.charAt(0) || "A"}
-                  </AvatarFallback>
+                  {!avatarErr && userAvatarUrl ? (
+                    <img
+                      src={userAvatarUrl}
+                      alt="Profile"
+                      className="aspect-square h-full w-full object-cover"
+                      onError={() => setAvatarErr(true)}
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center bg-primary text-primary-foreground text-sm font-bold">
+                      {user?.first_name?.charAt(0) || "A"}
+                    </span>
+                  )}
                 </Avatar>
               </button>
               <button
@@ -551,14 +562,18 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                 className="focus:outline-none shrink-0"
               >
                 <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
-                  <AvatarImage
-                    src={user?.avatar_url ?? undefined}
-                    alt="Profile"
-                    className="object-cover"
-                  />
-                  <AvatarFallback className="bg-primary text-primary-foreground">
-                    {user?.first_name?.charAt(0) || "A"}
-                  </AvatarFallback>
+                  {!avatarErr && userAvatarUrl ? (
+                    <img
+                      src={userAvatarUrl}
+                      alt="Profile"
+                      className="aspect-square h-full w-full object-cover"
+                      onError={() => setAvatarErr(true)}
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center bg-primary text-primary-foreground text-sm font-bold">
+                      {user?.first_name?.charAt(0) || "A"}
+                    </span>
+                  )}
                 </Avatar>
               </button>
               <button
@@ -601,28 +616,36 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-9 w-9">
                     <Avatar className="h-9 w-9">
-                      <AvatarImage
-                        src={user?.avatar_url ?? undefined}
-                        alt="Profile"
-                        className="object-cover"
-                      />
-                      <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                        {user?.first_name?.charAt(0) || "A"}
-                      </AvatarFallback>
+                      {!avatarErr && userAvatarUrl ? (
+                        <img
+                          src={userAvatarUrl}
+                          alt="Profile"
+                          className="aspect-square h-full w-full object-cover"
+                          onError={() => setAvatarErr(true)}
+                        />
+                      ) : (
+                        <span className="flex h-full w-full items-center justify-center bg-primary text-primary-foreground text-xs font-bold">
+                          {user?.first_name?.charAt(0) || "A"}
+                        </span>
+                      )}
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="end" className="w-56">
                   <div className="flex items-center gap-2 p-2">
                     <Avatar className="h-8 w-8">
-                      <AvatarImage
-                        src={user?.avatar_url ?? undefined}
-                        alt="Profile"
-                        className="object-cover"
-                      />
-                      <AvatarFallback className="bg-primary text-primary-foreground">
-                        {user?.first_name?.charAt(0) || "A"}
-                      </AvatarFallback>
+                      {!avatarErr && userAvatarUrl ? (
+                        <img
+                          src={userAvatarUrl}
+                          alt="Profile"
+                          className="aspect-square h-full w-full object-cover"
+                          onError={() => setAvatarErr(true)}
+                        />
+                      ) : (
+                        <span className="flex h-full w-full items-center justify-center bg-primary text-primary-foreground text-sm font-bold">
+                          {user?.first_name?.charAt(0) || "A"}
+                        </span>
+                      )}
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">

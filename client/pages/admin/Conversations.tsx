@@ -151,6 +151,8 @@ import {
   fetchCallHistory,
   setCurrentThread,
   clearCurrentThread,
+  clearThreads,
+  resetThreadsFilters,
   setThreadsFilters,
   markConversationAsRead,
   checkWhatsAppAvailability,
@@ -183,7 +185,6 @@ type ChannelFilter = "all" | "sms" | "whatsapp" | "calls";
 const CHANNEL_TABS: { key: ChannelFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "sms", label: "SMS" },
-  { key: "whatsapp", label: "WhatsApp" },
   { key: "calls", label: "Calls" },
 ];
 
@@ -493,7 +494,9 @@ const Conversations = () => {
 
   // Load initial data
   useEffect(() => {
-    dispatch(fetchConversationThreads(threadsFilters));
+    dispatch(resetThreadsFilters());
+    dispatch(clearThreads());
+    dispatch(fetchConversationThreads({}));
     dispatch(fetchConversationTemplates(undefined));
     dispatch(fetchConversationStats());
     dispatch(fetchBrokers());
@@ -787,6 +790,7 @@ const Conversations = () => {
       unknown
     >;
     const merged = status === "all" ? restFilters : { ...restFilters, status };
+    dispatch(clearThreads()); // instant feedback — spinner shows right away
     dispatch(setThreadsFilters(merged));
     dispatch(fetchConversationThreads(merged));
   };
@@ -845,6 +849,8 @@ const Conversations = () => {
 
     // 1. Upload MMS attachment first if present (so we have the public URL)
     let uploadedMediaUrl: string | undefined;
+    let uploadedContentType: string | undefined;
+    let uploadedFilename: string | undefined;
     if (mmsAttachment && messageType === "sms") {
       setIsUploadingMMS(true);
       logger.log(
@@ -858,11 +864,21 @@ const Conversations = () => {
           sessionToken ?? "",
         );
         uploadedMediaUrl = result.url;
+        uploadedContentType = result.content_type;
+        uploadedFilename = result.filename;
         logger.log("[SMS Trace] 2/7 — MMS upload OK, url:", uploadedMediaUrl);
       } catch (err) {
         logger.error("[SMS Trace] 2/7 — MMS upload FAILED:", err);
         setIsUploadingMMS(false);
         setFailedText(text || null);
+        toast({
+          title: "Attachment upload failed",
+          description:
+            err instanceof Error
+              ? err.message
+              : "Could not upload attachment. Please try again.",
+          variant: "destructive",
+        });
         logger.groupEnd();
         return;
       }
@@ -906,6 +922,8 @@ const Conversations = () => {
         | "text",
       template_id: sentTemplateId ?? undefined,
       media_url: uploadedMediaUrl,
+      media_content_type: uploadedContentType,
+      media_filename: uploadedFilename,
     };
 
     logger.log("[SMS Trace] 3/7 — dispatching sendMessage payload:", payload);
@@ -1007,12 +1025,23 @@ const Conversations = () => {
       const result = await dispatch(sendMessage(data)).unwrap();
       const conversationId = result.conversation_id;
 
-      // Refresh thread list in background
-      dispatch(fetchConversationThreads(threadsFilters));
+      // The backend re-opens the thread to 'active' for new outbound sends.
+      // Clear any status/priority filters so the reopened thread is visible,
+      // then fetch a fresh list and auto-select the new conversation.
+      setSelectedStatus("all");
+      dispatch(setThreadsFilters({}));
+      const threadsResult = await dispatch(
+        fetchConversationThreads({}),
+      ).unwrap();
 
-      // Immediately load the new conversation so the user sees it without
-      // having to manually find and click on it in the sidebar.
       if (conversationId) {
+        // Auto-select the thread in the sidebar
+        const freshThread = (threadsResult as any).threads?.find(
+          (t: any) => t.conversation_id === conversationId,
+        );
+        if (freshThread) {
+          dispatch(setCurrentThread(freshThread));
+        }
         await dispatch(fetchConversationMessages({ conversationId })).unwrap();
         setMobilePanel("chat");
       }
@@ -1146,7 +1175,7 @@ const Conversations = () => {
       <MetaHelmet
         {...adminPageMeta(
           "Conversations",
-          "Manage client communications via SMS, WhatsApp, and Email",
+          "Manage client communications via SMS and Email",
         )}
       />
 
@@ -1157,7 +1186,7 @@ const Conversations = () => {
           <MessageCircle className="h-5 w-5 md:h-6 md:w-6 text-primary flex-shrink-0" />
         }
         title="Conversations"
-        description="Manage client communications via SMS, WhatsApp & Email"
+        description="Manage client communications via SMS & Email"
         mobileBack={
           mobilePanel === "chat" ? () => setMobilePanel("list") : undefined
         }
@@ -1986,304 +2015,375 @@ const Conversations = () => {
                               <div className="flex-1 h-px bg-border" />
                             </div>
                           )}
-                          <div
-                            className={cn(
-                              "flex flex-col mb-2 group",
-                              isOutbound ? "items-end" : "items-start",
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "flex items-end gap-1",
-                                isOutbound ? "justify-end" : "justify-start",
-                                "w-full",
-                              )}
-                            >
-                              {isOutbound && (
-                                <button
-                                  onClick={() =>
-                                    handleDeleteMessage(message.id)
-                                  }
-                                  className="opacity-0 group-hover:opacity-100 transition-opacity mr-0.5 self-center p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                                  title="Delete message"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
+                          {message.communication_type === "system_event" ? (
+                            /* ── Conversation status event (closed / reopened) ── */
+                            <div className="flex items-center gap-3 py-1.5 my-0.5">
+                              <div className="flex-1 h-px bg-border/60" />
                               <div
                                 className={cn(
-                                  "max-w-[72%] px-3.5 py-2.5 rounded-2xl text-sm shadow-sm cursor-default select-text",
-                                  isOutbound
-                                    ? "bg-slate-800 text-white rounded-br-sm"
-                                    : "bg-muted text-foreground rounded-bl-sm border border-border",
+                                  "flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border bg-card",
+                                  message.body === "closed"
+                                    ? "text-muted-foreground border-border/60"
+                                    : "text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30",
                                 )}
                               >
-                                {message.subject && (
-                                  <p className="font-semibold text-xs mb-1 opacity-90">
-                                    {message.subject}
-                                  </p>
-                                )}
-                                {/* Call recordings get an inline audio player + download */}
-                                {message.communication_type === "call" &&
-                                message.recording_url &&
-                                message.external_id ? (
-                                  /* ✅ Recording is ready */
-                                  <div className="flex flex-col gap-2 min-w-[240px]">
-                                    {(message as any).is_voicemail ? (
-                                      <div
-                                        className={cn(
-                                          "inline-flex items-center gap-1.5 self-start text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5",
-                                          isOutbound
-                                            ? "bg-amber-400/20 text-amber-200"
-                                            : "bg-amber-100 text-amber-700",
-                                        )}
-                                      >
-                                        <Voicemail className="h-3 w-3" />
-                                        Voicemail
-                                      </div>
-                                    ) : null}
-                                    <p className="leading-relaxed text-sm">
-                                      {message.body}
-                                    </p>
-                                    {(message as any).is_voicemail &&
-                                    (message as any).voicemail_transcription ? (
-                                      <div
-                                        className={cn(
-                                          "rounded-lg px-2.5 py-2 text-xs italic leading-relaxed",
-                                          isOutbound
-                                            ? "bg-white/10 text-white/85"
-                                            : "bg-amber-50 text-amber-900 border border-amber-200",
-                                        )}
-                                      >
-                                        “
-                                        {
-                                          (message as any)
-                                            .voicemail_transcription
-                                        }
-                                        ”
-                                      </div>
-                                    ) : (message as any).is_voicemail ? (
-                                      <div
-                                        className={cn(
-                                          "text-[11px] italic",
-                                          isOutbound
-                                            ? "text-white/60"
-                                            : "text-muted-foreground",
-                                        )}
-                                      >
-                                        Transcription pending…
-                                      </div>
-                                    ) : null}
-                                    {/* token query param required — <audio> can't send Authorization header */}
-                                    <audio
-                                      controls
-                                      preload="metadata"
-                                      className="w-full h-8 rounded"
-                                      style={{
-                                        colorScheme: isOutbound
-                                          ? "dark"
-                                          : "light",
-                                      }}
-                                      src={`/api/voice/recording/${message.external_id}?token=${encodeURIComponent(sessionToken ?? "")}`}
-                                    />
-                                    <a
-                                      href={`/api/voice/recording/${message.external_id}?download=1&token=${encodeURIComponent(sessionToken ?? "")}`}
-                                      download={`${(message as any).is_voicemail ? "voicemail" : "call"}-${message.external_id}.mp3`}
-                                      className={cn(
-                                        "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
-                                        isOutbound
-                                          ? "bg-white/10 text-white/80 hover:bg-white/20"
-                                          : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
-                                      )}
-                                    >
-                                      <Download className="h-3.5 w-3.5" />
-                                      Download{" "}
-                                      {(message as any).is_voicemail
-                                        ? "voicemail"
-                                        : "recording"}
-                                    </a>
-                                  </div>
-                                ) : message.communication_type === "call" &&
-                                  message.external_id &&
-                                  !(message as any).recording_url &&
-                                  (message as any).delivery_status !==
-                                    "failed" ? (
-                                  /* ⏳ Call ended but recording still processing */
-                                  <div className="flex flex-col gap-1.5 min-w-[200px]">
-                                    <p className="leading-relaxed text-sm">
-                                      {message.body}
-                                    </p>
-                                    <div
-                                      className={cn(
-                                        "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
-                                        isOutbound
-                                          ? "bg-white/10 text-white/50"
-                                          : "bg-muted-foreground/10 text-muted-foreground",
-                                      )}
-                                    >
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                      Recording processing…
-                                    </div>
-                                  </div>
+                                {message.body === "closed" ? (
+                                  <Lock className="h-2.5 w-2.5 shrink-0" />
                                 ) : (
-                                  <div className="flex flex-col gap-2">
-                                    {/* MMS media attachment */}
-                                    {(message as any).media_url &&
-                                      (() => {
-                                        const rawUrl: string = (message as any)
-                                          .media_url;
-                                        const contentType: string =
-                                          (message as any).media_content_type ??
-                                          "";
-                                        // Support JSON array (multiple attachments) or single URL
-                                        let urls: string[];
-                                        try {
-                                          urls = JSON.parse(rawUrl);
-                                        } catch {
-                                          urls = [rawUrl];
-                                        }
-                                        const proxyUrl = (u: string) =>
-                                          // CDN URLs are already public — serve directly
-                                          // Twilio media URLs need our auth proxy
-                                          u.startsWith(
-                                            "https://disruptinglabs.com/",
-                                          )
-                                            ? u
-                                            : `/api/sms/media?url=${encodeURIComponent(u)}&token=${encodeURIComponent(sessionToken ?? "")}`;
-                                        return urls.map((u, i) => {
-                                          const ct = i === 0 ? contentType : "";
-                                          if (
-                                            ct.startsWith("image/") ||
-                                            (!ct &&
-                                              /\.(jpe?g|png|gif|webp|heic)$/i.test(
-                                                u,
-                                              ))
-                                          ) {
+                                  <ArchiveRestore className="h-2.5 w-2.5 shrink-0" />
+                                )}
+                                <span>
+                                  {message.body === "closed"
+                                    ? "Conversation closed"
+                                    : "Conversation reopened"}
+                                  {(message as any).sender_name &&
+                                    (message as any).sender_name !== "System" &&
+                                    ` by ${(message as any).sender_name}`}
+                                </span>
+                                <span className="opacity-50 ml-0.5">
+                                  ·{" "}
+                                  {new Date(
+                                    message.created_at,
+                                  ).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                    hour12: true,
+                                  })}
+                                </span>
+                              </div>
+                              <div className="flex-1 h-px bg-border/60" />
+                            </div>
+                          ) : (
+                            <div
+                              className={cn(
+                                "flex flex-col mb-2 group",
+                                isOutbound ? "items-end" : "items-start",
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  "flex items-end gap-1",
+                                  isOutbound ? "justify-end" : "justify-start",
+                                  "w-full",
+                                )}
+                              >
+                                {isOutbound && (
+                                  <button
+                                    onClick={() =>
+                                      handleDeleteMessage(message.id)
+                                    }
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity mr-0.5 self-center p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                                    title="Delete message"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                                <div
+                                  className={cn(
+                                    "max-w-[72%] px-3.5 py-2.5 rounded-2xl text-sm shadow-sm cursor-default select-text",
+                                    isOutbound
+                                      ? "bg-slate-800 text-white rounded-br-sm"
+                                      : "bg-muted text-foreground rounded-bl-sm border border-border",
+                                  )}
+                                >
+                                  {message.subject && (
+                                    <p className="font-semibold text-xs mb-1 opacity-90">
+                                      {message.subject}
+                                    </p>
+                                  )}
+                                  {/* Call recordings get an inline audio player + download */}
+                                  {message.communication_type === "call" &&
+                                  message.recording_url &&
+                                  message.external_id ? (
+                                    /* ✅ Recording is ready */
+                                    <div className="flex flex-col gap-2 min-w-[240px]">
+                                      {(message as any).is_voicemail ? (
+                                        <div
+                                          className={cn(
+                                            "inline-flex items-center gap-1.5 self-start text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5",
+                                            isOutbound
+                                              ? "bg-amber-400/20 text-amber-200"
+                                              : "bg-amber-100 text-amber-700",
+                                          )}
+                                        >
+                                          <Voicemail className="h-3 w-3" />
+                                          Voicemail
+                                        </div>
+                                      ) : null}
+                                      <p className="leading-relaxed text-sm">
+                                        {message.body}
+                                      </p>
+                                      {(message as any).is_voicemail &&
+                                      (message as any)
+                                        .voicemail_transcription ? (
+                                        <div
+                                          className={cn(
+                                            "rounded-lg px-2.5 py-2 text-xs italic leading-relaxed",
+                                            isOutbound
+                                              ? "bg-white/10 text-white/85"
+                                              : "bg-amber-50 text-amber-900 border border-amber-200",
+                                          )}
+                                        >
+                                          “
+                                          {
+                                            (message as any)
+                                              .voicemail_transcription
+                                          }
+                                          ”
+                                        </div>
+                                      ) : (message as any).is_voicemail ? (
+                                        <div
+                                          className={cn(
+                                            "text-[11px] italic",
+                                            isOutbound
+                                              ? "text-white/60"
+                                              : "text-muted-foreground",
+                                          )}
+                                        >
+                                          Transcription pending…
+                                        </div>
+                                      ) : null}
+                                      {/* token query param required — <audio> can't send Authorization header */}
+                                      <audio
+                                        controls
+                                        preload="metadata"
+                                        className="w-full h-8 rounded"
+                                        style={{
+                                          colorScheme: isOutbound
+                                            ? "dark"
+                                            : "light",
+                                        }}
+                                        src={`/api/voice/recording/${message.external_id}?token=${encodeURIComponent(sessionToken ?? "")}`}
+                                      />
+                                      <a
+                                        href={`/api/voice/recording/${message.external_id}?download=1&token=${encodeURIComponent(sessionToken ?? "")}`}
+                                        download={`${(message as any).is_voicemail ? "voicemail" : "call"}-${message.external_id}.mp3`}
+                                        className={cn(
+                                          "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
+                                          isOutbound
+                                            ? "bg-white/10 text-white/80 hover:bg-white/20"
+                                            : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
+                                        )}
+                                      >
+                                        <Download className="h-3.5 w-3.5" />
+                                        Download{" "}
+                                        {(message as any).is_voicemail
+                                          ? "voicemail"
+                                          : "recording"}
+                                      </a>
+                                    </div>
+                                  ) : message.communication_type === "call" &&
+                                    message.external_id &&
+                                    !(message as any).recording_url &&
+                                    (message as any).delivery_status !==
+                                      "failed" ? (
+                                    /* ⏳ Call ended but recording still processing */
+                                    <div className="flex flex-col gap-1.5 min-w-[200px]">
+                                      <p className="leading-relaxed text-sm">
+                                        {message.body}
+                                      </p>
+                                      <div
+                                        className={cn(
+                                          "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
+                                          isOutbound
+                                            ? "bg-white/10 text-white/50"
+                                            : "bg-muted-foreground/10 text-muted-foreground",
+                                        )}
+                                      >
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                        Recording processing…
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col gap-2">
+                                      {/* MMS media attachment */}
+                                      {(message as any).media_url &&
+                                        (() => {
+                                          const rawUrl: string = (
+                                            message as any
+                                          ).media_url;
+                                          const contentType: string =
+                                            (message as any)
+                                              .media_content_type ?? "";
+                                          const mediaFilename: string =
+                                            (message as any).media_filename ??
+                                            "";
+                                          // Support JSON array (multiple attachments) or single URL
+                                          let urls: string[];
+                                          try {
+                                            urls = JSON.parse(rawUrl);
+                                          } catch {
+                                            urls = [rawUrl];
+                                          }
+                                          const proxyUrl = (u: string) =>
+                                            // Our own public MMS proxy — serve directly
+                                            u.includes("/api/sms/media/public/")
+                                              ? u
+                                              : // CDN URLs are already public — serve directly
+                                                u.startsWith(
+                                                    "https://disruptinglabs.com/",
+                                                  )
+                                                ? u
+                                                : `/api/sms/media?url=${encodeURIComponent(u)}&token=${encodeURIComponent(sessionToken ?? "")}`;
+                                          return urls.map((u, i) => {
+                                            const ct =
+                                              i === 0 ? contentType : "";
+                                            if (
+                                              ct.startsWith("image/") ||
+                                              (!ct &&
+                                                /\.(jpe?g|png|gif|webp|heic)$/i.test(
+                                                  u,
+                                                ))
+                                            ) {
+                                              return (
+                                                <a
+                                                  key={i}
+                                                  href={proxyUrl(u)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                >
+                                                  <img
+                                                    src={proxyUrl(u)}
+                                                    alt="MMS attachment"
+                                                    className="rounded-xl max-w-[260px] max-h-[320px] object-cover border border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
+                                                    loading="lazy"
+                                                  />
+                                                </a>
+                                              );
+                                            }
+                                            if (ct.startsWith("video/")) {
+                                              return (
+                                                <video
+                                                  key={i}
+                                                  controls
+                                                  className="rounded-xl max-w-[260px]"
+                                                  preload="metadata"
+                                                >
+                                                  <source
+                                                    src={proxyUrl(u)}
+                                                    type={ct}
+                                                  />
+                                                </video>
+                                              );
+                                            }
+                                            if (ct.startsWith("audio/")) {
+                                              return (
+                                                <audio
+                                                  key={i}
+                                                  controls
+                                                  preload="metadata"
+                                                  className="w-full h-8 rounded"
+                                                >
+                                                  <source
+                                                    src={proxyUrl(u)}
+                                                    type={ct}
+                                                  />
+                                                </audio>
+                                              );
+                                            }
+                                            if (ct === "application/pdf") {
+                                              return (
+                                                <a
+                                                  key={i}
+                                                  href={proxyUrl(u)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className={cn(
+                                                    "flex items-center gap-2 rounded-xl px-3 py-2.5 font-medium text-sm transition-colors border",
+                                                    isOutbound
+                                                      ? "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                                                      : "bg-red-50 text-red-700 border-red-200 hover:bg-red-100",
+                                                  )}
+                                                >
+                                                  <FileText className="h-5 w-5 shrink-0" />
+                                                  <span className="truncate max-w-[180px]">
+                                                    {mediaFilename ||
+                                                      "PDF Document"}
+                                                  </span>
+                                                  <Download className="h-3.5 w-3.5 shrink-0 ml-auto" />
+                                                </a>
+                                              );
+                                            }
                                             return (
                                               <a
                                                 key={i}
                                                 href={proxyUrl(u)}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
+                                                className={cn(
+                                                  "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
+                                                  isOutbound
+                                                    ? "bg-white/10 text-white/80 hover:bg-white/20"
+                                                    : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
+                                                )}
                                               >
-                                                <img
-                                                  src={proxyUrl(u)}
-                                                  alt="MMS attachment"
-                                                  className="rounded-xl max-w-[260px] max-h-[320px] object-cover border border-white/10 cursor-pointer hover:opacity-90 transition-opacity"
-                                                  loading="lazy"
-                                                />
+                                                <Download className="h-3.5 w-3.5" />
+                                                Download attachment
                                               </a>
                                             );
-                                          }
-                                          if (ct.startsWith("video/")) {
-                                            return (
-                                              <video
-                                                key={i}
-                                                controls
-                                                className="rounded-xl max-w-[260px]"
-                                                preload="metadata"
-                                              >
-                                                <source
-                                                  src={proxyUrl(u)}
-                                                  type={ct}
-                                                />
-                                              </video>
-                                            );
-                                          }
-                                          if (ct.startsWith("audio/")) {
-                                            return (
-                                              <audio
-                                                key={i}
-                                                controls
-                                                preload="metadata"
-                                                className="w-full h-8 rounded"
-                                              >
-                                                <source
-                                                  src={proxyUrl(u)}
-                                                  type={ct}
-                                                />
-                                              </audio>
-                                            );
-                                          }
-                                          return (
-                                            <a
-                                              key={i}
-                                              href={proxyUrl(u)}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className={cn(
-                                                "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 font-medium transition-colors",
-                                                isOutbound
-                                                  ? "bg-white/10 text-white/80 hover:bg-white/20"
-                                                  : "bg-muted-foreground/10 text-muted-foreground hover:bg-muted-foreground/20",
-                                              )}
-                                            >
-                                              <Download className="h-3.5 w-3.5" />
-                                              Download attachment
-                                            </a>
-                                          );
-                                        });
-                                      })()}
-                                    {/* Text body (may be empty for image-only MMS) */}
-                                    {message.body ? (
-                                      <p className="leading-relaxed">
-                                        {message.body}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                )}
+                                          });
+                                        })()}
+                                      {/* Text body (may be empty for image-only MMS) */}
+                                      {message.body ? (
+                                        <p className="leading-relaxed">
+                                          {message.body}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
+                              {/* Timestamp — always visible short time, full date on hover */}
+                              {msgDate && (
+                                <Tooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <div className="flex items-center gap-1 mt-0.5 cursor-default">
+                                      <span
+                                        className={cn(
+                                          "shrink-0",
+                                          isOutbound
+                                            ? "text-muted-foreground/50"
+                                            : getChannelColor(
+                                                message.communication_type,
+                                              ),
+                                        )}
+                                      >
+                                        {getChannelIcon(
+                                          message.communication_type,
+                                          "h-2.5 w-2.5",
+                                        )}
+                                      </span>
+                                      <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+                                        {formatTime(msgDate)}
+                                      </span>
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side={isOutbound ? "left" : "right"}
+                                    className="text-xs font-medium"
+                                  >
+                                    {new Date(
+                                      /[Zz+\-]\d{2}:?\d{2}$/.test(msgDate) ||
+                                        msgDate.endsWith("Z")
+                                        ? msgDate
+                                        : msgDate.replace(" ", "T") + "Z",
+                                    ).toLocaleString("en-US", {
+                                      weekday: "short",
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                      hour12: true,
+                                      timeZone:
+                                        currentUser?.timezone || undefined,
+                                    })}
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
                             </div>
-                            {/* Timestamp — always visible short time, full date on hover */}
-                            {msgDate && (
-                              <Tooltip delayDuration={300}>
-                                <TooltipTrigger asChild>
-                                  <div className="flex items-center gap-1 mt-0.5 cursor-default">
-                                    <span
-                                      className={cn(
-                                        "shrink-0",
-                                        isOutbound
-                                          ? "text-muted-foreground/50"
-                                          : getChannelColor(
-                                              message.communication_type,
-                                            ),
-                                      )}
-                                    >
-                                      {getChannelIcon(
-                                        message.communication_type,
-                                        "h-2.5 w-2.5",
-                                      )}
-                                    </span>
-                                    <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-                                      {formatTime(msgDate)}
-                                    </span>
-                                  </div>
-                                </TooltipTrigger>
-                                <TooltipContent
-                                  side={isOutbound ? "left" : "right"}
-                                  className="text-xs font-medium"
-                                >
-                                  {new Date(
-                                    /[Zz+\-]\d{2}:?\d{2}$/.test(msgDate) ||
-                                      msgDate.endsWith("Z")
-                                      ? msgDate
-                                      : msgDate.replace(" ", "T") + "Z",
-                                  ).toLocaleString("en-US", {
-                                    weekday: "short",
-                                    month: "short",
-                                    day: "numeric",
-                                    year: "numeric",
-                                    hour: "numeric",
-                                    minute: "2-digit",
-                                    second: "2-digit",
-                                    hour12: true,
-                                    timeZone:
-                                      currentUser?.timezone || undefined,
-                                  })}
-                                </TooltipContent>
-                              </Tooltip>
-                            )}
-                          </div>
+                          )}
                         </React.Fragment>
                       );
                     })}
@@ -2341,528 +2441,532 @@ const Conversations = () => {
                 <div ref={messagesEndRef} />
               </ScrollArea>
 
-              {/* Composer */}
-              <div className="p-3 border-t border-border bg-card flex-shrink-0">
-                {/* Unassigned claim notice */}
-                {!currentThread.broker_id && (
-                  <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 mb-2.5">
-                    <Info className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                    <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-snug">
-                      <span className="font-semibold">
-                        Unassigned conversation —
-                      </span>{" "}
-                      replying will assign it to you and remove it from other
-                      bankers' queues.
+              {/* Composer / Closed banner */}
+              {currentThread.status === "closed" ? (
+                <div className="px-4 py-5 border-t border-border bg-card flex-shrink-0 flex flex-col items-center justify-center gap-3 text-center">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full bg-muted">
+                    <Lock className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Conversation closed
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      If the client replies, this conversation will reopen
+                      automatically.
                     </p>
                   </div>
-                )}
-                {/* Row 1: Channel + Smart Template picker */}
-                <div className="flex items-center gap-2 mb-2">
-                  <Select
-                    value={messageType}
-                    onValueChange={(v: any) => setMessageType(v)}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 mt-1"
+                    onClick={(e) => handleReopenThread(currentThread, e)}
                   >
-                    <SelectTrigger className="w-36 h-8 text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="sms">
-                        <div className="flex items-center gap-2">
-                          <MessageSquare className="h-3.5 w-3.5 text-primary" />
-                          SMS
-                        </div>
-                      </SelectItem>
-                      <SelectItem
-                        value="whatsapp"
-                        disabled={!whatsappAvailable}
-                      >
-                        <div className="flex items-center gap-2">
-                          <FaWhatsapp
-                            className={cn(
-                              "h-3.5 w-3.5",
-                              whatsappAvailable
-                                ? "text-[#25D366]"
-                                : "opacity-40",
-                            )}
-                          />
-                          <span
-                            className={cn(!whatsappAvailable && "opacity-40")}
-                          >
-                            WhatsApp
-                          </span>
-                          {isCheckingWhatsApp && currentPhone && (
-                            <span className="text-xs text-muted-foreground ml-1">
-                              checking…
-                            </span>
-                          )}
-                          {!isCheckingWhatsApp && whatsappStatus === false && (
-                            <span className="text-xs text-muted-foreground ml-1">
-                              unavailable
-                            </span>
-                          )}
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {/* Smart template picker */}
-                  <Popover
-                    open={templatePickerOpen}
-                    onOpenChange={setTemplatePickerOpen}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-sm flex-1 justify-between font-normal"
-                      >
-                        <span className="flex items-center gap-1.5 truncate">
-                          <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
-                          <span className="truncate">
-                            {selectedTemplate && selectedTemplate !== "none"
-                              ? (templates?.find(
-                                  (t) => t.id.toString() === selectedTemplate,
-                                )?.name ?? "Use template…")
-                              : "Use template…"}
-                          </span>
-                        </span>
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      align="start"
-                      className="w-80 p-0"
-                      sideOffset={4}
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                    Reopen Conversation
+                  </Button>
+                </div>
+              ) : (
+                <div className="p-3 border-t border-border bg-card flex-shrink-0">
+                  {/* Unassigned claim notice */}
+                  {!currentThread.broker_id && (
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 mb-2.5">
+                      <Info className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                      <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-snug">
+                        <span className="font-semibold">
+                          Unassigned conversation —
+                        </span>{" "}
+                        replying will assign it to you and remove it from other
+                        bankers' queues.
+                      </p>
+                    </div>
+                  )}
+                  {/* Row 1: Smart Template picker */}
+                  <div className="flex items-center gap-2 mb-2">
+                    {/* Smart template picker */}
+                    <Popover
+                      open={templatePickerOpen}
+                      onOpenChange={setTemplatePickerOpen}
                     >
-                      <Command>
-                        <CommandInput
-                          placeholder="Search templates…"
-                          className="h-8"
-                        />
-                        <CommandList className="max-h-72">
-                          <CommandEmpty>No templates found.</CommandEmpty>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-sm flex-1 justify-between font-normal"
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
+                            <span className="truncate">
+                              {selectedTemplate && selectedTemplate !== "none"
+                                ? (templates?.find(
+                                    (t) => t.id.toString() === selectedTemplate,
+                                  )?.name ?? "Use template…")
+                                : "Use template…"}
+                            </span>
+                          </span>
+                          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        align="start"
+                        className="w-80 p-0"
+                        sideOffset={4}
+                      >
+                        <Command>
+                          <CommandInput
+                            placeholder="Search templates…"
+                            className="h-8"
+                          />
+                          <CommandList className="max-h-72">
+                            <CommandEmpty>No templates found.</CommandEmpty>
 
-                          {/* Clear current selection */}
-                          {selectedTemplate && selectedTemplate !== "none" && (
-                            <CommandGroup>
-                              <CommandItem
-                                value="__clear__"
-                                onSelect={() => {
-                                  setSelectedTemplate("");
-                                  setMessageText("");
-                                  setMessageSubject("");
-                                  setTemplatePickerOpen(false);
-                                }}
-                                className="text-muted-foreground italic text-xs"
-                              >
-                                ✕ Clear template
-                              </CommandItem>
-                            </CommandGroup>
-                          )}
+                            {/* Clear current selection */}
+                            {selectedTemplate &&
+                              selectedTemplate !== "none" && (
+                                <CommandGroup>
+                                  <CommandItem
+                                    value="__clear__"
+                                    onSelect={() => {
+                                      setSelectedTemplate("");
+                                      setMessageText("");
+                                      setMessageSubject("");
+                                      setTemplatePickerOpen(false);
+                                    }}
+                                    className="text-muted-foreground italic text-xs"
+                                  >
+                                    ✕ Clear template
+                                  </CommandItem>
+                                </CommandGroup>
+                              )}
 
-                          {/* Smart-sorted, category-grouped templates */}
-                          {(() => {
-                            const channelTemplates = (templates ?? []).filter(
-                              (t) => t.template_type === messageType,
-                            );
-                            const sorted = sortTemplatesSmart(
-                              channelTemplates,
-                              varMap,
-                              recentTemplateIds,
-                            );
-                            const recentSet = new Set(recentTemplateIds);
-                            const recent = sorted.filter((t) =>
-                              recentSet.has(t.id),
-                            );
-                            const rest = sorted.filter(
-                              (t) => !recentSet.has(t.id),
-                            );
+                            {/* Smart-sorted, category-grouped templates */}
+                            {(() => {
+                              const channelTemplates = (templates ?? []).filter(
+                                (t) => t.template_type === messageType,
+                              );
+                              const sorted = sortTemplatesSmart(
+                                channelTemplates,
+                                varMap,
+                                recentTemplateIds,
+                              );
+                              const recentSet = new Set(recentTemplateIds);
+                              const recent = sorted.filter((t) =>
+                                recentSet.has(t.id),
+                              );
+                              const rest = sorted.filter(
+                                (t) => !recentSet.has(t.id),
+                              );
 
-                            // Group remaining by category
-                            const byCategory: Record<string, typeof rest> = {};
-                            for (const t of rest) {
-                              if (!byCategory[t.category])
-                                byCategory[t.category] = [];
-                              byCategory[t.category].push(t);
-                            }
+                              // Group remaining by category
+                              const byCategory: Record<string, typeof rest> =
+                                {};
+                              for (const t of rest) {
+                                if (!byCategory[t.category])
+                                  byCategory[t.category] = [];
+                                byCategory[t.category].push(t);
+                              }
 
-                            const renderItem = (t: (typeof sorted)[0]) => {
-                              const { resolved, total, score } =
-                                getTemplateCompatibility(t, varMap);
-                              const hasVars = total > 0;
-                              return (
-                                <CommandItem
-                                  key={t.id}
-                                  value={`${t.name} ${t.body.slice(0, 40)}`}
-                                  onSelect={() => {
-                                    setSelectedTemplate(t.id.toString());
-                                    setMessageText(t.body || "");
-                                    setTemplatePickerOpen(false);
-                                  }}
-                                  className="flex items-start gap-2 cursor-pointer py-2"
-                                >
-                                  <div className="mt-0.5 shrink-0">
-                                    {hasVars ? (
-                                      score >= 1 ? (
-                                        <CircleCheck className="h-3.5 w-3.5 text-green-500" />
+                              const renderItem = (t: (typeof sorted)[0]) => {
+                                const { resolved, total, score } =
+                                  getTemplateCompatibility(t, varMap);
+                                const hasVars = total > 0;
+                                return (
+                                  <CommandItem
+                                    key={t.id}
+                                    value={`${t.name} ${t.body.slice(0, 40)}`}
+                                    onSelect={() => {
+                                      setSelectedTemplate(t.id.toString());
+                                      setMessageText(t.body || "");
+                                      setTemplatePickerOpen(false);
+                                    }}
+                                    className="flex items-start gap-2 cursor-pointer py-2"
+                                  >
+                                    <div className="mt-0.5 shrink-0">
+                                      {hasVars ? (
+                                        score >= 1 ? (
+                                          <CircleCheck className="h-3.5 w-3.5 text-green-500" />
+                                        ) : (
+                                          <CircleAlert className="h-3.5 w-3.5 text-amber-500" />
+                                        )
                                       ) : (
-                                        <CircleAlert className="h-3.5 w-3.5 text-amber-500" />
-                                      )
-                                    ) : (
-                                      <CircleCheck className="h-3.5 w-3.5 text-muted-foreground/30" />
-                                    )}
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[13px] font-medium truncate">
-                                        {t.name}
+                                        <CircleCheck className="h-3.5 w-3.5 text-muted-foreground/30" />
+                                      )}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-[13px] font-medium truncate">
+                                          {t.name}
+                                        </span>
+                                        {(t.usage_count ?? 0) > 0 && (
+                                          <span className="text-[10px] text-muted-foreground shrink-0">
+                                            ×{t.usage_count}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-[11px] text-muted-foreground line-clamp-1">
+                                        {t.body.substring(0, 60)}
+                                        {t.body.length > 60 ? "…" : ""}
                                       </span>
-                                      {(t.usage_count ?? 0) > 0 && (
-                                        <span className="text-[10px] text-muted-foreground shrink-0">
-                                          ×{t.usage_count}
+                                      {hasVars && score < 1 && (
+                                        <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                                          {resolved}/{total} vars resolve
                                         </span>
                                       )}
                                     </div>
-                                    <span className="text-[11px] text-muted-foreground line-clamp-1">
-                                      {t.body.substring(0, 60)}
-                                      {t.body.length > 60 ? "…" : ""}
-                                    </span>
-                                    {hasVars && score < 1 && (
-                                      <span className="text-[10px] text-amber-600 dark:text-amber-400">
-                                        {resolved}/{total} vars resolve
-                                      </span>
-                                    )}
-                                  </div>
-                                </CommandItem>
-                              );
-                            };
+                                  </CommandItem>
+                                );
+                              };
 
-                            return (
-                              <>
-                                {recent.length > 0 && (
-                                  <CommandGroup heading="Recently Used">
-                                    {recent.map(renderItem)}
-                                  </CommandGroup>
-                                )}
-                                {Object.entries(byCategory).map(
-                                  ([cat, catTemplates]) => (
-                                    <CommandGroup
-                                      key={cat}
-                                      heading={CATEGORY_LABELS[cat] ?? cat}
-                                    >
-                                      {catTemplates.map(renderItem)}
+                              return (
+                                <>
+                                  {recent.length > 0 && (
+                                    <CommandGroup heading="Recently Used">
+                                      {recent.map(renderItem)}
                                     </CommandGroup>
-                                  ),
-                                )}
-                              </>
-                            );
-                          })()}
+                                  )}
+                                  {Object.entries(byCategory).map(
+                                    ([cat, catTemplates]) => (
+                                      <CommandGroup
+                                        key={cat}
+                                        heading={CATEGORY_LABELS[cat] ?? cat}
+                                      >
+                                        {catTemplates.map(renderItem)}
+                                      </CommandGroup>
+                                    ),
+                                  )}
+                                </>
+                              );
+                            })()}
 
-                          <CommandSeparator />
-                          <CommandGroup>
-                            <CommandItem
-                              value="__save_as_template__"
-                              disabled={!messageText.trim()}
-                              onSelect={() => {
-                                if (!messageText.trim()) return;
-                                setTemplatePickerOpen(false);
-                                setSaveTemplateOpen(true);
-                              }}
-                              className="gap-2 text-primary data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed"
-                            >
-                              <BookmarkPlus className="h-4 w-4" />
-                              Save current message as template
-                            </CommandItem>
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                </div>
+                            <CommandSeparator />
+                            <CommandGroup>
+                              <CommandItem
+                                value="__save_as_template__"
+                                disabled={!messageText.trim()}
+                                onSelect={() => {
+                                  if (!messageText.trim()) return;
+                                  setTemplatePickerOpen(false);
+                                  setSaveTemplateOpen(true);
+                                }}
+                                className="gap-2 text-primary data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed"
+                              >
+                                <BookmarkPlus className="h-4 w-4" />
+                                Save current message as template
+                              </CommandItem>
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
 
-                {/* Smart variable preview banner */}
-                {(() => {
-                  const varStatuses = getVarStatus(messageText, varMap);
-                  if (varStatuses.length === 0) return null;
-                  return (
-                    <div className="rounded-md border border-border bg-card px-3 py-2 mb-1.5">
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <Sparkles className="h-3 w-3 text-primary shrink-0" />
-                        <span className="text-[11px] font-medium text-foreground">
-                          Variable preview
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {varStatuses.map(({ name, value, resolved }) => (
-                          <span
-                            key={name}
-                            className={cn(
-                              "inline-flex items-center gap-1 text-[10px] rounded-full px-2 py-0.5 font-mono border",
-                              resolved
-                                ? "bg-green-50 border-green-200 text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300"
-                                : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300",
-                            )}
-                          >
-                            {resolved ? (
-                              <CircleCheck className="h-2.5 w-2.5 shrink-0" />
-                            ) : (
-                              <CircleAlert className="h-2.5 w-2.5 shrink-0" />
-                            )}
-                            {`{{${name}}}`}
-                            {resolved && (
-                              <>
-                                <span className="opacity-40 mx-0.5">→</span>
-                                <span className="font-sans font-medium">
-                                  {value}
-                                </span>
-                              </>
-                            )}
+                  {/* Smart variable preview banner */}
+                  {(() => {
+                    const varStatuses = getVarStatus(messageText, varMap);
+                    if (varStatuses.length === 0) return null;
+                    return (
+                      <div className="rounded-md border border-border bg-card px-3 py-2 mb-1.5">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <Sparkles className="h-3 w-3 text-primary shrink-0" />
+                          <span className="text-[11px] font-medium text-foreground">
+                            Variable preview
                           </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {varStatuses.map(({ name, value, resolved }) => (
+                            <span
+                              key={name}
+                              className={cn(
+                                "inline-flex items-center gap-1 text-[10px] rounded-full px-2 py-0.5 font-mono border",
+                                resolved
+                                  ? "bg-green-50 border-green-200 text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300"
+                                  : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300",
+                              )}
+                            >
+                              {resolved ? (
+                                <CircleCheck className="h-2.5 w-2.5 shrink-0" />
+                              ) : (
+                                <CircleAlert className="h-2.5 w-2.5 shrink-0" />
+                              )}
+                              {`{{${name}}}`}
+                              {resolved && (
+                                <>
+                                  <span className="opacity-40 mx-0.5">→</span>
+                                  <span className="font-sans font-medium">
+                                    {value}
+                                  </span>
+                                </>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Variable autocomplete dropdown */}
+                  {varAutocomplete && (
+                    <div className="mb-1.5 rounded-md border border-border bg-popover shadow-md p-1 animate-in fade-in-0 slide-in-from-bottom-1">
+                      <p className="text-[10px] text-muted-foreground px-2 py-1 font-medium uppercase tracking-wide">
+                        Insert variable
+                      </p>
+                      <div className="flex flex-wrap gap-1 px-1 pb-1">
+                        {ALL_VARIABLES.filter((v) =>
+                          v.name
+                            .toLowerCase()
+                            .startsWith(varAutocompleteFilter.toLowerCase()),
+                        ).map((v) => (
+                          <button
+                            key={v.name}
+                            type="button"
+                            onClick={() => {
+                              const el = composeTextareaRef.current;
+                              if (!el) return;
+                              const cur =
+                                el.selectionStart ?? messageText.length;
+                              const before = messageText.slice(0, cur);
+                              const braceIdx = before.lastIndexOf("{{");
+                              const newText =
+                                messageText.slice(0, braceIdx) +
+                                `{{${v.name}}}` +
+                                messageText.slice(cur);
+                              setMessageText(newText);
+                              setVarAutocomplete(false);
+                              requestAnimationFrame(() => {
+                                el.focus();
+                                const pos = braceIdx + v.name.length + 4;
+                                el.setSelectionRange(pos, pos);
+                              });
+                            }}
+                            className="text-[11px] font-mono px-2 py-0.5 rounded bg-muted hover:bg-primary/10 hover:text-primary border border-transparent hover:border-primary/20 transition-colors"
+                            title={v.label}
+                          >
+                            {`{{${v.name}}}`}
+                          </button>
                         ))}
                       </div>
                     </div>
-                  );
-                })()}
+                  )}
 
-                {/* Variable autocomplete dropdown */}
-                {varAutocomplete && (
-                  <div className="mb-1.5 rounded-md border border-border bg-popover shadow-md p-1 animate-in fade-in-0 slide-in-from-bottom-1">
-                    <p className="text-[10px] text-muted-foreground px-2 py-1 font-medium uppercase tracking-wide">
-                      Insert variable
-                    </p>
-                    <div className="flex flex-wrap gap-1 px-1 pb-1">
-                      {ALL_VARIABLES.filter((v) =>
-                        v.name
-                          .toLowerCase()
-                          .startsWith(varAutocompleteFilter.toLowerCase()),
-                      ).map((v) => (
+                  {/* Textarea + send button */}
+                  <div className="flex flex-col gap-2">
+                    {/* MMS attachment preview (SMS only) */}
+                    {messageType === "sms" && mmsAttachment && (
+                      <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+                        {mmsAttachment.contentType.startsWith("image/") ? (
+                          <img
+                            src={mmsAttachment.previewUrl}
+                            alt="attachment"
+                            className="h-12 w-12 rounded object-cover border border-border"
+                          />
+                        ) : mmsAttachment.contentType.startsWith("video/") ? (
+                          <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
+                            <Film className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        ) : mmsAttachment.contentType.startsWith("audio/") ? (
+                          <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
+                            <FileAudio className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        ) : (
+                          <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
+                            <FileText className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate">
+                            {mmsAttachment.file.name}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {(mmsAttachment.file.size / 1024).toFixed(0)} KB
+                          </p>
+                        </div>
                         <button
-                          key={v.name}
                           type="button"
                           onClick={() => {
-                            const el = composeTextareaRef.current;
-                            if (!el) return;
-                            const cur = el.selectionStart ?? messageText.length;
-                            const before = messageText.slice(0, cur);
-                            const braceIdx = before.lastIndexOf("{{");
-                            const newText =
-                              messageText.slice(0, braceIdx) +
-                              `{{${v.name}}}` +
-                              messageText.slice(cur);
-                            setMessageText(newText);
-                            setVarAutocomplete(false);
-                            requestAnimationFrame(() => {
-                              el.focus();
-                              const pos = braceIdx + v.name.length + 4;
-                              el.setSelectionRange(pos, pos);
-                            });
+                            URL.revokeObjectURL(mmsAttachment.previewUrl);
+                            setMmsAttachment(null);
                           }}
-                          className="text-[11px] font-mono px-2 py-0.5 rounded bg-muted hover:bg-primary/10 hover:text-primary border border-transparent hover:border-primary/20 transition-colors"
-                          title={v.label}
+                          className="shrink-0 rounded-full p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                          aria-label="Remove attachment"
                         >
-                          {`{{${v.name}}}`}
+                          <X className="h-3.5 w-3.5" />
                         </button>
-                      ))}
+                      </div>
+                    )}
+
+                    <div className="flex items-end gap-2">
+                      {/* Hidden file input */}
+                      {messageType === "sms" && (
+                        <input
+                          ref={mmsFileInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/3gpp,video/quicktime,audio/mpeg,audio/ogg,audio/wav,application/pdf"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (!f) return;
+                            const previewUrl = f.type.startsWith("image/")
+                              ? URL.createObjectURL(f)
+                              : "";
+                            setMmsAttachment({
+                              file: f,
+                              previewUrl,
+                              contentType: f.type,
+                            });
+                            e.target.value = "";
+                          }}
+                        />
+                      )}
+                      {/* Paperclip button — SMS only */}
+                      {messageType === "sms" && (
+                        <Tooltip delayDuration={300}>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={() => mmsFileInputRef.current?.click()}
+                              disabled={isUploadingMMS}
+                              className="shrink-0 flex h-10 w-10 items-center justify-center rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
+                              aria-label="Attach media"
+                            >
+                              <Paperclip className="h-4 w-4" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent
+                            side="top"
+                            className="max-w-[220px] text-xs leading-relaxed"
+                          >
+                            <p className="font-semibold mb-1">
+                              Attach MMS media
+                            </p>
+                            <p>
+                              Max <span className="font-medium">5 MB</span> ·
+                              Link expires in{" "}
+                              <span className="font-medium">72 h</span>
+                            </p>
+                            <p className="text-muted-foreground mt-1">
+                              JPG · PNG · GIF · WebP · MP4 · MOV · MP3 · OGG ·
+                              WAV · PDF
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                      <Textarea
+                        ref={composeTextareaRef}
+                        placeholder="Type your message… (type {{ to insert a variable)"
+                        value={messageText}
+                        onChange={(e) => {
+                          const newText = e.target.value;
+                          setMessageText(newText);
+
+                          // Decouple from template if the body was edited
+                          if (
+                            selectedTemplate &&
+                            selectedTemplate !== "none" &&
+                            newText !==
+                              (templates?.find(
+                                (t) => t.id.toString() === selectedTemplate,
+                              )?.body ?? "")
+                          ) {
+                            setSelectedTemplate("");
+                          }
+
+                          // Variable autocomplete: trigger when "{{" appears before cursor
+                          const cur = e.target.selectionStart ?? newText.length;
+                          const before = newText.slice(0, cur);
+                          const lastBrace = before.lastIndexOf("{{");
+                          if (
+                            lastBrace !== -1 &&
+                            !before.slice(lastBrace).includes("}}")
+                          ) {
+                            setVarAutocompleteFilter(
+                              before.slice(lastBrace + 2),
+                            );
+                            setVarAutocomplete(true);
+                          } else {
+                            setVarAutocomplete(false);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            setVarAutocomplete(false);
+                            return;
+                          }
+                          if (
+                            e.key === "Enter" &&
+                            !e.shiftKey &&
+                            !varAutocomplete
+                          ) {
+                            e.preventDefault();
+                            handleSendMessage();
+                          }
+                        }}
+                        className="flex-1 min-h-[72px] resize-none text-sm"
+                      />
+                      <Button
+                        onClick={handleSendMessage}
+                        disabled={
+                          (!messageText.trim() && !mmsAttachment) ||
+                          isUploadingMMS
+                        }
+                        className="bg-primary hover:bg-primary/90 h-10 w-10 p-0 transition-transform active:scale-90"
+                      >
+                        {isUploadingMMS ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                      </Button>
                     </div>
                   </div>
-                )}
 
-                {/* Textarea + send button */}
-                <div className="flex flex-col gap-2">
-                  {/* MMS attachment preview (SMS only) */}
-                  {messageType === "sms" && mmsAttachment && (
-                    <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
-                      {mmsAttachment.contentType.startsWith("image/") ? (
-                        <img
-                          src={mmsAttachment.previewUrl}
-                          alt="attachment"
-                          className="h-12 w-12 rounded object-cover border border-border"
-                        />
-                      ) : mmsAttachment.contentType.startsWith("video/") ? (
-                        <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
-                          <Film className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                      ) : mmsAttachment.contentType.startsWith("audio/") ? (
-                        <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
-                          <FileAudio className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                      ) : (
-                        <div className="flex h-12 w-12 items-center justify-center rounded border border-border bg-muted">
-                          <FileText className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium truncate">
-                          {mmsAttachment.file.name}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground">
-                          {(mmsAttachment.file.size / 1024).toFixed(0)} KB
-                        </p>
-                      </div>
+                  {/* Live resolved preview toggle */}
+                  {/* Failed message restore banner */}
+                  {failedText && (
+                    <div className="mt-1.5 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+                      <X className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                      <p className="text-[11px] text-destructive flex-1 truncate">
+                        Failed to send — message restored
+                      </p>
                       <button
                         type="button"
                         onClick={() => {
-                          URL.revokeObjectURL(mmsAttachment.previewUrl);
-                          setMmsAttachment(null);
+                          setMessageText(failedText);
+                          setFailedText(null);
+                          setOptimisticMessages([]);
+                          requestAnimationFrame(() =>
+                            composeTextareaRef.current?.focus(),
+                          );
                         }}
-                        className="shrink-0 rounded-full p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                        aria-label="Remove attachment"
+                        className="text-[11px] font-medium text-destructive underline shrink-0"
                       >
-                        <X className="h-3.5 w-3.5" />
+                        Restore
                       </button>
                     </div>
                   )}
 
-                  <div className="flex items-end gap-2">
-                    {/* Hidden file input */}
-                    {messageType === "sms" && (
-                      <input
-                        ref={mmsFileInputRef}
-                        type="file"
-                        accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/3gpp,video/quicktime,audio/mpeg,audio/ogg,audio/wav,application/pdf"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (!f) return;
-                          const previewUrl = f.type.startsWith("image/")
-                            ? URL.createObjectURL(f)
-                            : "";
-                          setMmsAttachment({
-                            file: f,
-                            previewUrl,
-                            contentType: f.type,
-                          });
-                          e.target.value = "";
-                        }}
-                      />
-                    )}
-                    {/* Paperclip button — SMS only */}
-                    {messageType === "sms" && (
+                  {messageText.trim() && (
+                    <div className="mt-1.5">
                       <button
                         type="button"
-                        onClick={() => mmsFileInputRef.current?.click()}
-                        disabled={isUploadingMMS}
-                        className="shrink-0 flex h-10 w-10 items-center justify-center rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
-                        title="Attach image, video, audio, or PDF (MMS)"
-                        aria-label="Attach media"
+                        onClick={() => setShowPreview((p) => !p)}
+                        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <Paperclip className="h-4 w-4" />
+                        {showPreview ? (
+                          <EyeOff className="h-3 w-3" />
+                        ) : (
+                          <Eye className="h-3 w-3" />
+                        )}
+                        {showPreview ? "Hide preview" : "Show resolved preview"}
                       </button>
-                    )}
-                    <Textarea
-                      ref={composeTextareaRef}
-                      placeholder="Type your message… (type {{ to insert a variable)"
-                      value={messageText}
-                      onChange={(e) => {
-                        const newText = e.target.value;
-                        setMessageText(newText);
-
-                        // Decouple from template if the body was edited
-                        if (
-                          selectedTemplate &&
-                          selectedTemplate !== "none" &&
-                          newText !==
-                            (templates?.find(
-                              (t) => t.id.toString() === selectedTemplate,
-                            )?.body ?? "")
-                        ) {
-                          setSelectedTemplate("");
-                        }
-
-                        // Variable autocomplete: trigger when "{{" appears before cursor
-                        const cur = e.target.selectionStart ?? newText.length;
-                        const before = newText.slice(0, cur);
-                        const lastBrace = before.lastIndexOf("{{");
-                        if (
-                          lastBrace !== -1 &&
-                          !before.slice(lastBrace).includes("}}")
-                        ) {
-                          setVarAutocompleteFilter(before.slice(lastBrace + 2));
-                          setVarAutocomplete(true);
-                        } else {
-                          setVarAutocomplete(false);
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") {
-                          setVarAutocomplete(false);
-                          return;
-                        }
-                        if (
-                          e.key === "Enter" &&
-                          !e.shiftKey &&
-                          !varAutocomplete
-                        ) {
-                          e.preventDefault();
-                          handleSendMessage();
-                        }
-                      }}
-                      className="flex-1 min-h-[72px] resize-none text-sm"
-                    />
-                    <Button
-                      onClick={handleSendMessage}
-                      disabled={
-                        (!messageText.trim() && !mmsAttachment) ||
-                        isUploadingMMS
-                      }
-                      className="bg-primary hover:bg-primary/90 h-10 w-10 p-0 transition-transform active:scale-90"
-                    >
-                      {isUploadingMMS ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
+                      {showPreview && (
+                        <div className="mt-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed text-foreground">
+                          {resolveVars(messageText, varMap)}
+                        </div>
                       )}
-                    </Button>
-                  </div>
+                    </div>
+                  )}
                 </div>
-
-                {/* Live resolved preview toggle */}
-                {/* Failed message restore banner */}
-                {failedText && (
-                  <div className="mt-1.5 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
-                    <X className="h-3.5 w-3.5 shrink-0 text-destructive" />
-                    <p className="text-[11px] text-destructive flex-1 truncate">
-                      Failed to send — message restored
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMessageText(failedText);
-                        setFailedText(null);
-                        setOptimisticMessages([]);
-                        requestAnimationFrame(() =>
-                          composeTextareaRef.current?.focus(),
-                        );
-                      }}
-                      className="text-[11px] font-medium text-destructive underline shrink-0"
-                    >
-                      Restore
-                    </button>
-                  </div>
-                )}
-
-                {messageText.trim() && (
-                  <div className="mt-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setShowPreview((p) => !p)}
-                      className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {showPreview ? (
-                        <EyeOff className="h-3 w-3" />
-                      ) : (
-                        <Eye className="h-3 w-3" />
-                      )}
-                      {showPreview ? "Hide preview" : "Show resolved preview"}
-                    </button>
-                    {showPreview && (
-                      <div className="mt-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed text-foreground">
-                        {resolveVars(messageText, varMap)}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              )}
             </>
           ) : channelFilter === "calls" && selectedCall ? (
             /* ── Call Detail View ── */

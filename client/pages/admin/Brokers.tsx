@@ -283,6 +283,8 @@ export default function Brokers() {
         description: error || "Operation failed",
         variant: "destructive",
       });
+      // Re-throw so the wizard knows the submission failed and keeps the dialog open
+      throw error;
     }
   };
 

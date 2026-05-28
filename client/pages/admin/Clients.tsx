@@ -427,6 +427,14 @@ const Clients = () => {
           isOpen={detailClientId !== null}
           onClose={() => setDetailClientId(null)}
           clientId={detailClientId}
+          onClientUpdated={() =>
+            doFetch({
+              page: 1,
+              sortBy,
+              sortOrder: sortDir,
+              search: searchQuery || undefined,
+            })
+          }
         />
 
         {/* Delete Confirmation Dialog */}
@@ -465,7 +473,7 @@ const Clients = () => {
                               {clientToDelete.total_conversations}
                             </strong>{" "}
                             conversation thread(s) and all associated messages
-                            (emails, SMS, WhatsApp)
+                            (emails, SMS)
                           </li>
                         )}
                         <li>All client profile data and documents</li>

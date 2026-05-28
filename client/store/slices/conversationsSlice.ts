@@ -252,6 +252,8 @@ export const sendMessage = createAsyncThunk(
         ...data,
         body: messageData.body ?? null,
         media_url: messageData.media_url ?? null,
+        media_content_type: messageData.media_content_type ?? null,
+        media_filename: messageData.media_filename ?? null,
         communication_type: messageData.communication_type,
         from_broker_id: user?.id ?? null,
       };
@@ -624,7 +626,21 @@ const conversationsSlice = createSlice({
       state.messages = [];
     },
 
+    clearThreads: (state) => {
+      state.threads = [];
+    },
+
     // Filters
+    resetThreadsFilters: (state) => {
+      state.threadsFilters = {
+        status: "all",
+        priority: "",
+        search: "",
+        page: 1,
+        limit: 20,
+      };
+    },
+
     setThreadsFilters: (state, action) => {
       state.threadsFilters = {
         ...state.threadsFilters,
@@ -1235,6 +1251,8 @@ const conversationsSlice = createSlice({
 export const {
   setCurrentThread,
   clearCurrentThread,
+  clearThreads,
+  resetThreadsFilters,
   setThreadsFilters,
   setMessagesFilters,
   clearError,

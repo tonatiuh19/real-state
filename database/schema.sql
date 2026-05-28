@@ -431,6 +431,7 @@ CREATE TABLE `clients` (
   `middle_name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `last_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `normalized_phone` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Last-10-digit normalised phone; maintained by app on every write (TiDB has no STORED generated columns)',
   `alternate_phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `date_of_birth` date DEFAULT NULL,
   `ssn_encrypted` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -461,6 +462,7 @@ CREATE TABLE `clients` (
   KEY `idx_income_type` (`income_type`),
   KEY `tenant_id` (`tenant_id`),
   KEY `idx_clients_citizenship` (`citizenship_status`),
+  UNIQUE KEY `uq_clients_tenant_norm_phone` (`tenant_id`,`normalized_phone`) COMMENT 'Prevents two clients from sharing the same phone under a tenant; NULL values are excluded from uniqueness',
   CONSTRAINT `fk_clients_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=480015;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -489,12 +491,13 @@ CREATE TABLE `communications` (
   `from_broker_id` int DEFAULT NULL,
   `to_user_id` int DEFAULT NULL,
   `to_broker_id` int DEFAULT NULL,
-  `communication_type` enum('email','sms','whatsapp','call','internal_note') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `communication_type` enum('email','sms','whatsapp','call','internal_note','system_event') COLLATE utf8mb4_unicode_ci NOT NULL,
   `direction` enum('inbound','outbound') COLLATE utf8mb4_unicode_ci NOT NULL,
   `subject` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `body` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `media_url` text COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'URL(s) of MMS media attachments — JSON array for multiple items, plain URL for single',
   `media_content_type` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'MIME type of the primary media attachment (e.g. image/jpeg, application/pdf)',
+  `media_filename` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Original filename of the MMS media attachment (e.g. contract.pdf)',
   `status` enum('pending','sent','delivered','failed','read') COLLATE utf8mb4_unicode_ci DEFAULT 'pending',
   `external_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `recording_url` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio recording URL (mp3) for call communications',
@@ -721,6 +724,7 @@ CREATE TABLE `conversation_threads` (
   `client_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `client_phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `client_email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `normalized_client_phone` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Last-10-digit normalised client_phone; maintained by app on every write (TiDB has no STORED generated columns)',
   `inbox_number` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Twilio number (To) that received the first inbound message',
   `last_message_at` datetime NOT NULL,
   `last_message_preview` text COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Always set when thread has communications; NULL only for empty threads. API enforces a typed fallback (Message/Email/📞) so this is never blank.',
@@ -751,6 +755,7 @@ CREATE TABLE `conversation_threads` (
   KEY `idx_conversations_last_message` (`last_message_at`),
   KEY `idx_conversation_threads_archived_at` (`archived_at`),
   KEY `idx_conversation_threads_mailbox_id` (`mailbox_id`),
+  KEY `idx_ct_tenant_norm_client_phone` (`tenant_id`,`normalized_client_phone`),
   CONSTRAINT `fk_conversation_threads_application` FOREIGN KEY (`application_id`) REFERENCES `loan_applications` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_conversation_threads_broker` FOREIGN KEY (`broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_conversation_threads_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
@@ -1783,7 +1788,7 @@ CREATE TABLE `templates` (
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `template_type` enum('email','sms','whatsapp') COLLATE utf8mb4_unicode_ci NOT NULL,
-  `category` enum('welcome','reminder','update','follow_up','marketing','system') COLLATE utf8mb4_unicode_ci DEFAULT 'system',
+  `category` enum('welcome','reminder','update','follow_up','marketing','system','status_update','document_request','approval','denial','custom') COLLATE utf8mb4_unicode_ci DEFAULT 'system',
   `subject` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'For email templates',
   `body` text COLLATE utf8mb4_unicode_ci NOT NULL,
   `variables` json DEFAULT NULL COMMENT 'Available template variables',
@@ -2126,4 +2131,19 @@ CREATE TABLE `email_sync_log` (
   KEY `idx_email_sync_log_mailbox` (`mailbox_id`, `started_at`),
   CONSTRAINT `fk_email_sync_log_tenant`  FOREIGN KEY (`tenant_id`)  REFERENCES `tenants` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_email_sync_log_mailbox` FOREIGN KEY (`mailbox_id`) REFERENCES `conversation_email_mailboxes` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Table structure for table `mms_media`
+-- Stores MMS attachment bytes for Twilio delivery. Files expire after 24 hours.
+--
+
+CREATE TABLE IF NOT EXISTS `mms_media` (
+  `id`           VARCHAR(36)   NOT NULL,
+  `content_type` VARCHAR(100)  NOT NULL,
+  `data`         MEDIUMBLOB    NOT NULL,
+  `created_at`   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `expires_at`   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_mms_media_expires_at` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

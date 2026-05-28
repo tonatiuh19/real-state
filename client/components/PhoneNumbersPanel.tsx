@@ -13,7 +13,6 @@ import {
   Users,
   UserPlus,
   MessageSquare,
-  X,
 } from "lucide-react";
 import {
   Sheet,
@@ -112,7 +111,9 @@ const PhoneNumbersPanel: React.FC<PhoneNumbersPanelProps> = ({
   const assignNumber = async (sid: string, brokerId: number | null) => {
     setAssigningSid(sid);
     try {
-      const data = await dispatch(assignPhoneNumber({ sid, brokerId })).unwrap();
+      const data = await dispatch(
+        assignPhoneNumber({ sid, brokerId }),
+      ).unwrap();
       if (data.success) {
         toast({
           title: "Routing updated",
@@ -210,21 +211,12 @@ const PhoneNumbersPanel: React.FC<PhoneNumbersPanelProps> = ({
         {/* ── Sticky header ── */}
         <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-6 py-4 space-y-4">
           <SheetHeader className="pb-0">
-            <div className="flex items-center justify-between">
-              <SheetTitle className="flex items-center gap-2 text-base">
-                <div className="p-1.5 rounded-lg bg-primary/10">
-                  <Phone className="h-4 w-4 text-primary" />
-                </div>
-                Phone Numbers & Routing
-              </SheetTitle>
-              <button
-                onClick={onClose}
-                className="rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-              >
-                <X className="h-4 w-4" />
-                <span className="sr-only">Close</span>
-              </button>
-            </div>
+            <SheetTitle className="flex items-center gap-2 text-base">
+              <div className="p-1.5 rounded-lg bg-primary/10">
+                <Phone className="h-4 w-4 text-primary" />
+              </div>
+              Phone Numbers & Routing
+            </SheetTitle>
             <p className="text-xs text-muted-foreground">
               Configure which Twilio numbers are active and who answers inbound
               calls.

@@ -194,12 +194,24 @@ export function BrokerWizard({
     validationSchema,
     enableReinitialize: true,
     validateOnMount: true,
-    onSubmit: async (values, { setSubmitting }) => {
+    onSubmit: async (
+      values,
+      { setSubmitting, setFieldError, setFieldTouched },
+    ) => {
       try {
         await onSubmit(values);
         formik.resetForm();
         onClose();
-      } catch (error) {
+      } catch (error: any) {
+        const message: string = error || "Operation failed";
+        // Highlight the conflicting field inline so the user knows exactly what to fix
+        if (/phone/i.test(message)) {
+          setFieldError("phone", message);
+          setFieldTouched("phone", true, false);
+        } else if (/email/i.test(message)) {
+          setFieldError("email", message);
+          setFieldTouched("email", true, false);
+        }
         logger.error("Error submitting broker form:", error);
       } finally {
         setSubmitting(false);

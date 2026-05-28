@@ -9,8 +9,15 @@ import type {
   UpdateClientResponse,
   ConvertClientToBrokerRequest,
   ConvertClientToBrokerResponse,
+  ClientConflictInfo,
+  ReassignClientResponse,
   PaginationInfo,
 } from "@shared/api";
+
+export interface ClientCreateConflict {
+  error: string;
+  conflict: ClientConflictInfo;
+}
 import { logger } from "@/lib/logger";
 
 interface FetchClientsParams {
@@ -88,8 +95,33 @@ export const createClient = createAsyncThunk(
       );
       return data.client;
     } catch (error: any) {
+      const responseData = error.response?.data;
+      // Pass through the full conflict object so the UI can show who owns the client
+      if (responseData?.conflict) {
+        return rejectWithValue(responseData as ClientCreateConflict);
+      }
+      return rejectWithValue(responseData?.error || "Failed to create client");
+    }
+  },
+);
+
+export const reassignClient = createAsyncThunk(
+  "clients/reassignClient",
+  async (
+    { clientId, brokerId }: { clientId: number; brokerId: number },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.put<ReassignClientResponse>(
+        `/api/clients/${clientId}/reassign`,
+        { broker_id: brokerId },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { clientId, brokerId, message: data.message };
+    } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.error || "Failed to create client",
+        error.response?.data?.error || "Failed to reassign client",
       );
     }
   },
@@ -110,9 +142,11 @@ export const updateClient = createAsyncThunk(
       );
       return data.client;
     } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.error || "Failed to update client",
-      );
+      const responseData = error.response?.data;
+      if (responseData?.conflict) {
+        return rejectWithValue(responseData as ClientCreateConflict);
+      }
+      return rejectWithValue(responseData?.error || "Failed to update client");
     }
   },
 );
@@ -186,7 +220,20 @@ const clientsSlice = createSlice({
         state.clients = state.clients.filter(
           (c) => c.id !== action.payload.clientId,
         );
-      });
+      })
+      // Keep grid in sync when ClientDetailPanel saves via updateClientProfile
+      .addMatcher(
+        (action): action is { type: string; payload: { client?: any } } =>
+          action.type === "clientDetail/updateClientProfile/fulfilled",
+        (state, action) => {
+          const updated = action.payload?.client;
+          if (!updated) return;
+          const idx = state.clients.findIndex((c) => c.id === updated.id);
+          if (idx !== -1) {
+            state.clients[idx] = { ...state.clients[idx], ...updated };
+          }
+        },
+      );
   },
 });
 

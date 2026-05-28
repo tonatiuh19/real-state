@@ -1241,6 +1241,7 @@ const mockPagination = {
   limit: 20,
   total: 0,
   total_pages: 1,
+  totalPages: 1,
 };
 
 describe("calendarEventsSlice – reducers and state transitions", () => {

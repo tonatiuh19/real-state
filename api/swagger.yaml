@@ -3087,12 +3087,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, subject, body]
+              required: [name, subject, body_html]
               properties:
                 name: { type: string }
                 subject: { type: string }
-                body: { type: string }
-                category: { type: string }
+                body_html: { type: string }
+                body_text: { type: string }
+                template_type:
+                  type: string
+                  description: Template category (welcome, reminder, update, follow_up, marketing, system, status_update, document_request, approval, denial, custom). Maps to DB category column.
+                  default: system
+                is_active: { type: boolean, default: true }
       responses:
         "201":
           description: Created
@@ -3120,7 +3125,12 @@ paths:
               properties:
                 name: { type: string }
                 subject: { type: string }
-                body: { type: string }
+                body_html: { type: string }
+                body_text: { type: string }
+                template_type:
+                  type: string
+                  description: Template category (maps to DB category column). The channel (email/sms/whatsapp) is immutable.
+                is_active: { type: boolean }
       responses:
         "200":
           description: Updated
@@ -3177,7 +3187,11 @@ paths:
               properties:
                 name: { type: string }
                 body: { type: string }
-                category: { type: string }
+                template_type:
+                  type: string
+                  description: Template category (welcome, reminder, update, follow_up, marketing, system, status_update, document_request, custom). Maps to DB category column.
+                  default: system
+                is_active: { type: boolean, default: true }
       responses:
         "201":
           description: Created

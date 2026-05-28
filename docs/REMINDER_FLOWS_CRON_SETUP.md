@@ -15,6 +15,7 @@ When a client replies, the system detects the response and advances (or stops) t
 | `GET /api/cron/sync-office365-mailboxes` | Every 5 min (cron)  | Sync all active Office 365 mailboxes into Conversations       |
 | `GET /api/cron/sync-o365-calendars`      | Every 30 min (cron) | Sync Outlook calendar events into scheduler blocked ranges    |
 | `GET /api/cron/sync-teams-policy`        | Every 24h (cron)    | Grant Teams app-access policy for users with Teams enabled    |
+| `GET /api/cron/purge-mms-media`          | Every 24h (cron)    | Delete expired MMS media rows from `mms_media` table          |
 | `POST /api/webhooks/inbound-sms`         | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
 
 ---
@@ -132,6 +133,34 @@ Sample response:
 > **Note:** The first time a broker connects their Outlook mailbox, the manual
 > "Sync Now" button in the Calendar settings tab provides an immediate sync.
 > The cron keeps it fresh automatically after that.
+
+### 2f. Purge expired MMS media — every 24 hours
+
+MMS attachments are stored in `mms_media` as BLOBs with a 72-hour TTL.
+Twilio only needs the media URL for a few minutes during delivery.
+This job removes expired rows to keep DB storage lean.
+
+| Field   | Value |
+| ------- | ----- |
+| Minute  | `0`   |
+| Hour    | `3`   |
+| Day     | `*`   |
+| Month   | `*`   |
+| Weekday | `*`   |
+
+```bash
+curl -s "https://portal.encoremortgage.org/api/cron/purge-mms-media?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
+```
+
+Expected response:
+
+```json
+{ "success": true, "deleted": 3 }
+```
+
+> Files are only useful while Twilio is delivering the MMS (usually seconds).
+> The 72-hour TTL is a generous safety buffer. Rows that have already been
+> served are still kept until the nightly purge — that's fine.
 
 ---
 

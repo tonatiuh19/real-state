@@ -48,7 +48,7 @@ export async function uploadAvatarToCDN(
 export async function uploadMMSMedia(
   file: File,
   sessionToken: string,
-): Promise<{ url: string; content_type: string }> {
+): Promise<{ url: string; content_type: string; filename: string }> {
   const formData = new FormData();
   formData.append("file", file);
 
@@ -64,7 +64,11 @@ export async function uploadMMSMedia(
     throw new Error("MMS upload failed: " + (data.error ?? res.status));
   }
 
-  return { url: data.url as string, content_type: data.content_type as string };
+  return {
+    url: data.url as string,
+    content_type: data.content_type as string,
+    filename: (data.filename as string) || "",
+  };
 }
 
 /**
