@@ -3050,7 +3050,7 @@ const AdminCalendar: React.FC = () => {
   const { brokers: brokersList } = useAppSelector((s) => s.brokers);
 
   const isPartner = user?.role === "broker";
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "admin" || user?.role === "platform_owner";
 
   const [activeTab, setActiveTab] = useState<string>("calendar");
   const [statusFilter, setStatusFilter] = useState<string>("active");

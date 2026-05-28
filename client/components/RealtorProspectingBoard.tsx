@@ -250,7 +250,9 @@ function OpportunityForm({
           tags: [],
           notes: "",
           owner_broker_id:
-            user?.role === "admin" || user?.role === "superadmin"
+            user?.role === "admin" ||
+            user?.role === "superadmin" ||
+            user?.role === "platform_owner"
               ? user.id
               : null,
           followers: [],

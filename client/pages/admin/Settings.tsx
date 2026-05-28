@@ -11,6 +11,10 @@ import {
   AlertCircle,
   Phone,
   Tag,
+  ShieldCheck,
+  Eye,
+  EyeOff,
+  Lock,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -34,6 +38,11 @@ import {
   updateSettings,
   selectSettingValue,
 } from "@/store/slices/settingsSlice";
+import {
+  fetchRoleSectionPermissions,
+  updateRoleSectionPermissions,
+  setPermission,
+} from "@/store/slices/roleSectionPermissionsSlice";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -227,7 +236,23 @@ const Settings = () => {
     (state) => state.settings,
   );
   const { user } = useAppSelector((state) => state.brokerAuth);
-  const isAdmin = user?.role === "admin" || user?.role === "superadmin";
+  const isAdmin =
+    user?.role === "admin" ||
+    user?.role === "superadmin" ||
+    user?.role === "platform_owner";
+  const isPlatformOwner = user?.role === "platform_owner";
+
+  // Role section permissions
+  const { permissions: rolePerms, isSaving: isSavingPerms } = useAppSelector(
+    (s) => s.roleSectionPermissions,
+  );
+
+  /** Locked sections — always hidden for admin/broker regardless of DB */
+  const LOCKED_SECTIONS = [
+    "reminder-flows",
+    "communication-templates",
+    "brokers",
+  ];
 
   // Pre-Approval Letter
   const [preApprovalRequireAllTasks, setPreApprovalRequireAllTasks] =
@@ -258,7 +283,8 @@ const Settings = () => {
 
   useEffect(() => {
     dispatch(fetchSettings());
-  }, [dispatch]);
+    if (isPlatformOwner) dispatch(fetchRoleSectionPermissions());
+  }, [dispatch, isPlatformOwner]);
 
   const flashSaved = (section: string) => {
     setSavedSections((s) => new Set(s).add(section));
@@ -297,6 +323,53 @@ const Settings = () => {
     },
     [dispatch, toast],
   );
+
+  const getPermValue = useCallback(
+    (role: "admin" | "broker", sectionId: string): boolean => {
+      const p = rolePerms.find(
+        (x) => x.broker_role === role && x.section_id === sectionId,
+      );
+      return p?.is_visible ?? true;
+    },
+    [rolePerms],
+  );
+
+  const togglePerm = useCallback(
+    (role: "admin" | "broker", sectionId: string, value: boolean) => {
+      dispatch(
+        setPermission({
+          broker_role: role,
+          section_id: sectionId,
+          is_visible: value,
+        }),
+      );
+    },
+    [dispatch],
+  );
+
+  const handleSavePerms = useCallback(async () => {
+    try {
+      await dispatch(
+        updateRoleSectionPermissions({
+          permissions: rolePerms.map((p) => ({
+            broker_role: p.broker_role,
+            section_id: p.section_id,
+            is_visible: p.is_visible,
+          })),
+        }),
+      ).unwrap();
+      await dispatch(fetchRoleSectionPermissions());
+      flashSaved("roleperms");
+      toast({ title: "Saved", description: "Role visibility updated." });
+    } catch (err: any) {
+      logger.error("Role perms save error:", err);
+      toast({
+        title: "Error",
+        description: String(err),
+        variant: "destructive",
+      });
+    }
+  }, [dispatch, rolePerms, toast]);
 
   return (
     <>
@@ -477,6 +550,154 @@ const Settings = () => {
                   />
                 </div>
               </SettingsSection>
+
+              {/* Role Section Permissions — platform_owner only */}
+              {isPlatformOwner && (
+                <SettingsSection
+                  index={3}
+                  icon={ShieldCheck}
+                  title="Role Visibility"
+                  description="Control which sidebar sections are visible for Mortgage Bankers and Partners"
+                  accent="bg-amber-50/60"
+                >
+                  {rolePerms.length === 0 ? (
+                    <div className="flex items-center justify-center py-10">
+                      <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : (
+                    <>
+                      {(
+                        [
+                          {
+                            role: "admin" as const,
+                            label: "Mortgage Bankers",
+                            color: "text-sky-700",
+                            bg: "bg-sky-50 border-sky-200",
+                          },
+                          {
+                            role: "broker" as const,
+                            label: "Partners (Realtors)",
+                            color: "text-violet-700",
+                            bg: "bg-violet-50 border-violet-200",
+                          },
+                        ] as const
+                      ).map(({ role, label, color, bg }) => {
+                        const sections: {
+                          id: string;
+                          label: string;
+                          locked?: boolean;
+                        }[] = [
+                          { id: "dashboard", label: "Home / Dashboard" },
+                          { id: "pipeline", label: "Pipeline" },
+                          { id: "clients", label: "Clients & Leads" },
+                          { id: "tasks", label: "Tasks" },
+                          { id: "documents", label: "Documents" },
+                          { id: "scheduler", label: "Calendar" },
+                          { id: "conversations", label: "Conversations" },
+                          { id: "email", label: "Email" },
+                          { id: "reports", label: "Reports & Analytics" },
+                          { id: "settings", label: "Settings" },
+                          {
+                            id: "income-calculator",
+                            label: "Income Calculator",
+                          },
+                          { id: "mortgi", label: "Mortgi AI" },
+                          {
+                            id: "reminder-flows",
+                            label: "Reminder Flows",
+                            locked: true,
+                          },
+                          {
+                            id: "communication-templates",
+                            label: "Message Templates",
+                            locked: true,
+                          },
+                          {
+                            id: "brokers",
+                            label: "People Management",
+                            locked: true,
+                          },
+                        ];
+                        return (
+                          <div key={role} className="mb-6 last:mb-0">
+                            <div
+                              className={cn(
+                                "flex items-center gap-2 px-4 py-2 rounded-xl border mb-3",
+                                bg,
+                              )}
+                            >
+                              <ShieldCheck className={cn("h-4 w-4", color)} />
+                              <span
+                                className={cn("text-sm font-semibold", color)}
+                              >
+                                {label}
+                              </span>
+                            </div>
+                            <div className="space-y-2">
+                              {sections.map((sec) => (
+                                <div
+                                  key={sec.id}
+                                  className={cn(
+                                    "flex items-center justify-between py-2.5 px-4 rounded-xl border border-border/50 bg-background transition-colors",
+                                    sec.locked
+                                      ? "opacity-50 cursor-not-allowed"
+                                      : "hover:bg-muted/30",
+                                  )}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    {sec.locked ? (
+                                      <Lock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                                    ) : getPermValue(role, sec.id) ? (
+                                      <Eye className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+                                    ) : (
+                                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                                    )}
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">
+                                        {sec.label}
+                                      </p>
+                                      {sec.locked && (
+                                        <p className="text-xs text-muted-foreground">
+                                          Platform owner only — cannot be
+                                          enabled for this role
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <Switch
+                                    checked={
+                                      sec.locked
+                                        ? false
+                                        : getPermValue(role, sec.id)
+                                    }
+                                    onCheckedChange={(v) =>
+                                      !sec.locked && togglePerm(role, sec.id, v)
+                                    }
+                                    disabled={sec.locked}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      <div className="flex items-center justify-between pt-5 mt-5 border-t border-border/40">
+                        <p className="text-xs text-muted-foreground">
+                          Changes apply after the next login or page refresh for
+                          affected users.
+                        </p>
+                        <SaveButton
+                          isSaving={isSavingPerms}
+                          saved={savedSections.has("roleperms")}
+                          disabled={false}
+                          onClick={handleSavePerms}
+                        />
+                      </div>
+                    </>
+                  )}
+                </SettingsSection>
+              )}
             </>
           )}
         </div>

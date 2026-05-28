@@ -85,7 +85,8 @@ export default function Brokers() {
     setSchedulerLinkModalOpen(true);
   };
 
-  const isAdmin = currentBroker?.role === "admin";
+  const isAdmin =
+    currentBroker?.role === "admin" || currentBroker?.role === "platform_owner";
 
   const doFetch = useCallback(
     (params: {
@@ -322,6 +323,8 @@ export default function Brokers() {
   };
 
   const getRoleBadgeColor = (role: string) => {
+    if (role === "platform_owner")
+      return "bg-violet-100 text-violet-800 hover:bg-violet-100";
     return role === "admin"
       ? "bg-purple-100 text-purple-800 hover:bg-purple-100"
       : "bg-blue-100 text-blue-800 hover:bg-blue-100";
@@ -420,7 +423,11 @@ export default function Brokers() {
                   return (
                     <div className="space-y-1">
                       <Badge className={getRoleBadgeColor(b.role)}>
-                        {b.role === "admin" ? "Mortgage Banker" : "Partner"}
+                        {b.role === "platform_owner"
+                          ? "Platform Owner"
+                          : b.role === "admin"
+                            ? "Mortgage Banker"
+                            : "Partner"}
                       </Badge>
                       {assignedMB && (
                         <p className="text-xs text-gray-500 whitespace-nowrap">
@@ -615,7 +622,11 @@ export default function Brokers() {
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <Badge className={getRoleBadgeColor(broker.role)}>
-                      {broker.role === "admin" ? "Mortgage Banker" : "Partner"}
+                      {broker.role === "platform_owner"
+                        ? "Platform Owner"
+                        : broker.role === "admin"
+                          ? "Mortgage Banker"
+                          : "Partner"}
                     </Badge>
                     <Badge variant={getStatusBadgeVariant(broker.status)}>
                       {broker.status}

@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from "react";
-import { Users, Search, Phone, Trash2, Plus } from "lucide-react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { Users, Search, Phone, Trash2, Plus, UserCircle2 } from "lucide-react";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import ClientFormDialog from "@/components/ClientFormDialog";
@@ -46,10 +46,12 @@ const Clients = () => {
   } = useAppSelector((state) => state.clients);
   const { user } = useAppSelector((state) => state.brokerAuth);
   const isPartner = user?.role === "broker";
+  const isPlatformOwner = user?.role === "platform_owner";
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sortBy, setSortBy] = useState("first_name");
   const [sortDir, setSortDir] = useState<"ASC" | "DESC">("ASC");
   const [formOpen, setFormOpen] = useState(false);
@@ -90,7 +92,10 @@ const Clients = () => {
 
   const handleSearch = (q: string) => {
     setSearchQuery(q);
-    doFetch({ page: 1, sortBy, sortOrder: sortDir, search: q || undefined });
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      doFetch({ page: 1, sortBy, sortOrder: sortDir, search: q || undefined });
+    }, 300);
   };
 
   const getInitials = (firstName: string, lastName: string) => {
@@ -182,6 +187,53 @@ const Clients = () => {
         </div>
       ),
     },
+    ...(isPlatformOwner
+      ? [
+          {
+            key: "assigned_broker_first_name",
+            label: "Assigned To",
+            sortable: false,
+            className: "min-w-[140px]",
+            render: (client: ClientRow) => {
+              if (!client.assigned_broker_id) {
+                return (
+                  <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                    <UserCircle2 className="h-3.5 w-3.5" />
+                    Unassigned
+                  </span>
+                );
+              }
+              const firstName = client.assigned_broker_first_name ?? "";
+              const lastName = client.assigned_broker_last_name ?? "";
+              const initials =
+                `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+              const roleLabel =
+                client.assigned_broker_role === "broker"
+                  ? "Partner"
+                  : client.assigned_broker_role === "admin"
+                    ? "Banker"
+                    : "Staff";
+              return (
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-violet-100 flex items-center justify-center shrink-0">
+                    <span className="text-[10px] font-bold text-violet-700">
+                      {initials}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium truncate">
+                      {firstName} {lastName}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {roleLabel}
+                    </p>
+                  </div>
+                </div>
+              );
+            },
+          } as DataGridColumn<ClientRow>,
+        ]
+      : []),
     {
       key: "total_applications",
       label: "Applications",

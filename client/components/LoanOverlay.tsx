@@ -2269,7 +2269,9 @@ export function LoanOverlay({
               </Card>
 
               {/* Broker Assignment */}
-              {(user?.role === "admin" || user?.role === "superadmin") && (
+              {(user?.role === "admin" ||
+                user?.role === "superadmin" ||
+                user?.role === "platform_owner") && (
                 <Card className="border-gray-200 shadow-sm">
                   <CardHeader className="pb-3 border-b border-gray-100">
                     <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
@@ -2344,7 +2346,9 @@ export function LoanOverlay({
               )}
 
               {/* Partner Assignment */}
-              {(user?.role === "admin" || user?.role === "superadmin") && (
+              {(user?.role === "admin" ||
+                user?.role === "superadmin" ||
+                user?.role === "platform_owner") && (
                 <Card className="border-gray-200 shadow-sm">
                   <CardHeader className="pb-3 border-b border-gray-100">
                     <CardTitle className="text-lg flex items-center gap-2 text-gray-900">
@@ -2410,7 +2414,9 @@ export function LoanOverlay({
               )}
 
               {/* Pipeline Status — admin/mortgage banker only */}
-              {(user?.role === "admin" || user?.role === "superadmin") && (
+              {(user?.role === "admin" ||
+                user?.role === "superadmin" ||
+                user?.role === "platform_owner") && (
                 <Card className="border-gray-200 shadow-sm">
                   <CardHeader className="pb-3 border-b border-gray-100">
                     <CardTitle className="text-lg flex items-center gap-2 text-gray-900">

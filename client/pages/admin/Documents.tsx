@@ -67,7 +67,7 @@ const Documents = () => {
     useAppSelector((state) => state.documents);
   const { user } = useAppSelector((state) => state.brokerAuth);
 
-  const hasGlobalDocumentAccess = user?.role === "superadmin";
+  const hasGlobalDocumentAccess = user?.role === "platform_owner";
 
   useEffect(() => {
     dispatch(fetchAllDocuments());

@@ -171,7 +171,9 @@ export function BrokerWizard({
       first_name: broker?.first_name || "",
       last_name: broker?.last_name || "",
       phone: broker?.phone || "",
-      role: broker?.role || "broker",
+      role:
+        (broker?.role === "platform_owner" ? "admin" : broker?.role) ||
+        "broker",
       license_number: broker?.license_number || "",
       specializations:
         broker?.specializations && Array.isArray(broker.specializations)

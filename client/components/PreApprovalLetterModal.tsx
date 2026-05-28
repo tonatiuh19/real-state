@@ -271,7 +271,10 @@ export function PreApprovalLetterModal({
     (state) => state.communicationTemplates,
   );
 
-  const isAdmin = user?.role === "admin" || user?.role === "superadmin";
+  const isAdmin =
+    user?.role === "admin" ||
+    user?.role === "superadmin" ||
+    user?.role === "platform_owner";
   const isPartner = user?.role === "broker";
   const isLoading = loadingLoanIds.includes(loanId);
   const isSaving = savingLoanIds.includes(loanId);

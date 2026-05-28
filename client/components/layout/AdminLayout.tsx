@@ -50,6 +50,7 @@ import { IS_DEV } from "@/lib/env";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
 import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
+import { selectRolePermissionsMap } from "@/store/slices/roleSectionPermissionsSlice";
 import { fetchEmailMailboxes } from "@/store/slices/emailSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import { MortgiWidget } from "@/components/MortgiWidget";
@@ -92,8 +93,32 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     setAvatarErr(false);
   }, [userAvatarUrl]);
   const sectionControlsMap = useAppSelector(selectSectionControlsMap);
+  const rolePermissionsMap = useAppSelector(selectRolePermissionsMap);
   const { isLoading: isLoadingControls, isInitialized: controlsInitialized } =
     useAppSelector((s) => s.adminSectionControls);
+
+  const isPlatformOwner = user?.role === "platform_owner";
+
+  /**
+   * Determine if a section should be visible for the current user.
+   * - platform_owner: always visible
+   * - admin/broker: use DB permissions, falling back to defaults if no DB row
+   */
+  const isSectionVisible = React.useCallback(
+    (
+      sectionId: string,
+      adminDefault: boolean,
+      brokerDefault: boolean,
+    ): boolean => {
+      if (user?.role === "platform_owner") return true;
+      const role = user?.role as "admin" | "broker" | undefined;
+      if (!role) return true;
+      const key = `${role}:${sectionId}`;
+      if (key in rolePermissionsMap) return rolePermissionsMap[key];
+      return role === "admin" ? adminDefault : brokerDefault;
+    },
+    [user?.role, rolePermissionsMap],
+  );
 
   // Redirect to login if not authenticated
   React.useEffect(() => {
@@ -123,7 +148,6 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     navigate("/broker-login");
   };
 
-  const isPartner = user?.role === "broker";
   const emailMailboxes = useAppSelector((s) => s.email.mailboxes);
   const hasActiveMailbox = emailMailboxes.some((m) => m.status === "active");
 
@@ -133,80 +157,84 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Home",
       icon: <LayoutDashboard className="h-4 w-4" />,
       path: "/admin",
+      hidden: !isSectionVisible("dashboard", true, true),
     },
     {
       id: "pipeline",
       label: "Pipeline",
       icon: <Kanban className="h-4 w-4" />,
       path: "/admin/pipeline",
+      hidden: !isSectionVisible("pipeline", true, true),
     },
     {
       id: "clients",
       label: "Clients & Leads",
       icon: <Users className="h-4 w-4" />,
       path: "/admin/clients",
+      hidden: !isSectionVisible("clients", true, true),
     },
     {
       id: "tasks",
       label: "Tasks",
       icon: <CheckCircle2 className="h-4 w-4" />,
       path: "/admin/tasks",
-      hidden: isPartner,
+      hidden: !isSectionVisible("tasks", true, false),
     },
     {
       id: "documents",
       label: "Documents",
       icon: <Briefcase className="h-4 w-4" />,
       path: "/admin/documents",
-      hidden: isPartner,
+      hidden: !isSectionVisible("documents", true, false),
     },
     {
       id: "scheduler",
       label: "Calendar",
       icon: <CalendarDays className="h-4 w-4" />,
       path: "/admin/calendar",
+      hidden: !isSectionVisible("scheduler", true, true),
     },
     {
       id: "conversations",
       label: "Conversations",
       icon: <MessageCircle className="h-4 w-4" />,
       path: "/admin/conversations",
-      hidden: isPartner,
+      hidden: !isSectionVisible("conversations", true, false),
     },
     {
       id: "email",
       label: "Email",
       icon: <Mail className="h-4 w-4" />,
       path: "/admin/email",
-      hidden: isPartner || !hasActiveMailbox,
+      hidden: !isSectionVisible("email", true, false) || !hasActiveMailbox,
     },
     {
       id: "reminder-flows",
       label: "Reminder Flows",
       icon: <AlarmClock className="h-4 w-4" />,
       path: "/admin/reminder-flows",
-      hidden: isPartner,
+      hidden: !isPlatformOwner,
     },
     {
       id: "communication-templates",
       label: "Message Templates",
       icon: <FileText className="h-4 w-4" />,
       path: "/admin/communication-templates",
-      hidden: isPartner,
+      hidden: !isPlatformOwner,
     },
     {
       id: "reports",
       label: "Reports & Analytics",
       icon: <TrendingUp className="h-4 w-4" />,
       path: "/admin/reports",
-      hidden: isPartner,
+      hidden: !isSectionVisible("reports", true, false),
     },
     {
       id: "brokers",
       label: "People Management",
       icon: <UserCog className="h-4 w-4" />,
       path: "/admin/brokers",
-      hidden: isPartner,
+      hidden: !isPlatformOwner,
     },
     {
       id: "contact-submissions",
@@ -220,19 +248,21 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       label: "Income Calculator",
       icon: <Calculator className="h-4 w-4" />,
       path: "/admin/income-calculator",
+      hidden: !isSectionVisible("income-calculator", true, true),
     },
     {
       id: "mortgi",
       label: "Mortgi AI",
       icon: <LiaRobotSolid className="h-4 w-4 text-rose-500" />,
       path: "/admin/mortgi",
+      hidden: !isSectionVisible("mortgi", true, true),
     },
     {
       id: "settings",
       label: "Settings",
       icon: <Settings className="h-4 w-4" />,
       path: "/admin/settings",
-      hidden: isPartner,
+      hidden: !isSectionVisible("settings", true, false),
     },
   ];
 
@@ -405,7 +435,11 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   {user ? `${user.first_name} ${user.last_name}` : "Admin User"}
                 </p>
                 <p className="text-xs text-muted-foreground capitalize">
-                  {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
+                  {user?.role === "platform_owner"
+                    ? "Platform Owner"
+                    : user?.role === "admin"
+                      ? "Mortgage Banker"
+                      : "Partner"}
                 </p>
               </button>
               <Button
@@ -585,7 +619,11 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   {user ? `${user.first_name} ${user.last_name}` : "Admin User"}
                 </p>
                 <p className="text-xs text-muted-foreground capitalize">
-                  {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
+                  {user?.role === "platform_owner"
+                    ? "Platform Owner"
+                    : user?.role === "admin"
+                      ? "Mortgage Banker"
+                      : "Partner"}
                 </p>
               </button>
               {sessionToken && (
@@ -654,7 +692,11 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                           : "Admin User"}
                       </p>
                       <p className="text-xs text-muted-foreground capitalize">
-                        {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
+                        {user?.role === "platform_owner"
+                          ? "Platform Owner"
+                          : user?.role === "admin"
+                            ? "Mortgage Banker"
+                            : "Partner"}
                       </p>
                     </div>
                   </div>

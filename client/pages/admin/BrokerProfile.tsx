@@ -388,7 +388,7 @@ const BrokerProfile = () => {
       ).unwrap();
 
       // Save tenant-level defaults if user is admin
-      if (user?.role === "admin") {
+      if (user?.role === "admin" || user?.role === "platform_owner") {
         await dispatch(
           saveTenantVoicemailSettings({
             enabled: tenantVmEnabled,
@@ -1300,7 +1300,7 @@ const BrokerProfile = () => {
                   </div>
 
                   {/* Tenant-level (admin only) */}
-                  {user?.role === "admin" ? (
+                  {user?.role === "admin" || user?.role === "platform_owner" ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 space-y-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>

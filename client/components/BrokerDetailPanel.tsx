@@ -183,7 +183,8 @@ export default function BrokerDetailPanel({
     useAppSelector((s) => s.brokers);
   const { templates } = useAppSelector((s) => s.conversations);
   const { user: currentBroker } = useAppSelector((s) => s.brokerAuth);
-  const isAdmin = currentBroker?.role === "admin";
+  const isAdmin =
+    currentBroker?.role === "admin" || currentBroker?.role === "platform_owner";
 
   // ── edit state ─────────────────────────────────────────────────────────────
   const [editing, setEditing] = useState(false);

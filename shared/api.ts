@@ -669,7 +669,7 @@ export interface Broker {
   first_name: string;
   last_name: string;
   phone: string | null;
-  role: "broker" | "admin";
+  role: "broker" | "admin" | "platform_owner";
   status: "active" | "inactive" | "suspended";
   email_verified: boolean;
   last_login: string | null;
@@ -866,6 +866,10 @@ export interface GetClientsResponse {
     address_zip: string | null;
     status: string;
     created_at: string;
+    assigned_broker_id: number | null;
+    assigned_broker_first_name: string | null;
+    assigned_broker_last_name: string | null;
+    assigned_broker_role: string | null;
     total_applications: number;
     active_applications: number;
     total_conversations: number;
@@ -1033,6 +1037,10 @@ export interface CreateClientResponse {
     address_zip: string | null;
     status: string;
     created_at: string;
+    assigned_broker_id: number | null;
+    assigned_broker_first_name: string | null;
+    assigned_broker_last_name: string | null;
+    assigned_broker_role: string | null;
     total_applications: number;
     active_applications: number;
     total_conversations: number;
@@ -1730,7 +1738,7 @@ export interface BrokerPublicProfile {
   last_name: string;
   email: string;
   phone: string | null;
-  role: "broker" | "admin";
+  role: "broker" | "admin" | "platform_owner";
   license_number: string | null;
   specializations: string[] | null;
   public_token: string;
@@ -2346,12 +2354,45 @@ export interface UpdateAdminSectionControlsResponse {
   message: string;
 }
 
+// ─── Role Section Permissions ─────────────────────────────────────────────────
+
+export interface RoleSectionPermission {
+  id: number;
+  tenant_id: number;
+  broker_role: "admin" | "broker";
+  section_id: string;
+  is_visible: boolean;
+  updated_by: number | null;
+  updated_at: string;
+}
+
+export interface GetRoleSectionPermissionsResponse {
+  success: boolean;
+  permissions: RoleSectionPermission[];
+}
+
+export interface UpdateRoleSectionPermissionItem {
+  broker_role: "admin" | "broker";
+  section_id: string;
+  is_visible: boolean;
+}
+
+export interface UpdateRoleSectionPermissionsRequest {
+  permissions: UpdateRoleSectionPermissionItem[];
+}
+
+export interface UpdateRoleSectionPermissionsResponse {
+  success: boolean;
+  message: string;
+}
+
 // ─── Admin Init (merged session bootstrap) ──────────────────────────────────
 
 export interface AdminInitResponse {
   success: boolean;
   profile: BrokerProfileDetails;
   controls: AdminSectionControl[];
+  rolePermissions: RoleSectionPermission[];
 }
 
 // ─── Contact Form ─────────────────────────────────────────────────────────────

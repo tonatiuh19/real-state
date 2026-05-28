@@ -161,7 +161,7 @@ const MortgiPage = () => {
     quotaExceededAt,
   } = useAppSelector((s) => s.mortgi);
   const { user } = useAppSelector((s) => s.brokerAuth);
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "admin" || user?.role === "platform_owner";
 
   // Local form state (mirrors config)
   const [form, setForm] = useState({

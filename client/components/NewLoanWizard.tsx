@@ -245,7 +245,12 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
       dispatch(fetchClients());
       dispatch(fetchTasks());
       // Fetch brokers if admin
-      if (user && (user.role === "admin" || user.role === "superadmin")) {
+      if (
+        user &&
+        (user.role === "admin" ||
+          user.role === "superadmin" ||
+          user.role === "platform_owner")
+      ) {
         dispatch(fetchBrokers());
       }
       // Set default broker assignment to current user
@@ -465,7 +470,10 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
     { number: 5, title: "Review", icon: User },
   ];
 
-  const isAdmin = user?.role === "admin" || user?.role === "superadmin";
+  const isAdmin =
+    user?.role === "admin" ||
+    user?.role === "superadmin" ||
+    user?.role === "platform_owner";
 
   // Available active task templates
   const activeTemplates = taskTemplates.filter((t) => t.is_active);

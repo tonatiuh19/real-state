@@ -3656,7 +3656,7 @@ async function createBrokerNotification(params: {
     }
     if (ids.length === 0 && params.notifyAllAdminsOnEmpty) {
       const [admins] = await pool.query<any[]>(
-        "SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active' AND role IN ('admin', 'superadmin')",
+        "SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active' AND role IN ('admin', 'superadmin', 'platform_owner')",
         [MORTGAGE_TENANT_ID],
       );
       ids = admins.map((a: any) => a.id);
@@ -6321,7 +6321,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalLoanAccess = brokerRole === "superadmin";
+    const hasGlobalLoanAccess = brokerRole === "platform_owner";
 
     // Extract query parameters for filtering
     const {
@@ -6594,7 +6594,7 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
     const loanId = req.params.loanId;
-    const hasGlobalLoanAccess = brokerRole === "superadmin";
+    const hasGlobalLoanAccess = brokerRole === "platform_owner";
 
     // Scope loan detail to the client owner or any banker explicitly linked on the loan.
     const whereClause = hasGlobalLoanAccess
@@ -6689,7 +6689,7 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalLoanAccess = brokerRole === "superadmin";
+    const hasGlobalLoanAccess = brokerRole === "platform_owner";
     const loanId = parseInt(req.params.loanId);
 
     if (isNaN(loanId)) {
@@ -6904,7 +6904,7 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
 const handleUpdateLoanSourceCategory: RequestHandler = async (req, res) => {
   try {
     const brokerRole = (req as any).brokerRole;
-    if (brokerRole !== "admin") {
+    if (brokerRole !== "admin" && brokerRole !== "platform_owner") {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
@@ -6976,7 +6976,7 @@ const handleUpdateLoanSourceCategory: RequestHandler = async (req, res) => {
 const handleAssignBroker: RequestHandler = async (req, res) => {
   try {
     const brokerRole = (req as any).brokerRole;
-    if (brokerRole !== "admin") {
+    if (brokerRole !== "admin" && brokerRole !== "platform_owner") {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
@@ -7019,7 +7019,7 @@ const handleAssignBroker: RequestHandler = async (req, res) => {
 const handleAssignPartner: RequestHandler = async (req, res) => {
   try {
     const brokerRole = (req as any).brokerRole;
-    if (brokerRole !== "admin") {
+    if (brokerRole !== "admin" && brokerRole !== "platform_owner") {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
@@ -7064,7 +7064,7 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalLoanAccess = brokerRole === "superadmin";
+    const hasGlobalLoanAccess = brokerRole === "platform_owner";
     const loanId = parseInt(req.params.loanId);
     const { status: newStatus, notes } = req.body;
 
@@ -7090,7 +7090,11 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     }
 
     // Only mortgage bankers can manually move status.
-    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
+    if (
+      brokerRole !== "admin" &&
+      brokerRole !== "superadmin" &&
+      brokerRole !== "platform_owner"
+    ) {
       return res.status(403).json({
         success: false,
         error: "Only mortgage bankers can update loan pipeline status.",
@@ -7205,7 +7209,7 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole as string | undefined;
-    const isSuperAdmin = brokerRole === "superadmin";
+    const isSuperAdmin = brokerRole === "platform_owner";
 
     // Build WHERE clause: superadmins see all tenant loans; everyone else (admin/broker) sees their own via all 3 ownership paths
     const scopeJoin = isSuperAdmin
@@ -7332,7 +7336,7 @@ const handleGetAnnualMetrics: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isAdmin = brokerRole === "superadmin";
+    const isAdmin = brokerRole === "platform_owner";
 
     const now = new Date();
     const year = parseInt(
@@ -7564,7 +7568,7 @@ const handleGetBrokerMetrics: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isAdmin = brokerRole === "superadmin";
+    const isAdmin = brokerRole === "platform_owner";
 
     const now = new Date();
     const year = parseInt(
@@ -7750,7 +7754,7 @@ const handleUpdateBrokerMetrics: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isAdmin = brokerRole === "superadmin";
+    const isAdmin = brokerRole === "platform_owner";
 
     const {
       year,
@@ -7849,7 +7853,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalClientAccess = brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "platform_owner";
     const clientId = parseInt(req.params.clientId);
     if (isNaN(clientId)) {
       return res
@@ -7992,7 +7996,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalClientAccess = brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "platform_owner";
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(
@@ -8019,7 +8023,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
     };
     const safeSortBy = SORT_MAP[sortBy] ?? "c.created_at";
 
-    const baseWhere = `WHERE c.tenant_id = ?${hasGlobalClientAccess ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR c.normalized_phone LIKE ? OR c.normalized_phone = ?)" : ""}`;
+    const baseWhere = `WHERE c.tenant_id = ?${hasGlobalClientAccess ? "" : " AND (c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ?)"}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR CONCAT(c.last_name, ' ', c.first_name) LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR c.normalized_phone LIKE ? OR c.normalized_phone = ?)" : ""}`;
 
     const filterParams: any[] = hasGlobalClientAccess
       ? [MORTGAGE_TENANT_ID]
@@ -8035,7 +8039,18 @@ const handleGetClients: RequestHandler = async (req, res) => {
       const digitsLike = digitsOnly ? `%${digitsOnly}%` : like;
       // Exact normalized match uses the indexed column directly (fast, no REGEXP_REPLACE)
       const exactNorm = lastTen || digitsOnly;
-      filterParams.push(like, like, like, like, digitsLike, exactNorm);
+      // Order: full-name concat (handles "alex go" → "Alex Gomez"), reversed concat,
+      // then individual fields, then phone
+      filterParams.push(
+        like,
+        like,
+        like,
+        like,
+        like,
+        like,
+        digitsLike,
+        exactNorm,
+      );
     }
 
     const [[countRow]] = await pool.query<any[]>(
@@ -8067,14 +8082,19 @@ const handleGetClients: RequestHandler = async (req, res) => {
         c.address_zip,
         c.status,
         c.created_at,
+        c.assigned_broker_id,
+        ab.first_name AS assigned_broker_first_name,
+        ab.last_name  AS assigned_broker_last_name,
+        ab.role       AS assigned_broker_role,
         COUNT(DISTINCT la.id) as total_applications,
         SUM(CASE WHEN la.status IN ('submitted', 'under_review', 'documents_pending', 'underwriting', 'conditional_approval') THEN 1 ELSE 0 END) as active_applications,
         COUNT(DISTINCT ct.id) as total_conversations
       FROM clients c
       LEFT JOIN loan_applications la ON c.id = la.client_user_id
       LEFT JOIN conversation_threads ct ON ct.client_id = c.id AND ct.tenant_id = c.tenant_id
+      LEFT JOIN brokers ab ON ab.id = c.assigned_broker_id
       ${baseWhere}
-      GROUP BY c.id
+      GROUP BY c.id, c.assigned_broker_id, ab.first_name, ab.last_name, ab.role
       ORDER BY ${safeSortBy} ${sortOrder}
       LIMIT ${limit} OFFSET ${offset}`,
       [...filterParams],
@@ -8233,6 +8253,10 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       `SELECT id, email, first_name, middle_name, last_name, phone, date_of_birth,
               address_street, address_unit, address_city, address_state, address_zip,
               status, created_at,
+              assigned_broker_id,
+              NULL AS assigned_broker_first_name,
+              NULL AS assigned_broker_last_name,
+              NULL AS assigned_broker_role,
               0 as total_applications, 0 as active_applications, 0 as total_conversations
        FROM clients WHERE id = ?`,
       [newClientId],
@@ -8334,8 +8358,8 @@ const handleReassignClient: RequestHandler = async (req, res) => {
         .json({ success: false, error: "broker_id is required" });
     }
 
-    // Non-superadmins can only transfer a client to themselves
-    if (brokerRole !== "superadmin" && broker_id !== requestingBrokerId) {
+    // Non-platform-owners can only transfer a client to themselves
+    if (brokerRole !== "platform_owner" && broker_id !== requestingBrokerId) {
       return res.status(403).json({
         success: false,
         error: "You can only transfer clients to your own account",
@@ -8384,7 +8408,7 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
     const { clientId } = req.params;
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalClientAccess = brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "platform_owner";
     const {
       first_name,
       middle_name,
@@ -8753,7 +8777,7 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
     const { clientId } = req.params;
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalClientAccess = brokerRole === "superadmin";
+    const hasGlobalClientAccess = brokerRole === "platform_owner";
 
     // Check if client exists and belongs to this broker
     const [clientRows] = await pool.query<RowDataPacket[]>(
@@ -9055,10 +9079,10 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
     }
 
     const brokerRole = brokerRows[0].role;
-    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
+    if (brokerRole !== "platform_owner") {
       return res.status(403).json({
         success: false,
-        message: "Only admins can view all brokers",
+        message: "Only platform owners can view all brokers",
       });
     }
 
@@ -9087,10 +9111,16 @@ const handleGetBrokers: RequestHandler = async (req, res) => {
     const safeSortBy = BROKER_SORT[sortBy] ?? "first_name";
 
     const searchWhere = search
-      ? " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)"
+      ? " AND (CONCAT(first_name, ' ', last_name) LIKE ? OR CONCAT(last_name, ' ', first_name) LIKE ? OR first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)"
       : "";
     const searchParams: any[] = search
-      ? [`%${search}%`, `%${search}%`, `%${search}%`]
+      ? [
+          `%${search}%`,
+          `%${search}%`,
+          `%${search}%`,
+          `%${search}%`,
+          `%${search}%`,
+        ]
       : [];
     const roleWhere = roleFilter ? " AND role = ?" : "";
     const roleParams: any[] = roleFilter ? [roleFilter] : [];
@@ -10256,9 +10286,9 @@ const handleUpdateTask: RequestHandler = async (req, res) => {
 
     const currentTask = currentTaskRows[0];
 
-    // Ownership check: only superadmin has full access; everyone else restricted to their own loans
+    // Ownership check: only platform_owner has full access; everyone else restricted to their own loans
     const brokerRole = (req as any).brokerRole;
-    const isAdmin = brokerRole === "superadmin";
+    const isAdmin = brokerRole === "platform_owner";
     if (!isAdmin) {
       const owns =
         currentTask.broker_user_id === brokerId ||
@@ -10625,7 +10655,7 @@ const handleDeleteTaskInstance: RequestHandler = async (req, res) => {
 
     // Ownership check
     const brokerRoleDelete = (req as any).brokerRole;
-    const isAdminDelete = brokerRoleDelete === "superadmin";
+    const isAdminDelete = brokerRoleDelete === "platform_owner";
     if (!isAdminDelete) {
       const owns =
         task.broker_user_id === brokerId ||
@@ -11177,7 +11207,7 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
       });
     }
 
-    const hasGlobalDocumentAccess = brokerRole === "superadmin";
+    const hasGlobalDocumentAccess = brokerRole === "platform_owner";
 
     const [documents] = await pool.query(
       `SELECT td.* FROM task_documents td 
@@ -11241,7 +11271,7 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
       });
     }
 
-    const hasGlobalDocumentAccess = brokerRole === "superadmin";
+    const hasGlobalDocumentAccess = brokerRole === "platform_owner";
 
     const [documentRows] = await pool.query<RowDataPacket[]>(
       `SELECT td.id
@@ -11734,7 +11764,7 @@ const handleApproveTask: RequestHandler = async (req, res) => {
 
     // Ownership check
     const brokerRoleApprove = (req as any).brokerRole;
-    const isAdminApprove = brokerRoleApprove === "superadmin";
+    const isAdminApprove = brokerRoleApprove === "platform_owner";
     if (!isAdminApprove) {
       const owns =
         task.broker_user_id === brokerId ||
@@ -11854,7 +11884,7 @@ const handleReopenTask: RequestHandler = async (req, res) => {
 
     // Ownership check
     const brokerRoleReopen = (req as any).brokerRole;
-    const isAdminReopen = brokerRoleReopen === "superadmin";
+    const isAdminReopen = brokerRoleReopen === "platform_owner";
     if (!isAdminReopen) {
       const owns =
         task.broker_user_id === brokerId ||
@@ -12850,7 +12880,7 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const hasGlobalDocumentAccess = brokerRole === "superadmin";
+    const hasGlobalDocumentAccess = brokerRole === "platform_owner";
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(
@@ -12890,10 +12920,10 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
     }
     if (search) {
       conditions.push(
-        "(td.original_filename LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR a.application_number LIKE ?)",
+        "(td.original_filename LIKE ? OR CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR CONCAT(c.last_name, ' ', c.first_name) LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR a.application_number LIKE ?)",
       );
       const like = `%${search}%`;
-      params.push(like, like, like, like);
+      params.push(like, like, like, like, like, like);
     }
     if (filterType && filterType !== "all") {
       conditions.push("td.document_type = ?");
@@ -15756,10 +15786,10 @@ const handleAdminSmsCheck: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    if (brokerRole !== "superadmin") {
+    if (brokerRole !== "platform_owner") {
       return res
         .status(403)
-        .json({ success: false, message: "Superadmin only" });
+        .json({ success: false, message: "Platform owner only" });
     }
 
     const { sid } = req.query as { sid?: string };
@@ -16096,7 +16126,9 @@ const handleConnectOffice365Mailbox: RequestHandler = async (req, res) => {
     // Admin can assign to another broker; otherwise always assign to self.
     const assignedBrokerId =
       target_broker_id &&
-      (brokerRole === "admin" || brokerRole === "superadmin")
+      (brokerRole === "admin" ||
+        brokerRole === "superadmin" ||
+        brokerRole === "platform_owner")
         ? Number(target_broker_id)
         : brokerId;
 
@@ -16485,7 +16517,10 @@ const handleDisconnectConversationMailbox: RequestHandler = async (
     }
 
     const mb = rows[0];
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdmin =
+      brokerRole === "admin" ||
+      brokerRole === "superadmin" ||
+      brokerRole === "platform_owner";
     const isOwner = mb.assigned_broker_id === brokerId;
 
     // Only the owning broker or an admin can disconnect a mailbox.
@@ -19416,7 +19451,10 @@ const handleDeleteConversationMessage: RequestHandler = async (req, res) => {
 
     const msg = rows[0];
     const brokerRole = (req as any).brokerRole;
-    const isAdminRole = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdminRole =
+      brokerRole === "admin" ||
+      brokerRole === "superadmin" ||
+      brokerRole === "platform_owner";
     const canDelete =
       msg.from_broker_id === brokerId ||
       msg.thread_owner === brokerId ||
@@ -20837,7 +20875,10 @@ const handleDeleteConversation: RequestHandler = async (req, res) => {
 
     // Verify broker has access — admins can delete any thread; brokers can delete own or unassigned
     const brokerRole = (req as any).brokerRole;
-    const isAdminRole = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdminRole =
+      brokerRole === "admin" ||
+      brokerRole === "superadmin" ||
+      brokerRole === "platform_owner";
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       `SELECT id FROM conversation_threads
        WHERE conversation_id = ? AND tenant_id = ?
@@ -24196,7 +24237,11 @@ const handleUpdateSettings: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
+    if (
+      brokerRole !== "admin" &&
+      brokerRole !== "superadmin" &&
+      brokerRole !== "platform_owner"
+    ) {
       return res
         .status(403)
         .json({ success: false, error: "Admin access required" });
@@ -24309,7 +24354,11 @@ const handleUpdateAdminSectionControls: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    if (brokerRole !== "admin" && brokerRole !== "superadmin") {
+    if (
+      brokerRole !== "admin" &&
+      brokerRole !== "superadmin" &&
+      brokerRole !== "platform_owner"
+    ) {
       return res
         .status(403)
         .json({ success: false, error: "Admin access required" });
@@ -24381,6 +24430,126 @@ const handleUpdateAdminSectionControls: RequestHandler = async (req, res) => {
   }
 };
 
+// ─── Role Section Permissions ──────────────────────────────────────────────
+
+/** Platform-owner-exclusive sections that can never be toggled for other roles */
+const PLATFORM_OWNER_LOCKED_SECTIONS = [
+  "reminder-flows",
+  "communication-templates",
+  "brokers",
+];
+
+/**
+ * GET /api/admin/role-section-permissions
+ * Returns all broker_role_section_permissions rows for this tenant.
+ * Any authenticated broker may call this (needed for menu visibility on login).
+ */
+const handleGetRoleSectionPermissions: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM broker_role_section_permissions
+       WHERE tenant_id = ?
+       ORDER BY broker_role, section_id`,
+      [tenantId],
+    );
+    const permissions = rows.map((r) => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      broker_role: r.broker_role,
+      section_id: r.section_id,
+      is_visible: r.is_visible === 1 || r.is_visible === true,
+      updated_by: r.updated_by ?? null,
+      updated_at: r.updated_at,
+    }));
+    return res.json({ success: true, permissions });
+  } catch (error) {
+    console.error("Error fetching role section permissions:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch role section permissions",
+    });
+  }
+};
+
+/**
+ * PUT /api/admin/role-section-permissions
+ * Upserts visibility flags for admin/broker roles. Platform owner only.
+ * Silently skips locked sections (reminder-flows, communication-templates, brokers).
+ */
+const handleUpdateRoleSectionPermissions: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole;
+    if (brokerRole !== "platform_owner") {
+      return res
+        .status(403)
+        .json({ success: false, error: "Platform owner access required" });
+    }
+    const [tenantRows] = await pool.query<RowDataPacket[]>(
+      "SELECT tenant_id FROM brokers WHERE id = ? LIMIT 1",
+      [brokerId],
+    );
+    if (!tenantRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+    const tenantId = tenantRows[0].tenant_id;
+    const { permissions } = req.body as {
+      permissions: {
+        broker_role: "admin" | "broker";
+        section_id: string;
+        is_visible: boolean;
+      }[];
+    };
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "permissions array is required" });
+    }
+    for (const perm of permissions) {
+      if (PLATFORM_OWNER_LOCKED_SECTIONS.includes(perm.section_id)) continue;
+      await pool.query(
+        `INSERT INTO broker_role_section_permissions
+           (tenant_id, broker_role, section_id, is_visible, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE
+           is_visible = VALUES(is_visible),
+           updated_by = VALUES(updated_by),
+           updated_at = NOW()`,
+        [
+          tenantId,
+          perm.broker_role,
+          perm.section_id,
+          perm.is_visible ? 1 : 0,
+          brokerId,
+        ],
+      );
+    }
+    return res.json({
+      success: true,
+      message: "Role section permissions updated",
+    });
+  } catch (error) {
+    console.error("Error updating role section permissions:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to update role section permissions",
+    });
+  }
+};
+
 /**
  * GET /api/admin/init
  * Single bootstrap endpoint — returns broker profile + section controls in one
@@ -24436,7 +24605,25 @@ const handleAdminInit: RequestHandler = async (req, res) => {
       updated_at: r.updated_at,
     }));
 
-    return res.json({ success: true, profile, controls });
+    // Fetch role section permissions for this tenant
+    const [permRows] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM broker_role_section_permissions
+       WHERE tenant_id = ?
+       ORDER BY broker_role, section_id`,
+      [profile.tenant_id],
+    );
+
+    const rolePermissions = permRows.map((r) => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      broker_role: r.broker_role,
+      section_id: r.section_id,
+      is_visible: r.is_visible === 1 || r.is_visible === true,
+      updated_by: r.updated_by ?? null,
+      updated_at: r.updated_at,
+    }));
+
+    return res.json({ success: true, profile, controls, rolePermissions });
   } catch (error) {
     console.error("Error in admin init:", error);
     return res
@@ -24840,7 +25027,10 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
     const { loanId } = req.params;
     const brokerId = (req as any).brokerId;
     const brokerRole: string = (req as any).brokerRole;
-    const isAdmin = brokerRole === "admin" || brokerRole === "superadmin";
+    const isAdmin =
+      brokerRole === "admin" ||
+      brokerRole === "superadmin" ||
+      brokerRole === "platform_owner";
 
     const [
       max_approved_amount,
@@ -25090,7 +25280,11 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
     }
 
     // Non-admins cannot edit HTML content
-    if (html_content !== undefined && brokerRole !== "admin") {
+    if (
+      html_content !== undefined &&
+      brokerRole !== "admin" &&
+      brokerRole !== "platform_owner"
+    ) {
       return res.status(403).json({
         success: false,
         error: "Only admin brokers can edit the letter content",
@@ -25117,7 +25311,10 @@ const handleUpdatePreApprovalLetter: RequestHandler = async (req, res) => {
       updates.push("expires_at = ?");
       values.push(expires_at || null);
     }
-    if (is_active !== undefined && brokerRole === "admin") {
+    if (
+      is_active !== undefined &&
+      (brokerRole === "admin" || brokerRole === "platform_owner")
+    ) {
       updates.push("is_active = ?");
       values.push(is_active ? 1 : 0);
     }
@@ -26232,7 +26429,7 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole as string | undefined;
-    const isSuperAdmin = brokerRole === "superadmin";
+    const isSuperAdmin = brokerRole === "platform_owner";
     const { status, flow_id, flow_category } = req.query;
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -27435,6 +27632,18 @@ function createServer() {
     "/api/admin/section-controls",
     verifyBrokerSession,
     handleUpdateAdminSectionControls,
+  );
+
+  // Role Section Permissions routes
+  expressApp.get(
+    "/api/admin/role-section-permissions",
+    verifyBrokerSession,
+    handleGetRoleSectionPermissions,
+  );
+  expressApp.put(
+    "/api/admin/role-section-permissions",
+    verifyBrokerSession,
+    handleUpdateRoleSectionPermissions,
   );
 
   // Pre-Approval Letter routes
@@ -31064,8 +31273,8 @@ function createServer() {
       const conditions: string[] = ["rp.tenant_id = ?"];
       const params: any[] = [MORTGAGE_TENANT_ID];
 
-      // Non-superadmin sees only their own or prospects they own / created
-      if (brokerRole !== "superadmin") {
+      // Non-platform-owner sees only their own or prospects they own / created
+      if (brokerRole !== "platform_owner") {
         conditions.push(
           "(rp.created_by_broker_id = ? OR rp.owner_broker_id = ?)",
         );
@@ -31276,7 +31485,7 @@ function createServer() {
 
       const prospect = rows[0];
       if (
-        brokerRole !== "superadmin" &&
+        brokerRole !== "platform_owner" &&
         prospect.created_by_broker_id !== brokerId &&
         prospect.owner_broker_id !== brokerId
       ) {
@@ -31341,7 +31550,7 @@ function createServer() {
 
       const prospect = rows[0];
       if (
-        brokerRole !== "superadmin" &&
+        brokerRole !== "platform_owner" &&
         prospect.created_by_broker_id !== brokerId &&
         prospect.owner_broker_id !== brokerId
       ) {
@@ -31396,7 +31605,7 @@ function createServer() {
 
       const prospect = rows[0];
       if (
-        brokerRole !== "superadmin" &&
+        brokerRole !== "platform_owner" &&
         prospect.created_by_broker_id !== brokerId &&
         prospect.owner_broker_id !== brokerId
       ) {
@@ -31550,7 +31759,7 @@ function createServer() {
 
       const prospect = rows[0];
       if (
-        brokerRole !== "superadmin" &&
+        brokerRole !== "platform_owner" &&
         prospect.created_by_broker_id !== brokerId &&
         prospect.owner_broker_id !== brokerId
       ) {

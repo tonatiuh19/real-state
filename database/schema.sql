@@ -253,7 +253,7 @@ CREATE TABLE `brokers` (
   `first_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `last_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `role` enum('broker','admin') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'broker',
+  `role` enum('broker','admin','platform_owner') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'broker',
   `status` enum('active','inactive','suspended') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
   `email_verified` tinyint(1) DEFAULT '0',
   `last_login` datetime DEFAULT NULL,
@@ -2134,7 +2134,24 @@ CREATE TABLE `email_sync_log` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
--- Table structure for table `mms_media`
+-- Table structure for table `broker_role_section_permissions`
+-- Per-role sidebar visibility control. platform_owner always sees everything.
+-- admin and broker visibility is seeded here; configurable by platform_owner.
+--
+
+CREATE TABLE IF NOT EXISTS `broker_role_section_permissions` (
+  `id`          INT          NOT NULL AUTO_INCREMENT,
+  `tenant_id`   INT          NOT NULL DEFAULT 1,
+  `broker_role` ENUM('admin','broker') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `section_id`  VARCHAR(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `is_visible`  TINYINT(1)   NOT NULL DEFAULT 1,
+  `updated_by`  INT          NULL COMMENT 'platform_owner broker_id who last changed this',
+  `updated_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_role_section` (`tenant_id`, `broker_role`, `section_id`),
+  CONSTRAINT `fk_brsp_tenant`  FOREIGN KEY (`tenant_id`)  REFERENCES `tenants`(`id`)  ON DELETE CASCADE,
+  CONSTRAINT `fk_brsp_updater` FOREIGN KEY (`updated_by`) REFERENCES `brokers`(`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- Stores MMS attachment bytes for Twilio delivery. Files expire after 24 hours.
 --
 

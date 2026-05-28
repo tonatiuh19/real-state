@@ -22,6 +22,7 @@ import preApprovalReducer from "./slices/preApprovalSlice";
 import settingsReducer from "./slices/settingsSlice";
 import reminderFlowsReducer from "./slices/reminderFlowsSlice";
 import adminSectionControlsReducer from "./slices/adminSectionControlsSlice";
+import roleSectionPermissionsReducer from "./slices/roleSectionPermissionsSlice";
 import contactSubmissionsReducer from "./slices/contactSubmissionsSlice";
 import schedulerReducer from "./slices/schedulerSlice";
 import calendarEventsReducer from "./slices/calendarEventsSlice";
@@ -54,6 +55,7 @@ export const store = configureStore({
     settings: settingsReducer,
     reminderFlows: reminderFlowsReducer,
     adminSectionControls: adminSectionControlsReducer,
+    roleSectionPermissions: roleSectionPermissionsReducer,
     contactSubmissions: contactSubmissionsReducer,
     scheduler: schedulerReducer,
     calendarEvents: calendarEventsReducer,

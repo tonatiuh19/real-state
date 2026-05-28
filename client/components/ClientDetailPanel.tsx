@@ -46,6 +46,7 @@ import {
   Copy,
   BookmarkPlus,
   Info,
+  ArrowRightLeft,
 } from "lucide-react";
 import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -98,7 +99,11 @@ import {
   fetchConversationTemplates,
   sendMessage,
 } from "@/store/slices/conversationsSlice";
-import { convertClientToBroker } from "@/store/slices/clientsSlice";
+import {
+  convertClientToBroker,
+  reassignClient,
+} from "@/store/slices/clientsSlice";
+import { fetchBrokers } from "@/store/slices/brokersSlice";
 import { useToast } from "@/hooks/use-toast";
 import { logger } from "@/lib/logger";
 import { stripHtml } from "@/lib/utils";
@@ -621,6 +626,7 @@ export default function ClientDetailPanel({
     availability: schedulerAvailability,
     availableSlots,
   } = useAppSelector((s) => s.scheduler);
+  const allBrokers = useAppSelector((s) => s.brokers.brokers);
 
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const [meetingForm, setMeetingForm] = useState({
@@ -634,6 +640,48 @@ export default function ClientDetailPanel({
   /* ── convert to broker ── */
   const [convertToRealtorOpen, setConvertToRealtorOpen] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
+
+  /* ── transfer client ── */
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
+  const [transferBrokerId, setTransferBrokerId] = useState<number | null>(null);
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [transferSearch, setTransferSearch] = useState("");
+
+  useEffect(() => {
+    if (transferDialogOpen) {
+      dispatch(
+        fetchBrokers({ limit: 500, sortBy: "first_name", sortOrder: "ASC" }),
+      );
+      setTransferBrokerId(null);
+      setTransferSearch("");
+    }
+  }, [transferDialogOpen, dispatch]);
+
+  const handleTransferClient = async () => {
+    if (!clientId || !transferBrokerId) return;
+    setIsTransferring(true);
+    try {
+      await dispatch(
+        reassignClient({ clientId, brokerId: transferBrokerId }),
+      ).unwrap();
+      const targetBroker = allBrokers.find((b) => b.id === transferBrokerId);
+      toast({
+        title: "Client transferred",
+        description: `${client?.first_name} ${client?.last_name} is now assigned to ${targetBroker?.first_name} ${targetBroker?.last_name}.`,
+      });
+      setTransferDialogOpen(false);
+      dispatch(fetchClientProfile(clientId));
+      onClientUpdated?.();
+    } catch (err: any) {
+      toast({
+        title: "Transfer failed",
+        description: err,
+        variant: "destructive",
+      });
+    } finally {
+      setIsTransferring(false);
+    }
+  };
 
   const handleConvertToRealtor = async () => {
     if (!clientId) return;
@@ -855,6 +903,14 @@ export default function ClientDetailPanel({
   const conversations = profile?.conversations ?? [];
   const communications = profile?.communications ?? [];
   const hasAssignedBroker = Boolean(client?.assigned_broker?.id);
+
+  /* Platform owner cannot message clients they don't directly own */
+  const isPlatformOwner = currentBroker?.role === "platform_owner";
+  const isClientOwner =
+    !isPlatformOwner ||
+    !client?.assigned_broker?.id ||
+    client.assigned_broker.id === currentBroker?.id;
+  const canMessage = isClientOwner;
 
   const statusMeta = CLIENT_STATUS_META[client?.status ?? "active"];
 
@@ -1085,6 +1141,17 @@ export default function ClientDetailPanel({
                         )}
                       </Tooltip>
                     </TooltipProvider>
+                    {isPlatformOwner && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setTransferDialogOpen(true)}
+                        className="h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-50"
+                      >
+                        <ArrowRightLeft className="w-3.5 h-3.5 mr-1" />
+                        Transfer
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
@@ -1164,7 +1231,7 @@ export default function ClientDetailPanel({
                           </p>
                           <p className="text-xs text-muted-foreground capitalize flex items-center gap-1 flex-wrap">
                             {client.assigned_broker.role === "broker"
-                              ? "Partner / Mortgage Banker"
+                              ? "Partner"
                               : client.assigned_broker.role === "admin"
                                 ? "Mortgage Banker"
                                 : client.assigned_broker.role}{" "}
@@ -1757,21 +1824,48 @@ export default function ClientDetailPanel({
                       {conversations.length} thread
                       {conversations.length !== 1 ? "s" : ""}
                     </p>
-                    <Button
-                      size="sm"
-                      className="h-8 text-xs gap-1.5"
-                      onClick={() => {
-                        setActiveConvId(null);
-                        setComposeOpen(true);
-                      }}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      New Message
-                    </Button>
+                    {canMessage ? (
+                      <Button
+                        size="sm"
+                        className="h-8 text-xs gap-1.5"
+                        onClick={() => {
+                          setActiveConvId(null);
+                          setComposeOpen(true);
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        New Message
+                      </Button>
+                    ) : (
+                      <Lock className="w-4 h-4 text-muted-foreground/50" />
+                    )}
                   </div>
 
+                  {/* Platform owner privacy notice */}
+                  {!canMessage && (
+                    <div className="mx-6 mb-3 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <Shield className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-semibold text-amber-800">
+                          Read-only — Client Privacy Protected
+                        </p>
+                        <p className="text-xs text-amber-700 leading-relaxed">
+                          This client's conversations belong to{" "}
+                          <strong>
+                            {client?.assigned_broker?.first_name}{" "}
+                            {client?.assigned_broker?.last_name}
+                          </strong>
+                          's workspace. As platform owner you can review
+                          activity for oversight, but sending messages on
+                          another team member's behalf would violate client
+                          communication privacy.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* compose box (new thread) */}
-                  {composeOpen && !activeConvId && (
+                  {canMessage && composeOpen && !activeConvId && (
                     <ComposeBox
                       composeType={composeType}
                       composeSubject={composeSubject}
@@ -1791,24 +1885,26 @@ export default function ClientDetailPanel({
 
                   <ScrollArea className="flex-1">
                     <div className="px-6 pb-4 space-y-2.5">
-                      {conversations.length === 0 && !composeOpen ? (
+                      {conversations.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
                           <MessageSquare className="w-12 h-12 text-muted-foreground/30" />
                           <p className="text-sm text-muted-foreground">
                             No conversations yet
                           </p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setActiveConvId(null);
-                              setComposeOpen(true);
-                            }}
-                            className="gap-1.5 text-xs"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Start a conversation
-                          </Button>
+                          {canMessage && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setActiveConvId(null);
+                                setComposeOpen(true);
+                              }}
+                              className="gap-1.5 text-xs"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Start a conversation
+                            </Button>
+                          )}
                         </div>
                       ) : (
                         conversations.map((conv) => {
@@ -2034,7 +2130,7 @@ export default function ClientDetailPanel({
                   </ScrollArea>
 
                   {/* reply compose */}
-                  {composeOpen && (
+                  {canMessage && composeOpen && (
                     <ComposeBox
                       composeType={composeType}
                       composeSubject={composeSubject}
@@ -2051,6 +2147,19 @@ export default function ClientDetailPanel({
                       onSaveAsTemplate={() => setSaveTemplateOpen(true)}
                       templates={convTemplates}
                     />
+                  )}
+                  {!canMessage && (
+                    <div className="mx-4 mb-3 flex gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5">
+                      <Lock className="h-3.5 w-3.5 text-amber-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-700">
+                        Replies are disabled — this thread belongs to{" "}
+                        <strong>
+                          {client?.assigned_broker?.first_name}{" "}
+                          {client?.assigned_broker?.last_name}
+                        </strong>
+                        's workspace.
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
@@ -2385,6 +2494,138 @@ export default function ClientDetailPanel({
                 <ArrowUpRight className="h-4 w-4" />
               )}
               Convert to Realtor
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Transfer Client ───────────────────────────────────────────────── */}
+      <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowRightLeft className="h-5 w-5 text-amber-500" />
+              Transfer Client
+            </DialogTitle>
+            <DialogDescription>
+              Reassign{" "}
+              <span className="font-medium text-foreground">
+                {client?.first_name} {client?.last_name}
+              </span>{" "}
+              to a different team member. The new owner will gain full messaging
+              and scheduling access.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Current owner */}
+          {client?.assigned_broker && (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/60 border px-3 py-2 text-xs text-muted-foreground">
+              <User className="h-3.5 w-3.5 flex-shrink-0" />
+              Currently assigned to{" "}
+              <span className="font-medium text-foreground ml-0.5">
+                {client.assigned_broker.first_name}{" "}
+                {client.assigned_broker.last_name}
+              </span>
+            </div>
+          )}
+
+          {/* Broker picker */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Assign to</Label>
+            <Command className="rounded-lg border shadow-sm">
+              <CommandInput
+                placeholder="Search brokers..."
+                value={transferSearch}
+                onValueChange={setTransferSearch}
+              />
+              <CommandList className="max-h-52">
+                <CommandEmpty className="py-6 text-center text-xs text-muted-foreground">
+                  No brokers found.
+                </CommandEmpty>
+                <CommandGroup>
+                  {allBrokers
+                    .filter(
+                      (b) =>
+                        b.status === "active" &&
+                        b.id !== client?.assigned_broker?.id,
+                    )
+                    .map((broker) => {
+                      const roleLabel =
+                        broker.role === "admin"
+                          ? "Banker"
+                          : broker.role === "platform_owner"
+                            ? "Staff"
+                            : "Partner";
+                      const isSelected = broker.id === transferBrokerId;
+                      return (
+                        <CommandItem
+                          key={broker.id}
+                          value={`${broker.first_name} ${broker.last_name} ${broker.email}`}
+                          onSelect={() =>
+                            setTransferBrokerId(isSelected ? null : broker.id)
+                          }
+                          className="flex items-center justify-between gap-2 cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="h-7 w-7 rounded-full bg-violet-100 text-violet-700 flex items-center justify-center font-semibold text-xs flex-shrink-0">
+                              {broker.first_name[0]}
+                              {broker.last_name[0]}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium truncate">
+                                {broker.first_name} {broker.last_name}
+                              </p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {broker.email}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <Badge
+                              variant="secondary"
+                              className="text-[10px] h-4 px-1.5"
+                            >
+                              {roleLabel}
+                            </Badge>
+                            {isSelected && (
+                              <CheckCircle2 className="h-4 w-4 text-violet-600" />
+                            )}
+                          </div>
+                        </CommandItem>
+                      );
+                    })}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </div>
+
+          {transferBrokerId && (
+            <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-amber-800 text-xs leading-snug">
+              <Shield className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+              The previous owner will lose messaging access to this client
+              immediately.
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setTransferDialogOpen(false)}
+              disabled={isTransferring}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleTransferClient}
+              disabled={!transferBrokerId || isTransferring}
+              className="bg-amber-500 hover:bg-amber-600 text-white gap-2"
+            >
+              {isTransferring ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowRightLeft className="h-4 w-4" />
+              )}
+              Transfer Client
             </Button>
           </DialogFooter>
         </DialogContent>

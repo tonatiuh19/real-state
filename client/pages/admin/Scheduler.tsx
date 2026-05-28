@@ -902,7 +902,8 @@ function SettingsPanel() {
     return message.replace(/broker/gi, roleLabel);
   };
   const { brokers } = useAppSelector((s) => s.brokers);
-  const isAdmin = authUser?.role === "admin";
+  const isAdmin =
+    authUser?.role === "admin" || authUser?.role === "platform_owner";
 
   // Load partner brokers for admin link generation
   useEffect(() => {
