@@ -20,7 +20,8 @@
     "deploy:prod": "tsx scripts/deploy-prod.ts",
     "validate:create-loan": "tsx scripts/validate-create-loan-schema.ts",
     "validate:all": "npm run typecheck && npm test && npm run validate:create-loan && npm run build",
-    "teams:policy-sync": "bash scripts/teams-policy-sync.sh"
+    "teams:policy-sync": "bash scripts/teams-policy-sync.sh",
+    "purge:data": "node scripts/purge-old-data.mjs"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.11.2",

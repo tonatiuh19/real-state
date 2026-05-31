@@ -8,6 +8,7 @@ import type {
   UpdateBrokerProfileRequest,
   UpdateBrokerProfileResponse,
 } from "@shared/api";
+import { isQuotaExceededApiResponse } from "@shared/database-quota";
 
 interface BrokerUser {
   id: number;
@@ -49,6 +50,7 @@ interface BrokerAuthState {
   avatarUploading: boolean;
   error: string | null;
   profileError: string | null;
+  databaseQuotaExceeded: boolean;
 }
 
 // Helper to get user from localStorage
@@ -71,7 +73,12 @@ const initialState: BrokerAuthState = {
   avatarUploading: false,
   error: null,
   profileError: null,
+  databaseQuotaExceeded: false,
 };
+
+type AuthRejectPayload =
+  | string
+  | { quotaExceeded: true; message: string };
 
 // Async thunks
 export const sendVerificationCode = createAsyncThunk(
@@ -90,9 +97,13 @@ export const sendVerificationCode = createAsyncThunk(
       });
       return response.data;
     } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.message || "Failed to send verification code",
-      );
+      const data = error.response?.data;
+      const message =
+        error.response?.data?.message || "Failed to send verification code";
+      if (isQuotaExceededApiResponse(data)) {
+        return rejectWithValue({ quotaExceeded: true, message });
+      }
+      return rejectWithValue(message);
     }
   },
 );
@@ -178,9 +189,15 @@ export const initAdminSession = createAsyncThunk(
       });
       return data;
     } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.error || "Failed to initialise admin session",
-      );
+      const data = error.response?.data;
+      const message =
+        error.response?.data?.error ||
+        error.response?.data?.message ||
+        "Failed to initialise admin session";
+      if (isQuotaExceededApiResponse(data)) {
+        return rejectWithValue({ quotaExceeded: true, message });
+      }
+      return rejectWithValue(message);
     }
   },
 );
@@ -280,10 +297,25 @@ const brokerAuthSlice = createSlice({
       })
       .addCase(sendVerificationCode.fulfilled, (state) => {
         state.loading = false;
+        state.databaseQuotaExceeded = false;
       })
       .addCase(sendVerificationCode.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.payload as string;
+        const payload = action.payload as AuthRejectPayload | undefined;
+        if (
+          payload &&
+          typeof payload === "object" &&
+          payload.quotaExceeded
+        ) {
+          state.databaseQuotaExceeded = true;
+          state.error = payload.message;
+        } else {
+          state.databaseQuotaExceeded = false;
+          state.error =
+            typeof payload === "string"
+              ? payload
+              : "Failed to send verification code";
+        }
       });
 
     // Verify code
@@ -343,6 +375,7 @@ const brokerAuthSlice = createSlice({
       })
       .addCase(initAdminSession.fulfilled, (state, action) => {
         state.profileLoading = false;
+        state.databaseQuotaExceeded = false;
         state.user = { ...state.user, ...action.payload.profile } as BrokerUser;
         state.isAuthenticated = true;
         state.error = null;
@@ -350,7 +383,17 @@ const brokerAuthSlice = createSlice({
       })
       .addCase(initAdminSession.rejected, (state, action) => {
         state.profileLoading = false;
-        // session invalid — clear everything
+        const payload = action.payload as AuthRejectPayload | undefined;
+        if (
+          payload &&
+          typeof payload === "object" &&
+          payload.quotaExceeded
+        ) {
+          state.databaseQuotaExceeded = true;
+          state.error = payload.message;
+          return;
+        }
+        state.databaseQuotaExceeded = false;
         state.user = null;
         state.sessionToken = null;
         state.isAuthenticated = false;

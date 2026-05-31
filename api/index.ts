@@ -219,7 +219,8 @@ function isOAuthRedirectMismatch(err: any): boolean {
   const desc = String(err?.response?.data?.error_description || "");
   return (
     code === "invalid_client" &&
-    (desc.includes("AADSTS50011") || desc.toLowerCase().includes("redirect uri"))
+    (desc.includes("AADSTS50011") ||
+      desc.toLowerCase().includes("redirect uri"))
   );
 }
 
@@ -374,7 +375,9 @@ async function graphGetWithFallback(
 }
 
 /** Extract relative /calendarView path from a Graph @odata.nextLink (any URL shape). */
-function graphCalendarNextPath(rawNext: string | null | undefined): string | null {
+function graphCalendarNextPath(
+  rawNext: string | null | undefined,
+): string | null {
   if (!rawNext) return null;
   const idx = rawNext.indexOf("/calendarView");
   if (idx >= 0) return rawNext.slice(idx);
@@ -863,11 +866,7 @@ const SYNC_SKIP_FOLDER_NAMES = new Set([
 async function fetchMailboxFolderTree(mailbox: ConversationMailboxRow) {
   const SELECT =
     "id,displayName,totalItemCount,unreadItemCount,childFolderCount";
-  const {
-    resp,
-    token,
-    base,
-  } = await graphGetWithFallback(
+  const { resp, token, base } = await graphGetWithFallback(
     mailbox,
     (b) => `${b}/mailFolders?$top=100&$select=${SELECT}`,
   );
@@ -1020,7 +1019,11 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
 
   const mailboxEmailLower = mailbox.mailbox_email.toLowerCase();
 
-  for (const { folderRef, label, direction: folderDirection } of foldersToSync) {
+  for (const {
+    folderRef,
+    label,
+    direction: folderDirection,
+  } of foldersToSync) {
     const folderStart = Date.now();
     const graphFolder = label;
     console.log(
@@ -1048,8 +1051,7 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         } else {
           const { resp, token } = await graphGetWithFallback(
             mailbox,
-            (b) =>
-              `${b}/mailFolders/${encodeURIComponent(folderRef)}/messages`,
+            (b) => `${b}/mailFolders/${encodeURIComponent(folderRef)}/messages`,
             {
               params: {
                 $top: SYNC_MESSAGES_PER_PAGE,
@@ -2766,10 +2768,191 @@ function processTemplateVariables(
 
   for (const [key, value] of Object.entries(variables)) {
     const placeholder = `{{${key}}}`;
-    processed = processed.replace(new RegExp(placeholder, "g"), value || "");
+    processed = processed.replace(new RegExp(placeholder, "gi"), value || "");
   }
 
   return processed;
+}
+
+/** Last-10-digit phone match (same logic as thread list + ownership guard). */
+function phoneLastTen(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const last = phone.replace(/\D/g, "").slice(-10);
+  return last.length === 10 ? last : null;
+}
+
+/**
+ * Resolve {{first_name}}, {{client_name}}, {{broker_name}}, etc. for Conversations send.
+ * Uses client_id when provided; otherwise thread row, normalized phone/email, and
+ * denormalized client_name — matching how the UI displays contact names.
+ */
+async function resolveConversationTemplateVariables(opts: {
+  clientId?: number | null;
+  applicationId?: number | null;
+  conversationId?: string | null;
+  recipientPhone?: string | null;
+  recipientEmail?: string | null;
+  recipientBrokerId?: number | null;
+  senderBrokerId?: number | null;
+}): Promise<Record<string, string>> {
+  let clientFirstName = "";
+  let clientLastName = "";
+  let clientFullName = "";
+  let applicationNumber = opts.applicationId ? String(opts.applicationId) : "";
+
+  const loadClientById = async (id: number) => {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT first_name, last_name FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [id, MORTGAGE_TENANT_ID],
+    );
+    if (rows.length > 0) {
+      clientFirstName = rows[0].first_name || "";
+      clientLastName = rows[0].last_name || "";
+      clientFullName = `${clientFirstName} ${clientLastName}`.trim();
+    }
+  };
+
+  const loadClientByPhone = async (phone: string) => {
+    const lastTen = phoneLastTen(phone);
+    if (!lastTen) return;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT first_name, last_name FROM clients
+       WHERE tenant_id = ?
+         AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, lastTen],
+    );
+    if (rows.length > 0) {
+      clientFirstName = rows[0].first_name || "";
+      clientLastName = rows[0].last_name || "";
+      clientFullName = `${clientFirstName} ${clientLastName}`.trim();
+    }
+  };
+
+  const loadClientByEmail = async (email: string) => {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT first_name, last_name FROM clients
+       WHERE tenant_id = ? AND LOWER(email) = LOWER(?) LIMIT 1`,
+      [MORTGAGE_TENANT_ID, email],
+    );
+    if (rows.length > 0) {
+      clientFirstName = rows[0].first_name || "";
+      clientLastName = rows[0].last_name || "";
+      clientFullName = `${clientFirstName} ${clientLastName}`.trim();
+    }
+  };
+
+  const applyDisplayName = (name: string | null | undefined) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    const parts = trimmed.split(/\s+/);
+    clientFirstName = parts[0] || "";
+    clientLastName = parts.slice(1).join(" ");
+    clientFullName = trimmed;
+  };
+
+  if (opts.clientId) {
+    await loadClientById(opts.clientId);
+  }
+
+  if (!clientFirstName && opts.conversationId) {
+    const [threadRows] = await pool.query<RowDataPacket[]>(
+      `SELECT client_id, client_name, client_phone, client_email, contact_broker_id
+       FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+      [opts.conversationId, MORTGAGE_TENANT_ID],
+    );
+    if (threadRows.length > 0) {
+      const t = threadRows[0];
+      if (t.client_id) {
+        await loadClientById(t.client_id as number);
+      }
+      if (!clientFirstName && t.client_name) {
+        applyDisplayName(t.client_name as string);
+      }
+      if (!clientFirstName && t.client_phone) {
+        await loadClientByPhone(t.client_phone as string);
+      }
+      if (!clientFirstName && t.client_email) {
+        await loadClientByEmail(t.client_email as string);
+      }
+      if (!clientFirstName && t.contact_broker_id) {
+        const [bRows] = await pool.query<RowDataPacket[]>(
+          `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [t.contact_broker_id, MORTGAGE_TENANT_ID],
+        );
+        if (bRows.length > 0) {
+          clientFirstName = bRows[0].first_name || "";
+          clientLastName = bRows[0].last_name || "";
+          clientFullName =
+            `${clientFirstName} ${clientLastName}`.trim() || clientFirstName;
+        }
+      }
+    }
+  }
+
+  if (!clientFirstName && opts.recipientPhone) {
+    await loadClientByPhone(opts.recipientPhone);
+  }
+  if (!clientFirstName && opts.recipientEmail) {
+    await loadClientByEmail(opts.recipientEmail);
+  }
+  if (!clientFirstName && opts.recipientBrokerId) {
+    const [bRows] = await pool.query<RowDataPacket[]>(
+      `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [opts.recipientBrokerId, MORTGAGE_TENANT_ID],
+    );
+    if (bRows.length > 0) {
+      clientFirstName = bRows[0].first_name || "";
+      clientLastName = bRows[0].last_name || "";
+      clientFullName =
+        `${clientFirstName} ${clientLastName}`.trim() || clientFirstName;
+    }
+  }
+
+  if (opts.applicationId) {
+    const [appRows] = await pool.query<RowDataPacket[]>(
+      `SELECT application_number, id FROM loan_applications WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [opts.applicationId, MORTGAGE_TENANT_ID],
+    );
+    if (appRows.length > 0) {
+      applicationNumber =
+        appRows[0].application_number || String(appRows[0].id);
+    }
+  }
+
+  let brokerFirstName = "";
+  let brokerLastName = "";
+  let brokerFullName = "";
+  if (opts.senderBrokerId) {
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [opts.senderBrokerId, MORTGAGE_TENANT_ID],
+    );
+    if (brokerRows.length > 0) {
+      brokerFirstName = brokerRows[0].first_name || "";
+      brokerLastName = brokerRows[0].last_name || "";
+      brokerFullName = `${brokerFirstName} ${brokerLastName}`.trim();
+    }
+  }
+
+  return {
+    first_name: clientFirstName,
+    last_name: clientLastName,
+    client_name: clientFullName || clientFirstName,
+    client_first_name: clientFirstName,
+    client_last_name: clientLastName,
+    application_id: applicationNumber,
+    application_number: applicationNumber,
+    broker_name: brokerFullName || brokerFirstName || "Your Loan Officer",
+    broker_first_name: brokerFirstName,
+    broker_last_name: brokerLastName,
+    current_date: new Date().toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }),
+  };
 }
 
 // =====================================================
@@ -4277,6 +4460,17 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
     });
   } catch (error) {
     console.error("Error sending broker verification code:", error);
+    const quotaErrText =
+      (error as { sqlMessage?: string })?.sqlMessage ??
+      (error instanceof Error ? error.message : String(error));
+    if (/usage quota being exhausted|usage quota.*exhausted/i.test(quotaErrText)) {
+      return res.status(503).json({
+        success: false,
+        quota_exceeded: true,
+        message: "Failed to send verification code",
+        error: quotaErrText,
+      });
+    }
     res.status(500).json({
       success: false,
       message: "Failed to send verification code",
@@ -5797,10 +5991,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           employer_name || null,
           years_employed || null,
           marital_status || null,
-          dependent_count != null ? parseInt(String(dependent_count)) : null,
-          years_at_address != null
-            ? parseFloat(String(years_at_address))
-            : null,
+          toSqlOptionalInt(dependent_count),
+          toSqlOptionalFloat(years_at_address),
           broker_token || null,
           resolvedCitizenshipStatus,
         ],
@@ -7195,33 +7387,22 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
     };
 
     maybeSet("loan_type", loan_type);
-    maybeSet(
-      "loan_amount",
-      loan_amount != null ? parseFloat(loan_amount) : loan_amount,
-    );
-    maybeSet(
-      "property_value",
-      property_value != null ? parseFloat(property_value) : property_value,
-    );
+    if (loan_amount !== undefined) maybeSet("loan_amount", toSqlMoney(loan_amount));
+    if (property_value !== undefined)
+      maybeSet("property_value", toSqlMoney(property_value));
     maybeSet("property_address", property_address);
     maybeSet("property_city", property_city);
     maybeSet("property_state", property_state);
     maybeSet("property_zip", property_zip);
     maybeSet("property_type", property_type);
-    maybeSet(
-      "down_payment",
-      down_payment != null ? parseFloat(down_payment) : down_payment,
-    );
+    if (down_payment !== undefined)
+      maybeSet("down_payment", toSqlMoney(down_payment));
     maybeSet("loan_purpose", loan_purpose);
     maybeSet("estimated_close_date", estimated_close_date);
-    maybeSet(
-      "interest_rate",
-      interest_rate != null ? parseFloat(interest_rate) : interest_rate,
-    );
-    maybeSet(
-      "loan_term_months",
-      loan_term_months != null ? parseInt(loan_term_months) : loan_term_months,
-    );
+    if (interest_rate !== undefined)
+      maybeSet("interest_rate", toSqlOptionalFloat(interest_rate));
+    if (loan_term_months !== undefined)
+      maybeSet("loan_term_months", toSqlOptionalInt(loan_term_months));
     maybeSet("priority", priority);
     maybeSet("notes", notes);
     maybeSet("citizenship_status", citizenship_status);
@@ -7243,16 +7424,10 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
         maybeSet("marital_status", marital_status);
       }
     }
-    maybeSet(
-      "dependent_count",
-      dependent_count != null ? parseInt(dependent_count) : dependent_count,
-    );
-    maybeSet(
-      "years_at_address",
-      years_at_address != null
-        ? parseFloat(years_at_address)
-        : years_at_address,
-    );
+    if (dependent_count !== undefined)
+      maybeSet("dependent_count", toSqlOptionalInt(dependent_count));
+    if (years_at_address !== undefined)
+      maybeSet("years_at_address", toSqlOptionalFloat(years_at_address));
 
     if (fields.length === 0) {
       return res
@@ -20279,182 +20454,77 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       }
     }
 
-    // Process template if provided
+    // Resolve {{first_name}} and other merge tags (template picker or pasted body)
     let processedBody = body;
     let processedSubject = subject;
 
-    if (template_id && message_type === "template") {
-      const [templates] = await pool.query<RowDataPacket[]>(
-        `SELECT * FROM templates WHERE id = ? AND tenant_id = ?`,
-        [template_id, MORTGAGE_TENANT_ID],
+    let effectiveClientId: number | null = null;
+    if (client_id != null && client_id !== "") {
+      const parsed = Number(client_id);
+      if (!Number.isNaN(parsed)) effectiveClientId = parsed;
+    }
+    if (!effectiveClientId && finalConversationId) {
+      const [threadClientRows] = await pool.query<RowDataPacket[]>(
+        `SELECT client_id FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ? AND client_id IS NOT NULL LIMIT 1`,
+        [finalConversationId, MORTGAGE_TENANT_ID],
       );
+      if (threadClientRows.length > 0) {
+        effectiveClientId = threadClientRows[0].client_id as number;
+      }
+    }
 
-      if (templates.length > 0) {
-        const template = templates[0];
+    const bodyHasPlaceholders = /\{\{[^}]+\}\}/.test(processedBody || "");
+    const subjectHasPlaceholders = /\{\{[^}]+\}\}/.test(processedSubject || "");
+    const shouldResolveTemplate =
+      !!template_id ||
+      message_type === "template" ||
+      bodyHasPlaceholders ||
+      subjectHasPlaceholders;
 
-        // Resolve real client data
-        let clientFirstName = "";
-        let clientLastName = "";
-        let clientFullName = "";
-        let applicationNumber = application_id ? String(application_id) : "";
+    if (shouldResolveTemplate) {
+      const templateVariables = await resolveConversationTemplateVariables({
+        clientId: effectiveClientId,
+        applicationId: application_id ?? null,
+        conversationId: finalConversationId,
+        recipientPhone: finalRecipientPhone,
+        recipientEmail: finalRecipientEmail,
+        recipientBrokerId: recipientBrokerId ?? null,
+        senderBrokerId: brokerId,
+      });
 
-        if (client_id) {
-          const [clientRows] = await pool.query<RowDataPacket[]>(
-            `SELECT first_name, last_name FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
-            [client_id, MORTGAGE_TENANT_ID],
-          );
-          if (clientRows.length > 0) {
-            clientFirstName = clientRows[0].first_name || "";
-            clientLastName = clientRows[0].last_name || "";
-            clientFullName = `${clientFirstName} ${clientLastName}`.trim();
-          }
-        } else if (finalRecipientPhone || finalRecipientEmail) {
-          // Try to find client by phone or email
-          const [clientRows] = await pool.query<RowDataPacket[]>(
-            `SELECT first_name, last_name FROM clients
-             WHERE tenant_id = ? AND (phone = ? OR email = ?) LIMIT 1`,
-            [
-              MORTGAGE_TENANT_ID,
-              finalRecipientPhone || null,
-              finalRecipientEmail || null,
-            ],
-          );
-          if (clientRows.length > 0) {
-            clientFirstName = clientRows[0].first_name || "";
-            clientLastName = clientRows[0].last_name || "";
-            clientFullName = `${clientFirstName} ${clientLastName}`.trim();
-          }
-        }
-
-        if (application_id) {
-          const [appRows] = await pool.query<RowDataPacket[]>(
-            `SELECT application_number, id FROM loan_applications WHERE id = ? AND tenant_id = ? LIMIT 1`,
-            [application_id, MORTGAGE_TENANT_ID],
-          );
-          if (appRows.length > 0) {
-            applicationNumber =
-              appRows[0].application_number || String(appRows[0].id);
-          }
-        }
-
-        // Resolve broker name
-        let brokerFirstName = "";
-        let brokerLastName = "";
-        let brokerFullName = "";
-        if (brokerId) {
-          const [brokerRows] = await pool.query<RowDataPacket[]>(
-            `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
-            [brokerId, MORTGAGE_TENANT_ID],
-          );
-          if (brokerRows.length > 0) {
-            brokerFirstName = brokerRows[0].first_name || "";
-            brokerLastName = brokerRows[0].last_name || "";
-            brokerFullName = `${brokerFirstName} ${brokerLastName}`.trim();
-          }
-        }
-
-        const templateVariables: Record<string, string> = {
-          // Client vars
-          first_name: clientFirstName,
-          last_name: clientLastName,
-          client_name: clientFullName || clientFirstName,
-          client_first_name: clientFirstName,
-          client_last_name: clientLastName,
-          // Application vars
-          application_id: applicationNumber,
-          application_number: applicationNumber,
-          // Broker vars
-          broker_name: brokerFullName || brokerFirstName || "Your Loan Officer",
-          broker_first_name: brokerFirstName,
-          broker_last_name: brokerLastName,
-          // Misc
-          current_date: new Date().toLocaleDateString("en-US", {
-            month: "long",
-            day: "numeric",
-            year: "numeric",
-          }),
-        };
-
-        // Use the body sent by the client (may have been edited after template selection).
-        // Fall back to template.body only if the client sent an empty body.
-        processedBody = processTemplateVariables(
-          body || template.body,
-          templateVariables,
+      if (!templateVariables.first_name && bodyHasPlaceholders) {
+        console.warn(
+          `[handleSendMessage] first_name unresolved — conv=${finalConversationId} client_id=${effectiveClientId} phone=${finalRecipientPhone ?? "none"}`,
         );
-        if (communication_type === "email") {
-          processedSubject = processTemplateVariables(
-            subject || template.subject || "",
-            templateVariables,
-          );
+      }
+
+      let bodyToProcess = processedBody;
+      let subjectToProcess = processedSubject;
+
+      if (template_id) {
+        const [templates] = await pool.query<RowDataPacket[]>(
+          `SELECT * FROM templates WHERE id = ? AND tenant_id = ?`,
+          [template_id, MORTGAGE_TENANT_ID],
+        );
+        if (templates.length > 0) {
+          const template = templates[0];
+          if (!bodyToProcess?.trim()) bodyToProcess = template.body;
+          if (communication_type === "email" && !subjectToProcess?.trim()) {
+            subjectToProcess = template.subject || "";
+          }
         }
       }
-    } else if (message_type === "text") {
-      // Even for plain text, resolve any {{var}} patterns if we have client context
-      // (handles the case where the user typed or pasted template text manually)
-      const hasPlaceholders = /\{\{[^}]+\}\}/.test(processedBody);
-      if (hasPlaceholders && (client_id || application_id || brokerId)) {
-        let clientFirstName = "";
-        let clientLastName = "";
-        let applicationNumber = application_id ? String(application_id) : "";
 
-        if (client_id) {
-          const [clientRows] = await pool.query<RowDataPacket[]>(
-            `SELECT first_name, last_name FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
-            [client_id, MORTGAGE_TENANT_ID],
-          );
-          if (clientRows.length > 0) {
-            clientFirstName = clientRows[0].first_name || "";
-            clientLastName = clientRows[0].last_name || "";
-          }
-        }
-
-        if (application_id) {
-          const [appRows] = await pool.query<RowDataPacket[]>(
-            `SELECT application_number, id FROM loan_applications WHERE id = ? AND tenant_id = ? LIMIT 1`,
-            [application_id, MORTGAGE_TENANT_ID],
-          );
-          if (appRows.length > 0) {
-            applicationNumber =
-              appRows[0].application_number || String(appRows[0].id);
-          }
-        }
-
-        let brokerFullName = "";
-        if (brokerId) {
-          const [brokerRows] = await pool.query<RowDataPacket[]>(
-            `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
-            [brokerId, MORTGAGE_TENANT_ID],
-          );
-          if (brokerRows.length > 0) {
-            brokerFullName =
-              `${brokerRows[0].first_name || ""} ${brokerRows[0].last_name || ""}`.trim();
-          }
-        }
-
-        processedBody = processTemplateVariables(processedBody, {
-          first_name: clientFirstName,
-          last_name: clientLastName,
-          client_name:
-            `${clientFirstName} ${clientLastName}`.trim() || clientFirstName,
-          client_first_name: clientFirstName,
-          client_last_name: clientLastName,
-          application_id: applicationNumber,
-          application_number: applicationNumber,
-          broker_name: brokerFullName || "Your Loan Officer",
-          broker_first_name: brokerFullName.split(" ")[0] || "",
-          current_date: new Date().toLocaleDateString("en-US", {
-            month: "long",
-            day: "numeric",
-            year: "numeric",
-          }),
-        });
-        if (processedSubject) {
-          processedSubject = processTemplateVariables(processedSubject, {
-            first_name: clientFirstName,
-            application_number: applicationNumber,
-            broker_name: brokerFullName || "Your Loan Officer",
-          });
-        }
+      processedBody = processTemplateVariables(
+        bodyToProcess || "",
+        templateVariables,
+      );
+      if (communication_type === "email" && subjectToProcess) {
+        processedSubject = processTemplateVariables(
+          subjectToProcess,
+          templateVariables,
+        );
       }
     }
 
@@ -20470,7 +20540,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         application_id || null,
         lead_id || null,
         brokerId,
-        client_id || null,
+        effectiveClientId,
         communication_type,
         "outbound",
         processedSubject || null,
@@ -20516,7 +20586,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         leadId: lead_id || null,
         fromUserId: null,
         fromBrokerId: brokerId,
-        toUserId: client_id || null,
+        toUserId: effectiveClientId,
         toBrokerId: null,
         direction: "outbound",
         body: processedBody,
@@ -20531,7 +20601,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         leadId: lead_id || null,
         fromUserId: null,
         fromBrokerId: brokerId,
-        toUserId: client_id || null,
+        toUserId: effectiveClientId,
         toBrokerId: recipientBrokerId || null,
         contactBrokerId: recipientBrokerId || null,
         communicationType: communication_type,
@@ -23997,6 +24067,127 @@ const handleCronPurgeMmsMedia: RequestHandler = async (req, res) => {
   }
 };
 
+/** Max rows touched per table per cron tick (avoids Vercel timeout on large backlogs). */
+const PURGE_OLD_DATA_BATCH = 10_000;
+
+/**
+ * GET /api/cron/purge-old-data
+ * Batched retention cleanup — logs, expired sessions, email body trim, etc.
+ * Run weekly via cPanel cron; use scripts/purge-old-data.mjs --execute for one-time bulk purge.
+ * Requires ?secret=CRON_SECRET or Authorization: Bearer CRON_SECRET.
+ */
+const handleCronPurgeOldData: RequestHandler = async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const provided =
+    (req.query.secret as string | undefined) ||
+    req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  if (!secret || provided !== secret) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const batch = PURGE_OLD_DATA_BATCH;
+  const results: Record<string, number> = {};
+
+  const batchedDelete = async (
+    key: string,
+    sql: string,
+    params: unknown[] = [],
+  ) => {
+    const [result] = await pool.query<any>(sql, params);
+    results[key] = result.affectedRows ?? 0;
+  };
+
+  try {
+    await batchedDelete(
+      "mms_media",
+      "DELETE FROM mms_media WHERE expires_at <= NOW() LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "broker_sessions",
+      "DELETE FROM broker_sessions WHERE expires_at < NOW() LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "user_sessions",
+      "DELETE FROM user_sessions WHERE expires_at < NOW() LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "revoked_tokens",
+      "DELETE FROM revoked_tokens WHERE expires_at < NOW() LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "audit_logs",
+      "DELETE FROM audit_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY) LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "email_sync_log",
+      "DELETE FROM email_sync_log WHERE started_at < DATE_SUB(NOW(), INTERVAL 30 DAY) LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "notifications",
+      "DELETE FROM notifications WHERE is_read = 1 AND created_at < DATE_SUB(NOW(), INTERVAL 120 DAY) LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "reminder_flow_step_logs",
+      "DELETE FROM reminder_flow_step_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY) LIMIT ?",
+      [batch],
+    );
+    await batchedDelete(
+      "reminder_flow_executions",
+      `DELETE FROM reminder_flow_executions
+       WHERE status IN ('completed','failed','cancelled')
+         AND updated_at < DATE_SUB(NOW(), INTERVAL 180 DAY)
+       LIMIT ?`,
+      [batch],
+    );
+    await batchedDelete(
+      "communications_system_event",
+      `DELETE FROM communications
+       WHERE communication_type = 'system_event'
+         AND created_at < DATE_SUB(NOW(), INTERVAL 180 DAY)
+       LIMIT ?`,
+      [batch],
+    );
+
+    const [emailTrim] = await pool.query<any>(
+      `UPDATE communications
+       SET body = LEFT(body, 400)
+       WHERE communication_type = 'email'
+         AND CHAR_LENGTH(COALESCE(body,'')) > 400
+         AND created_at < DATE_SUB(NOW(), INTERVAL 60 DAY)
+       LIMIT ?`,
+      [batch],
+    );
+    results.email_body_trim = emailTrim.affectedRows ?? 0;
+
+    const [jsonTrim] = await pool.query<any>(
+      `UPDATE communications
+       SET provider_response = NULL, metadata = NULL
+       WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
+         AND (provider_response IS NOT NULL OR metadata IS NOT NULL)
+       LIMIT ?`,
+      [batch],
+    );
+    results.provider_json_trim = jsonTrim.affectedRows ?? 0;
+
+    const total = Object.values(results).reduce((a, b) => a + b, 0);
+    console.log(
+      `[handleCronPurgeOldData] Purged ${total} row(s)/updates:`,
+      results,
+    );
+    return res.json({ success: true, batch_limit: batch, results, total });
+  } catch (err) {
+    console.error("[handleCronPurgeOldData] Error:", err);
+    return res.status(500).json({ error: "Internal error" });
+  }
+};
+
 /**
  * GET /api/voice/calls
  * Return paginated call history (communications where type='call') for the authenticated broker.
@@ -25092,6 +25283,17 @@ const handleAdminInit: RequestHandler = async (req, res) => {
     return res.json({ success: true, profile, controls, rolePermissions });
   } catch (error) {
     console.error("Error in admin init:", error);
+    const quotaErrText =
+      (error as { sqlMessage?: string })?.sqlMessage ??
+      (error instanceof Error ? error.message : String(error));
+    if (/usage quota being exhausted|usage quota.*exhausted/i.test(quotaErrText)) {
+      return res.status(503).json({
+        success: false,
+        quota_exceeded: true,
+        error: "Failed to initialise admin session",
+        message: quotaErrText,
+      });
+    }
     return res
       .status(500)
       .json({ success: false, error: "Failed to initialise admin session" });
@@ -27798,6 +28000,10 @@ function createServer() {
   // MMS media cleanup cron — run daily via cPanel cron to purge expired rows:
   //   curl -s "https://portal.encoremortgage.org/api/cron/purge-mms-media?secret=CRON_SECRET"
   expressApp.get("/api/cron/purge-mms-media", handleCronPurgeMmsMedia);
+
+  // Retention cleanup (logs, sessions, email body trim) — run weekly via cPanel cron:
+  //   curl -s "https://admin.encoremortgage.org/api/cron/purge-old-data?secret=CRON_SECRET"
+  expressApp.get("/api/cron/purge-old-data", handleCronPurgeOldData);
 
   // Reminder flow execution engine cron — run every 5-15 min via cPanel cron:
   //   curl -s "https://yourdomain.com/api/cron/process-reminder-flows?secret=CRON_SECRET"

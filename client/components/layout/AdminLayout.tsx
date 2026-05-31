@@ -54,6 +54,7 @@ import { selectRolePermissionsMap } from "@/store/slices/roleSectionPermissionsS
 import { fetchEmailMailboxes } from "@/store/slices/emailSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import { MortgiWidget } from "@/components/MortgiWidget";
+import { DatabaseQuotaBanner } from "@/components/DatabaseQuotaBanner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -755,7 +756,12 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
             </div>
           </div>
         ) : (
-          children
+          <>
+            <div className="px-4 pt-4 md:px-6 md:pt-4">
+              <DatabaseQuotaBanner />
+            </div>
+            {children}
+          </>
         )}
       </main>
 

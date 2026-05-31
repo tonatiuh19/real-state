@@ -23,6 +23,7 @@ import {
 import { MetaHelmet } from "@/components/MetaHelmet";
 import { authPageMeta } from "@/lib/seo-helpers";
 import { ResendCodeButton } from "@/components/ResendCodeButton";
+import { DatabaseQuotaBanner } from "@/components/DatabaseQuotaBanner";
 
 export default function BrokerLogin() {
   const navigate = useNavigate();
@@ -267,6 +268,8 @@ export default function BrokerLogin() {
                   : "Check your email for the verification code"}
               </p>
             </div>
+
+            <DatabaseQuotaBanner className="mb-6" />
 
             {/* Error Alert */}
             {error && (

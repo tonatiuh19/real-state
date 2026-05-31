@@ -909,10 +909,21 @@ const Conversations = () => {
       setRecentTemplateIds(getRecentTemplateIds());
     }
 
+    if (/\{\{first_name\}\}/i.test(text) && !varMap.first_name?.trim()) {
+      toast({
+        title: "First name not available",
+        description:
+          "This thread has no linked client name. Save the contact as a client or pick a thread with a client record before using {{first_name}}.",
+        variant: "destructive",
+      });
+      logger.groupEnd();
+      return;
+    }
+
     const payload = {
       conversation_id: currentThread?.conversation_id,
       application_id: currentThread?.application_id || undefined,
-      client_id: currentThread?.client_id || undefined,
+      client_id: currentThread?.client_id ?? undefined,
       communication_type: messageType,
       recipient_phone: currentThread?.client_phone || undefined,
       recipient_email: currentThread?.client_email || undefined,

@@ -16,6 +16,7 @@ When a client replies, the system detects the response and advances (or stops) t
 | `GET /api/cron/sync-o365-calendars`      | Every 30 min (cron) | Sync Outlook calendar events into scheduler blocked ranges    |
 | `GET /api/cron/sync-teams-policy`        | Every 24h (cron)    | Grant Teams app-access policy for users with Teams enabled    |
 | `GET /api/cron/purge-mms-media`          | Every 24h (cron)    | Delete expired MMS media rows from `mms_media` table          |
+| `GET /api/cron/purge-old-data`           | Weekly (cron)       | Batched retention cleanup (logs, sessions, email body trim)   |
 | `POST /api/webhooks/inbound-sms`         | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
 
 ---
@@ -162,7 +163,68 @@ Expected response:
 > The 72-hour TTL is a generous safety buffer. Rows that have already been
 > served are still kept until the nightly purge — that's fine.
 
-### 2g. Process scheduled broadcasts — every 5 minutes
+### 2g. Purge old data (retention) — weekly
+
+Keeps TiDB row storage under control by deleting expired ephemeral rows and
+trimming bulky historical payloads. Each run touches at most **10,000 rows per
+table** so the job finishes within Vercel's timeout even on a large backlog.
+
+**After unlocking TiDB** (spending limit / quota), run a **one-time bulk purge**
+from your machine first, then rely on this cron for ongoing maintenance:
+
+```bash
+npm run purge:data              # dry-run counts
+npm run purge:data -- --execute # one-time full purge
+```
+
+| Field   | Value |
+| ------- | ----- |
+| Minute  | `15`  |
+| Hour    | `4`   |
+| Day     | `*`   |
+| Month   | `*`   |
+| Weekday | `0`   |
+
+```bash
+curl -s "https://admin.encoremortgage.org/api/cron/purge-old-data?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
+```
+
+(`0` = Sunday 04:15 — adjust if you prefer a different quiet window.)
+
+Expected response:
+
+```json
+{
+  "success": true,
+  "batch_limit": 10000,
+  "results": {
+    "mms_media": 12,
+    "audit_logs": 10000,
+    "email_body_trim": 842
+  },
+  "total": 10854
+}
+```
+
+**What each weekly tick cleans (batched):**
+
+| Target | Retention |
+| ------ | --------- |
+| `mms_media` | expired (`expires_at <= NOW()`) |
+| `broker_sessions`, `user_sessions`, `revoked_tokens` | expired |
+| `audit_logs` | older than 90 days |
+| `email_sync_log` | older than 30 days |
+| `notifications` | read, older than 120 days |
+| `reminder_flow_step_logs` | older than 90 days |
+| `reminder_flow_executions` | completed/failed/cancelled, older than 180 days |
+| `communications` (`system_event`) | older than 180 days |
+| `communications` (email `body`) | trim to 400 chars when older than 60 days |
+| `communications` (`provider_response` / `metadata`) | cleared when older than 90 days |
+
+> Keep **§2f** (`purge-mms-media`) on a **daily** schedule — MMS blobs are the
+> highest per-row cost. **§2g** handles everything else weekly.
+
+### 2h. Process scheduled broadcasts — every 5 minutes
 
 Fires any Realtor Broadcast campaigns whose `scheduled_at` time has passed and whose `status = 'scheduled'`.
 Processes up to 10 campaigns per tick to prevent thundering-herd scenarios on a large backlog.
