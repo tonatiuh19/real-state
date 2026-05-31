@@ -17,7 +17,6 @@ import {
   AlertCircle,
   Copy,
   ExternalLink,
-  Star,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -476,6 +475,36 @@ const SchedulerPage: React.FC = () => {
                     </p>
                   )}
                 </div>
+
+                {(publicBroker.phone || publicBroker.email) && (
+                  <div className="mt-5 pt-5 border-t border-border space-y-2.5">
+                    {publicBroker.phone && (
+                      <a
+                        href={`tel:${publicBroker.phone.replace(/\s/g, "")}`}
+                        className="flex items-center gap-2.5 text-sm text-primary hover:text-primary/80 transition-colors group"
+                      >
+                        <Phone className="h-4 w-4 shrink-0" />
+                        <span className="underline underline-offset-2">
+                          {publicBroker.phone}
+                        </span>
+                        <span className="text-muted-foreground text-xs no-underline">
+                          call/text
+                        </span>
+                      </a>
+                    )}
+                    {publicBroker.email && (
+                      <a
+                        href={`mailto:${publicBroker.email}`}
+                        className="flex items-center gap-2.5 text-sm text-primary hover:text-primary/80 transition-colors min-w-0"
+                      >
+                        <Mail className="h-4 w-4 shrink-0" />
+                        <span className="underline underline-offset-2 truncate">
+                          {publicBroker.email}
+                        </span>
+                      </a>
+                    )}
+                  </div>
+                )}
 
                 <div className="mt-5 pt-5 border-t border-border space-y-2.5">
                   <div className="flex items-center gap-2.5 text-sm text-foreground/80">

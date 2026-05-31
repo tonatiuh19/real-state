@@ -691,7 +691,11 @@ const BrokerProfile = () => {
                         variant="secondary"
                         className="text-xs bg-primary/10 text-primary border-0"
                       >
-                        {user?.role === "admin" ? "Mortgage Banker" : "Partner"}
+                        {user?.role === "platform_owner"
+                          ? "Platform Owner"
+                          : user?.role === "admin"
+                            ? "Mortgage Banker"
+                            : "Partner"}
                       </Badge>
                     </div>
                     {user?.email && (
@@ -761,7 +765,8 @@ const BrokerProfile = () => {
                     Basic Information
                   </CardTitle>
                   <CardDescription>
-                    Your name and contact details.
+                    Your name and contact details. Phone and email appear on
+                    your public booking page.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">

@@ -162,6 +162,33 @@ Expected response:
 > The 72-hour TTL is a generous safety buffer. Rows that have already been
 > served are still kept until the nightly purge — that's fine.
 
+### 2g. Process scheduled broadcasts — every 5 minutes
+
+Fires any Realtor Broadcast campaigns whose `scheduled_at` time has passed and whose `status = 'scheduled'`.
+Processes up to 10 campaigns per tick to prevent thundering-herd scenarios on a large backlog.
+
+| Field   | Value |
+| ------- | ----- |
+| Minute  | `*/5` |
+| Hour    | `*`   |
+| Day     | `*`   |
+| Month   | `*`   |
+| Weekday | `*`   |
+
+```bash
+curl -s "https://admin.encoremortgage.org/api/cron/process-scheduled-broadcasts?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
+```
+
+Expected response:
+
+```json
+{ "success": true, "fired": 1 }
+```
+
+> The endpoint marks each matched broadcast as `sending` **before** invoking the send loop,
+> so a second cron tick within the same minute cannot double-pick the same campaign.
+> Broadcasts cancelled before their send time (`is_cancelled = 1`) are never picked up.
+
 ---
 
 ## 3. Configure Twilio Inbound SMS webhook
@@ -312,13 +339,14 @@ LIMIT 50;
 
 ## 8. Summary of all cron jobs and webhooks
 
-| Endpoint                               | Interval / Trigger                    | Purpose                                                                       |
-| -------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------- |
-| `GET /api/cron/process-reminder-flows` | `*/10 * * * *`                        | Advance flow executions — send SMS/email, evaluate branches, handle timeouts  |
-| `GET /api/cron/poll-inbound-email`     | `*/5 * * * *`                         | Detect email replies → mark executions responded → advance `responded` branch |
-| `GET /api/cron/sync-teams-policy`      | `10 2 * * *`                          | Auto-grant Teams policy for active users with Teams enabled                   |
-| `POST /api/webhooks/inbound-sms`       | Real-time (Twilio)                    | Detect SMS replies → mark executions responded → advance `responded` branch   |
-| `POST /api/webhooks/inbound-email`     | Real-time (Postmark/Mailgun/SendGrid) | Detect email replies (alternative to IMAP poll)                               |
+| Endpoint                                     | Interval / Trigger                    | Purpose                                                                       |
+| -------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------- |
+| `GET /api/cron/process-reminder-flows`       | `*/10 * * * *`                        | Advance flow executions — send SMS/email, evaluate branches, handle timeouts  |
+| `GET /api/cron/poll-inbound-email`           | `*/5 * * * *`                         | Detect email replies → mark executions responded → advance `responded` branch |
+| `GET /api/cron/sync-teams-policy`            | `10 2 * * *`                          | Auto-grant Teams policy for active users with Teams enabled                   |
+| `GET /api/cron/process-scheduled-broadcasts` | `*/5 * * * *`                         | Fire Realtor Broadcast campaigns whose scheduled time has arrived (≤10/tick)  |
+| `POST /api/webhooks/inbound-sms`             | Real-time (Twilio)                    | Detect SMS replies → mark executions responded → advance `responded` branch   |
+| `POST /api/webhooks/inbound-email`           | Real-time (Postmark/Mailgun/SendGrid) | Detect email replies (alternative to IMAP poll)                               |
 
 ---
 

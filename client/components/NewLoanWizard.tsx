@@ -148,6 +148,8 @@ const step3Schema = Yup.object({
   property_type: Yup.string().required("Required"),
 });
 
+const fullSchema = step1Schema.concat(step2Schema).concat(step3Schema);
+
 const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
   open,
   onOpenChange,
@@ -267,9 +269,29 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
   const handleFinalSubmit = async (values: any) => {
     setIsSubmitting(true);
     try {
+      await fullSchema.validate(values, { abortEarly: false });
+
       await dispatch(
         createLoan({
           ...values,
+          loan_amount: String(values.loan_amount),
+          property_value: String(values.property_value),
+          down_payment: String(values.down_payment),
+          dependent_count: (() => {
+            if (values.dependent_count === "" || values.dependent_count == null)
+              return undefined;
+            const n = Number(values.dependent_count);
+            return Number.isFinite(n) ? n : undefined;
+          })(),
+          years_at_address: (() => {
+            if (
+              values.years_at_address === "" ||
+              values.years_at_address == null
+            )
+              return undefined;
+            const n = Number(values.years_at_address);
+            return Number.isFinite(n) ? n : undefined;
+          })(),
           tasks,
         }),
       ).unwrap();

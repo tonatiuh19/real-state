@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CalendarDays,
@@ -2079,7 +2079,12 @@ function SettingsPanel() {
     isSyncingO365,
   } = useAppSelector((s) => s.scheduler);
   const { user: authUser } = useAppSelector((s) => s.brokerAuth);
-  const roleLabel = authUser?.role === "admin" ? "Mortgage Banker" : "Partner";
+  const roleLabel =
+    authUser?.role === "platform_owner"
+      ? "Platform Owner"
+      : authUser?.role === "admin"
+        ? "Mortgage Banker"
+        : "Partner";
 
   const getFriendlyTeamsError = (message?: string): string => {
     if (!message) {
@@ -3035,6 +3040,9 @@ const AdminCalendar: React.FC = () => {
     settings: schedulerSettings,
     availability: schedulerAvailability,
     blockedRanges,
+    o365Connected,
+    o365LastSyncedAt,
+    isSyncingO365,
   } = useAppSelector((s) => s.scheduler);
   const {
     events,
@@ -3129,9 +3137,45 @@ const AdminCalendar: React.FC = () => {
     doFetchCalendarView(new Date());
     // Always load blocked ranges so Calendar tab shows them without needing to visit Settings
     dispatch(fetchBlockedRanges());
+    dispatch(fetchO365CalendarStatus());
     dispatch(fetchClients({ page: 1, limit: 200 }));
     if (isAdmin) dispatch(fetchBrokers({ page: 1, limit: 100 }));
   }, [dispatch]);
+
+  // Auto-sync Outlook calendar (throttled — avoids re-trigger loop on isSyncingO365 / null lastSyncedAt)
+  const o365AutoSyncAttemptRef = useRef(0);
+  useEffect(() => {
+    if (!o365Connected) return;
+
+    const STALE_MS = 25 * 60 * 1000;
+
+    const runSync = () => {
+      const now = Date.now();
+      if (now - o365AutoSyncAttemptRef.current < STALE_MS) return;
+      o365AutoSyncAttemptRef.current = now;
+
+      dispatch(syncO365Calendar()).then((result) => {
+        if (syncO365Calendar.fulfilled.match(result)) {
+          dispatch(fetchBlockedRanges());
+          dispatch(fetchO365CalendarStatus());
+        } else {
+          // Back off retries after failure (e.g. 403) so UI does not spin forever
+          o365AutoSyncAttemptRef.current = now;
+        }
+      });
+    };
+
+    const lastSync = o365LastSyncedAt
+      ? new Date(o365LastSyncedAt).getTime()
+      : 0;
+    if (!lastSync || Date.now() - lastSync > STALE_MS) {
+      runSync();
+    }
+
+    const interval = setInterval(runSync, 30 * 60 * 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-arm when connection changes
+  }, [o365Connected, dispatch]);
 
   // Real-time Ably subscription: re-fetch blocked ranges whenever the cron or
   // manual "Sync Now" publishes an o365_calendar_synced event on this broker's channel

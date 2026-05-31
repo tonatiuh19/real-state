@@ -18,6 +18,8 @@
     "format.fix": "prettier --write .",
     "typecheck": "tsc",
     "deploy:prod": "tsx scripts/deploy-prod.ts",
+    "validate:create-loan": "tsx scripts/validate-create-loan-schema.ts",
+    "validate:all": "npm run typecheck && npm test && npm run validate:create-loan && npm run build",
     "teams:policy-sync": "bash scripts/teams-policy-sync.sh"
   },
   "dependencies": {

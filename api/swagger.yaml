@@ -2303,6 +2303,44 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
 
+  /brokers/{brokerId}/sms-opt-in:
+    patch:
+      tags: [Brokers]
+      summary: Update a broker's SMS broadcast opt-in status (admin only)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: brokerId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sms_blast_opted_in]
+              properties:
+                sms_blast_opted_in:
+                  type: integer
+                  nullable: true
+                  enum: [0, 1, null]
+                  description: "0=opted-out, 1=opted-in, null=unknown/reset"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      sms_blast_opted_in:
+                        type: integer
+                        nullable: true
+
   /brokers/{brokerId}/avatar:
     put:
       tags: [Brokers]
@@ -3408,7 +3446,25 @@ paths:
                   - $ref: "#/components/schemas/SuccessResponse"
                   - type: object
                     properties:
-                      threads: { type: array, items: { type: object } }
+                      threads:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            client_assigned_broker_name:
+                              type: string
+                              nullable: true
+                              description: >
+                                Set when the contact's formal assigned broker differs from
+                                the broker who owns this conversation thread (e.g. an inbound
+                                call/SMS landed on a different broker's personal line).
+                                Null when no mismatch.
+                            client_assigned_broker_id:
+                              type: integer
+                              nullable: true
+                              description: >
+                                broker_id of the contact's formally assigned broker.
+                                Mirrors clients.assigned_broker_id. Null when no mismatch.
 
   /conversations/{conversationId}/messages:
     get:
@@ -3451,15 +3507,34 @@ paths:
                 communication_type:
                   type: string
                   enum: [email, sms, whatsapp]
+                client_id:
+                  type: integer
+                  description: Recipient client id (mutually exclusive with broker_id)
+                broker_id:
+                  type: integer
+                  description: Recipient broker/realtor id (mutually exclusive with client_id; admin/platform_owner only)
+                application_id: { type: integer }
+                lead_id: { type: integer }
                 mailbox_id:
                   type: integer
                   description: Optional Office365 mailbox id used for outbound email sends
+                recipient_phone: { type: string }
+                recipient_email: { type: string }
                 body: { type: string }
                 subject:
                   {
                     type: string,
                     description: "Required for email communication_type",
                   }
+                template_id: { type: integer }
+                message_type:
+                  type: string
+                  enum: [text, template]
+                  default: text
+                scheduled_at: { type: string, format: date-time }
+                media_url: { type: string }
+                media_content_type: { type: string }
+                media_filename: { type: string }
       responses:
         "200":
           description: Sent
@@ -5733,3 +5808,362 @@ paths:
       responses:
         "200":
           description: Notification deleted
+
+  # ─── Realtor Broadcast Center ─────────────────────────────────────────────
+  /realtor-broadcasts/preview:
+    post:
+      tags: [Broadcasts]
+      summary: Preview audience count and sample for a broadcast
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [audience_filter, channel]
+              properties:
+                channel: { type: string, enum: [email, sms, both] }
+                audience_filter:
+                  type: object
+                  properties:
+                    segments: { type: array, items: { type: string } }
+                    excluded_ids: { type: array, items: { type: integer } }
+                    stage_filter: { type: array, items: { type: string } }
+                    tag_filter: { type: array, items: { type: string } }
+                    owner_broker_id: { type: integer }
+      responses:
+        "200":
+          description: Audience preview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  preview:
+                    type: object
+                    properties:
+                      count: { type: integer }
+                      email_count: { type: integer }
+                      sms_count: { type: integer }
+                      skipped_count: { type: integer }
+                      sample: { type: array, items: { type: object } }
+
+  /realtor-broadcasts/unsubscribe:
+    get:
+      tags: [Broadcasts]
+      summary: Public CAN-SPAM email unsubscribe link (no auth required)
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: HTML unsubscribe confirmation page
+          content:
+            text/html:
+              schema: { type: string }
+
+  /realtor-broadcasts:
+    get:
+      tags: [Broadcasts]
+      summary: List all broadcasts for the tenant (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: Broadcast list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  broadcasts: { type: array, items: { type: object } }
+                  total: { type: integer }
+    post:
+      tags: [Broadcasts]
+      summary: Create and optionally send a broadcast (platform_owner only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, channel, audience_filter]
+              properties:
+                title: { type: string }
+                channel: { type: string, enum: [email, sms, both] }
+                subject: { type: string }
+                body_email: { type: string }
+                body_sms: { type: string }
+                audience_filter: { type: object }
+                scheduled_at: { type: string, format: date-time }
+                send_now: { type: boolean, default: true }
+      responses:
+        "200":
+          description: Broadcast created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  broadcast_id: { type: integer }
+                  recipient_count: { type: integer }
+                  status: { type: string, enum: [draft, scheduled, sending] }
+
+  /realtor-broadcasts/{id}:
+    get:
+      tags: [Broadcasts]
+      summary: Get a single broadcast (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Broadcast detail
+    patch:
+      tags: [Broadcasts]
+      summary: Update a draft or scheduled broadcast
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                channel: { type: string }
+                subject: { type: string }
+                body_email: { type: string }
+                body_sms: { type: string }
+                audience_filter: { type: object }
+                scheduled_at: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Broadcasts]
+      summary: Delete a draft or scheduled broadcast (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+
+  /realtor-broadcasts/{id}/cancel:
+    patch:
+      tags: [Broadcasts]
+      summary: Cancel a sending or scheduled broadcast
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Cancellation flagged
+
+  /realtor-broadcasts/{id}/recipients:
+    get:
+      tags: [Broadcasts]
+      summary: Get paginated recipient delivery log for a broadcast
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100 }
+      responses:
+        "200":
+          description: Recipient list with per-row delivery status
+
+  /realtor-broadcasts/{id}/resend-failed:
+    post:
+      tags: [Broadcasts]
+      summary: Retry all failed recipients for a broadcast (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Number of recipients re-queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  retried: { type: integer }
+
+  /realtor-broadcasts/{id}/recipients/export:
+    get:
+      tags: [Broadcasts]
+      summary: Export recipient delivery log as CSV (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: CSV file download
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
+  /track/open/{token}:
+    get:
+      tags: [Broadcasts]
+      summary: Email open tracking pixel (public — no auth)
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+          description: Recipient's unsubscribe_token used as tracking identifier
+      responses:
+        "200":
+          description: 1×1 transparent GIF; side-effect sets email_status to opened
+          content:
+            image/gif:
+              schema:
+                type: string
+                format: binary
+
+  /broadcast-segments:
+    get:
+      tags: [Broadcasts]
+      summary: List saved audience segment presets (platform_owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of saved segments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  segments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        filter_json: { type: object }
+                        created_at: { type: string, format: date-time }
+    post:
+      tags: [Broadcasts]
+      summary: Save a new audience segment preset (platform_owner only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, filter_json]
+              properties:
+                name: { type: string }
+                filter_json: { type: object }
+      responses:
+        "200":
+          description: Created segment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  id: { type: integer }
+
+  /broadcast-segments/{id}:
+    delete:
+      tags: [Broadcasts]
+      summary: Delete a saved audience segment preset (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+
+  /cron/process-scheduled-broadcasts:
+    get:
+      tags: [Cron]
+      summary: Process due scheduled broadcasts (cron-protected endpoint)
+      parameters:
+        - in: query
+          name: secret
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Number of broadcasts fired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  fired: { type: integer }

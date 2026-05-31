@@ -874,7 +874,12 @@ function SettingsPanel() {
   const { settings, availability, isLoadingSettings, isSavingSettings } =
     useAppSelector((s) => s.scheduler);
   const { user: authUser } = useAppSelector((s) => s.brokerAuth);
-  const roleLabel = authUser?.role === "admin" ? "Mortgage Banker" : "Partner";
+  const roleLabel =
+    authUser?.role === "platform_owner"
+      ? "Platform Owner"
+      : authUser?.role === "admin"
+        ? "Mortgage Banker"
+        : "Partner";
 
   const getFriendlyTeamsError = (message?: string): string => {
     if (!message) {
@@ -1269,9 +1274,13 @@ function SettingsPanel() {
 
       {/* Availability */}
       <div className="rounded-xl border border-border/50 bg-muted/30 p-5">
-        <h3 className="font-semibold text-foreground mb-4">
+        <h3 className="font-semibold text-foreground mb-1">
           Weekly Availability
         </h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          Set the days and hours clients can book on your public scheduling
+          page. Save settings to apply changes.
+        </p>
         <div className="space-y-3">
           {localAvailability.map((av) => (
             <div key={av.day_of_week} className="flex items-center gap-3">

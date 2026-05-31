@@ -802,9 +802,11 @@ const ApplicationWizard = () => {
                           {contactModalPerson.last_name}
                         </DialogTitle>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          {contactModalPerson.role === "admin"
-                            ? "Mortgage Banker"
-                            : "Partner"}
+                          {contactModalPerson.role === "platform_owner"
+                            ? "Platform Owner"
+                            : contactModalPerson.role === "admin"
+                              ? "Mortgage Banker"
+                              : "Partner"}
                         </p>
                       </div>
                     </div>
@@ -2421,9 +2423,11 @@ const ApplicationWizard = () => {
                         {contactModalPerson.last_name}
                       </DialogTitle>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {contactModalPerson.role === "admin"
-                          ? "Mortgage Banker"
-                          : "Partner"}
+                        {contactModalPerson.role === "platform_owner"
+                          ? "Platform Owner"
+                          : contactModalPerson.role === "admin"
+                            ? "Mortgage Banker"
+                            : "Partner"}
                       </p>
                     </div>
                   </div>

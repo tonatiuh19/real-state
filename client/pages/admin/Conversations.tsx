@@ -1003,9 +1003,18 @@ const Conversations = () => {
         prev.map((m) => (m.tempId === tempId ? { ...m, status: "failed" } : m)),
       );
       setFailedText(text);
+      const errMsg: string =
+        typeof error === "string" ? error : "Failed to send message";
+      const isPermissionErr = errMsg
+        .toLowerCase()
+        .includes("assigned to another broker");
       toast({
-        title: "Message failed",
-        description: error || "Failed to send message",
+        title: isPermissionErr
+          ? "Cannot send to this contact"
+          : "Message failed",
+        description: isPermissionErr
+          ? `This contact is managed by another broker. Open their profile to request access or reassignment.`
+          : errMsg,
         variant: "destructive",
       });
     }
@@ -1020,6 +1029,7 @@ const Conversations = () => {
     message_type: "text" | "template";
     template_id?: number;
     client_id?: number;
+    broker_id?: number;
   }) => {
     try {
       const result = await dispatch(sendMessage(data)).unwrap();
@@ -1806,7 +1816,17 @@ const Conversations = () => {
                                   ) || "No messages yet"}
                                 </p>
                               </div>
-                              {/* Row 3: timestamp */}
+                              {/* Row 3: ownership pill — shown when this client formally belongs to a different broker */}
+                              {thread.client_assigned_broker_name && (
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <Info className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
+                                  <p className="text-[10px] text-amber-600 truncate">
+                                    Managed by{" "}
+                                    {thread.client_assigned_broker_name}
+                                  </p>
+                                </div>
+                              )}
+                              {/* Row 4: timestamp */}
                               {thread.last_message_at && (
                                 <p className="text-[10px] text-muted-foreground/70 mt-0.5">
                                   {formatTime(thread.last_message_at)}
@@ -1897,6 +1917,19 @@ const Conversations = () => {
                             />
                           )}
                       </div>
+                      {/* Ownership notice — contact formally belongs to a different broker */}
+                      {currentThread.client_assigned_broker_name && (
+                        <div className="flex items-center gap-1.5 mt-1 px-2 py-1 rounded-md bg-amber-50 border border-amber-200 w-fit max-w-full">
+                          <Info className="h-3 w-3 text-amber-600 flex-shrink-0" />
+                          <span className="text-[11px] text-amber-700 leading-none">
+                            Managed by{" "}
+                            <span className="font-semibold">
+                              {currentThread.client_assigned_broker_name}
+                            </span>{" "}
+                            — contacted your personal line
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
@@ -2430,7 +2463,24 @@ const Conversations = () => {
                                 <CheckCheck className="h-3 w-3 text-white/60 animate-in fade-in-0 zoom-in-75 duration-300" />
                               )}
                               {opt.status === "failed" && (
-                                <X className="h-3 w-3 text-red-400" />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOptimisticMessages((prev) =>
+                                      prev.filter(
+                                        (m) => m.tempId !== opt.tempId,
+                                      ),
+                                    );
+                                    setMessageText(opt.body);
+                                    requestAnimationFrame(() =>
+                                      composeTextareaRef.current?.focus(),
+                                    );
+                                  }}
+                                  className="flex items-center gap-1 text-[10px] text-red-300 hover:text-white transition-colors"
+                                >
+                                  <RefreshCw className="h-2.5 w-2.5" />
+                                  <span>Retry</span>
+                                </button>
                               )}
                             </div>
                           </div>
@@ -2478,6 +2528,23 @@ const Conversations = () => {
                         </span>{" "}
                         replying will assign it to you and remove it from other
                         bankers' queues.
+                      </p>
+                    </div>
+                  )}
+                  {/* Cross-broker contact notice */}
+                  {currentThread.client_assigned_broker_name && (
+                    <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-3 py-2 mb-2.5">
+                      <Info className="h-3.5 w-3.5 shrink-0 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                      <p className="text-[11px] text-blue-800 dark:text-blue-300 leading-snug">
+                        <span className="font-semibold">
+                          {currentThread.client_name ?? "This contact"}
+                        </span>{" "}
+                        is managed by{" "}
+                        <span className="font-semibold">
+                          {currentThread.client_assigned_broker_name}
+                        </span>
+                        . You can reply because they contacted your personal
+                        line — your message will come from your number.
                       </p>
                     </div>
                   )}
@@ -2906,17 +2973,44 @@ const Conversations = () => {
                         onClick={handleSendMessage}
                         disabled={
                           (!messageText.trim() && !mmsAttachment) ||
-                          isUploadingMMS
+                          isUploadingMMS ||
+                          isSendingMessage
                         }
                         className="bg-primary hover:bg-primary/90 h-10 w-10 p-0 transition-transform active:scale-90"
                       >
-                        {isUploadingMMS ? (
+                        {isUploadingMMS || isSendingMessage ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
                           <Send className="h-4 w-4" />
                         )}
                       </Button>
                     </div>
+                    {/* SMS character / segment counter */}
+                    {messageType === "sms" &&
+                      messageText.length > 0 &&
+                      (() => {
+                        const len = messageText.length;
+                        const segLen = /[\u0080-\uFFFF]/.test(messageText)
+                          ? 70
+                          : 160;
+                        const segs = Math.ceil(len / segLen);
+                        const remaining = segs * segLen - len;
+                        return (
+                          <div
+                            className={cn(
+                              "flex justify-end text-[10px] mt-0.5 pr-0.5",
+                              len > segLen
+                                ? "text-amber-500"
+                                : "text-muted-foreground/60",
+                            )}
+                          >
+                            <span>
+                              {remaining} /{" "}
+                              {segs > 1 ? `${segs} segments` : "1 segment"}
+                            </span>
+                          </div>
+                        );
+                      })()}
                   </div>
 
                   {/* Live resolved preview toggle */}
@@ -3439,6 +3533,7 @@ const Conversations = () => {
         templates={templates}
         onSendMessage={handleNewConversation}
         isSending={isSendingMessage}
+        userRole={currentUser?.role}
       />
 
       {/* ── Schedule Meeting dialog ── */}

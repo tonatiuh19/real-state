@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchClients } from "@/store/slices/clientsSlice";
+import { fetchBrokers } from "@/store/slices/brokersSlice";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -64,11 +65,15 @@ interface NewConversationWizardProps {
     message_type: "text" | "template";
     template_id?: number;
     client_id?: number;
+    /** Broker/realtor recipient — mutually exclusive with client_id */
+    broker_id?: number;
     media_url?: string;
     media_content_type?: string;
     media_filename?: string;
   }) => Promise<void>;
   isSending: boolean;
+  /** Role of the currently-logged-in user — broker search is only shown to admin/platform_owner */
+  userRole?: string;
 }
 
 type SelectedRecipient =
@@ -79,7 +84,32 @@ type SelectedRecipient =
       phone?: string;
       email?: string;
     }
+  | {
+      kind: "broker";
+      brokerId: number;
+      label: string;
+      phone?: string;
+      email?: string;
+      role: string;
+    }
   | { kind: "raw_phone"; value: string };
+
+function roleBadge(role: string): { text: string; cls: string } {
+  if (role === "platform_owner")
+    return {
+      text: "Platform Owner",
+      cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+    };
+  if (role === "admin")
+    return {
+      text: "Mortgage Banker",
+      cls: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400",
+    };
+  return {
+    text: "Realtor Partner",
+    cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+  };
+}
 
 const PHONE_RE = /^[\d\s+\-()+]{7,}$/;
 
@@ -89,12 +119,16 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   templates,
   onSendMessage,
   isSending,
+  userRole,
 }) => {
   const dispatch = useAppDispatch();
   const { clients, isLoading: clientsLoading } = useAppSelector(
     (s) => s.clients,
   );
+  const { brokers } = useAppSelector((s) => s.brokers);
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
+  const canSearchBrokers =
+    userRole === "admin" || userRole === "platform_owner";
 
   // ── Recipient state ──────────────────────────────────────────────────────────
   const [search, setSearch] = useState("");
@@ -120,13 +154,14 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // ── Load clients ──────────────────────────────────────────────────────────────
+  // ── Load clients (and brokers for elevated roles) ─────────────────────────
   useEffect(() => {
     if (isOpen) {
       dispatch(fetchClients({}));
+      if (canSearchBrokers) dispatch(fetchBrokers({}));
       setTimeout(() => searchInputRef.current?.focus(), 80);
     }
-  }, [isOpen, dispatch]);
+  }, [isOpen, dispatch, canSearchBrokers]);
 
   // ── Reset on close ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -161,6 +196,21 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     })
     .slice(0, 8);
 
+  const filteredBrokers = canSearchBrokers
+    ? brokers
+        .filter((b) => {
+          const q = search.toLowerCase().trim();
+          if (!q) return false;
+          return (
+            b.first_name.toLowerCase().includes(q) ||
+            b.last_name.toLowerCase().includes(q) ||
+            b.email.toLowerCase().includes(q) ||
+            (b.phone ?? "").toLowerCase().includes(q)
+          );
+        })
+        .slice(0, 5)
+    : [];
+
   const isRawPhone = PHONE_RE.test(search.trim());
   const canSendToRaw = isRawPhone;
 
@@ -174,11 +224,19 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     phone?: string;
     email?: string;
     clientId?: number;
+    brokerId?: number;
   } => {
     if (!recipient) return {};
     if (recipient.kind === "client") {
       return {
         clientId: recipient.clientId,
+        phone: recipient.phone,
+        email: recipient.email,
+      };
+    }
+    if (recipient.kind === "broker") {
+      return {
+        brokerId: recipient.brokerId,
         phone: recipient.phone,
         email: recipient.email,
       };
@@ -189,7 +247,8 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
 
   const recipientLabel = (): string => {
     if (!recipient) return "";
-    if (recipient.kind === "client") return recipient.label;
+    if (recipient.kind === "client" || recipient.kind === "broker")
+      return recipient.label;
     return recipient.value;
   };
 
@@ -215,7 +274,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     if (!canSend) return;
     const rv = getRecipientValue();
 
-    if (!rv.phone) {
+    if (!rv.phone && !rv.brokerId) {
       logger.warn("No phone number available");
       return;
     }
@@ -248,6 +307,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
       body: body.trim(),
       message_type: "text",
       client_id: rv.clientId,
+      broker_id: rv.brokerId,
       media_url: mediaUrl,
       media_content_type: mediaContentType,
       media_filename: mediaFilename,
@@ -362,18 +422,67 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                               {c.phone ?? c.email}
                             </p>
                           </div>
-                          {c.phone && (
-                            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-                          )}
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-400 shrink-0">
+                            Client
+                          </span>
                         </button>
                       ))}
+
+                      {/* Broker / realtor results — only for admin & platform_owner */}
+                      {filteredBrokers.length > 0 && (
+                        <>
+                          {filteredClients.length > 0 && (
+                            <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50 border-t border-border/40 mt-1">
+                              Team &amp; Partners
+                            </div>
+                          )}
+                          {filteredBrokers.map((b) => {
+                            const badge = roleBadge(b.role);
+                            return (
+                              <button
+                                key={`broker-${b.id}`}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/60 transition-colors text-left"
+                                onMouseDown={() =>
+                                  selectRecipient({
+                                    kind: "broker",
+                                    brokerId: b.id,
+                                    label: `${b.first_name} ${b.last_name}`,
+                                    phone: b.phone ?? undefined,
+                                    email: b.email,
+                                    role: b.role,
+                                  })
+                                }
+                              >
+                                <div className="h-8 w-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-[11px] font-bold shrink-0">
+                                  {b.first_name[0]}
+                                  {b.last_name[0]}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[13px] font-medium leading-tight">
+                                    {b.first_name} {b.last_name}
+                                  </p>
+                                  <p className="text-[11px] text-muted-foreground truncate">
+                                    {b.phone ?? b.email}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${badge.cls}`}
+                                >
+                                  {badge.text}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </>
+                      )}
 
                       {/* Send to raw phone / email */}
                       {canSendToRaw && (
                         <button
                           className={cn(
                             "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/60 transition-colors text-left",
-                            filteredClients.length > 0 &&
+                            (filteredClients.length > 0 ||
+                              filteredBrokers.length > 0) &&
                               "border-t border-border/50",
                           )}
                           onMouseDown={() => {
@@ -401,16 +510,18 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                         </button>
                       )}
 
-                      {filteredClients.length === 0 && !canSendToRaw && (
-                        <div className="py-8 text-center text-sm text-muted-foreground">
-                          <User className="h-8 w-8 mx-auto mb-2 opacity-25" />
-                          No clients found.
-                          <br />
-                          <span className="text-xs">
-                            Try a phone number or email.
-                          </span>
-                        </div>
-                      )}
+                      {filteredClients.length === 0 &&
+                        filteredBrokers.length === 0 &&
+                        !canSendToRaw && (
+                          <div className="py-8 text-center text-sm text-muted-foreground">
+                            <User className="h-8 w-8 mx-auto mb-2 opacity-25" />
+                            No contacts found.
+                            <br />
+                            <span className="text-xs">
+                              Try a phone number or email.
+                            </span>
+                          </div>
+                        )}
                     </>
                   )}
                 </div>

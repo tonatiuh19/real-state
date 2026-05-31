@@ -91,6 +91,7 @@ import {
   fetchBrokerProfileForEdit,
   updateBroker,
   updateBrokerProfileByAdmin,
+  updateBrokerSmsOptIn,
   convertBrokerToClient,
   fetchMortgageBankers,
   uploadBrokerAvatarByAdmin,
@@ -546,6 +547,102 @@ export default function BrokerDetailPanel({
                       clientName={`${profile.first_name} ${profile.last_name}`}
                       className="text-sm text-muted-foreground"
                     />
+                  )}
+
+                  {/* SMS broadcast opt-in status — shown for platform admins viewing partner brokers */}
+                  {isAdmin && isPartner && profile.sms_blast_opted_in !== 1 && (
+                    <div
+                      className={`flex items-center gap-2 mt-1 p-2 rounded-lg border ${
+                        profile.sms_blast_opted_in === 0
+                          ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+                          : "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800"
+                      }`}
+                    >
+                      <span
+                        className={`text-xs flex items-center gap-1.5 ${
+                          profile.sms_blast_opted_in === 0
+                            ? "text-red-700 dark:text-red-400"
+                            : "text-amber-700 dark:text-amber-400"
+                        }`}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-3.5 w-3.5"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
+                          {profile.sms_blast_opted_in === 0 ? (
+                            <>
+                              <circle cx="12" cy="12" r="10" />
+                              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                            </>
+                          ) : (
+                            <>
+                              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                              <line x1="12" y1="9" x2="12" y2="13" />
+                              <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </>
+                          )}
+                        </svg>
+                        {profile.sms_blast_opted_in === 0
+                          ? "Opted out of SMS broadcasts (replied STOP)"
+                          : "Not yet enrolled in SMS broadcasts"}
+                      </span>
+                      <button
+                        className={`ml-auto text-xs underline hover:no-underline ${
+                          profile.sms_blast_opted_in === 0
+                            ? "text-red-700 dark:text-red-400"
+                            : "text-amber-700 dark:text-amber-400"
+                        }`}
+                        onClick={() =>
+                          dispatch(
+                            updateBrokerSmsOptIn({
+                              id: profile.id,
+                              sms_blast_opted_in: 1,
+                            }),
+                          )
+                        }
+                      >
+                        {profile.sms_blast_opted_in === 0
+                          ? "Re-enable"
+                          : "Enable SMS broadcasts"}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* SMS opt-in confirmed badge */}
+                  {isAdmin && isPartner && profile.sms_blast_opted_in === 1 && (
+                    <div className="flex items-center gap-2 mt-1 p-2 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
+                      <span className="text-xs text-green-700 dark:text-green-400 flex items-center gap-1.5">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-3.5 w-3.5"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
+                          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                          <polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                        Enrolled in SMS broadcasts
+                      </span>
+                      <button
+                        className="ml-auto text-xs text-green-700 dark:text-green-400 underline hover:no-underline"
+                        onClick={() =>
+                          dispatch(
+                            updateBrokerSmsOptIn({
+                              id: profile.id,
+                              sms_blast_opted_in: null,
+                            }),
+                          )
+                        }
+                      >
+                        Revoke
+                      </button>
+                    </div>
                   )}
 
                   {/* action buttons row: SMS · Email · Convert · Edit */}

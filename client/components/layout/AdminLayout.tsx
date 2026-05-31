@@ -202,6 +202,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       hidden: !isSectionVisible("conversations", true, false),
     },
     {
+      id: "broadcasts",
+      label: "Broadcasts",
+      icon: <Megaphone className="h-4 w-4" />,
+      path: "/admin/broadcasts",
+      hidden: !isPlatformOwner,
+    },
+    {
       id: "email",
       label: "Email",
       icon: <Mail className="h-4 w-4" />,

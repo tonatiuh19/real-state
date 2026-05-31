@@ -36,6 +36,7 @@ interface BrokerUser {
   total_loans_closed?: number;
   // Feature flags (set by server at profile load time)
   office365_enabled?: boolean;
+  twilio_caller_id?: string | null;
 }
 
 interface BrokerAuthState {

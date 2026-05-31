@@ -2402,9 +2402,11 @@ export function LoanOverlay({
                               value={String(broker.id)}
                             >
                               {broker.first_name} {broker.last_name}
-                              {broker.role === "admin"
-                                ? " (Mortgage Banker)"
-                                : " (Partner)"}
+                              {broker.role === "platform_owner"
+                                ? " (Platform Owner)"
+                                : broker.role === "admin"
+                                  ? " (Mortgage Banker)"
+                                  : " (Partner)"}
                             </SelectItem>
                           ))}
                       </SelectContent>

@@ -259,7 +259,9 @@ export const sendMessage = createAsyncThunk(
       };
     } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.message || "Failed to send message",
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          "Failed to send message",
       );
     }
   },

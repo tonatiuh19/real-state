@@ -1256,6 +1256,10 @@ export interface ConversationThread {
   client_email?: string | null;
   /** Whether the current broker has ownership of this client (3-path check). Only true when client_id is set and broker owns the client. */
   can_view_client?: boolean;
+  /** When set, the client belongs to a different broker than the one handling this thread (e.g. call landed on a personal line). Name of the formal owner. */
+  client_assigned_broker_name?: string | null;
+  /** broker_id of the client's formal assigned broker (mirrors client.assigned_broker_id). */
+  client_assigned_broker_id?: number | null;
   last_message_at: string;
   last_message_preview?: string | null;
   last_message_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
@@ -1387,6 +1391,8 @@ export interface SendMessageRequest {
   application_id?: number;
   lead_id?: number;
   client_id?: number;
+  /** When set, the recipient is a broker/realtor rather than a client. Mutually exclusive with client_id. */
+  broker_id?: number;
   mailbox_id?: number;
   communication_type: "email" | "sms" | "whatsapp";
   recipient_phone?: string;
@@ -1824,6 +1830,8 @@ export interface BrokerProfileDetails {
   website_url: string | null;
   // Feature flags
   office365_enabled: boolean;
+  // Broadcast opt-out
+  sms_blast_opted_in: 0 | 1 | null; // null=unknown, 1=opted-in, 0=opted-out (STOP received)
 }
 
 export interface GetBrokerProfileResponse {
@@ -2576,6 +2584,7 @@ export interface SyncO365CalendarResponse {
   success: boolean;
   synced_count: number;
   message: string;
+  last_synced_at?: string;
 }
 
 export interface GetO365CalendarStatusResponse {
@@ -2909,4 +2918,155 @@ export interface GetMortgiUsageResponse {
   usage: MortgiUsage;
   quota_exceeded: boolean;
   quota_exceeded_at: string;
+}
+
+// ─── Realtor Broadcast Center ──────────────────────────────────────────────────
+
+export type RealtorBroadcastChannel = "email" | "sms" | "both";
+export type RealtorBroadcastStatus =
+  | "draft"
+  | "scheduled"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "cancelled";
+
+export interface RealtorBroadcastAudienceFilter {
+  segments: string[];
+  excluded_ids?: number[];
+  /** When present, only these sourceIds are included (overrides excluded_ids). */
+  selected_ids?: number[];
+  stage_filter?: string[];
+  tag_filter?: string[];
+  owner_broker_id?: number;
+}
+
+export interface RealtorBroadcast {
+  id: number;
+  tenant_id: number;
+  created_by: number;
+  title: string;
+  channel: RealtorBroadcastChannel;
+  subject: string | null;
+  body_email: string | null;
+  body_sms: string | null;
+  audience_filter: RealtorBroadcastAudienceFilter;
+  recipient_count: number;
+  sent_count: number;
+  failed_count: number;
+  status: RealtorBroadcastStatus;
+  is_cancelled: boolean;
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  creator_name?: string;
+}
+
+export interface RealtorBroadcastRecipient {
+  id: number;
+  broadcast_id: number;
+  broker_id: number | null;
+  prospect_id: number | null;
+  recipient_name: string | null;
+  recipient_email: string | null;
+  recipient_phone: string | null;
+  email_status: string | null;
+  sms_status: string | null;
+  email_ext_id: string | null;
+  sms_ext_id: string | null;
+  conversation_id: string | null;
+  error_message: string | null;
+  sent_at: string | null;
+}
+
+export interface BroadcastAudienceSampleItem {
+  id: number;
+  source: "broker" | "prospect" | "client";
+  name: string;
+  email: string | null;
+  phone: string | null;
+  has_email: boolean;
+  has_phone: boolean;
+  skipped: boolean;
+  skip_reason: string | null;
+  role?: string | null;
+}
+
+export interface BroadcastAudiencePreview {
+  count: number;
+  email_count: number;
+  sms_count: number;
+  skipped_count: number;
+  sample: BroadcastAudienceSampleItem[];
+}
+
+export interface CreateBroadcastRequest {
+  title: string;
+  channel: RealtorBroadcastChannel;
+  subject?: string;
+  body_email?: string;
+  body_sms?: string;
+  audience_filter: RealtorBroadcastAudienceFilter;
+  scheduled_at?: string; // ISO UTC
+  send_now?: boolean;
+}
+
+export interface PreviewBroadcastAudienceRequest {
+  audience_filter: RealtorBroadcastAudienceFilter;
+  channel: RealtorBroadcastChannel;
+}
+
+export interface GetBroadcastsResponse {
+  success: boolean;
+  broadcasts: RealtorBroadcast[];
+  total: number;
+}
+
+export interface GetBroadcastResponse {
+  success: boolean;
+  broadcast: RealtorBroadcast;
+}
+
+export interface CreateBroadcastResponse {
+  success: boolean;
+  broadcast_id: number;
+  recipient_count: number;
+  status: RealtorBroadcastStatus;
+}
+
+export interface PreviewBroadcastAudienceResponse {
+  success: boolean;
+  preview: BroadcastAudiencePreview;
+}
+
+export interface GetBroadcastRecipientsResponse {
+  success: boolean;
+  recipients: RealtorBroadcastRecipient[];
+  total: number;
+}
+
+// ─── Saved Audience Segments ──────────────────────────────────────────────────
+
+export interface BroadcastSavedSegment {
+  id: number;
+  name: string;
+  filter_json: RealtorBroadcastAudienceFilter;
+  created_at: string;
+}
+
+export interface GetSavedSegmentsResponse {
+  success: boolean;
+  segments: BroadcastSavedSegment[];
+}
+
+export interface CreateSavedSegmentRequest {
+  name: string;
+  filter_json: RealtorBroadcastAudienceFilter;
+}
+
+export interface ResendFailedResponse {
+  success: boolean;
+  retried: number;
 }

@@ -607,9 +607,11 @@ const schedulerSlice = createSlice({
       .addCase(syncO365Calendar.pending, (state) => {
         state.isSyncingO365 = true;
       })
-      .addCase(syncO365Calendar.fulfilled, (state) => {
+      .addCase(syncO365Calendar.fulfilled, (state, action) => {
         state.isSyncingO365 = false;
-        // blockedRanges will be refreshed by the UI after sync
+        state.o365SyncedCount = action.payload.synced_count;
+        state.o365LastSyncedAt =
+          action.payload.last_synced_at ?? new Date().toISOString();
       })
       .addCase(syncO365Calendar.rejected, (state) => {
         state.isSyncingO365 = false;

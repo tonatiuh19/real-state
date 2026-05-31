@@ -119,12 +119,18 @@ export default function BrokerShareLinkModal({
               <span
                 className={cn(
                   "text-xs px-2 py-0.5 rounded-full font-medium",
-                  broker?.role === "admin"
-                    ? "bg-purple-100 text-purple-700"
-                    : "bg-blue-100 text-blue-700",
+                  broker?.role === "platform_owner"
+                    ? "bg-violet-100 text-violet-700"
+                    : broker?.role === "admin"
+                      ? "bg-purple-100 text-purple-700"
+                      : "bg-blue-100 text-blue-700",
                 )}
               >
-                {broker?.role === "admin" ? "Mortgage Banker" : "Partner"}
+                {broker?.role === "platform_owner"
+                  ? "Platform Owner"
+                  : broker?.role === "admin"
+                    ? "Mortgage Banker"
+                    : "Partner"}
               </span>
             </div>
           </div>

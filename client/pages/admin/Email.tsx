@@ -1572,6 +1572,37 @@ const Email = () => {
     if (selectedMailbox) dispatch(fetchMailFolders(selectedMailbox.id));
   }, [selectedMailbox?.id, dispatch]);
 
+  // Auto-sync: on load if stale, then every 5 minutes while on Email (inbox/sent view)
+  useEffect(() => {
+    if (!selectedMailbox || !isSelectedMailboxActive || activeFolderId) return;
+
+    const runSync = () => {
+      dispatch(syncEmailMailbox(selectedMailbox.id)).then((result) => {
+        if (syncEmailMailbox.fulfilled.match(result)) {
+          dispatch(fetchEmailThreads(selectedMailbox.id));
+          dispatch(fetchEmailMailboxes());
+        }
+      });
+    };
+
+    const STALE_MS = 3 * 60 * 1000;
+    const lastSync = selectedMailbox.last_sync_at
+      ? new Date(selectedMailbox.last_sync_at).getTime()
+      : 0;
+    if (Date.now() - lastSync > STALE_MS) {
+      runSync();
+    }
+
+    const interval = setInterval(runSync, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [
+    selectedMailbox?.id,
+    selectedMailbox?.last_sync_at,
+    isSelectedMailboxActive,
+    activeFolderId,
+    dispatch,
+  ]);
+
   // Load folder messages when a custom folder is selected
   useEffect(() => {
     if (!activeFolderId) return;
@@ -1768,8 +1799,18 @@ const Email = () => {
     if (!selectedMailbox || !isSelectedMailboxActive) return;
     const result = await dispatch(syncEmailMailbox(selectedMailbox.id));
     if (syncEmailMailbox.fulfilled.match(result)) {
-      toast({ title: "Inbox synced" });
+      const { processed, errors } = result.payload;
+      toast({
+        title: "Mailbox synced",
+        description:
+          processed > 0
+            ? `${processed} message${processed === 1 ? "" : "s"} imported${errors > 0 ? ` (${errors} skipped)` : ""}`
+            : errors > 0
+              ? `${errors} folder(s) had errors — check connection`
+              : "Already up to date",
+      });
       dispatch(fetchEmailThreads(selectedMailbox.id));
+      dispatch(fetchEmailMailboxes());
     } else {
       toast({ title: "Sync failed", variant: "destructive" });
     }

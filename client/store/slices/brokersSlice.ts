@@ -154,6 +154,35 @@ export const fetchBrokerProfileForEdit = createAsyncThunk(
   },
 );
 
+/** Platform owner: toggle sms_blast_opted_in for a broker (0 = opted-out, 1 = opted-in, null = unknown) */
+export const updateBrokerSmsOptIn = createAsyncThunk(
+  "brokers/updateBrokerSmsOptIn",
+  async (
+    {
+      id,
+      sms_blast_opted_in,
+    }: { id: number; sms_blast_opted_in: 0 | 1 | null },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.patch<{
+        success: boolean;
+        sms_blast_opted_in: 0 | 1 | null;
+      }>(
+        `/api/brokers/${id}/sms-opt-in`,
+        { sms_blast_opted_in },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { id, sms_blast_opted_in: data.sms_blast_opted_in };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to update SMS opt-in status",
+      );
+    }
+  },
+);
+
 /** Admin: update profile fields (bio, office, years_experience) for any broker */
 export const updateBrokerProfileByAdmin = createAsyncThunk(
   "brokers/updateBrokerProfileByAdmin",
@@ -391,6 +420,13 @@ const brokersSlice = createSlice({
       // Update broker profile by admin
       .addCase(updateBrokerProfileByAdmin.fulfilled, (state, action) => {
         state.selectedBrokerProfile = action.payload;
+      })
+      // Update SMS opt-in status
+      .addCase(updateBrokerSmsOptIn.fulfilled, (state, action) => {
+        if (state.selectedBrokerProfile?.id === action.payload.id) {
+          state.selectedBrokerProfile.sms_blast_opted_in =
+            action.payload.sms_blast_opted_in;
+        }
       })
       // Upload broker avatar by admin
       .addCase(uploadBrokerAvatarByAdmin.fulfilled, (state, action) => {

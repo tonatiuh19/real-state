@@ -31,6 +31,7 @@ import voiceReducer from "./slices/voiceSlice";
 import realtorProspectingReducer from "./slices/realtorProspectingSlice";
 import emailReducer from "./slices/emailSlice";
 import mortgiReducer from "./slices/mortgiSlice";
+import realtorBroadcastsReducer from "./slices/realtorBroadcastSlice";
 
 export const store = configureStore({
   reducer: {
@@ -64,6 +65,7 @@ export const store = configureStore({
     realtorProspecting: realtorProspectingReducer,
     email: emailReducer,
     mortgi: mortgiReducer,
+    realtorBroadcasts: realtorBroadcastsReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

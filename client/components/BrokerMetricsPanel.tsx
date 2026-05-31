@@ -625,10 +625,16 @@ const BrokerMetricsPanel: React.FC<BrokerMetricsPanelProps> = ({
                       "text-[10px] px-1.5 py-0.5 rounded font-semibold shrink-0",
                       b.role === "broker"
                         ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                        : "bg-primary/10 text-primary",
+                        : b.role === "platform_owner"
+                          ? "bg-violet-100 text-violet-700"
+                          : "bg-primary/10 text-primary",
                     )}
                   >
-                    {b.role === "broker" ? "Partner" : "MB"}
+                    {b.role === "broker"
+                      ? "Partner"
+                      : b.role === "platform_owner"
+                        ? "Owner"
+                        : "MB"}
                   </span>
                 </label>
               ))}

@@ -40,6 +40,7 @@ import AdminCalendar from "./pages/admin/Calendar";
 import IncomeCalculator from "./pages/admin/IncomeCalculator";
 import Email from "./pages/admin/Email";
 import Mortgi from "./pages/admin/Mortgi";
+import RealtorBroadcasts from "./pages/admin/RealtorBroadcasts";
 
 const AppRoutes = () => (
   <Routes>
@@ -311,6 +312,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <Mortgi />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/broadcasts"
+      element={
+        <AdminLayout>
+          <RealtorBroadcasts />
         </AdminLayout>
       }
     />

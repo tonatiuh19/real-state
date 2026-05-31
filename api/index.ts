@@ -168,6 +168,7 @@ type ConversationMailboxRow = RowDataPacket & {
   oauth_access_token: string | null;
   oauth_refresh_token: string | null;
   oauth_expires_at: string | null;
+  oauth_redirect_uri: string | null;
 };
 
 const OFFICE365_SCOPES = [
@@ -178,15 +179,49 @@ const OFFICE365_SCOPES = [
   "Calendars.Read",
 ];
 
+const OFFICE365_CALLBACK_PATH =
+  "/api/conversations/mailboxes/office365/callback";
+
 const getOffice365OAuthConfig = () => {
   const tenantId = process.env.OFFICE365_TENANT_ID;
   const clientId = process.env.OFFICE365_CLIENT_ID;
   const clientSecret = process.env.OFFICE365_CLIENT_SECRET;
   const redirectUri =
     process.env.OFFICE365_REDIRECT_URI ||
-    `${getBaseUrl()}/api/conversations/mailboxes/office365/callback`;
+    `${getBaseUrl()}${OFFICE365_CALLBACK_PATH}`;
   return { tenantId, clientId, clientSecret, redirectUri };
 };
+
+/** Redirect URIs to try on token refresh (must match the URI used at authorize). */
+function getOffice365RedirectUriCandidates(
+  mailbox?: ConversationMailboxRow | null,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (uri?: string | null) => {
+    const u = uri?.trim();
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+
+  add(mailbox?.oauth_redirect_uri ?? null);
+  add(process.env.OFFICE365_REDIRECT_URI);
+  add(`https://admin.encoremortgage.org${OFFICE365_CALLBACK_PATH}`);
+  add(`https://portal.encoremortgage.org${OFFICE365_CALLBACK_PATH}`);
+  add(`${getBaseUrl()}${OFFICE365_CALLBACK_PATH}`);
+
+  return out;
+}
+
+function isOAuthRedirectMismatch(err: any): boolean {
+  const code = String(err?.response?.data?.error || "");
+  const desc = String(err?.response?.data?.error_description || "");
+  return (
+    code === "invalid_client" &&
+    (desc.includes("AADSTS50011") || desc.toLowerCase().includes("redirect uri"))
+  );
+}
 
 const signOffice365State = (payload: string) =>
   crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("hex");
@@ -298,6 +333,8 @@ async function graphGetWithFallback(
   options: {
     headers?: Record<string, string>;
     params?: Record<string, any>;
+    /** When app token returns 403 (e.g. Mail app perm without Calendars.Read), retry /me */
+    retryDelegatedOn403?: boolean;
   } = {},
 ): Promise<{ resp: any; token: string; base: string }> {
   const { token, useAppToken } = await resolveOffice365Token(mailbox);
@@ -315,10 +352,12 @@ async function graphGetWithFallback(
     const errCode: string = err?.response?.data?.error?.code ?? "";
     if (
       useAppToken &&
-      (errCode === "ErrorInvalidUser" || err?.response?.status === 404)
+      (errCode === "ErrorInvalidUser" ||
+        err?.response?.status === 404 ||
+        (options.retryDelegatedOn403 && err?.response?.status === 403))
     ) {
       console.warn(
-        `graphGetWithFallback: app token rejected for ${mailbox.mailbox_email} (${errCode}). Retrying with delegated token.`,
+        `graphGetWithFallback: app token rejected for ${mailbox.mailbox_email} (${errCode || err?.response?.status}). Retrying with delegated token.`,
       );
       const delegated = await getOffice365AccessToken(mailbox);
       const resp = await axios.get(buildUrl(meBase), {
@@ -332,6 +371,45 @@ async function graphGetWithFallback(
     }
     throw err;
   }
+}
+
+/** Extract relative /calendarView path from a Graph @odata.nextLink (any URL shape). */
+function graphCalendarNextPath(rawNext: string | null | undefined): string | null {
+  if (!rawNext) return null;
+  const idx = rawNext.indexOf("/calendarView");
+  if (idx >= 0) return rawNext.slice(idx);
+  try {
+    const u = new URL(rawNext);
+    const path = u.pathname + u.search;
+    const idx2 = path.indexOf("/calendarView");
+    if (idx2 >= 0) return path.slice(idx2);
+  } catch {
+    /* ignore */
+  }
+  console.warn(
+    "[syncO365Calendar] could not parse @odata.nextLink, stopping pagination:",
+    rawNext.slice(0, 120),
+  );
+  return null;
+}
+
+/** Parse Graph event start/end (timed or all-day) into a UTC Date. */
+function parseGraphEventBound(
+  bound: { dateTime?: string; date?: string } | undefined,
+  endOfDay = false,
+): Date | null {
+  if (!bound) return null;
+  if (bound.dateTime) {
+    const raw = bound.dateTime;
+    const hasTz = raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw);
+    const d = new Date(hasTz ? raw : `${raw.slice(0, 19)}Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (bound.date) {
+    const d = new Date(`${bound.date}T${endOfDay ? "23:59:59" : "00:00:00"}Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
 }
 
 /**
@@ -392,7 +470,7 @@ class Office365AuthRequiredError extends Error {
 }
 
 async function refreshOffice365Token(mailbox: ConversationMailboxRow) {
-  const { clientId, clientSecret, redirectUri } = getOffice365OAuthConfig();
+  const { clientId, clientSecret } = getOffice365OAuthConfig();
   const refreshToken = mailbox.oauth_refresh_token;
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Office365AuthRequiredError(
@@ -400,25 +478,73 @@ async function refreshOffice365Token(mailbox: ConversationMailboxRow) {
     );
   }
 
-  // Use 'common' endpoint so both personal (MSA) and work (AAD) accounts work.
   const tokenUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
-  const params = new URLSearchParams();
-  params.set("grant_type", "refresh_token");
-  params.set("client_id", clientId);
-  params.set("client_secret", clientSecret);
-  params.set("refresh_token", refreshToken);
-  params.set("scope", OFFICE365_SCOPES.join(" "));
-  params.set("redirect_uri", redirectUri);
-
+  const candidates = getOffice365RedirectUriCandidates(mailbox);
   let data: any;
-  try {
-    const response = await axios.post(tokenUrl, params.toString(), {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    data = response.data;
-  } catch (err: any) {
+  let lastErr: any;
+
+  for (const redirectUri of candidates) {
+    const params = new URLSearchParams();
+    params.set("grant_type", "refresh_token");
+    params.set("client_id", clientId);
+    params.set("client_secret", clientSecret);
+    params.set("refresh_token", refreshToken);
+    params.set("scope", OFFICE365_SCOPES.join(" "));
+    params.set("redirect_uri", redirectUri);
+
+    try {
+      const response = await axios.post(tokenUrl, params.toString(), {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
+      data = response.data;
+      if (redirectUri !== mailbox.oauth_redirect_uri) {
+        await pool.query(
+          `UPDATE conversation_email_mailboxes
+           SET oauth_redirect_uri = ?, updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [redirectUri, mailbox.id, MORTGAGE_TENANT_ID],
+        );
+        console.log(
+          `[Office365] refresh: recovered redirect_uri=${redirectUri} for mailbox #${mailbox.id}`,
+        );
+      }
+      lastErr = null;
+      break;
+    } catch (err: any) {
+      lastErr = err;
+      if (isOAuthRedirectMismatch(err)) {
+        console.warn(
+          `[Office365] refresh redirect mismatch for ${redirectUri}, trying next candidate`,
+        );
+        continue;
+      }
+      break;
+    }
+  }
+
+  if (lastErr) {
+    const err = lastErr;
     const errData = err?.response?.data;
     const errCode = errData?.error || "";
+    if (isOAuthRedirectMismatch(err)) {
+      await pool.query(
+        `UPDATE conversation_email_mailboxes
+         SET status = 'auth_required',
+             last_sync_status = 'error',
+             last_sync_error = ?,
+             last_sync_at = NOW(),
+             updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          "OAuth redirect URI mismatch — reconnect mailbox from Settings → Email",
+          mailbox.id,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+      throw new Office365AuthRequiredError(
+        "OAuth redirect URI mismatch. Reconnect your mailbox under Settings → Email.",
+      );
+    }
     // invalid_grant = refresh token expired/revoked — user must re-authorize.
     // interaction_required = Conditional Access / MFA requires user action.
     if (
@@ -724,6 +850,112 @@ async function sendEmailMessageViaOffice365(options: {
   }
 }
 
+const SYNC_MESSAGES_PER_PAGE = 50;
+const SYNC_MAX_PAGES_PER_FOLDER = 20;
+const SYNC_SKIP_FOLDER_NAMES = new Set([
+  "drafts",
+  "deleted items",
+  "junk email",
+  "outbox",
+]);
+
+/** Lists all mail folders (top-level + one level of children) for a mailbox. */
+async function fetchMailboxFolderTree(mailbox: ConversationMailboxRow) {
+  const SELECT =
+    "id,displayName,totalItemCount,unreadItemCount,childFolderCount";
+  const {
+    resp,
+    token,
+    base,
+  } = await graphGetWithFallback(
+    mailbox,
+    (b) => `${b}/mailFolders?$top=100&$select=${SELECT}`,
+  );
+  const topLevel: any[] = resp.data?.value ?? [];
+  const childRequests = topLevel
+    .filter((f: any) => (f.childFolderCount ?? 0) > 0)
+    .map((f: any) =>
+      axios
+        .get(
+          `${base}/mailFolders/${encodeURIComponent(f.id)}/childFolders?$top=100&$select=${SELECT}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        .then((r) => ({ parentId: f.id, children: r.data?.value ?? [] }))
+        .catch(() => ({ parentId: f.id, children: [] })),
+    );
+  const childResults = await Promise.all(childRequests);
+  const SYSTEM_FOLDER_NAMES = new Set([
+    "inbox",
+    "sent items",
+    "drafts",
+    "deleted items",
+    "junk email",
+    "outbox",
+    "archive",
+    "conversation history",
+  ]);
+  const mapFolder = (f: any, parentId?: string) => ({
+    id: f.id as string,
+    displayName: f.displayName as string,
+    parentId: parentId ?? null,
+    isSystemFolder: SYSTEM_FOLDER_NAMES.has(
+      f.displayName?.toLowerCase?.() ?? "",
+    ),
+    childFolderCount: f.childFolderCount ?? 0,
+    totalItemCount: f.totalItemCount ?? 0,
+    unreadItemCount: f.unreadItemCount ?? 0,
+  });
+  return [
+    ...topLevel.map((f) => mapFolder(f)),
+    ...childResults.flatMap(({ parentId, children }) =>
+      children.map((c: any) => mapFolder(c, parentId)),
+    ),
+  ];
+}
+
+/** Builds the folder list for a full mailbox sync (Inbox, Sent, Inbox children, Archive). */
+async function buildSyncFolderTargets(mailbox: ConversationMailboxRow) {
+  const targets: Array<{
+    folderRef: string;
+    label: string;
+    direction: "inbound" | "outbound" | "auto";
+  }> = [
+    { folderRef: "SentItems", label: "SentItems", direction: "outbound" },
+    { folderRef: "Inbox", label: "Inbox", direction: "inbound" },
+  ];
+  try {
+    const tree = await fetchMailboxFolderTree(mailbox);
+    const inboxFolder = tree.find(
+      (f) => f.displayName?.toLowerCase() === "inbox" && !f.parentId,
+    );
+    for (const f of tree) {
+      const name = f.displayName?.toLowerCase() ?? "";
+      if (SYNC_SKIP_FOLDER_NAMES.has(name)) continue;
+      if (inboxFolder && f.parentId === inboxFolder.id) {
+        targets.push({
+          folderRef: f.id,
+          label: f.displayName,
+          direction: "auto",
+        });
+      } else if (name === "archive") {
+        targets.push({
+          folderRef: f.id,
+          label: "Archive",
+          direction: "auto",
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[syncO365] folder discovery failed (non-fatal):", err);
+  }
+  const seen = new Set<string>();
+  return targets.filter((t) => {
+    if (seen.has(t.folderRef)) return false;
+    seen.add(t.folderRef);
+    return true;
+  });
+}
+
 async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
   processed: number;
   errors: number;
@@ -779,38 +1011,63 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
   }
 
   // ── Folders to sync ────────────────────────────────────────────────────────
-  // SentItems first so outbound graph_conversation_id is in DB before Inbox replies are matched
-  const foldersToSync: Array<{
-    graphFolder: string;
-    direction: "inbound" | "outbound";
-  }> = [
-    { graphFolder: "SentItems", direction: "outbound" },
-    { graphFolder: "Inbox", direction: "inbound" },
-  ];
+  // SentItems first so outbound graph_conversation_id is in DB before Inbox replies are matched.
+  // Includes all Inbox child folders (broker filing folders) discovered via Graph API.
+  const foldersToSync = await buildSyncFolderTargets(mailbox);
+  console.log(
+    `[syncO365] syncing ${foldersToSync.length} folder(s): ${foldersToSync.map((f) => f.label).join(", ")}`,
+  );
 
-  for (const { graphFolder, direction } of foldersToSync) {
+  const mailboxEmailLower = mailbox.mailbox_email.toLowerCase();
+
+  for (const { folderRef, label, direction: folderDirection } of foldersToSync) {
     const folderStart = Date.now();
+    const graphFolder = label;
     console.log(
-      `[syncO365] ── folder "${graphFolder}" (${direction}) ──────────────────`,
+      `[syncO365] ── folder "${graphFolder}" (${folderDirection}) ──────────────────`,
     );
 
-    let folderData: any;
+    const messages: any[] = [];
     try {
-      const { resp } = await graphGetWithFallback(
-        mailbox,
-        (base) => `${base}/mailFolders/${graphFolder}/messages`,
-        {
-          params: {
-            $top: 50,
-            $orderby: "receivedDateTime desc",
-            $select:
-              "id,subject,from,toRecipients,ccRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body",
-          },
-        },
-      );
-      folderData = resp.data;
+      const messageSelect =
+        "id,subject,from,toRecipients,ccRecipients,internetMessageId,conversationId,receivedDateTime,bodyPreview,body";
+      let nextLink: string | null = null;
+      let page = 0;
+      let graphToken = "";
+
+      while (page < SYNC_MAX_PAGES_PER_FOLDER) {
+        let pageMessages: any[] = [];
+        if (nextLink) {
+          const pageResp = await axios.get(nextLink, {
+            headers: { Authorization: `Bearer ${graphToken}` },
+          });
+          pageMessages = Array.isArray(pageResp.data?.value)
+            ? pageResp.data.value
+            : [];
+          nextLink = pageResp.data?.["@odata.nextLink"] ?? null;
+        } else {
+          const { resp, token } = await graphGetWithFallback(
+            mailbox,
+            (b) =>
+              `${b}/mailFolders/${encodeURIComponent(folderRef)}/messages`,
+            {
+              params: {
+                $top: SYNC_MESSAGES_PER_PAGE,
+                $orderby: "receivedDateTime desc",
+                $select: messageSelect,
+              },
+            },
+          );
+          graphToken = token;
+          pageMessages = Array.isArray(resp.data?.value) ? resp.data.value : [];
+          nextLink = resp.data?.["@odata.nextLink"] ?? null;
+        }
+        messages.push(...pageMessages);
+        page++;
+        if (!nextLink || pageMessages.length === 0) break;
+      }
       console.log(
-        `[syncO365] "${graphFolder}": Graph API returned ${folderData?.value?.length ?? 0} messages`,
+        `[syncO365] "${graphFolder}": Graph API returned ${messages.length} messages (${page} page(s))`,
       );
     } catch (fetchErr: any) {
       console.error(
@@ -818,12 +1075,8 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         JSON.stringify(fetchErr?.response?.data ?? fetchErr?.message, null, 2),
       );
       errors++;
-      continue; // skip this folder, proceed to the next
+      continue;
     }
-
-    const messages: any[] = Array.isArray(folderData?.value)
-      ? folderData.value
-      : [];
     // Process oldest-first so threads are built in chronological order
     messages.reverse();
     console.log(
@@ -839,6 +1092,14 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
           );
           continue;
         }
+
+        const direction: "inbound" | "outbound" =
+          folderDirection === "auto"
+            ? (msg?.from?.emailAddress?.address?.toLowerCase?.() || "") ===
+              mailboxEmailLower
+              ? "outbound"
+              : "inbound"
+            : folderDirection;
 
         // Skip already-synced messages
         const [existing] = await pool.query<RowDataPacket[]>(
@@ -1142,7 +1403,10 @@ async function syncO365CalendarForBroker(
   brokerId: number,
 ): Promise<{ synced_count: number }> {
   const now = new Date();
-  const startDt = now.toISOString();
+  // Include all of today (sync at 3pm must still block a 9am meeting)
+  const startOfToday = new Date(now);
+  startOfToday.setUTCHours(0, 0, 0, 0);
+  const startDt = startOfToday.toISOString();
   const endDt = new Date(
     now.getTime() + 60 * 24 * 60 * 60 * 1000,
   ).toISOString();
@@ -1161,13 +1425,18 @@ async function syncO365CalendarForBroker(
 
   let allEvents: GraphEvent[] = [];
   let nextRelativePath: string | null = `/calendarView${calendarQuery}`;
+  const MAX_CALENDAR_PAGES = 50;
+  let page = 0;
 
-  while (nextRelativePath) {
+  while (nextRelativePath && page < MAX_CALENDAR_PAGES) {
     const currentPath = nextRelativePath;
     const { resp } = await graphGetWithFallback(
       mailbox,
       (base) => `${base}${currentPath}`,
-      { headers: { Prefer: 'outlook.timezone="UTC"' } },
+      {
+        headers: { Prefer: 'outlook.timezone="UTC"' },
+        retryDelegatedOn403: true,
+      },
     );
     const body = resp.data as {
       value?: GraphEvent[];
@@ -1176,19 +1445,15 @@ async function syncO365CalendarForBroker(
     if (Array.isArray(body.value)) {
       allEvents = allEvents.concat(body.value);
     }
-    const rawNext = body["@odata.nextLink"] ?? null;
-    if (rawNext) {
-      nextRelativePath = rawNext
-        .replace(/^https:\/\/graph\.microsoft\.com\/v1\.0\/users\/[^/]+/, "")
-        .replace(/^https:\/\/graph\.microsoft\.com\/v1\.0\/me/, "");
-    } else {
-      nextRelativePath = null;
-    }
+    nextRelativePath = graphCalendarNextPath(body["@odata.nextLink"] ?? null);
+    page++;
   }
 
-  // Only busy/tentative/oof events block scheduler slots — free/working elsewhere skip
+  // Block busy/tentative/oof/workingElsewhere — skip free/unknown
   const blockingEvents = allEvents.filter((e) =>
-    ["busy", "tentative", "oof"].includes((e.showAs ?? "").toLowerCase()),
+    ["busy", "tentative", "oof", "workingelsewhere"].includes(
+      (e.showAs ?? "").toLowerCase(),
+    ),
   );
 
   // Replace all existing O365 blocks for this broker with the fresh set
@@ -1198,6 +1463,8 @@ async function syncO365CalendarForBroker(
     [brokerId, MORTGAGE_TENANT_ID],
   );
 
+  let syncedCount = 0;
+
   if (blockingEvents.length > 0) {
     const fmtDt = (d: Date) =>
       d
@@ -1205,30 +1472,46 @@ async function syncO365CalendarForBroker(
         .replace("T", " ")
         .replace(/\.\d+Z$/, "");
 
-    const values = blockingEvents.map((e) => {
-      // Graph returns UTC times (Prefer: outlook.timezone="UTC" header); append Z for safe parsing
-      const startUtc = new Date(e.start.dateTime.slice(0, 19) + "Z");
-      const endUtc = new Date(e.end.dateTime.slice(0, 19) + "Z");
-      return [
-        MORTGAGE_TENANT_ID,
-        brokerId,
-        fmtDt(startUtc),
-        fmtDt(endUtc),
-        (e.subject ?? "Meeting").slice(0, 255),
-        "o365",
-        e.id,
-      ];
-    });
+    const values = blockingEvents
+      .map((e) => {
+        const startUtc = parseGraphEventBound(e.start, false);
+        const endUtc = parseGraphEventBound(e.end, true);
+        if (!startUtc || !endUtc || endUtc <= startUtc) {
+          console.warn(
+            `[syncO365Calendar] skip event ${e.id} — invalid start/end`,
+          );
+          return null;
+        }
+        return [
+          MORTGAGE_TENANT_ID,
+          brokerId,
+          fmtDt(startUtc),
+          fmtDt(endUtc),
+          (e.subject ?? "Meeting").slice(0, 255),
+          "o365",
+          e.id,
+        ];
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    await pool.query(
-      `INSERT INTO scheduler_blocked_ranges
-         (tenant_id, broker_id, start_datetime, end_datetime, label, source, external_id)
-       VALUES ?`,
-      [values],
-    );
+    syncedCount = values.length;
+    if (values.length > 0) {
+      await pool.query(
+        `INSERT INTO scheduler_blocked_ranges
+           (tenant_id, broker_id, start_datetime, end_datetime, label, source, external_id)
+         VALUES ?`,
+        [values],
+      );
+    }
   }
 
-  return { synced_count: blockingEvents.length };
+  // Touch mailbox so status reflects sync even when zero events were imported
+  await pool.query(
+    `UPDATE conversation_email_mailboxes SET updated_at = NOW() WHERE id = ? AND tenant_id = ?`,
+    [mailbox.id, MORTGAGE_TENANT_ID],
+  );
+
+  return { synced_count: syncedCount };
 }
 
 // Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
@@ -1416,6 +1699,33 @@ async function _executeThreadUpsert(core: {
     ? clientPhone.replace(/\D/g, "").slice(-10) || null
     : null;
 
+  // Personal-line ownership: if the inbox number is exclusively assigned to a
+  // broker, that broker ALWAYS owns the thread — even if a different broker_id
+  // is already stored (e.g. from a prior shared-inbox assignment). This fixes
+  // the case where inbound SMS/calls on +15623370000 were attributed to Kayla
+  // (broker 120002) instead of Encore Mortgage Processing (broker 270004).
+  let effectiveBrokerId = resolvedBrokerId;
+  if (
+    inboxNumber &&
+    (communicationType === "sms" ||
+      communicationType === "call" ||
+      communicationType === "whatsapp")
+  ) {
+    try {
+      const [ownerRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM brokers
+         WHERE tenant_id = ? AND status = 'active' AND twilio_caller_id = ?
+         LIMIT 1`,
+        [tenantId, inboxNumber],
+      );
+      if (ownerRows.length > 0) {
+        effectiveBrokerId = ownerRows[0].id as number;
+      }
+    } catch {
+      // non-fatal — fall back to resolvedBrokerId
+    }
+  }
+
   // Always INSERT — broker_id is now nullable so shared-inbox threads (broker_id=NULL)
   // are also persisted and visible to all brokers.
   await pool.query(
@@ -1438,7 +1748,12 @@ async function _executeThreadUpsert(core: {
        message_count        = message_count + 1,
        unread_count         = unread_count + ?,
        client_id            = COALESCE(client_id, ?),
-       broker_id            = COALESCE(broker_id, ?),
+       -- Personal-line override: when effectiveBrokerId is non-null (personal line
+       -- owner resolved above), always stamp it — even if broker_id already has a
+       -- different value from a prior shared assignment. For shared lines
+       -- (effectiveBrokerId = resolvedBrokerId = NULL or same), COALESCE preserves
+       -- any existing broker_id.
+       broker_id            = IF(? IS NOT NULL, ?, COALESCE(broker_id, ?)),
        contact_broker_id    = COALESCE(contact_broker_id, ?),
        client_name          = COALESCE(client_name, ?),
        client_phone               = COALESCE(client_phone, ?),
@@ -1471,7 +1786,7 @@ async function _executeThreadUpsert(core: {
       applicationId,
       resolvedLeadId,
       finalClientId,
-      resolvedBrokerId,
+      effectiveBrokerId,
       finalContactBrokerId,
       clientName,
       clientPhone,
@@ -1487,7 +1802,10 @@ async function _executeThreadUpsert(core: {
       communicationType,
       unreadDelta,
       finalClientId,
-      resolvedBrokerId,
+      // broker_id IF(? IS NOT NULL, ?, COALESCE(broker_id, ?))
+      effectiveBrokerId,
+      effectiveBrokerId,
+      effectiveBrokerId,
       finalContactBrokerId,
       clientName,
       clientPhone,
@@ -1602,6 +1920,9 @@ async function upsertConversationThread(params: {
   fromBrokerId: number | null;
   toUserId: number | null;
   toBrokerId: number | null;
+  /** When the external contact IS a broker/realtor, supply their broker id here to
+   *  skip phone-based identity resolution and set contact_broker_id directly. */
+  contactBrokerId?: number | null;
   communicationType: string;
   direction: string;
   body: string | null;
@@ -1619,6 +1940,7 @@ async function upsertConversationThread(params: {
       fromBrokerId,
       toUserId,
       toBrokerId,
+      contactBrokerId,
       communicationType,
       direction,
       body,
@@ -1670,7 +1992,25 @@ async function upsertConversationThread(params: {
     let finalClientId: number | null = null;
     let finalContactBrokerId: number | null = null;
 
-    if (resolvedClientId !== null) {
+    // When the external contact is a known broker/realtor, skip phone-based
+    // identity resolution entirely to prevent phone collisions from accidentally
+    // attributing the thread to a client record.
+    if (contactBrokerId != null) {
+      finalContactBrokerId = contactBrokerId;
+      // Fetch their name so the thread sidebar never shows "Unknown"
+      try {
+        const [brNameRows] = await pool.query<RowDataPacket[]>(
+          `SELECT CONCAT(first_name, ' ', last_name) AS name, email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [contactBrokerId, tenantId],
+        );
+        if (brNameRows.length > 0) {
+          clientName = brNameRows[0].name?.trim() || null;
+          clientEmail = brNameRows[0].email ?? null;
+        }
+      } catch {
+        /* non-fatal */
+      }
+    } else if (resolvedClientId !== null) {
       const [rows] = await pool.query<RowDataPacket[]>(
         "SELECT CONCAT(first_name, ' ', last_name) AS name, phone, email, assigned_broker_id FROM clients WHERE id = ? LIMIT 1",
         [resolvedClientId],
@@ -4083,6 +4423,7 @@ const handleAdminVerifyCode: RequestHandler = async (req, res) => {
         avatar_url: broker.avatar_url ?? null,
         public_token: broker.public_token ?? null,
         slug: broker.slug ?? null,
+        twilio_caller_id: broker.twilio_caller_id ?? null,
       },
     });
   } catch (error) {
@@ -4186,6 +4527,7 @@ const handleAdminValidateSession: RequestHandler = async (req, res) => {
           avatar_url: broker.avatar_url ?? null,
           public_token: broker.public_token ?? null,
           slug: broker.slug ?? null,
+          twilio_caller_id: broker.twilio_caller_id ?? null,
         },
       });
     } catch (jwtError) {
@@ -4882,6 +5224,25 @@ const handleUpdateBrokerAvatar: RequestHandler = async (req, res) => {
   }
 };
 
+/** Coerce optional numeric form fields — NaN/empty → null (avoids SQL "Unknown column 'nan'"). */
+function toSqlOptionalInt(val: unknown): number | null {
+  if (val == null || val === "") return null;
+  const n = parseInt(String(val), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toSqlOptionalFloat(val: unknown): number | null {
+  if (val == null || val === "") return null;
+  const n = parseFloat(String(val));
+  return Number.isFinite(n) ? n : null;
+}
+
+function toSqlMoney(val: unknown): number | null {
+  if (val == null || val === "") return null;
+  const n = parseFloat(String(val));
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Create a new loan application with tasks
  */
@@ -4922,6 +5283,28 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
 
     // Get broker ID from authenticated session
     const brokerId = (req as any).brokerId;
+
+    const parsedLoanAmount = toSqlMoney(loan_amount);
+    const parsedPropertyValue = toSqlMoney(property_value);
+    const parsedDownPayment = toSqlMoney(down_payment);
+
+    if (
+      parsedLoanAmount == null ||
+      parsedLoanAmount <= 0 ||
+      parsedPropertyValue == null ||
+      parsedPropertyValue <= 0 ||
+      parsedDownPayment == null ||
+      parsedDownPayment < 0
+    ) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        error: "Invalid loan amount, property value, or down payment",
+      });
+    }
+
+    const parsedDependentCount = toSqlOptionalInt(dependent_count);
+    const parsedYearsAtAddress = toSqlOptionalFloat(years_at_address);
 
     // Check if client exists
     let [existingClients] = await connection.query<any[]>(
@@ -4996,23 +5379,19 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         clientId,
         brokerId,
         loan_type,
-        loan_amount,
-        property_value,
+        parsedLoanAmount,
+        parsedPropertyValue,
         property_address,
         property_unit || null,
         property_city,
         property_state,
         property_zip,
         property_type,
-        down_payment,
+        parsedDownPayment,
         loan_purpose || null,
         marital_status || null,
-        dependent_count != null && String(dependent_count).trim() !== ""
-          ? parseInt(String(dependent_count), 10)
-          : null,
-        years_at_address != null && String(years_at_address).trim() !== ""
-          ? parseFloat(String(years_at_address))
-          : null,
+        parsedDependentCount,
+        parsedYearsAtAddress,
         estimated_close_date || null,
         notes || null,
       ],
@@ -5079,7 +5458,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         client_email,
         client_first_name,
         applicationNumber,
-        new Intl.NumberFormat("en-US").format(parseFloat(loan_amount)),
+        new Intl.NumberFormat("en-US").format(parsedLoanAmount),
         tasksWithDates,
       );
     } catch (emailError) {
@@ -9204,7 +9583,11 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
       [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({
         success: false,
         error: "Only admins can create brokers",
@@ -9321,7 +9704,11 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
       [brokerId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({
         success: false,
         error: "Only admins can update brokers",
@@ -9491,7 +9878,11 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
       [brokerId, MORTGAGE_TENANT_ID],
     );
 
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({
         success: false,
         error: "Only admins can delete brokers",
@@ -9674,7 +10065,11 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
       [adminId, MORTGAGE_TENANT_ID],
     );
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
@@ -9747,13 +10142,18 @@ const handleGetBrokerProfileByAdmin: RequestHandler = async (req, res) => {
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
       [adminId, MORTGAGE_TENANT_ID],
     );
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
     const [rows] = await pool.query<any[]>(
       `SELECT b.id, b.email, b.first_name, b.last_name, b.phone, b.role,
               b.license_number, b.specializations, b.created_by_broker_id,
+              b.sms_blast_opted_in,
               bp.bio, bp.avatar_url, bp.office_address, bp.office_city,
               bp.office_state, bp.office_zip, bp.years_experience,
               COALESCE(bp.total_loans_closed, 0) AS total_loans_closed,
@@ -9814,7 +10214,11 @@ const handleUpdateBrokerProfileByAdmin: RequestHandler = async (req, res) => {
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
       [adminId, MORTGAGE_TENANT_ID],
     );
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
@@ -9939,7 +10343,11 @@ const handleUpdateBrokerAvatarByAdmin: RequestHandler = async (req, res) => {
       "SELECT role FROM brokers WHERE id = ? AND tenant_id = ?",
       [adminId, MORTGAGE_TENANT_ID],
     );
-    if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+    if (
+      adminCheck.length === 0 ||
+      (adminCheck[0].role !== "admin" &&
+        adminCheck[0].role !== "platform_owner")
+    ) {
       return res.status(403).json({ success: false, error: "Admins only" });
     }
 
@@ -16372,6 +16780,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
        SET oauth_access_token = ?,
            oauth_refresh_token = ?,
            oauth_expires_at = ?,
+           oauth_redirect_uri = ?,
            office365_tenant_id = ?,
            office365_client_id = ?,
            status = 'active',
@@ -16381,6 +16790,7 @@ const handleOffice365Callback: RequestHandler = async (req, res) => {
         String(data.access_token || ""),
         String(data.refresh_token || ""),
         expiresAt,
+        oauthRedirectUri,
         tenantId,
         clientId,
         verified.mailboxId,
@@ -16579,65 +16989,7 @@ const handleGetMailFolders: RequestHandler = async (req, res) => {
     }
     const mailbox = rows[0];
 
-    // Fetch top-level folders plus their child count and unread count.
-    // Uses graphGetWithFallback so personal accounts (Hotmail/Outlook.com)
-    // automatically retry with the delegated token when the app token fails.
-    const SELECT =
-      "id,displayName,totalItemCount,unreadItemCount,childFolderCount";
-    const {
-      resp,
-      token: resolvedToken,
-      base: resolvedBase,
-    } = await graphGetWithFallback(
-      mailbox,
-      (base) => `${base}/mailFolders?$top=100&$select=${SELECT}`,
-    );
-    const topLevel: any[] = resp.data?.value ?? [];
-
-    // Also fetch child folders for every top-level folder that has children
-    // (typical Outlook setup: custom folders live inside Inbox)
-    const childRequests = topLevel
-      .filter((f: any) => (f.childFolderCount ?? 0) > 0)
-      .map((f: any) =>
-        axios
-          .get(
-            `${resolvedBase}/mailFolders/${encodeURIComponent(f.id)}/childFolders?$top=100&$select=${SELECT}`,
-            { headers: { Authorization: `Bearer ${resolvedToken}` } },
-          )
-          .then((r) => ({ parentId: f.id, children: r.data?.value ?? [] }))
-          .catch(() => ({ parentId: f.id, children: [] })),
-      );
-    const childResults = await Promise.all(childRequests);
-
-    const SYSTEM_FOLDER_NAMES = new Set([
-      "inbox",
-      "sent items",
-      "drafts",
-      "deleted items",
-      "junk email",
-      "outbox",
-      "archive",
-      "conversation history",
-    ]);
-
-    const mapFolder = (f: any, parentId?: string) => ({
-      id: f.id,
-      displayName: f.displayName,
-      totalItemCount: f.totalItemCount ?? 0,
-      unreadItemCount: f.unreadItemCount ?? 0,
-      childFolderCount: f.childFolderCount ?? 0,
-      parentId: parentId ?? null,
-      isSystemFolder: SYSTEM_FOLDER_NAMES.has(
-        f.displayName?.toLowerCase?.() ?? "",
-      ),
-    });
-
-    const folders = [
-      ...topLevel.map((f) => mapFolder(f)),
-      ...childResults.flatMap(({ parentId, children }) =>
-        children.map((c: any) => mapFolder(c, parentId)),
-      ),
-    ];
+    const folders = await fetchMailboxFolderTree(mailbox);
 
     return res.json({ success: true, folders });
   } catch (error: any) {
@@ -18698,6 +19050,36 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     const fromPhone = fromRaw.replace(/[^\d+]/g, "");
     const toPhone = toRaw.replace(/[^\d+]/g, "") || null; // The Twilio number that received this SMS
 
+    // ── STOP opt-out — TCPA compliance for broadcast SMS ─────────────────────
+    if (body.trim().toUpperCase() === "STOP") {
+      const fromDigitsNorm = fromPhone.replace(/\D/g, "");
+      const fromLast10 = fromDigitsNorm.slice(-10);
+      // Mark the sender opted out of broadcast SMS blasts
+      await pool.query(
+        `UPDATE brokers SET sms_blast_opted_in = 0, updated_at = NOW()
+         WHERE tenant_id = ?
+           AND (
+             REGEXP_REPLACE(twilio_caller_id, '[^0-9]', '') = ?
+             OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+           )`,
+        [MORTGAGE_TENANT_ID, fromDigitsNorm, fromLast10],
+      );
+      // Also mark any pending broadcast recipient rows as opted_out
+      await pool.query(
+        `UPDATE realtor_broadcast_recipients
+         SET sms_status = 'opted_out', updated_at = NOW()
+         WHERE RIGHT(REPLACE(REPLACE(REPLACE(recipient_phone, '+', ''), '-', ''), ' ', ''), 10) = ?
+           AND sms_status = 'pending'`,
+        [fromLast10],
+      );
+      res.set("Content-Type", "text/xml");
+      return res
+        .status(200)
+        .send(
+          "<Response><Message>You have been unsubscribed from broadcast messages. Reply START to opt back in.</Message></Response>",
+        );
+    }
+
     // ── Find the client by phone number ──────────────────────────────────────
     // Strip ALL non-digit characters from both sides so any stored format
     // ((323) 475-6240, 323-475-6240, 3234756240, +13234756240, etc.) all match.
@@ -18763,16 +19145,35 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     let conversationId: string | null = null;
 
     if (clientId) {
-      // First: find the most recent existing thread for this client
-      const [threadRows] = await pool.query<RowDataPacket[]>(
-        `SELECT conversation_id FROM conversation_threads
-         WHERE tenant_id = ? AND client_id = ?
-         ORDER BY last_message_at DESC, created_at DESC
-         LIMIT 1`,
-        [MORTGAGE_TENANT_ID, clientId],
-      );
-      if (threadRows.length > 0) {
-        conversationId = threadRows[0].conversation_id;
+      // First: prefer the thread that was established on this exact inbox number.
+      // This prevents an inbound message on Broker A's personal line from
+      // being routed into a thread that belongs to Broker B just because
+      // Broker B's thread happened to be more recently active.
+      if (toPhone) {
+        const [inboxThreadRows] = await pool.query<RowDataPacket[]>(
+          `SELECT conversation_id FROM conversation_threads
+           WHERE tenant_id = ? AND client_id = ? AND inbox_number = ?
+           ORDER BY last_message_at DESC, created_at DESC
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, clientId, toPhone],
+        );
+        if (inboxThreadRows.length > 0) {
+          conversationId = inboxThreadRows[0].conversation_id;
+        }
+      }
+
+      // Fallback: most recent thread for this client on any inbox
+      if (!conversationId) {
+        const [threadRows] = await pool.query<RowDataPacket[]>(
+          `SELECT conversation_id FROM conversation_threads
+           WHERE tenant_id = ? AND client_id = ?
+           ORDER BY last_message_at DESC, created_at DESC
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, clientId],
+        );
+        if (threadRows.length > 0) {
+          conversationId = threadRows[0].conversation_id;
+        }
       }
     }
 
@@ -19029,12 +19430,16 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       whereConditions.push("ct.status = 'active'");
     }
 
-    // The Conversations page never displays email threads — those live in the
-    // dedicated Email section. Exclude them here so pagination counts correctly
-    // and real conversations aren't pushed off the first page by inbox noise.
-    whereConditions.push(
-      "(ct.last_message_type IS NULL OR ct.last_message_type != 'email')",
-    );
+    const isEmailFolderView = folder === "inbox" || folder === "sent";
+    if (isEmailFolderView) {
+      // Email section: only email threads (inbox/sent folder filters apply below)
+      whereConditions.push("ct.last_message_type = 'email'");
+    } else {
+      // Conversations page: exclude email threads so SMS/call pagination stays accurate
+      whereConditions.push(
+        "(ct.last_message_type IS NULL OR ct.last_message_type != 'email')",
+      );
+    }
 
     if (priority) {
       whereConditions.push("ct.priority = ?");
@@ -19151,11 +19556,22 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
                  = RIGHT(REGEXP_REPLACE(ct.client_phone, '[^0-9]', ''), 10)
            LIMIT 1)
         ) AS resolved_client_name,
-        CASE WHEN ct.client_id IS NOT NULL THEN 1 ELSE 0 END AS can_view_client
+        CASE WHEN ct.client_id IS NOT NULL THEN 1 ELSE 0 END AS can_view_client,
+        -- When the thread's broker_id differs from the client's assigned broker,
+        -- surface the assigned broker's name so the UI can show an ownership hint.
+        CASE
+          WHEN c.assigned_broker_id IS NOT NULL
+            AND ct.broker_id IS NOT NULL
+            AND c.assigned_broker_id != ct.broker_id
+          THEN CONCAT(ab.first_name, ' ', ab.last_name)
+          ELSE NULL
+        END AS client_assigned_broker_name,
+        c.assigned_broker_id AS client_assigned_broker_id
       FROM conversation_threads ct
       LEFT JOIN loan_applications la ON ct.application_id = la.id
       LEFT JOIN clients c ON ct.client_id = c.id
       LEFT JOIN brokers cb ON ct.contact_broker_id = cb.id
+      LEFT JOIN brokers ab ON c.assigned_broker_id = ab.id AND ab.tenant_id = ct.tenant_id
       WHERE ${whereClause}
       ORDER BY ct.last_message_at DESC, ct.id DESC
       LIMIT ${parseInt(limit as string)} OFFSET ${offset}
@@ -19189,6 +19605,8 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
         client_name: thread.resolved_client_name || thread.client_name,
         tags: thread.tags ? JSON.parse(thread.tags) : [],
         can_view_client: !!thread.can_view_client,
+        client_assigned_broker_name: thread.client_assigned_broker_name ?? null,
+        client_assigned_broker_id: thread.client_assigned_broker_id ?? null,
       })),
       pagination: {
         page: parseInt(page as string),
@@ -19507,6 +19925,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       application_id,
       lead_id,
       client_id,
+      broker_id: recipientBrokerId,
       mailbox_id,
       communication_type,
       recipient_phone,
@@ -19605,6 +20024,20 @@ const handleSendMessage: RequestHandler = async (req, res) => {
             finalRecipientEmail || threadPhone[0].client_email || null;
         }
       }
+
+      // Broker/realtor recipient — look up their contact details directly.
+      if (recipientBrokerId && (!finalRecipientPhone || !finalRecipientEmail)) {
+        const [brokerContactInfo] = await pool.query<RowDataPacket[]>(
+          `SELECT phone, email FROM brokers WHERE id = ? AND tenant_id = ? AND status = 'active' LIMIT 1`,
+          [recipientBrokerId, MORTGAGE_TENANT_ID],
+        );
+        if (brokerContactInfo.length > 0) {
+          finalRecipientPhone =
+            finalRecipientPhone || brokerContactInfo[0].phone || null;
+          finalRecipientEmail =
+            finalRecipientEmail || brokerContactInfo[0].email || null;
+        }
+      }
     }
 
     console.log(
@@ -19616,7 +20049,9 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     // that belongs to a different broker with no shared loan co-ownership.
     // This is the primary enforcement point. upsertConversationThread also has
     // a secondary correction layer as defence-in-depth.
-    if (!isSuperAdmin) {
+    // Guard is bypassed entirely when messaging a broker/realtor contact
+    // (recipientBrokerId) — ownership rules only apply to client contacts.
+    if (!isSuperAdmin && !recipientBrokerId) {
       // Prefer the client_id supplied directly; fall back to phone → email lookup.
       let guardClientId: number | null =
         typeof client_id === "number" ? client_id : null;
@@ -19812,6 +20247,9 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     if (!finalConversationId) {
       if (client_id) {
         finalConversationId = `conv_client_${client_id}`;
+      } else if (recipientBrokerId) {
+        // Canonical thread per sender+broker pair so broker-to-broker messages thread correctly
+        finalConversationId = `conv_broker_${brokerId}_${recipientBrokerId}`;
       } else if (finalRecipientPhone) {
         // Look up the most recent existing thread for this phone+broker combination
         // so outbound replies thread correctly instead of creating orphan conversations.
@@ -20094,7 +20532,8 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         fromUserId: null,
         fromBrokerId: brokerId,
         toUserId: client_id || null,
-        toBrokerId: null,
+        toBrokerId: recipientBrokerId || null,
+        contactBrokerId: recipientBrokerId || null,
         communicationType: communication_type,
         direction: "outbound",
         body: processedBody,
@@ -21335,8 +21774,11 @@ const handleVoiceToken: RequestHandler = async (req, res) => {
  */
 const handleVoiceTwiml: RequestHandler = async (req, res) => {
   const To = (req.body?.To || req.query?.To) as string | undefined;
-  // The identity is "broker_{id}" — passed by the Twilio SDK as the caller identity
-  const identity = (req.body?.Called || req.body?.Identity || "") as string;
+  // When the browser SDK places a call, Twilio sends the caller identity as
+  // From: "client:broker_270004". req.body?.Called is the destination phone
+  // number — not the identity — so we must read From and strip "client:".
+  const fromParam = (req.body?.From || req.body?.Caller || "") as string;
+  const identity = fromParam.replace(/^client:/, "");
 
   res.setHeader("Content-Type", "text/xml");
 
@@ -21645,7 +22087,7 @@ const handleUpdateTenantVoicemailSettings: RequestHandler = async (
 ) => {
   try {
     const role = (req as any).brokerRole as string | undefined;
-    if (role !== "admin") {
+    if (role !== "admin" && role !== "platform_owner") {
       return res
         .status(403)
         .json({ success: false, error: "Admin access required" });
@@ -22688,6 +23130,10 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     // Fire-and-forget: log the incoming call attempt asynchronously.
     const conversationId = `conv_phone_${callerNumber.replace(/\D/g, "")}`;
     const body = `📞 Incoming call from ${callerNumber}`;
+    // For personal-line inbound calls, attribute the thread directly to that
+    // broker so it appears in their Conversations view rather than as NULL/shared.
+    const personalLineBrokerId: number | null =
+      assignedRows.length > 0 ? (assignedRows[0].id as number) : null;
     pool
       .query<any>(
         `INSERT INTO communications
@@ -22709,7 +23155,7 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
           applicationId: null,
           leadId: null,
           fromUserId: null,
-          fromBrokerId: null,
+          fromBrokerId: personalLineBrokerId,
           toUserId: null,
           toBrokerId: null,
           communicationType: "call",
@@ -22907,6 +23353,26 @@ const handleAssignPhoneNumber: RequestHandler = async (req, res) => {
          WHERE id = ? AND tenant_id = ?`,
         [sid, callerIdE164, brokerId, MORTGAGE_TENANT_ID],
       );
+      // Auto-configure voice and SMS webhooks so the newly assigned number
+      // immediately routes inbound calls/SMS to our handlers without requiring
+      // a separate "Configure All Webhooks" admin action.
+      try {
+        const incomingUrl = `${getVoiceBaseUrl()}/api/voice/incoming`;
+        const smsIncomingUrl = `${getVoiceBaseUrl()}/api/webhooks/inbound-sms`;
+        await twilioClient!.incomingPhoneNumbers(sid).update({
+          voiceUrl: incomingUrl,
+          voiceMethod: "POST",
+          smsUrl: smsIncomingUrl,
+          smsMethod: "POST",
+        });
+      } catch (webhookErr) {
+        // Non-fatal — log but don't fail the assignment. Admin can manually
+        // click "Configure All Webhooks" if this fails.
+        console.error(
+          "[handleAssignPhoneNumber] Webhook config failed (non-fatal):",
+          webhookErr,
+        );
+      }
       return res.json({ success: true, sid, brokerId, callerIdE164 });
     } else {
       // Unassign
@@ -26850,6 +27316,54 @@ function createServer() {
     verifyBrokerSession,
     handleUpdateBrokerProfileByAdmin,
   );
+  expressApp.patch(
+    "/api/brokers/:brokerId/sms-opt-in",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const adminId = (req as any).brokerId as number;
+        const adminRole = (req as any).brokerRole as string;
+        if (adminRole !== "platform_owner" && adminRole !== "admin") {
+          return res
+            .status(403)
+            .json({ success: false, error: "Admin access required" });
+        }
+        const targetId = parseInt(req.params.brokerId);
+        const { sms_blast_opted_in } = req.body as {
+          sms_blast_opted_in: 0 | 1 | null;
+        };
+        if (![0, 1, null].includes(sms_blast_opted_in)) {
+          return res.status(400).json({
+            success: false,
+            error: "sms_blast_opted_in must be 0, 1, or null",
+          });
+        }
+
+        await pool.query(
+          `UPDATE brokers SET sms_blast_opted_in = ?, updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [sms_blast_opted_in, targetId, MORTGAGE_TENANT_ID],
+        );
+
+        await createAuditLog({
+          actorType: "broker",
+          actorId: adminId,
+          action: "broker_sms_opt_in_updated",
+          entityType: "broker",
+          entityId: targetId,
+          changes: { sms_blast_opted_in },
+        });
+
+        return res.json({ success: true, sms_blast_opted_in });
+      } catch (err) {
+        console.error("[SMS opt-in update] error:", err);
+        return res.status(500).json({
+          success: false,
+          error: "Failed to update SMS opt-in status",
+        });
+      }
+    },
+  );
   expressApp.put(
     "/api/brokers/:brokerId/avatar",
     verifyBrokerSession,
@@ -27206,6 +27720,20 @@ function createServer() {
         `UPDATE communications SET ${updateFields.join(", ")} WHERE external_id = ? AND tenant_id = ?`,
         updateValues,
       );
+
+      // Also sync delivery status to broadcast recipients when the SID matches
+      const broadcastSmsStatus =
+        deliveryStatus === "delivered" ? "sent" : deliveryStatus;
+      pool
+        .query(
+          `UPDATE realtor_broadcast_recipients
+           SET sms_status = ?
+           WHERE sms_ext_id = ? AND tenant_id = ?`,
+          [broadcastSmsStatus, MessageSid, MORTGAGE_TENANT_ID],
+        )
+        .catch((e) =>
+          console.warn("[SMS Status Webhook] broadcast recipient sync:", e),
+        );
 
       if (deliveryStatus === "failed") {
         console.error(
@@ -29767,7 +30295,7 @@ function createServer() {
       const params: any[] = [MORTGAGE_TENANT_ID];
 
       // Admins can see all, partners only see their own
-      if (broker.role !== "admin") {
+      if (broker.role !== "admin" && broker.role !== "platform_owner") {
         whereClause += ` AND sm.broker_id = ?`;
         params.push(broker.id);
       } else if (broker_id) {
@@ -29864,7 +30392,11 @@ function createServer() {
 
       const meeting = rows[0];
 
-      if (role !== "admin" && meeting.broker_id !== reqBrokerId) {
+      if (
+        role !== "admin" &&
+        role !== "platform_owner" &&
+        meeting.broker_id !== reqBrokerId
+      ) {
         return res.status(403).json({ success: false, error: "Access denied" });
       }
 
@@ -30460,10 +30992,8 @@ function createServer() {
       const brokerId = broker.id;
 
       // Find active O365 mailbox for this broker
-      const [mailboxRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, mailbox_email, office365_tenant_id, office365_client_id,
-                oauth_refresh_token, oauth_access_token, oauth_expires_at
-         FROM conversation_email_mailboxes
+      const [mailboxRows] = await pool.query<ConversationMailboxRow[]>(
+        `SELECT * FROM conversation_email_mailboxes
          WHERE assigned_broker_id = ? AND tenant_id = ? AND provider = 'office365'
            AND status IN ('active','auth_required')
          LIMIT 1`,
@@ -30490,13 +31020,29 @@ function createServer() {
         { synced_count },
       );
 
+      const syncedAt = new Date().toISOString();
+
       return res.json({
         success: true,
         synced_count,
+        last_synced_at: syncedAt,
         message: `Synced ${synced_count} event${synced_count !== 1 ? "s" : ""} from your Outlook calendar`,
       });
     } catch (err: any) {
+      if (err instanceof Office365AuthRequiredError) {
+        const isRedirect = err.message.toLowerCase().includes("redirect");
+        return res.status(403).json({
+          success: false,
+          error: isRedirect
+            ? `${err.message} Also ensure Azure App registration includes redirect URIs for both admin.encoremortgage.org and portal.encoremortgage.org.`
+            : "Your Outlook connection expired. Go to Settings → Email, disconnect, then reconnect to restore calendar access.",
+        });
+      }
+
       const status = err?.response?.status ?? err?.status;
+      const graphMsg: string =
+        err?.response?.data?.error?.message || err?.message || "";
+
       if (status === 403) {
         console.warn(
           "handleSyncO365Calendar: calendar permission denied — mailbox needs reconnect",
@@ -30508,10 +31054,40 @@ function createServer() {
             "Calendar access is not permitted with your current connection. Please reconnect your Outlook mailbox (Settings → Email) to grant calendar permissions, then try again.",
         });
       }
-      console.error("handleSyncO365Calendar error:", err);
-      return res
-        .status(500)
-        .json({ success: false, error: "Internal server error" });
+
+      if (status === 401) {
+        return res.status(403).json({
+          success: false,
+          error:
+            "Outlook sign-in expired. Reconnect your mailbox under Settings → Email, then try Sync Now again.",
+        });
+      }
+
+      const sqlCode = String(err?.code || "");
+      if (sqlCode === "ER_BAD_FIELD_ERROR" || sqlCode === "ER_NO_SUCH_TABLE") {
+        console.error(
+          "handleSyncO365Calendar: database schema missing o365 columns — run migration 20260519_120000_scheduler_blocked_ranges_o365_source.sql",
+          err,
+        );
+        return res.status(500).json({
+          success: false,
+          error:
+            "Calendar sync is not configured on the server database. Contact support to apply the scheduler migration.",
+        });
+      }
+
+      console.error(
+        "handleSyncO365Calendar error:",
+        graphMsg || err,
+        err?.response?.data ?? err,
+      );
+      return res.status(500).json({
+        success: false,
+        error:
+          graphMsg && graphMsg.length < 200
+            ? `Calendar sync failed: ${graphMsg}`
+            : "Internal server error",
+      });
     }
   };
 
@@ -30520,7 +31096,7 @@ function createServer() {
       const broker = (req as any).broker as { id: number };
 
       const [mailboxRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, mailbox_email, status
+        `SELECT id, mailbox_email, status, updated_at
          FROM conversation_email_mailboxes
          WHERE assigned_broker_id = ? AND tenant_id = ? AND provider = 'office365'
            AND status IN ('active','auth_required')
@@ -30530,13 +31106,16 @@ function createServer() {
 
       const connected = mailboxRows.length > 0;
 
-      // Get count and last sync time of O365 blocks
-      const [[syncInfo]] = await pool.query<RowDataPacket[]>(
-        `SELECT COUNT(*) AS count, MAX(created_at) AS last_synced_at
+      const [[blockInfo]] = await pool.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS count, MAX(created_at) AS last_block_at
          FROM scheduler_blocked_ranges
          WHERE broker_id = ? AND tenant_id = ? AND source = 'o365'`,
         [broker.id, MORTGAGE_TENANT_ID],
       );
+
+      const lastRaw =
+        blockInfo?.last_block_at ??
+        (connected ? mailboxRows[0].updated_at : null);
 
       return res.json({
         success: true,
@@ -30544,10 +31123,8 @@ function createServer() {
         mailbox_email: connected
           ? (mailboxRows[0].mailbox_email as string)
           : null,
-        synced_count: Number(syncInfo?.count ?? 0),
-        last_synced_at: syncInfo?.last_synced_at
-          ? dtStr(syncInfo.last_synced_at as Date | string)
-          : null,
+        synced_count: Number(blockInfo?.count ?? 0),
+        last_synced_at: lastRaw ? dtStr(lastRaw as Date | string) : null,
       });
     } catch (err) {
       console.error("handleGetO365CalendarStatus error:", err);
@@ -30625,7 +31202,7 @@ function createServer() {
       // Non-admins (partners) see:
       // - Events they created themselves
       // - Birthday events for clients assigned to them
-      if (broker.role !== "admin") {
+      if (broker.role !== "admin" && broker.role !== "platform_owner") {
         conditions.push(
           `(ce.broker_id = ? OR (ce.event_type = 'birthday' AND ce.linked_client_id IN (SELECT id FROM clients WHERE tenant_id = ? AND assigned_broker_id = ?)))`,
         );
@@ -30845,7 +31422,11 @@ function createServer() {
           .json({ success: false, error: "Event not found" });
       }
 
-      if (broker.role !== "admin" && existing.broker_id !== broker.id) {
+      if (
+        broker.role !== "admin" &&
+        broker.role !== "platform_owner" &&
+        existing.broker_id !== broker.id
+      ) {
         return res.status(403).json({ success: false, error: "Forbidden" });
       }
 
@@ -30915,7 +31496,11 @@ function createServer() {
           .json({ success: false, error: "Event not found" });
       }
 
-      if (broker.role !== "admin" && existing.broker_id !== broker.id) {
+      if (
+        broker.role !== "admin" &&
+        broker.role !== "platform_owner" &&
+        existing.broker_id !== broker.id
+      ) {
         return res.status(403).json({ success: false, error: "Forbidden" });
       }
 
@@ -30940,7 +31525,7 @@ function createServer() {
         tenant_id: number;
         role: string;
       };
-      if (broker.role !== "admin") {
+      if (broker.role !== "admin" && broker.role !== "platform_owner") {
         return res.status(403).json({ success: false, error: "Admin only" });
       }
 
@@ -31809,6 +32394,1681 @@ function createServer() {
     "/api/realtor-prospects/:id",
     verifyBrokerSession,
     handleDeleteRealtorProspect,
+  );
+
+  // =====================================================
+  // REALTOR BROADCAST CENTER
+  // =====================================================
+
+  /**
+   * Resolve the audience for a broadcast from a filter config.
+   * Returns a flat, deduplicated list of recipients.
+   */
+  async function resolveAudience(filter: {
+    segments: string[];
+    excluded_ids?: number[];
+    selected_ids?: number[];
+    stage_filter?: string[];
+    tag_filter?: string[];
+    owner_broker_id?: number;
+  }): Promise<
+    Array<{
+      source: "broker" | "prospect" | "client";
+      sourceId: number;
+      name: string;
+      email: string | null;
+      phone: string | null;
+      role?: string;
+      skipped: boolean;
+      skipReason: string | null;
+    }>
+  > {
+    const candidates: Array<{
+      key: string;
+      source: "broker" | "prospect" | "client";
+      sourceId: number;
+      name: string;
+      email: string | null;
+      phone: string | null;
+      role?: string;
+      skipped: boolean;
+      skipReason: string | null;
+    }> = [];
+
+    const seenEmails = new Set<string>();
+    const seenPhones = new Set<string>();
+
+    // 1. Active registered brokers (role=broker, status=active)
+    if (
+      filter.segments.includes("all_active_realtors") ||
+      filter.segments.includes("all")
+    ) {
+      const [brokerRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, email, phone,
+                sms_blast_opted_in, role
+         FROM brokers
+         WHERE tenant_id = ? AND role = 'broker' AND status = 'active'
+           AND id NOT IN (
+             SELECT DISTINCT broker_id FROM realtor_broadcast_recipients rbr
+             WHERE rbr.email_status = 'unsubscribed'
+               AND rbr.broadcast_id IN (
+                 SELECT id FROM realtor_broadcasts WHERE tenant_id = ?
+               )
+           )`,
+        [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
+      );
+      for (const row of brokerRows) {
+        // Only brokers explicitly opted in (sms_blast_opted_in = 1) receive SMS
+        // NULL = not yet opted in; 0 = opted out via STOP reply
+        const smsEligible = row.sms_blast_opted_in === 1;
+        const skipReason = !smsEligible
+          ? row.sms_blast_opted_in === 0
+            ? "sms_opted_out"
+            : "sms_not_opted_in"
+          : null;
+        candidates.push({
+          key: row.email ?? row.phone ?? `broker-${row.id}`,
+          source: "broker",
+          sourceId: row.id,
+          name: row.name || "Unknown",
+          email: row.email || null,
+          phone: smsEligible ? row.phone || null : null,
+          role: row.role as string,
+          skipped: false,
+          skipReason,
+        });
+      }
+    }
+
+    // 2. Realtor prospects (any prospect-based segment)
+    const hasProspectSegment =
+      filter.segments.some((s) =>
+        [
+          "prospects",
+          "stage_filter",
+          "tag_filter",
+          "owner_filter",
+          "refi_rates_dropped",
+        ].includes(s),
+      ) ||
+      !!filter.stage_filter?.length ||
+      !!filter.tag_filter?.length ||
+      !!filter.owner_broker_id;
+
+    if (hasProspectSegment) {
+      const conditions = [`rp.tenant_id = ?`];
+      const params: any[] = [MORTGAGE_TENANT_ID];
+
+      if (filter.stage_filter?.length) {
+        conditions.push(
+          `rp.stage IN (${filter.stage_filter.map(() => "?").join(",")})`,
+        );
+        params.push(...filter.stage_filter);
+      }
+      if (filter.tag_filter?.length) {
+        for (const tag of filter.tag_filter) {
+          conditions.push(`JSON_CONTAINS(rp.tags, JSON_QUOTE(?))`);
+          params.push(tag);
+        }
+      }
+      if (filter.owner_broker_id) {
+        conditions.push(`rp.owner_broker_id = ?`);
+        params.push(filter.owner_broker_id);
+      }
+      if (filter.segments.includes("refi_rates_dropped")) {
+        conditions.push(`rp.add_to_refi_rates_dropped = 1`);
+      }
+
+      const [prospectRows] = await pool.query<RowDataPacket[]>(
+        `SELECT rp.id, rp.contact_name AS name, rp.contact_email AS email, rp.contact_phone AS phone
+         FROM realtor_prospects rp
+         WHERE ${conditions.join(" AND ")}
+           AND LOWER(TRIM(rp.contact_email)) NOT IN (
+             SELECT LOWER(TRIM(email)) FROM realtor_email_unsubscribes WHERE tenant_id = ?
+           )`,
+        [...params, MORTGAGE_TENANT_ID],
+      );
+      for (const row of prospectRows) {
+        candidates.push({
+          key: row.email ?? row.phone ?? `prospect-${row.id}`,
+          source: "prospect",
+          sourceId: row.id,
+          name: row.name || "Unknown",
+          email: row.email || null,
+          phone: row.phone || null,
+          skipped: false,
+          skipReason: null,
+        });
+      }
+    }
+
+    // 3. Active loan clients
+    if (filter.segments.includes("all_clients")) {
+      const [clientRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, email, phone
+         FROM clients
+         WHERE tenant_id = ? AND status = 'active'
+           AND (email IS NULL OR LOWER(TRIM(email)) NOT IN (
+             SELECT LOWER(TRIM(email)) FROM realtor_email_unsubscribes WHERE tenant_id = ?
+           ))`,
+        [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
+      );
+      for (const row of clientRows) {
+        candidates.push({
+          key: row.email ?? row.phone ?? `client-${row.id}`,
+          source: "client",
+          sourceId: row.id,
+          name: row.name || "Unknown",
+          email: row.email || null,
+          phone: row.phone || null,
+          skipped: false,
+          skipReason: null,
+        });
+      }
+    }
+
+    // 4. Deduplicate by normalized email + last-10 phone digits
+    const result: (typeof candidates)[number][] = [];
+    for (const c of candidates) {
+      // selected_ids (inclusion list) takes precedence over excluded_ids
+      if (filter.selected_ids?.length) {
+        if (!filter.selected_ids.includes(c.sourceId)) continue;
+      } else if (filter.excluded_ids?.includes(c.sourceId)) {
+        continue;
+      }
+
+      const emailKey = c.email?.toLowerCase().trim();
+      const phoneKey = c.phone?.replace(/\D/g, "").slice(-10);
+
+      if (emailKey && seenEmails.has(emailKey)) continue;
+      if (phoneKey && seenPhones.has(phoneKey)) continue;
+
+      if (emailKey) seenEmails.add(emailKey);
+      if (phoneKey) seenPhones.add(phoneKey);
+
+      result.push(c);
+    }
+
+    return result;
+  }
+
+  /** Replace merge tags in a message body server-side. */
+  function resolveMergeTags(
+    body: string,
+    recipient: { name: string },
+    sender: { firstName: string; lastName: string },
+    companyName: string,
+    unsubscribeUrl?: string,
+  ): string {
+    const firstName = recipient.name.split(" ")[0] || recipient.name;
+    const lastName = recipient.name.split(" ").slice(1).join(" ") || "";
+    return body
+      .replace(/\{\{first_name\}\}/gi, firstName)
+      .replace(/\{\{last_name\}\}/gi, lastName)
+      .replace(/\{\{full_name\}\}/gi, recipient.name)
+      .replace(
+        /\{\{broker_name\}\}/gi,
+        `${sender.firstName} ${sender.lastName}`,
+      )
+      .replace(/\{\{company_name\}\}/gi, companyName)
+      .replace(
+        /\{\{unsubscribe_link\}\}/gi,
+        unsubscribeUrl
+          ? `<a href="${unsubscribeUrl}">Unsubscribe</a>`
+          : "[unsubscribe]",
+      );
+  }
+
+  /**
+   * Async send loop — runs detached after POST /api/realtor-broadcasts responds.
+   */
+  async function sendBroadcastAsync(broadcastId: number): Promise<void> {
+    let sentCount = 0;
+    let failedCount = 0;
+
+    // Fetch broadcast meta
+    const [broadcastRows] = await pool.query<RowDataPacket[]>(
+      `SELECT rb.*, b.first_name, b.last_name,
+              COALESCE(ts.setting_value, 'Encore Mortgage') AS company_name,
+              COALESCE(ta.setting_value, '') AS company_address,
+              b.twilio_caller_id AS from_number
+       FROM realtor_broadcasts rb
+       JOIN brokers b ON b.id = rb.created_by
+       LEFT JOIN system_settings ts ON ts.setting_key = 'company_name'
+         AND ts.tenant_id = rb.tenant_id
+       LEFT JOIN system_settings ta ON ta.setting_key = 'company_address'
+         AND ta.tenant_id = rb.tenant_id
+       WHERE rb.id = ?`,
+      [broadcastId],
+    );
+    if (!broadcastRows.length) return;
+
+    const broadcast = broadcastRows[0];
+    const tenantId: number = broadcast.tenant_id;
+    const createdBy: number = broadcast.created_by;
+    const senderFirstName: string = broadcast.first_name || "Team";
+    const senderLastName: string = broadcast.last_name || "";
+    const fromNumber: string | null = broadcast.from_number || null;
+    const companyName: string = broadcast.company_name || "Encore Mortgage";
+    const companyAddress: string = broadcast.company_address || "";
+
+    await createAuditLog({
+      actorType: "broker",
+      actorId: createdBy,
+      action: "broadcast_send_started",
+      entityType: "realtor_broadcast",
+      entityId: broadcastId,
+      changes: { channel: broadcast.channel },
+    });
+
+    // Fetch pending recipients
+    const [recipientRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, broker_id, prospect_id, recipient_name,
+              recipient_email, recipient_phone,
+              email_status, sms_status, unsubscribe_token
+       FROM realtor_broadcast_recipients
+       WHERE broadcast_id = ? AND tenant_id = ?`,
+      [broadcastId, tenantId],
+    );
+
+    const total = recipientRows.length;
+    const smtpFromEmail =
+      RESEND_FROM.match(/<([^>]+)>/)?.[1] ?? "noreply@encoremortgage.org";
+    const emailDomain = smtpFromEmail.split("@")[1] ?? "encoremortgage.org";
+    const senderFrom = `${senderFirstName} ${senderLastName} at ${companyName} <${smtpFromEmail}>`;
+    const inboundMailbox = process.env.IMAP_USER;
+    const inboundDomain = process.env.INBOUND_EMAIL_DOMAIN;
+    const baseUrl = getBaseUrl();
+
+    for (const recipient of recipientRows) {
+      // Cancellation check each iteration
+      const [cancelCheck] = await pool.query<RowDataPacket[]>(
+        `SELECT is_cancelled FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
+        [broadcastId],
+      );
+      if (cancelCheck[0]?.is_cancelled) {
+        await pool.query(
+          `UPDATE realtor_broadcasts
+           SET status = 'cancelled', sent_count = ?, failed_count = ?,
+               completed_at = NOW(), updated_at = NOW()
+           WHERE id = ?`,
+          [sentCount, failedCount, broadcastId],
+        );
+        await createAuditLog({
+          actorType: "broker",
+          actorId: createdBy,
+          action: "broadcast_cancelled",
+          entityType: "realtor_broadcast",
+          entityId: broadcastId,
+          changes: { sentCount, failedCount },
+        });
+        return;
+      }
+
+      const recipientName: string = recipient.recipient_name || "Friend";
+      const convId = `broadcast-${broadcastId}-r${recipient.id}`;
+      const unsubscribeUrl = `${baseUrl}/api/realtor-broadcasts/unsubscribe?token=${recipient.unsubscribe_token}`;
+
+      // ── Email ──────────────────────────────────────────────────────────────
+      const shouldEmail =
+        (broadcast.channel === "email" || broadcast.channel === "both") &&
+        recipient.recipient_email &&
+        recipient.email_status === "pending";
+
+      if (shouldEmail && broadcast.body_email) {
+        try {
+          const resolvedBody = resolveMergeTags(
+            broadcast.body_email,
+            { name: recipientName },
+            { firstName: senderFirstName, lastName: senderLastName },
+            companyName,
+            unsubscribeUrl,
+          );
+          const resolvedSubject = broadcast.subject
+            ? resolveMergeTags(
+                broadcast.subject,
+                { name: recipientName },
+                { firstName: senderFirstName, lastName: senderLastName },
+                companyName,
+              )
+            : `Message from ${senderFirstName} ${senderLastName}`;
+
+          const trackingPixelUrl = `${baseUrl}/api/track/open/${recipient.unsubscribe_token}`;
+          const htmlWithFooter = `${resolvedBody}
+<img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:none;border:0;outline:0;text-decoration:none;" />
+<p style="font-size:11px;color:#999;margin-top:24px;border-top:1px solid #eee;padding-top:8px;">
+  ${companyName}${companyAddress ? ` · ${companyAddress}` : ""}<br/>
+  <a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a> from broadcast emails.
+</p>`;
+
+          const messageId = `<enc-${convId}-${Date.now()}@${emailDomain}>`;
+          const replyTo = inboundMailbox
+            ? inboundMailbox
+            : inboundDomain
+              ? `reply+${convId}@${inboundDomain}`
+              : smtpFromEmail;
+
+          const emailResult = await sendViaResend({
+            from: senderFrom,
+            to: recipient.recipient_email,
+            subject: resolvedSubject,
+            html: htmlWithFooter,
+            replyTo,
+            headers: {
+              "Message-ID": messageId,
+              "X-Conversation-Id": convId,
+            },
+          });
+
+          const [emailCommInsert] = await pool.query<ResultSetHeader>(
+            `INSERT INTO communications
+               (tenant_id, from_broker_id, communication_type, direction,
+                subject, body, status, conversation_id, delivery_status,
+                external_id, sent_at)
+             VALUES (?, ?, 'email', 'outbound', ?, ?, 'sent', ?, 'sent', ?, NOW())`,
+            [
+              tenantId,
+              createdBy,
+              resolvedSubject,
+              resolvedBody,
+              convId,
+              emailResult.messageId || null,
+            ],
+          );
+
+          await upsertConversationThread({
+            tenantId,
+            commId: emailCommInsert.insertId,
+            conversationId: convId,
+            applicationId: null,
+            leadId: null,
+            fromUserId: null,
+            fromBrokerId: createdBy,
+            toUserId: null,
+            toBrokerId: recipient.broker_id || null,
+            communicationType: "email",
+            direction: "outbound",
+            body: resolvedSubject,
+          });
+
+          await pool.query(
+            `UPDATE realtor_broadcast_recipients
+             SET email_status = 'sent', email_ext_id = ?,
+                 conversation_id = ?, sent_at = NOW(), updated_at = NOW()
+             WHERE id = ?`,
+            [emailResult.messageId || null, convId, recipient.id],
+          );
+          sentCount++;
+        } catch (err: any) {
+          console.error(
+            `[Broadcast #${broadcastId}] Email failed for recipient #${recipient.id}:`,
+            err,
+          );
+          await pool.query(
+            `UPDATE realtor_broadcast_recipients
+             SET email_status = 'failed', error_message = ?, updated_at = NOW()
+             WHERE id = ?`,
+            [err.message?.slice(0, 500) || "Unknown error", recipient.id],
+          );
+          failedCount++;
+        }
+        // 100ms throttle between email sends (Resend batch-friendly)
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      // ── SMS ────────────────────────────────────────────────────────────────
+      const shouldSms =
+        (broadcast.channel === "sms" || broadcast.channel === "both") &&
+        recipient.recipient_phone &&
+        fromNumber &&
+        recipient.sms_status === "pending";
+
+      if (shouldSms && broadcast.body_sms) {
+        try {
+          const resolvedSmsBody = resolveMergeTags(
+            broadcast.body_sms,
+            { name: recipientName },
+            { firstName: senderFirstName, lastName: senderLastName },
+            companyName,
+          );
+          const smsConvId = `broadcast-${broadcastId}-sms-r${recipient.id}`;
+
+          const smsResult = await sendSMSMessage(
+            recipient.recipient_phone,
+            resolvedSmsBody,
+            undefined,
+            fromNumber,
+          );
+
+          if (!smsResult.success)
+            throw new Error(smsResult.error || "SMS send failed");
+
+          const [smsCommInsert] = await pool.query<ResultSetHeader>(
+            `INSERT INTO communications
+               (tenant_id, from_broker_id, communication_type, direction,
+                body, status, conversation_id, delivery_status,
+                external_id, sent_at)
+             VALUES (?, ?, 'sms', 'outbound', ?, 'sent', ?, 'sent', ?, NOW())`,
+            [
+              tenantId,
+              createdBy,
+              resolvedSmsBody,
+              smsConvId,
+              smsResult.external_id || null,
+            ],
+          );
+
+          await upsertConversationThread({
+            tenantId,
+            commId: smsCommInsert.insertId,
+            conversationId: smsConvId,
+            applicationId: null,
+            leadId: null,
+            fromUserId: null,
+            fromBrokerId: createdBy,
+            toUserId: null,
+            toBrokerId: recipient.broker_id || null,
+            communicationType: "sms",
+            direction: "outbound",
+            body: resolvedSmsBody,
+            inboxNumber: fromNumber,
+            recipientPhone: recipient.recipient_phone,
+          });
+
+          await pool.query(
+            `UPDATE realtor_broadcast_recipients
+             SET sms_status = 'sent', sms_ext_id = ?,
+                 conversation_id = COALESCE(conversation_id, ?),
+                 sent_at = NOW(), updated_at = NOW()
+             WHERE id = ?`,
+            [smsResult.external_id || null, smsConvId, recipient.id],
+          );
+          sentCount++;
+        } catch (err: any) {
+          console.error(
+            `[Broadcast #${broadcastId}] SMS failed for recipient #${recipient.id}:`,
+            err,
+          );
+          await pool.query(
+            `UPDATE realtor_broadcast_recipients
+             SET sms_status = 'failed', error_message = ?, updated_at = NOW()
+             WHERE id = ?`,
+            [err.message?.slice(0, 500) || "Unknown error", recipient.id],
+          );
+          failedCount++;
+        }
+        // 1s throttle per SMS — respect A2P 10DLC carrier throughput limits
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+
+      // Ably real-time progress — frontend live progress bar subscribes here
+      await publishToAbly(`broadcast:${broadcastId}`, "progress", {
+        sent: sentCount,
+        failed: failedCount,
+        total,
+      });
+    }
+
+    // Finalize
+    const finalStatus =
+      sentCount > 0 || failedCount > 0
+        ? failedCount === total
+          ? "failed"
+          : "sent"
+        : "sent";
+    await pool.query(
+      `UPDATE realtor_broadcasts
+       SET status = IF(is_cancelled = 1, 'cancelled', ?),
+           sent_count = ?, failed_count = ?,
+           completed_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [finalStatus, sentCount, failedCount, broadcastId],
+    );
+
+    await createAuditLog({
+      actorType: "broker",
+      actorId: createdBy,
+      action: "broadcast_send_completed",
+      entityType: "realtor_broadcast",
+      entityId: broadcastId,
+      changes: { sentCount, failedCount, total },
+    });
+
+    await createBrokerNotification({
+      brokerIds: createdBy,
+      title: "Broadcast Complete",
+      message: `"${broadcast.title}" delivered to ${sentCount} of ${total} contacts.${failedCount > 0 ? ` ${failedCount} failed — check the broadcast detail.` : ""}`,
+      category: "system",
+      type: failedCount > 0 ? "warning" : "success",
+      actionUrl: `/admin/broadcasts`,
+    });
+  }
+
+  // POST /api/realtor-broadcasts/preview — resolve audience, return count + sample
+  const handlePreviewBroadcastAudience: RequestHandler = async (req, res) => {
+    try {
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const { audience_filter, channel } = req.body as {
+        audience_filter: any;
+        channel: string;
+      };
+      if (!audience_filter?.segments) {
+        return res
+          .status(400)
+          .json({ success: false, error: "audience_filter.segments required" });
+      }
+
+      const resolved = await resolveAudience(audience_filter);
+      const emailCount = resolved.filter((r) => !r.skipped && r.email).length;
+      // smsOptedOut brokers have phone nulled out — exclude them from SMS count
+      const smsCount = resolved.filter(
+        (r) => !r.skipped && r.phone && r.skipReason !== "sms_opted_out",
+      ).length;
+      const skipped = resolved.filter(
+        (r) => r.skipped || r.skipReason === "sms_opted_out",
+      ).length;
+
+      return res.json({
+        success: true,
+        preview: {
+          count: resolved.length - skipped,
+          email_count:
+            channel === "email" || channel === "both" ? emailCount : 0,
+          sms_count: channel === "sms" || channel === "both" ? smsCount : 0,
+          skipped_count: skipped,
+          // Return ALL resolved contacts so the client can accurately track
+          // per-recipient checkboxes and exclusions regardless of list size.
+          sample: resolved.map((r) => ({
+            id: r.sourceId,
+            source: r.source,
+            name: r.name,
+            email: r.email,
+            phone: r.phone,
+            has_email: !!r.email,
+            has_phone: !!r.phone,
+            skipped: r.skipped,
+            skip_reason: r.skipReason,
+            role: r.role ?? null,
+          })),
+        },
+      });
+    } catch (err) {
+      console.error("[Broadcast preview] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to preview audience" });
+    }
+  };
+
+  // POST /api/realtor-broadcasts — create and queue (or save as draft)
+  const handleCreateBroadcast: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const {
+        title,
+        channel,
+        subject,
+        body_email,
+        body_sms,
+        audience_filter,
+        scheduled_at,
+        send_now = true,
+      } = req.body as {
+        title: string;
+        channel: "email" | "sms" | "both";
+        subject?: string;
+        body_email?: string;
+        body_sms?: string;
+        audience_filter: any;
+        scheduled_at?: string;
+        send_now?: boolean;
+      };
+
+      if (!title || !channel || !audience_filter?.segments) {
+        return res.status(400).json({
+          success: false,
+          error: "title, channel, and audience_filter.segments are required",
+        });
+      }
+
+      // SMS requires an assigned Twilio number
+      if (channel === "sms" || channel === "both") {
+        const [callerRow] = await pool.query<RowDataPacket[]>(
+          `SELECT twilio_caller_id FROM brokers
+           WHERE id = ? AND tenant_id = ? AND twilio_caller_id IS NOT NULL LIMIT 1`,
+          [brokerId, MORTGAGE_TENANT_ID],
+        );
+        if (!callerRow.length) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "SMS broadcast requires an assigned Twilio number. Ask your platform admin to assign one to your account.",
+          });
+        }
+      }
+
+      // Enforce daily blast caps from system_settings
+      if (send_now || !!scheduled_at) {
+        const [capRows] = await pool.query<RowDataPacket[]>(
+          `SELECT setting_key, setting_value FROM system_settings
+           WHERE tenant_id = ? AND setting_key IN (
+             'broadcast_daily_email_limit', 'broadcast_daily_sms_limit'
+           )`,
+          [MORTGAGE_TENANT_ID],
+        );
+        const capMap: Record<string, number> = {
+          broadcast_daily_email_limit: 500,
+          broadcast_daily_sms_limit: 200,
+        };
+        for (const row of capRows) {
+          const v = parseInt(row.setting_value);
+          if (!isNaN(v)) capMap[row.setting_key] = v;
+        }
+
+        if (channel === "email" || channel === "both") {
+          const [emailSent] = await pool.query<RowDataPacket[]>(
+            `SELECT COUNT(*) AS cnt FROM realtor_broadcast_recipients rbr
+             JOIN realtor_broadcasts rb ON rb.id = rbr.broadcast_id
+             WHERE rb.tenant_id = ? AND rbr.email_status = 'sent'
+               AND rbr.sent_at >= NOW() - INTERVAL 24 HOUR`,
+            [MORTGAGE_TENANT_ID],
+          );
+          const sentToday = emailSent[0]?.cnt ?? 0;
+          if (sentToday >= capMap.broadcast_daily_email_limit) {
+            return res.status(429).json({
+              success: false,
+              error: `Daily email broadcast limit (${capMap.broadcast_daily_email_limit}) reached. Try again after 24 hours.`,
+            });
+          }
+        }
+
+        if (channel === "sms" || channel === "both") {
+          const [smsSent] = await pool.query<RowDataPacket[]>(
+            `SELECT COUNT(*) AS cnt FROM realtor_broadcast_recipients rbr
+             JOIN realtor_broadcasts rb ON rb.id = rbr.broadcast_id
+             WHERE rb.tenant_id = ? AND rbr.sms_status = 'sent'
+               AND rbr.sent_at >= NOW() - INTERVAL 24 HOUR`,
+            [MORTGAGE_TENANT_ID],
+          );
+          const sentToday = smsSent[0]?.cnt ?? 0;
+          if (sentToday >= capMap.broadcast_daily_sms_limit) {
+            return res.status(429).json({
+              success: false,
+              error: `Daily SMS broadcast limit (${capMap.broadcast_daily_sms_limit}) reached. Try again after 24 hours.`,
+            });
+          }
+        }
+      }
+
+      // Resolve recipients
+      const recipients = await resolveAudience(audience_filter);
+
+      // Determine initial status
+      const isDraft = !send_now && !scheduled_at;
+      const isScheduled = !send_now && !!scheduled_at;
+      const initialStatus = isDraft
+        ? "draft"
+        : isScheduled
+          ? "scheduled"
+          : "sending";
+
+      // Build recipient rows
+      const recipientValues: any[] = [];
+      const recipientPlaceholders: string[] = [];
+
+      for (const r of recipients) {
+        const token = crypto.randomUUID();
+        const emailStatus =
+          channel === "sms" ? null : r.email ? "pending" : "skipped_no_contact";
+        const smsStatus =
+          channel === "email"
+            ? null
+            : r.phone
+              ? "pending"
+              : "skipped_no_contact";
+
+        recipientPlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        recipientValues.push(
+          MORTGAGE_TENANT_ID,
+          r.source === "broker" ? r.sourceId : null,
+          r.source === "prospect" ? r.sourceId : null,
+          r.name,
+          r.email,
+          r.phone,
+          emailStatus,
+          smsStatus,
+          token,
+          0, // broadcast_id placeholder, updated below
+        );
+      }
+
+      // Insert broadcast header
+      const [broadcastInsert] = await pool.query<ResultSetHeader>(
+        `INSERT INTO realtor_broadcasts
+           (tenant_id, created_by, title, channel, subject, body_email, body_sms,
+            audience_filter, recipient_count, status, scheduled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          brokerId,
+          title,
+          channel,
+          subject || null,
+          body_email || null,
+          body_sms || null,
+          JSON.stringify(audience_filter),
+          recipients.length,
+          initialStatus,
+          scheduled_at ? new Date(scheduled_at) : null,
+        ],
+      );
+      const broadcastId = broadcastInsert.insertId;
+
+      // Bulk insert recipients (set correct broadcast_id)
+      if (recipients.length > 0) {
+        // Replace the placeholder 0 with actual broadcastId
+        const correctedValues = recipientValues.map((v, i) => {
+          // Last element per row was 0 placeholder
+          if ((i + 1) % 10 === 0) return broadcastId;
+          return v;
+        });
+
+        // Build corrected placeholders with broadcast_id first
+        const finalPlaceholders: string[] = [];
+        const finalValues: any[] = [];
+        for (let i = 0; i < recipients.length; i++) {
+          const base = i * 10;
+          finalPlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+          finalValues.push(
+            broadcastId,
+            recipientValues[base], // tenant_id
+            recipientValues[base + 1], // broker_id
+            recipientValues[base + 2], // prospect_id
+            recipientValues[base + 3], // name
+            recipientValues[base + 4], // email
+            recipientValues[base + 5], // phone
+            recipientValues[base + 6], // email_status
+            recipientValues[base + 7], // sms_status
+            recipientValues[base + 8], // token
+          );
+        }
+
+        await pool.query(
+          `INSERT INTO realtor_broadcast_recipients
+             (broadcast_id, tenant_id, broker_id, prospect_id, recipient_name,
+              recipient_email, recipient_phone, email_status, sms_status, unsubscribe_token)
+           VALUES ${finalPlaceholders.join(",")}`,
+          finalValues,
+        );
+      }
+
+      await createAuditLog({
+        actorType: "broker",
+        actorId: brokerId,
+        action: "broadcast_created",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+        changes: {
+          channel,
+          recipientCount: recipients.length,
+          title,
+          status: initialStatus,
+        },
+      });
+
+      // Fire async send loop for immediate sends
+      if (send_now && !scheduled_at) {
+        sendBroadcastAsync(broadcastId).catch((err) =>
+          console.error(`[Broadcast #${broadcastId}] send loop error:`, err),
+        );
+      }
+
+      return res.json({
+        success: true,
+        broadcast_id: broadcastId,
+        recipient_count: recipients.length,
+        status: initialStatus,
+      });
+    } catch (err) {
+      console.error("[Create broadcast] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to create broadcast" });
+    }
+  };
+
+  // PATCH /api/realtor-broadcasts/:id — update a draft broadcast (wizard auto-save)
+  const handleUpdateBroadcast: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const broadcastId = parseInt(req.params.id);
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, status FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ? AND created_by = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID, brokerId],
+      );
+      if (!rows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+      if (!["draft", "scheduled"].includes(rows[0].status)) {
+        return res.status(400).json({
+          success: false,
+          error: "Only draft or scheduled broadcasts can be updated",
+        });
+      }
+
+      const {
+        title,
+        subject,
+        body_email,
+        body_sms,
+        audience_filter,
+        scheduled_at,
+        channel,
+      } = req.body as any;
+
+      const fields: string[] = [];
+      const values: any[] = [];
+      if (title !== undefined) {
+        fields.push("title = ?");
+        values.push(title);
+      }
+      if (channel !== undefined) {
+        fields.push("channel = ?");
+        values.push(channel);
+      }
+      if (subject !== undefined) {
+        fields.push("subject = ?");
+        values.push(subject);
+      }
+      if (body_email !== undefined) {
+        fields.push("body_email = ?");
+        values.push(body_email);
+      }
+      if (body_sms !== undefined) {
+        fields.push("body_sms = ?");
+        values.push(body_sms);
+      }
+      if (audience_filter !== undefined) {
+        fields.push("audience_filter = ?");
+        values.push(JSON.stringify(audience_filter));
+      }
+      if (scheduled_at !== undefined) {
+        fields.push("scheduled_at = ?");
+        values.push(scheduled_at ? new Date(scheduled_at) : null);
+      }
+
+      if (!fields.length) {
+        return res
+          .status(400)
+          .json({ success: false, error: "No fields to update" });
+      }
+
+      values.push(broadcastId, MORTGAGE_TENANT_ID);
+      await pool.query(
+        `UPDATE realtor_broadcasts SET ${fields.join(", ")}, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        values,
+      );
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Update broadcast] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to update broadcast" });
+    }
+  };
+
+  // PATCH /api/realtor-broadcasts/:id/cancel — cancel a sending broadcast
+  const handleCancelBroadcast: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const broadcastId = parseInt(req.params.id);
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, status FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ? AND created_by = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID, brokerId],
+      );
+      if (!rows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+      if (!["sending", "scheduled", "draft"].includes(rows[0].status)) {
+        return res.status(400).json({
+          success: false,
+          error: "Broadcast cannot be cancelled in its current state",
+        });
+      }
+
+      await pool.query(
+        `UPDATE realtor_broadcasts
+         SET is_cancelled = 1, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      await createAuditLog({
+        actorType: "broker",
+        actorId: brokerId,
+        action: "broadcast_cancel_requested",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+      });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Cancel broadcast] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to cancel broadcast" });
+    }
+  };
+
+  // GET /api/realtor-broadcasts — list broadcasts for the tenant
+  const handleGetBroadcasts: RequestHandler = async (req, res) => {
+    try {
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const page = Math.max(1, parseInt((req.query.page as string) || "1"));
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt((req.query.limit as string) || "50")),
+      );
+      const offset = (page - 1) * limit;
+      const statusFilter = (req.query.status as string) || undefined;
+
+      const listQuery = `SELECT rb.*,
+              CONCAT(b.first_name, ' ', b.last_name) AS creator_name
+       FROM realtor_broadcasts rb
+       LEFT JOIN brokers b ON b.id = rb.created_by
+       WHERE rb.tenant_id = ?
+         ${statusFilter ? "AND rb.status = ?" : ""}
+       ORDER BY rb.created_at DESC
+       LIMIT ? OFFSET ?`;
+      const listParams: any[] = statusFilter
+        ? [MORTGAGE_TENANT_ID, statusFilter, limit, offset]
+        : [MORTGAGE_TENANT_ID, limit, offset];
+      const [rows] = await pool.query<RowDataPacket[]>(listQuery, listParams);
+
+      const countQuery = `SELECT COUNT(*) AS total FROM realtor_broadcasts WHERE tenant_id = ?${statusFilter ? " AND status = ?" : ""}`;
+      const countParams: any[] = statusFilter
+        ? [MORTGAGE_TENANT_ID, statusFilter]
+        : [MORTGAGE_TENANT_ID];
+      const [countRows] = await pool.query<RowDataPacket[]>(
+        countQuery,
+        countParams,
+      );
+
+      return res.json({
+        success: true,
+        broadcasts: rows.map((r) => ({
+          ...r,
+          audience_filter:
+            typeof r.audience_filter === "string"
+              ? JSON.parse(r.audience_filter)
+              : r.audience_filter,
+          is_cancelled: Boolean(r.is_cancelled),
+        })),
+        total: countRows[0]?.total || 0,
+      });
+    } catch (err) {
+      console.error("[Get broadcasts] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch broadcasts" });
+    }
+  };
+
+  // GET /api/realtor-broadcasts/:id — single broadcast with stats
+  const handleGetBroadcast: RequestHandler = async (req, res) => {
+    try {
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const broadcastId = parseInt(req.params.id);
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT rb.*,
+                CONCAT(b.first_name, ' ', b.last_name) AS creator_name
+         FROM realtor_broadcasts rb
+         LEFT JOIN brokers b ON b.id = rb.created_by
+         WHERE rb.id = ? AND rb.tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      if (!rows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+
+      const r = rows[0];
+      return res.json({
+        success: true,
+        broadcast: {
+          ...r,
+          audience_filter:
+            typeof r.audience_filter === "string"
+              ? JSON.parse(r.audience_filter)
+              : r.audience_filter,
+          is_cancelled: Boolean(r.is_cancelled),
+        },
+      });
+    } catch (err) {
+      console.error("[Get broadcast] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch broadcast" });
+    }
+  };
+
+  // GET /api/realtor-broadcasts/:id/recipients — paginated recipient delivery log
+  const handleGetBroadcastRecipients: RequestHandler = async (req, res) => {
+    try {
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const broadcastId = parseInt(req.params.id);
+      const page = Math.max(1, parseInt((req.query.page as string) || "1"));
+      const limit = Math.min(
+        200,
+        Math.max(1, parseInt((req.query.limit as string) || "100")),
+      );
+      const offset = (page - 1) * limit;
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, broadcast_id, broker_id, prospect_id, recipient_name,
+                recipient_email, recipient_phone, email_status, sms_status,
+                email_ext_id, sms_ext_id, conversation_id, error_message, sent_at
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?
+         ORDER BY id ASC
+         LIMIT ? OFFSET ?`,
+        [broadcastId, MORTGAGE_TENANT_ID, limit, offset],
+      );
+
+      const [countRows] = await pool.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS total
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      return res.json({
+        success: true,
+        recipients: rows,
+        total: countRows[0]?.total || 0,
+      });
+    } catch (err) {
+      console.error("[Get broadcast recipients] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch recipients" });
+    }
+  };
+
+  // DELETE /api/realtor-broadcasts/:id — delete draft or scheduled only
+  const handleDeleteBroadcast: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const broadcastId = parseInt(req.params.id);
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, status FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ? AND created_by = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID, brokerId],
+      );
+      if (!rows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+      if (!["draft", "scheduled"].includes(rows[0].status)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Only draft or scheduled broadcasts can be deleted. Sent broadcasts are retained for audit purposes.",
+        });
+      }
+
+      await pool.query(
+        `DELETE FROM realtor_broadcasts WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      await createAuditLog({
+        actorType: "broker",
+        actorId: brokerId,
+        action: "broadcast_deleted",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+      });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Delete broadcast] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to delete broadcast" });
+    }
+  };
+
+  // GET /api/realtor-broadcasts/unsubscribe — public CAN-SPAM opt-out link
+  const handleBroadcastUnsubscribe: RequestHandler = async (req, res) => {
+    try {
+      const token = req.query.token as string;
+      if (!token) {
+        return res.status(400).send("<h3>Invalid unsubscribe link.</h3>");
+      }
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT rbr.id, rbr.recipient_email, rb.tenant_id
+         FROM realtor_broadcast_recipients rbr
+         JOIN realtor_broadcasts rb ON rb.id = rbr.broadcast_id
+         WHERE rbr.unsubscribe_token = ? LIMIT 1`,
+        [token],
+      );
+
+      if (!rows.length) {
+        return res
+          .status(400)
+          .send(
+            "<h3>This unsubscribe link is invalid or has already been used.</h3>",
+          );
+      }
+
+      const { recipient_email, tenant_id } = rows[0];
+
+      // Record opt-out (UPSERT — idempotent)
+      await pool.query(
+        `INSERT IGNORE INTO realtor_email_unsubscribes (tenant_id, email)
+         VALUES (?, ?)`,
+        [tenant_id, recipient_email],
+      );
+
+      // Mark the recipient row
+      await pool.query(
+        `UPDATE realtor_broadcast_recipients
+         SET email_status = 'unsubscribed', updated_at = NOW()
+         WHERE unsubscribe_token = ?`,
+        [token],
+      );
+
+      return res.status(200).send(
+        `<html><body style="font-family:sans-serif;padding:40px;max-width:500px;margin:auto;">
+            <h2>You've been unsubscribed.</h2>
+            <p>You will no longer receive broadcast emails from this platform.</p>
+            <p style="color:#999;font-size:13px;">If this was a mistake, please contact your broker.</p>
+          </body></html>`,
+      );
+    } catch (err) {
+      console.error("[Broadcast unsubscribe] error:", err);
+      return res
+        .status(500)
+        .send("<h3>An error occurred. Please try again.</h3>");
+    }
+  };
+
+  // ─── Phase 2: Email open tracking pixel ───────────────────────────────────
+  // Public endpoint — embedded in every broadcast email as a 1×1 invisible image.
+  // GET /api/track/open/:token
+  const TRACKING_PIXEL_GIF = Buffer.from(
+    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+    "base64",
+  );
+  const handleTrackEmailOpen: RequestHandler = async (req, res) => {
+    res.set({
+      "Content-Type": "image/gif",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+    res.send(TRACKING_PIXEL_GIF);
+    // Fire-and-forget status update — do NOT block the pixel response
+    const token = req.params.token;
+    if (token) {
+      pool
+        .query(
+          `UPDATE realtor_broadcast_recipients
+           SET email_status = 'opened', updated_at = NOW()
+           WHERE unsubscribe_token = ? AND email_status = 'sent'`,
+          [token],
+        )
+        .catch((err) =>
+          console.error("[Open tracking] DB update failed:", err),
+        );
+    }
+  };
+
+  // ─── Phase 2: Re-send failed recipients ───────────────────────────────────
+  // POST /api/realtor-broadcasts/:id/resend-failed
+  const handleResendFailed: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const broadcastId = parseInt(req.params.id);
+
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const [bRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, status, channel FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+      if (!bRows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+      if (["sending", "draft", "scheduled"].includes(bRows[0].status)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Cannot retry while broadcast is in draft/scheduled/sending state",
+        });
+      }
+
+      const channel: string = bRows[0].channel;
+      const setClauses: string[] = [];
+      if (channel === "email" || channel === "both") {
+        setClauses.push(
+          "email_status = CASE WHEN email_status = 'failed' THEN 'pending' ELSE email_status END",
+        );
+      }
+      if (channel === "sms" || channel === "both") {
+        setClauses.push(
+          "sms_status = CASE WHEN sms_status = 'failed' THEN 'pending' ELSE sms_status END",
+        );
+      }
+
+      const [updateResult] = await pool.query<ResultSetHeader>(
+        `UPDATE realtor_broadcast_recipients
+         SET ${setClauses.join(", ")}, error_message = NULL, updated_at = NOW()
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      if (!updateResult.affectedRows) {
+        return res.json({ success: true, retried: 0 });
+      }
+
+      // Move broadcast back to sending so the UI reflects progress
+      await pool.query(
+        `UPDATE realtor_broadcasts
+         SET status = 'sending', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      // Fire send loop — processes only newly-pending recipients
+      sendBroadcastAsync(broadcastId).catch((err) =>
+        console.error(`[Resend failed] Broadcast #${broadcastId} error:`, err),
+      );
+
+      await createAuditLog({
+        actorType: "broker",
+        actorId: brokerId,
+        action: "broadcast_resend_failed",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+      });
+
+      return res.json({ success: true, retried: updateResult.affectedRows });
+    } catch (err) {
+      console.error("[Resend failed] error:", err);
+      return res.status(500).json({ success: false, error: "Failed to retry" });
+    }
+  };
+
+  // ─── Phase 2: Export recipients as CSV ────────────────────────────────────
+  // GET /api/realtor-broadcasts/:id/recipients/export
+  const handleExportBroadcastRecipients: RequestHandler = async (req, res) => {
+    try {
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const broadcastId = parseInt(req.params.id);
+      const [bRows] = await pool.query<RowDataPacket[]>(
+        `SELECT title FROM realtor_broadcasts WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+      if (!bRows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT recipient_name, recipient_email, recipient_phone,
+                email_status, sms_status, ab_variant, error_message, sent_at
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?
+         ORDER BY id ASC`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      const escape = (v: string | null | undefined) =>
+        `"${(v ?? "").toString().replace(/"/g, '""').slice(0, 500)}"`;
+
+      const header =
+        "Name,Email,Phone,Email Status,SMS Status,A/B Variant,Error,Sent At";
+      const csvLines = (rows as any[]).map((r) =>
+        [
+          escape(r.recipient_name),
+          escape(r.recipient_email),
+          escape(r.recipient_phone),
+          r.email_status ?? "",
+          r.sms_status ?? "",
+          r.ab_variant ?? "",
+          escape(r.error_message),
+          r.sent_at ? new Date(r.sent_at).toISOString() : "",
+        ].join(","),
+      );
+
+      const csv = [header, ...csvLines].join("\n");
+      const safeTitle = (bRows[0].title ?? "broadcast")
+        .replace(/[^a-z0-9]/gi, "-")
+        .toLowerCase()
+        .slice(0, 40);
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="broadcast-${broadcastId}-${safeTitle}.csv"`,
+      );
+      return res.send(csv);
+    } catch (err) {
+      console.error("[Export broadcast recipients] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to export" });
+    }
+  };
+
+  // ─── Phase 3: Saved audience segments ─────────────────────────────────────
+
+  // GET /api/broadcast-segments
+  const handleGetSavedSegments: RequestHandler = async (req, res) => {
+    try {
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, name, filter_json, created_at
+         FROM broadcast_saved_segments
+         WHERE tenant_id = ?
+         ORDER BY created_at DESC`,
+        [MORTGAGE_TENANT_ID],
+      );
+      return res.json({
+        success: true,
+        segments: rows.map((r) => ({
+          ...r,
+          filter_json:
+            typeof r.filter_json === "string"
+              ? JSON.parse(r.filter_json)
+              : r.filter_json,
+        })),
+      });
+    } catch (err) {
+      console.error("[Get saved segments] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch segments" });
+    }
+  };
+
+  // POST /api/broadcast-segments
+  const handleCreateSavedSegment: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+      const { name, filter_json } = req.body as {
+        name: string;
+        filter_json: any;
+      };
+      if (!name?.trim() || !filter_json) {
+        return res
+          .status(400)
+          .json({ success: false, error: "name and filter_json are required" });
+      }
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO broadcast_saved_segments (tenant_id, created_by, name, filter_json)
+         VALUES (?, ?, ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          brokerId,
+          name.trim(),
+          JSON.stringify(filter_json),
+        ],
+      );
+      return res.status(201).json({ success: true, id: result.insertId });
+    } catch (err) {
+      console.error("[Create saved segment] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to save segment" });
+    }
+  };
+
+  // DELETE /api/broadcast-segments/:id
+  const handleDeleteSavedSegment: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+      const segmentId = parseInt(req.params.id);
+      await pool.query(
+        `DELETE FROM broadcast_saved_segments
+         WHERE id = ? AND tenant_id = ? AND created_by = ?`,
+        [segmentId, MORTGAGE_TENANT_ID, brokerId],
+      );
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Delete saved segment] error:", err);
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to delete segment" });
+    }
+  };
+
+  // Cron: process scheduled broadcasts every 5 min
+  // curl -s "https://admin.encoremortgage.org/api/cron/process-scheduled-broadcasts?secret=CRON_SECRET"
+  const handleProcessScheduledBroadcasts: RequestHandler = async (req, res) => {
+    const secret = req.query.secret;
+    if (secret !== process.env.CRON_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const [due] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM realtor_broadcasts
+         WHERE status = 'scheduled'
+           AND scheduled_at <= NOW()
+           AND is_cancelled = 0
+         ORDER BY scheduled_at ASC
+         LIMIT 10`,
+      );
+
+      for (const row of due) {
+        // Mark sending before firing — prevents double-pickup
+        await pool.query(
+          `UPDATE realtor_broadcasts
+           SET status = 'sending', started_at = NOW(), updated_at = NOW()
+           WHERE id = ?`,
+          [row.id],
+        );
+        sendBroadcastAsync(row.id).catch((err) =>
+          console.error(`❌ Scheduled broadcast #${row.id} failed:`, err),
+        );
+      }
+
+      return res.json({ success: true, fired: due.length });
+    } catch (err) {
+      console.error("[Scheduled broadcasts cron] error:", err);
+      return res.status(500).json({ success: false, error: "Cron failed" });
+    }
+  };
+
+  // Route registrations
+  expressApp.post(
+    "/api/realtor-broadcasts/preview",
+    verifyBrokerSession,
+    handlePreviewBroadcastAudience,
+  );
+  expressApp.get(
+    "/api/realtor-broadcasts/unsubscribe",
+    handleBroadcastUnsubscribe,
+  );
+  expressApp.get(
+    "/api/realtor-broadcasts",
+    verifyBrokerSession,
+    handleGetBroadcasts,
+  );
+  expressApp.post(
+    "/api/realtor-broadcasts",
+    rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 10,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => ipKey(req),
+      message: {
+        success: false,
+        error:
+          "Too many broadcast requests. Please wait before sending another.",
+      },
+    }),
+    verifyBrokerSession,
+    handleCreateBroadcast,
+  );
+  expressApp.get(
+    "/api/realtor-broadcasts/:id/recipients",
+    verifyBrokerSession,
+    handleGetBroadcastRecipients,
+  );
+  expressApp.get(
+    "/api/realtor-broadcasts/:id/recipients/export",
+    verifyBrokerSession,
+    handleExportBroadcastRecipients,
+  );
+  expressApp.post(
+    "/api/realtor-broadcasts/:id/resend-failed",
+    verifyBrokerSession,
+    handleResendFailed,
+  );
+  expressApp.get(
+    "/api/realtor-broadcasts/:id",
+    verifyBrokerSession,
+    handleGetBroadcast,
+  );
+  expressApp.patch(
+    "/api/realtor-broadcasts/:id/cancel",
+    verifyBrokerSession,
+    handleCancelBroadcast,
+  );
+  expressApp.patch(
+    "/api/realtor-broadcasts/:id",
+    verifyBrokerSession,
+    handleUpdateBroadcast,
+  );
+  expressApp.delete(
+    "/api/realtor-broadcasts/:id",
+    verifyBrokerSession,
+    handleDeleteBroadcast,
+  );
+  expressApp.get(
+    "/api/cron/process-scheduled-broadcasts",
+    handleProcessScheduledBroadcasts,
+  );
+
+  // Email open tracking pixel — public, no auth
+  expressApp.get("/api/track/open/:token", handleTrackEmailOpen);
+
+  // Saved audience segments
+  expressApp.get(
+    "/api/broadcast-segments",
+    verifyBrokerSession,
+    handleGetSavedSegments,
+  );
+  expressApp.post(
+    "/api/broadcast-segments",
+    verifyBrokerSession,
+    handleCreateSavedSegment,
+  );
+  expressApp.delete(
+    "/api/broadcast-segments/:id",
+    verifyBrokerSession,
+    handleDeleteSavedSegment,
   );
 
   // =====================================================
@@ -32712,7 +34972,7 @@ function createServer() {
   expressApp.put("/api/ai/config", verifyBrokerSession, async (req, res) => {
     try {
       const broker = (req as any).broker;
-      if (broker.role !== "admin") {
+      if (broker.role !== "admin" && broker.role !== "platform_owner") {
         return res.status(403).json({
           success: false,
           error: "Only admins can update Mortgi config",
@@ -32875,7 +35135,7 @@ function createServer() {
     async (req, res) => {
       try {
         const broker = (req as any).broker;
-        if (broker.role !== "admin") {
+        if (broker.role !== "admin" && broker.role !== "platform_owner") {
           return res.status(403).json({
             success: false,
             error: "Only admins can delete chat sessions",
