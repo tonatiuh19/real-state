@@ -6,6 +6,7 @@ import type {
   RealtorBroadcastRecipient,
   BroadcastAudiencePreview,
   BroadcastSavedSegment,
+  BroadcastCreditSummary,
   CreateBroadcastRequest,
   PreviewBroadcastAudienceRequest,
   GetBroadcastsResponse,
@@ -15,6 +16,7 @@ import type {
   GetBroadcastRecipientsResponse,
   GetSavedSegmentsResponse,
   ResendFailedResponse,
+  ResendPendingResponse,
 } from "@shared/api";
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -28,6 +30,7 @@ interface RealtorBroadcastState {
   audiencePreview: BroadcastAudiencePreview | null;
   latestDraft: RealtorBroadcast | null;
   savedSegments: BroadcastSavedSegment[];
+  credits: BroadcastCreditSummary | null;
   isLoading: boolean;
   isSending: boolean;
   isPreviewing: boolean;
@@ -45,6 +48,7 @@ const initialState: RealtorBroadcastState = {
   audiencePreview: null,
   latestDraft: null,
   savedSegments: [],
+  credits: null,
   isLoading: false,
   isSending: false,
   isPreviewing: false,
@@ -52,6 +56,14 @@ const initialState: RealtorBroadcastState = {
   isExporting: false,
   error: null,
 };
+
+function extractApiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const apiError = (error.response?.data as { error?: string } | undefined)?.error;
+    return apiError || error.message || fallback;
+  }
+  return fallback;
+}
 
 // ─── Thunks ───────────────────────────────────────────────────────────────────
 
@@ -79,7 +91,7 @@ export const fetchBroadcastDetail = createAsyncThunk(
       `/api/realtor-broadcasts/${broadcastId}`,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
-    return data.broadcast;
+    return data;
   },
 );
 
@@ -110,20 +122,26 @@ export const previewBroadcastAudience = createAsyncThunk(
       payload,
       { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
-    return data.preview;
+    return data;
   },
 );
 
 export const createBroadcast = createAsyncThunk(
   "realtorBroadcasts/create",
-  async (payload: CreateBroadcastRequest, { getState }) => {
-    const { sessionToken } = (getState() as RootState).brokerAuth;
-    const { data } = await axios.post<CreateBroadcastResponse>(
-      "/api/realtor-broadcasts",
-      payload,
-      { headers: { Authorization: `Bearer ${sessionToken}` } },
-    );
-    return data;
+  async (payload: CreateBroadcastRequest, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<CreateBroadcastResponse>(
+        "/api/realtor-broadcasts",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, "Failed to create broadcast"),
+      );
+    }
   },
 );
 
@@ -185,14 +203,38 @@ export const deleteBroadcast = createAsyncThunk(
 /** Re-send to failed recipients for a completed broadcast */
 export const retrySendFailed = createAsyncThunk(
   "realtorBroadcasts/retrySendFailed",
-  async (broadcastId: number, { getState }) => {
-    const { sessionToken } = (getState() as RootState).brokerAuth;
-    const { data } = await axios.post<ResendFailedResponse>(
-      `/api/realtor-broadcasts/${broadcastId}/resend-failed`,
-      {},
-      { headers: { Authorization: `Bearer ${sessionToken}` } },
-    );
-    return { broadcastId, retried: data.retried };
+  async (broadcastId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<ResendFailedResponse>(
+        `/api/realtor-broadcasts/${broadcastId}/resend-failed`,
+        {},
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { broadcastId, retried: data.retried };
+    } catch (error) {
+      return rejectWithValue(extractApiErrorMessage(error, "Failed to retry"));
+    }
+  },
+);
+
+/** Re-trigger any currently pending recipients for a completed broadcast */
+export const retrySendPending = createAsyncThunk(
+  "realtorBroadcasts/retrySendPending",
+  async (broadcastId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<ResendPendingResponse>(
+        `/api/realtor-broadcasts/${broadcastId}/resend-pending`,
+        {},
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { broadcastId, retried: data.retried };
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, "Failed to re-trigger pending recipients"),
+      );
+    }
   },
 );
 
@@ -309,6 +351,7 @@ const realtorBroadcastSlice = createSlice({
         state.isLoading = false;
         state.broadcasts = action.payload.broadcasts;
         state.broadcastsTotal = action.payload.total;
+        state.credits = action.payload.credits ?? state.credits;
       })
       .addCase(fetchBroadcasts.rejected, (state, action) => {
         state.isLoading = false;
@@ -323,7 +366,8 @@ const realtorBroadcastSlice = createSlice({
       })
       .addCase(fetchBroadcastDetail.fulfilled, (state, action) => {
         state.isLoading = false;
-        state.activeBroadcast = action.payload;
+        state.activeBroadcast = action.payload.broadcast;
+        state.credits = action.payload.credits ?? state.credits;
       })
       .addCase(fetchBroadcastDetail.rejected, (state, action) => {
         state.isLoading = false;
@@ -353,7 +397,8 @@ const realtorBroadcastSlice = createSlice({
       })
       .addCase(previewBroadcastAudience.fulfilled, (state, action) => {
         state.isPreviewing = false;
-        state.audiencePreview = action.payload;
+        state.audiencePreview = action.payload.preview;
+        state.credits = action.payload.credits ?? state.credits;
       })
       .addCase(previewBroadcastAudience.rejected, (state, action) => {
         state.isPreviewing = false;
@@ -366,13 +411,17 @@ const realtorBroadcastSlice = createSlice({
         state.isSending = true;
         state.error = null;
       })
-      .addCase(createBroadcast.fulfilled, (state) => {
+      .addCase(createBroadcast.fulfilled, (state, action) => {
         state.isSending = false;
         state.latestDraft = null;
+        state.credits = action.payload.credits ?? state.credits;
       })
       .addCase(createBroadcast.rejected, (state, action) => {
         state.isSending = false;
-        state.error = action.error.message || "Failed to create broadcast";
+        state.error =
+          (action.payload as string) ||
+          action.error.message ||
+          "Failed to create broadcast";
       });
 
     // cancelBroadcast
@@ -410,7 +459,32 @@ const realtorBroadcastSlice = createSlice({
       })
       .addCase(retrySendFailed.rejected, (state, action) => {
         state.isResending = false;
-        state.error = action.error.message || "Failed to retry";
+        state.error =
+          (action.payload as string) || action.error.message || "Failed to retry";
+      });
+
+    // retrySendPending
+    builder
+      .addCase(retrySendPending.pending, (state) => {
+        state.isResending = true;
+        state.error = null;
+      })
+      .addCase(retrySendPending.fulfilled, (state, action) => {
+        state.isResending = false;
+        const broadcast = state.broadcasts.find(
+          (b) => b.id === action.payload.broadcastId,
+        );
+        if (broadcast) broadcast.status = "sending";
+        if (state.activeBroadcast?.id === action.payload.broadcastId) {
+          state.activeBroadcast.status = "sending";
+        }
+      })
+      .addCase(retrySendPending.rejected, (state, action) => {
+        state.isResending = false;
+        state.error =
+          (action.payload as string) ||
+          action.error.message ||
+          "Failed to re-trigger pending";
       });
 
     // exportBroadcastRecipients

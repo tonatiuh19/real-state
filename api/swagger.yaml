@@ -3436,6 +3436,10 @@ paths:
         - in: query
           name: channel
           schema: { type: string, enum: [email, sms, whatsapp] }
+        - in: query
+          name: include_broadcast
+          schema: { type: boolean, default: false }
+          description: Include broadcast-generated threads (persisted `broadcast_hidden` tag and legacy `broadcast-*` ids). Defaults to false for normal inbox UX.
       responses:
         "200":
           description: Threads
@@ -5381,6 +5385,9 @@ paths:
         4. Upserts the `conversation_thread` via DB trigger.
         5. Marks any active `reminder_flow_executions` waiting on this
            conversation as responded so the cron can advance the flow.
+        6. Handles SMS consent keywords:
+           - `STOP` => marks matching broker/client phone as unsubscribed from SMS broadcasts
+           - `START` / `UNSTOP` => re-subscribes matching broker/client phone for SMS broadcasts
 
         Configure in Twilio Console → Phone Numbers → Active Numbers → Messaging:
           Webhook URL: `https://yourdomain.com/api/webhooks/inbound-sms`
@@ -5835,7 +5842,7 @@ paths:
                     owner_broker_id: { type: integer }
       responses:
         "200":
-          description: Audience preview
+          description: Audience preview including skipped recipients (e.g. missing contact or SMS consent not granted)
           content:
             application/json:
               schema:
@@ -5849,7 +5856,15 @@ paths:
                       email_count: { type: integer }
                       sms_count: { type: integer }
                       skipped_count: { type: integer }
+                      estimated_cost_usd: { type: number, format: float }
                       sample: { type: array, items: { type: object } }
+                  credits:
+                    type: object
+                    properties:
+                      available_balance_usd: { type: number, format: float }
+                      reserved_balance_usd: { type: number, format: float }
+                      total_spent_usd: { type: number, format: float }
+                      currency: { type: string, example: USD }
 
   /realtor-broadcasts/unsubscribe:
     get:
@@ -5891,6 +5906,13 @@ paths:
                   success: { type: boolean }
                   broadcasts: { type: array, items: { type: object } }
                   total: { type: integer }
+                  credits:
+                    type: object
+                    properties:
+                      available_balance_usd: { type: number, format: float }
+                      reserved_balance_usd: { type: number, format: float }
+                      total_spent_usd: { type: number, format: float }
+                      currency: { type: string, example: USD }
     post:
       tags: [Broadcasts]
       summary: Create and optionally send a broadcast (platform_owner only)
@@ -5914,7 +5936,7 @@ paths:
                 send_now: { type: boolean, default: true }
       responses:
         "200":
-          description: Broadcast created
+          description: Broadcast created and queued. Final delivery status becomes `sent` only when at least one recipient is delivered; otherwise it finalizes as `failed`. Conversation threads are lazily materialized on interaction (e.g., inbound reply), while delivery/audit records are written immediately.
           content:
             application/json:
               schema:
@@ -5924,6 +5946,16 @@ paths:
                   broadcast_id: { type: integer }
                   recipient_count: { type: integer }
                   status: { type: string, enum: [draft, scheduled, sending] }
+                  estimated_cost_usd: { type: number, format: float }
+                  credits:
+                    type: object
+                    properties:
+                      available_balance_usd: { type: number, format: float }
+                      reserved_balance_usd: { type: number, format: float }
+                      total_spent_usd: { type: number, format: float }
+                      currency: { type: string, example: USD }
+        "402":
+          description: Not enough broadcast credits to reserve send budget
 
   /realtor-broadcasts/{id}:
     get:
@@ -5939,6 +5971,20 @@ paths:
       responses:
         "200":
           description: Broadcast detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  broadcast: { type: object }
+                  credits:
+                    type: object
+                    properties:
+                      available_balance_usd: { type: number, format: float }
+                      reserved_balance_usd: { type: number, format: float }
+                      total_spent_usd: { type: number, format: float }
+                      currency: { type: string, example: USD }
     patch:
       tags: [Broadcasts]
       summary: Update a draft or scheduled broadcast
@@ -6014,7 +6060,7 @@ paths:
           schema: { type: integer, default: 100 }
       responses:
         "200":
-          description: Recipient list with per-row delivery status
+          description: Recipient list with per-row delivery status (`pending`, `sent`, `failed`, `opened`, `unsubscribed`, `skipped_no_contact`, `undelivered`, `opted_out`) where `opted_out` represents explicit SMS unsubscribe (e.g. STOP)
 
   /realtor-broadcasts/{id}/resend-failed:
     post:
@@ -6037,6 +6083,32 @@ paths:
                 properties:
                   success: { type: boolean }
                   retried: { type: integer }
+        "402":
+          description: Not enough broadcast credits to retry failed recipients
+
+  /realtor-broadcasts/{id}/resend-pending:
+    post:
+      tags: [Broadcasts]
+      summary: Re-trigger pending recipients (and newly reachable skipped recipients) for a completed broadcast (platform_owner only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Number of pending recipients re-triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  retried: { type: integer }
+        "402":
+          description: Not enough broadcast credits to re-trigger pending recipients
 
   /realtor-broadcasts/{id}/recipients/export:
     get:

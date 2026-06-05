@@ -224,6 +224,7 @@ const Conversations = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPriority, setSelectedPriority] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("all");
+  const [includeBroadcastThreads] = useState(false);
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [isNewConversationOpen, setIsNewConversationOpen] = useState(false);
   const [messageText, setMessageText] = useState("");
@@ -232,6 +233,10 @@ const Conversations = () => {
   const [messageSubject, setMessageSubject] = useState("");
   const [mobilePanel, setMobilePanel] = useState<"list" | "chat">("list");
   const [isCallActive, setIsCallActive] = useState(false);
+  const recordingPollAttemptsRef = useRef<Record<string, number>>({});
+  const [recordingPollingExhausted, setRecordingPollingExhausted] = useState<
+    Record<string, true>
+  >({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Dialpad state
@@ -496,7 +501,7 @@ const Conversations = () => {
   useEffect(() => {
     dispatch(resetThreadsFilters());
     dispatch(clearThreads());
-    dispatch(fetchConversationThreads({}));
+    dispatch(fetchConversationThreads({ include_broadcast: false }));
     dispatch(fetchConversationTemplates(undefined));
     dispatch(fetchConversationStats());
     dispatch(fetchBrokers());
@@ -558,7 +563,7 @@ const Conversations = () => {
           if (conversationId) {
             if (claimedByBrokerId === currentUser?.id) {
               // We claimed it — keep thread but refresh to drop "Unassigned" badge
-              dispatch(fetchConversationThreads(threadsFilters));
+              dispatch(fetchConversationThreads(threadsFiltersRef.current));
             } else {
               dispatch(removeThread(conversationId));
             }
@@ -625,28 +630,62 @@ const Conversations = () => {
       (m) =>
         m.communication_type === "call" &&
         m.external_id &&
-        !(m as any).recording_url,
+        !(m as any).recording_url &&
+        (m as any).delivery_status !== "failed",
     );
 
-    if (pending.length === 0) return;
+    const pendingSids = pending.map((m) => m.external_id!);
+    const pendingSet = new Set(pendingSids);
 
-    const pollCounts: Record<string, number> = {};
-    pending.forEach((m) => {
-      pollCounts[m.external_id!] = 0;
+    // Drop stale tracking for messages no longer pending.
+    Object.keys(recordingPollAttemptsRef.current).forEach((sid) => {
+      if (!pendingSet.has(sid)) {
+        delete recordingPollAttemptsRef.current[sid];
+      }
+    });
+    setRecordingPollingExhausted((prev) => {
+      const next: Record<string, true> = {};
+      Object.entries(prev).forEach(([sid, flag]) => {
+        if (pendingSet.has(sid)) next[sid] = flag;
+      });
+      return next;
     });
 
-    const timer = setInterval(async () => {
-      const sidsToCheck = Object.keys(pollCounts).filter(
-        (sid) => pollCounts[sid] < MAX_POLLS,
+    pendingSids.forEach((sid) => {
+      if (!(sid in recordingPollAttemptsRef.current)) {
+        recordingPollAttemptsRef.current[sid] = 0;
+      }
+    });
+
+    if (pendingSids.length === 0) return;
+
+    const timer = window.setInterval(async () => {
+      const sidsToCheck = pendingSids.filter(
+        (sid) =>
+          recordingPollAttemptsRef.current[sid] < MAX_POLLS &&
+          !recordingPollingExhausted[sid],
       );
       if (sidsToCheck.length === 0) {
-        clearInterval(timer);
+        const exhaustedNow = pendingSids.filter(
+          (sid) => recordingPollAttemptsRef.current[sid] >= MAX_POLLS,
+        );
+        if (exhaustedNow.length > 0) {
+          setRecordingPollingExhausted((prev) => {
+            const next = { ...prev };
+            exhaustedNow.forEach((sid) => {
+              next[sid] = true;
+            });
+            return next;
+          });
+        }
+        window.clearInterval(timer);
         return;
       }
 
       await Promise.all(
         sidsToCheck.map(async (sid) => {
-          pollCounts[sid]++;
+          recordingPollAttemptsRef.current[sid] =
+            (recordingPollAttemptsRef.current[sid] ?? 0) + 1;
           try {
             const data = await dispatch(checkRecordingUrl(sid)).unwrap();
             if (data.ready && data.recording_url) {
@@ -658,7 +697,13 @@ const Conversations = () => {
                 }),
               );
               // Remove from polling once resolved
-              delete pollCounts[sid];
+              delete recordingPollAttemptsRef.current[sid];
+              setRecordingPollingExhausted((prev) => {
+                if (!prev[sid]) return prev;
+                const next = { ...prev };
+                delete next[sid];
+                return next;
+              });
             }
           } catch {
             // Silently ignore network errors — will retry on next tick
@@ -667,8 +712,40 @@ const Conversations = () => {
       );
     }, POLL_INTERVAL_MS);
 
-    return () => clearInterval(timer);
-  }, [messages, dispatch]);
+    return () => window.clearInterval(timer);
+  }, [messages, dispatch, recordingPollingExhausted]);
+
+  const handleCheckRecordingNow = async (sid: string) => {
+    try {
+      const data = await dispatch(checkRecordingUrl(sid)).unwrap();
+      if (data.ready && data.recording_url) {
+        dispatch(
+          patchMessageRecording({
+            external_id: sid,
+            recording_url: data.recording_url,
+            recording_duration: data.recording_duration ?? null,
+          }),
+        );
+        setRecordingPollingExhausted((prev) => {
+          if (!prev[sid]) return prev;
+          const next = { ...prev };
+          delete next[sid];
+          return next;
+        });
+        return;
+      }
+      toast({
+        title: "Recording still processing",
+        description: "It is taking longer than usual. Please try again shortly.",
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Recording check failed",
+        description: "Unable to check recording right now. Please try again.",
+      });
+    }
+  };
 
   const handleSelectThread = (thread: ConversationThread) => {
     // Reset initial-load tracker so the new thread shows its spinner
@@ -708,7 +785,13 @@ const Conversations = () => {
   const handleSearch = (query: string) => {
     setSearchQuery(query);
     dispatch(setThreadsFilters({ search: query }));
-    dispatch(fetchConversationThreads({ ...threadsFilters, search: query }));
+    dispatch(
+      fetchConversationThreads({
+        ...threadsFilters,
+        search: query,
+        include_broadcast: includeBroadcastThreads,
+      }),
+    );
   };
 
   const handleCloseThread = (
@@ -756,8 +839,9 @@ const Conversations = () => {
     ).then(() => {
       // Reset view back to active conversations
       setSelectedStatus("all");
-      dispatch(setThreadsFilters({}));
-      dispatch(fetchConversationThreads({}));
+      const resetFilters = { include_broadcast: includeBroadcastThreads };
+      dispatch(setThreadsFilters(resetFilters));
+      dispatch(fetchConversationThreads(resetFilters));
     });
     toast({ title: "Conversation reopened" });
   };
@@ -792,7 +876,12 @@ const Conversations = () => {
     const merged = status === "all" ? restFilters : { ...restFilters, status };
     dispatch(clearThreads()); // instant feedback — spinner shows right away
     dispatch(setThreadsFilters(merged));
-    dispatch(fetchConversationThreads(merged));
+    dispatch(
+      fetchConversationThreads({
+        ...merged,
+        include_broadcast: includeBroadcastThreads,
+      }),
+    );
   };
 
   const handlePriorityFilter = (priority: string) => {
@@ -803,7 +892,12 @@ const Conversations = () => {
     >;
     const merged = priority === "" ? restFilters : { ...restFilters, priority };
     dispatch(setThreadsFilters(merged));
-    dispatch(fetchConversationThreads(merged));
+    dispatch(
+      fetchConversationThreads({
+        ...merged,
+        include_broadcast: includeBroadcastThreads,
+      }),
+    );
   };
 
   const handleDeleteMessage = async (messageId: number | string) => {
@@ -994,8 +1088,9 @@ const Conversations = () => {
       // the view back to active so the user can continue the conversation.
       if (selectedStatus === "closed") {
         setSelectedStatus("all");
-        dispatch(setThreadsFilters({}));
-        dispatch(fetchConversationThreads({}));
+        const resetFilters = { include_broadcast: includeBroadcastThreads };
+        dispatch(setThreadsFilters(resetFilters));
+        dispatch(fetchConversationThreads(resetFilters));
         toast({
           title: "Conversation reopened",
           description: "This conversation is now active again.",
@@ -1050,9 +1145,10 @@ const Conversations = () => {
       // Clear any status/priority filters so the reopened thread is visible,
       // then fetch a fresh list and auto-select the new conversation.
       setSelectedStatus("all");
-      dispatch(setThreadsFilters({}));
+      const resetFilters = { include_broadcast: includeBroadcastThreads };
+      dispatch(setThreadsFilters(resetFilters));
       const threadsResult = await dispatch(
-        fetchConversationThreads({}),
+        fetchConversationThreads(resetFilters),
       ).unwrap();
 
       if (conversationId) {
@@ -1333,50 +1429,52 @@ const Conversations = () => {
                   />
                 </div>
                 {channelFilter !== "calls" ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-8 p-0"
-                      >
-                        <Filter className="h-3.5 w-3.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
-                      <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      {["all", "active", "closed"].map((s) => (
-                        <DropdownMenuItem
-                          key={s}
-                          onClick={() => handleStatusFilter(s)}
-                          className={cn(
-                            selectedStatus === s &&
-                              "bg-primary/10 text-primary",
-                          )}
+                  <div className="flex items-center gap-1">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 w-8 p-0"
                         >
-                          {s.charAt(0).toUpperCase() + s.slice(1)}
-                        </DropdownMenuItem>
-                      ))}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel>Filter by Priority</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      {["", "low", "normal", "high", "urgent"].map((p) => (
-                        <DropdownMenuItem
-                          key={p}
-                          onClick={() => handlePriorityFilter(p)}
-                          className={cn(
-                            selectedPriority === p &&
-                              "bg-primary/10 text-primary",
-                          )}
-                        >
-                          {p
-                            ? p.charAt(0).toUpperCase() + p.slice(1)
-                            : "All Priorities"}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                          <Filter className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {["all", "active", "closed"].map((s) => (
+                          <DropdownMenuItem
+                            key={s}
+                            onClick={() => handleStatusFilter(s)}
+                            className={cn(
+                              selectedStatus === s &&
+                                "bg-primary/10 text-primary",
+                            )}
+                          >
+                            {s.charAt(0).toUpperCase() + s.slice(1)}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>Filter by Priority</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {["", "low", "normal", "high", "urgent"].map((p) => (
+                          <DropdownMenuItem
+                            key={p}
+                            onClick={() => handlePriorityFilter(p)}
+                            className={cn(
+                              selectedPriority === p &&
+                                "bg-primary/10 text-primary",
+                            )}
+                          >
+                            {p
+                              ? p.charAt(0).toUpperCase() + p.slice(1)
+                              : "All Priorities"}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 ) : (
                   <Button
                     variant="outline"
@@ -2226,17 +2324,47 @@ const Conversations = () => {
                                       <p className="leading-relaxed text-sm">
                                         {message.body}
                                       </p>
-                                      <div
-                                        className={cn(
-                                          "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
-                                          isOutbound
-                                            ? "bg-white/10 text-white/50"
-                                            : "bg-muted-foreground/10 text-muted-foreground",
-                                        )}
-                                      >
-                                        <Loader2 className="h-3 w-3 animate-spin" />
-                                        Recording processing…
-                                      </div>
+                                      {(message as any).external_id &&
+                                      recordingPollingExhausted[
+                                        (message as any).external_id
+                                      ] ? (
+                                        <div
+                                          className={cn(
+                                            "flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5",
+                                            isOutbound
+                                              ? "bg-white/10 text-white/70"
+                                              : "bg-muted-foreground/10 text-muted-foreground",
+                                          )}
+                                        >
+                                          <span>
+                                            Recording is delayed. You can check again.
+                                          </span>
+                                          <Button
+                                            size="sm"
+                                            variant={isOutbound ? "secondary" : "outline"}
+                                            className="h-6 px-2 text-[11px]"
+                                            onClick={() =>
+                                              handleCheckRecordingNow(
+                                                (message as any).external_id,
+                                              )
+                                            }
+                                          >
+                                            Check now
+                                          </Button>
+                                        </div>
+                                      ) : (
+                                        <div
+                                          className={cn(
+                                            "flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5",
+                                            isOutbound
+                                              ? "bg-white/10 text-white/50"
+                                              : "bg-muted-foreground/10 text-muted-foreground",
+                                          )}
+                                        >
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          Recording processing…
+                                        </div>
+                                      )}
                                     </div>
                                   ) : (
                                     <div className="flex flex-col gap-2">

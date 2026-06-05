@@ -10,10 +10,10 @@ import {
   deleteBroadcast,
   clearAudiencePreview,
   clearActiveBroadcast,
-  updateBroadcastProgress,
   saveBroadcastDraft,
   fetchLatestDraft,
   retrySendFailed,
+  retrySendPending,
   exportBroadcastRecipients,
   fetchSavedSegments,
   createSavedSegment,
@@ -54,7 +54,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
@@ -86,7 +85,6 @@ import {
   BookmarkPlus,
   BookOpen,
 } from "lucide-react";
-import { getSharedAblyClient } from "@/lib/ably-client";
 import ReactQuill from "react-quill-new";
 import "react-quill-new/dist/quill.snow.css";
 import type {
@@ -96,7 +94,7 @@ import type {
   BroadcastSavedSegment,
 } from "@shared/api";
 import { cn } from "@/lib/utils";
-import { logger } from "@/lib/logger";
+import { useToast } from "@/hooks/use-toast";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -147,31 +145,120 @@ const STATUS_CONFIG: Record<
     color: "bg-gray-100 text-gray-500",
     icon: <Ban className="h-3 w-3" />,
   },
+  pending: {
+    label: "Pending",
+    color: "bg-amber-100 text-amber-700",
+    icon: <Clock className="h-3 w-3" />,
+  },
+  processing: {
+    label: "Sending",
+    color: "bg-amber-100 text-amber-700",
+    icon: <Loader2 className="h-3 w-3 animate-spin" />,
+  },
+  opened: {
+    label: "Opened",
+    color: "bg-sky-100 text-sky-700",
+    icon: <Eye className="h-3 w-3" />,
+  },
+  skipped_no_contact: {
+    label: "Skipped (No Contact)",
+    color: "bg-slate-100 text-slate-700",
+    icon: <AlertTriangle className="h-3 w-3" />,
+  },
+  unsubscribed: {
+    label: "Unsubscribed",
+    color: "bg-zinc-100 text-zinc-700",
+    icon: <Ban className="h-3 w-3" />,
+  },
+  bounced: {
+    label: "Bounced",
+    color: "bg-orange-100 text-orange-700",
+    icon: <XCircle className="h-3 w-3" />,
+  },
+  undelivered: {
+    label: "Undelivered",
+    color: "bg-red-100 text-red-700",
+    icon: <XCircle className="h-3 w-3" />,
+  },
+  opted_out: {
+    label: "Opted Out",
+    color: "bg-zinc-100 text-zinc-700",
+    icon: <Ban className="h-3 w-3" />,
+  },
 };
 
+const BROADCAST_COST_PER_DELIVERY_USD = 0.0079;
+const INSUFFICIENT_CREDITS_MESSAGE =
+  "Insufficient broadcast credits. Contact your admin to add more credits.";
+
 function StatusBadge({ status }: { status: string }) {
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.draft;
+  const cfg = STATUS_CONFIG[status];
+  const fallback = {
+    label: status.replace(/_/g, " "),
+    color: "bg-gray-100 text-gray-700",
+    icon: <Info className="h-3 w-3" />,
+  };
+  const view = cfg ?? fallback;
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-        cfg.color,
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap shrink-0",
+        view.color,
       )}
     >
-      {cfg.icon}
-      {cfg.label}
+      {view.icon}
+      {view.label}
     </span>
   );
+}
+
+function formatBroadcastFailureReason(raw: string | null): string {
+  const text = (raw || "").trim();
+  if (!text) return "—";
+  const lower = text.toLowerCase();
+
+  if (lower.includes("timeout of 30000ms exceeded") || lower.includes("timeout")) {
+    return "Provider timeout. Please retry this recipient.";
+  }
+  if (lower.includes("opted out")) {
+    return "Recipient unsubscribed from SMS (STOP).";
+  }
+  if (lower.includes("not opted in")) {
+    return "Recipient has no SMS consent.";
+  }
+  if (lower.includes("assigned twilio number")) {
+    return "Sender number is not configured.";
+  }
+  if (lower.includes("body is empty")) {
+    return "Message content is empty.";
+  }
+  if (lower.includes("undeliverable") || lower.includes("undelivered")) {
+    return "Carrier could not deliver to this number.";
+  }
+
+  return text;
 }
 
 function smsSegments(text: string): number {
   return Math.ceil((text || "").length / 160) || 1;
 }
 
-function smsCostEstimate(body: string, recipientCount: number): string {
-  const segs = smsSegments(body);
-  const cost = segs * recipientCount * 0.0079;
-  return `≈ $${cost.toFixed(2)}`;
+function estimateBroadcastCostUsd(deliveryCount: number): number {
+  return Number((Math.max(0, deliveryCount) * BROADCAST_COST_PER_DELIVERY_USD).toFixed(2));
+}
+
+function formatUsd(amount: number): string {
+  return `$${amount.toFixed(2)}`;
+}
+
+function smsCostEstimate(recipientCount: number): string {
+  return `≈ ${formatUsd(estimateBroadcastCostUsd(recipientCount))}`;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  return fallback;
 }
 
 function roleLabel(s: { source: string; role?: string | null }): {
@@ -313,7 +400,9 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     error,
     latestDraft,
     savedSegments,
+    credits,
   } = useAppSelector((state) => state.realtorBroadcasts);
+  const { toast } = useToast();
   const { user: currentBroker } = useAppSelector((state) => state.brokerAuth);
   const { emailTemplates, smsTemplates } = useAppSelector(
     (s) => s.communicationTemplates,
@@ -447,6 +536,11 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
       (form.channel === "both" &&
         form.body_email.trim() &&
         form.body_sms.trim()));
+  const availableCreditsUsd = credits?.available_balance_usd ?? 0;
+  const estimatedCostUsd = audiencePreview?.estimated_cost_usd ?? 0;
+  const isBillableSend = form.send_now || Boolean(form.scheduled_at);
+  const insufficientCredits =
+    isBillableSend && estimatedCostUsd > 0 && availableCreditsUsd < estimatedCostUsd;
 
   const handleSaveSegment = async () => {
     if (!saveSegmentName.trim()) return;
@@ -476,6 +570,14 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
   };
 
   const handleSend = async () => {
+    if (insufficientCredits) {
+      toast({
+        title: "Cannot send broadcast",
+        description: INSUFFICIENT_CREDITS_MESSAGE,
+        variant: "destructive",
+      });
+      return;
+    }
     let audience_filter: RealtorBroadcastAudienceFilter;
 
     if (form.excluded_ids.length > 0 && audiencePreview) {
@@ -823,10 +925,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
                     {audiencePreview && audiencePreview.sms_count > 0 && (
                       <span className="ml-1 text-amber-600">
                         ·{" "}
-                        {smsCostEstimate(
-                          form.body_sms,
-                          audiencePreview.sms_count,
-                        )}
+                        {smsCostEstimate(audiencePreview.sms_count)}
                       </span>
                     )}
                   </span>
@@ -1509,6 +1608,29 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             </div>
           )}
 
+          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+            <p className="font-medium">
+              This estimate includes multiple services running at the same time.
+              Final cost may vary based on successful deliveries.
+            </p>
+            <p className="mt-1">
+              Estimated send cost:{" "}
+              <span className="font-semibold">{formatUsd(estimatedCostUsd)}</span>.
+              Remaining credits:{" "}
+              <span className="font-semibold">
+                {formatUsd(availableCreditsUsd)}
+              </span>
+              .
+            </p>
+          </div>
+
+          {insufficientCredits && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{INSUFFICIENT_CREDITS_MESSAGE}</span>
+            </div>
+          )}
+
           {/* Minimum recipient warning */}
           {audiencePreview &&
             (() => {
@@ -1548,7 +1670,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             </Button>
             <Button
               onClick={handleSend}
-              disabled={isSending || !confirmed}
+              disabled={isSending || !confirmed || insufficientCredits}
               className="min-w-[140px]"
             >
               {isSending ? (
@@ -1579,7 +1701,9 @@ function BroadcastDetailDialog({
   broadcastId: number | null;
   onClose: () => void;
 }) {
+  const RECIPIENTS_PAGE_SIZE = 50;
   const dispatch = useAppDispatch();
+  const { toast } = useToast();
   const {
     activeBroadcast,
     recipients,
@@ -1587,39 +1711,45 @@ function BroadcastDetailDialog({
     isLoading,
     isResending,
     isExporting,
+    credits,
   } = useAppSelector((state) => state.realtorBroadcasts);
-  const { sessionToken } = useAppSelector((s) => s.brokerAuth);
+  const [recipientsPage, setRecipientsPage] = useState(1);
+
+  useEffect(() => {
+    if (!broadcastId) return;
+    setRecipientsPage(1);
+  }, [broadcastId]);
 
   useEffect(() => {
     if (!broadcastId) return;
     dispatch(fetchBroadcastDetail(broadcastId));
-    dispatch(fetchBroadcastRecipients({ broadcastId, limit: 100 }));
-
-    // Subscribe to Ably for live progress
-    let ablyChannel: ReturnType<
-      Awaited<ReturnType<typeof getSharedAblyClient>>["channels"]["get"]
-    > | null = null;
-    let cancelled = false;
-    (async () => {
-      const client = await getSharedAblyClient(sessionToken);
-      if (cancelled || !client) return;
-      ablyChannel = client.channels.get(`broadcast:${broadcastId}`);
-      ablyChannel.subscribe("progress", (msg) => {
-        dispatch(
-          updateBroadcastProgress({
-            broadcastId,
-            sent: msg.data.sent,
-            failed: msg.data.failed,
-            total: msg.data.total,
-          }),
-        );
-      });
-    })();
-    return () => {
-      cancelled = true;
-      ablyChannel?.unsubscribe?.();
-    };
   }, [broadcastId, dispatch]);
+
+  useEffect(() => {
+    if (!broadcastId) return;
+    dispatch(
+      fetchBroadcastRecipients({
+        broadcastId,
+        page: recipientsPage,
+        limit: RECIPIENTS_PAGE_SIZE,
+      }),
+    );
+  }, [broadcastId, recipientsPage, dispatch]);
+
+  useEffect(() => {
+    if (!broadcastId || activeBroadcast?.status !== "sending") return;
+    const pollTimer = window.setInterval(() => {
+      dispatch(fetchBroadcastDetail(broadcastId));
+      dispatch(
+        fetchBroadcastRecipients({
+          broadcastId,
+          page: recipientsPage,
+          limit: RECIPIENTS_PAGE_SIZE,
+        }),
+      );
+    }, 4000);
+    return () => window.clearInterval(pollTimer);
+  }, [broadcastId, activeBroadcast?.status, recipientsPage, dispatch]);
 
   useEffect(() => {
     return () => {
@@ -1628,15 +1758,23 @@ function BroadcastDetailDialog({
   }, [dispatch]);
 
   const b = activeBroadcast;
+  const totalPages = Math.max(1, Math.ceil(recipientsTotal / RECIPIENTS_PAGE_SIZE));
+  const rangeStart =
+    recipientsTotal === 0 ? 0 : (recipientsPage - 1) * RECIPIENTS_PAGE_SIZE + 1;
+  const rangeEnd = Math.min(
+    recipientsPage * RECIPIENTS_PAGE_SIZE,
+    recipientsTotal,
+  );
   const progress = b
     ? b.recipient_count > 0
       ? Math.round(((b.sent_count + b.failed_count) / b.recipient_count) * 100)
       : 0
     : 0;
+  const hasAnyCredits = (credits?.available_balance_usd ?? 0) > 0;
 
   return (
     <Dialog open={!!broadcastId} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col min-h-0 overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {b ? (
@@ -1650,7 +1788,7 @@ function BroadcastDetailDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 pr-2">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-2">
           {isLoading && !b ? (
             <div className="space-y-3 py-4">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -1713,23 +1851,96 @@ function BroadcastDetailDialog({
               )}
 
               {/* Resend failed button */}
-              {b.failed_count > 0 &&
-                ["sent", "failed", "cancelled"].includes(b.status) && (
-                  <div className="flex items-center gap-2">
+              {["sent", "failed", "cancelled"].includes(b.status) && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-blue-700 border-blue-300 hover:bg-blue-50"
+                    disabled={isResending || !hasAnyCredits}
+                    onClick={async () => {
+                      try {
+                        const result = await dispatch(
+                          retrySendPending(b.id),
+                        ).unwrap();
+                        dispatch(
+                          fetchBroadcastRecipients({
+                            broadcastId: b.id,
+                            page: recipientsPage,
+                            limit: RECIPIENTS_PAGE_SIZE,
+                          }),
+                        );
+                        dispatch(fetchBroadcastDetail(b.id));
+                        toast({
+                          title:
+                            result.retried > 0
+                              ? "Pending recipients re-triggered"
+                              : "No eligible pending recipients",
+                          description:
+                            result.retried > 0
+                              ? `${result.retried} recipient(s) queued for retry.`
+                              : "There are no pending recipients with reachable contact info.",
+                        });
+                      } catch (err: any) {
+                        toast({
+                          title: "Could not re-trigger pending recipients",
+                          description:
+                            getErrorMessage(
+                              err,
+                              "An unexpected error occurred while re-triggering.",
+                            ),
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                  >
+                    {isResending ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Re-trigger pending
+                  </Button>
+                  {b.failed_count > 0 && (
                     <Button
                       size="sm"
                       variant="outline"
                       className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                      disabled={isResending}
+                      disabled={isResending || !hasAnyCredits}
                       onClick={async () => {
-                        await dispatch(retrySendFailed(b.id));
-                        dispatch(
-                          fetchBroadcastRecipients({
-                            broadcastId: b.id,
-                            limit: 100,
-                          }),
-                        );
-                        dispatch(fetchBroadcastDetail(b.id));
+                        try {
+                          const result = await dispatch(
+                            retrySendFailed(b.id),
+                          ).unwrap();
+                          dispatch(
+                            fetchBroadcastRecipients({
+                              broadcastId: b.id,
+                              page: recipientsPage,
+                              limit: RECIPIENTS_PAGE_SIZE,
+                            }),
+                          );
+                          dispatch(fetchBroadcastDetail(b.id));
+                          toast({
+                            title:
+                              result.retried > 0
+                                ? "Failed recipients re-queued"
+                                : "No failed recipients to retry",
+                            description:
+                              result.retried > 0
+                                ? `${result.retried} failed recipient(s) queued.`
+                                : "This broadcast has no failed recipients right now.",
+                          });
+                        } catch (err: any) {
+                          toast({
+                            title: "Could not retry failed recipients",
+                            description:
+                              getErrorMessage(
+                                err,
+                                "An unexpected error occurred while retrying.",
+                              ),
+                            variant: "destructive",
+                          });
+                        }
                       }}
                     >
                       {isResending ? (
@@ -1739,8 +1950,14 @@ function BroadcastDetailDialog({
                       )}
                       Retry {b.failed_count} failed
                     </Button>
-                  </div>
-                )}
+                  )}
+                  {!hasAnyCredits && (
+                    <span className="text-xs text-red-600">
+                      {INSUFFICIENT_CREDITS_MESSAGE}
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Live progress */}
               {b.status === "sending" && (
@@ -1759,11 +1976,16 @@ function BroadcastDetailDialog({
 
               {/* Recipients table */}
               <div>
-                <p className="text-sm font-medium mb-2">
-                  Recipients ({recipientsTotal})
-                </p>
-                <div className="rounded-md border">
-                  <Table>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium">
+                    Recipients ({recipientsTotal})
+                  </p>
+                  <span className="text-xs text-muted-foreground">
+                    {rangeStart}-{rangeEnd} of {recipientsTotal}
+                  </span>
+                </div>
+                <div className="rounded-md border max-h-[42vh] overflow-y-auto overflow-x-auto">
+                  <Table className="min-w-[980px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Name</TableHead>
@@ -1775,6 +1997,7 @@ function BroadcastDetailDialog({
                         {(b.channel === "sms" || b.channel === "both") && (
                           <TableHead>SMS status</TableHead>
                         )}
+                        <TableHead className="min-w-[230px]">Failure reason</TableHead>
                         <TableHead>Sent at</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -1808,6 +2031,24 @@ function BroadcastDetailDialog({
                               )}
                             </TableCell>
                           )}
+                          <TableCell className="text-xs text-muted-foreground min-w-[230px]">
+                            {r.error_message ? (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="inline-block truncate max-w-[260px] cursor-help">
+                                      {formatBroadcastFailureReason(r.error_message)}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="max-w-sm break-words text-xs">
+                                    {formatBroadcastFailureReason(r.error_message)}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
                           <TableCell className="text-xs text-muted-foreground">
                             {r.sent_at
                               ? new Date(r.sent_at).toLocaleString()
@@ -1818,10 +2059,35 @@ function BroadcastDetailDialog({
                     </TableBody>
                   </Table>
                 </div>
+                <div className="mt-2 flex items-center justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={recipientsPage <= 1}
+                    onClick={() => setRecipientsPage((p) => Math.max(1, p - 1))}
+                  >
+                    <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                    Prev
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Page {recipientsPage} / {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={recipientsPage >= totalPages}
+                    onClick={() =>
+                      setRecipientsPage((p) => Math.min(totalPages, p + 1))
+                    }
+                  >
+                    Next
+                    <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
             </div>
           ) : null}
-        </ScrollArea>
+        </div>
 
         <DialogFooter className="gap-2 pt-2">
           {b && (
@@ -1852,9 +2118,10 @@ function BroadcastDetailDialog({
 
 function BroadcastHistory() {
   const dispatch = useAppDispatch();
-  const { broadcasts, broadcastsTotal, isLoading } = useAppSelector(
-    (state) => state.realtorBroadcasts,
-  );
+  const { toast } = useToast();
+  const { broadcasts, broadcastsTotal, isLoading, isResending, credits } =
+    useAppSelector((state) => state.realtorBroadcasts);
+  const hasAnyCredits = (credits?.available_balance_usd ?? 0) > 0;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RealtorBroadcast | null>(
     null,
@@ -1864,9 +2131,30 @@ function BroadcastHistory() {
     dispatch(fetchBroadcasts());
   }, [dispatch]);
 
+  useEffect(() => {
+    if (!broadcasts.some((b) => b.status === "sending")) return;
+    const timer = window.setInterval(() => {
+      dispatch(fetchBroadcasts());
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [broadcasts, dispatch]);
+
   const handleCancel = async (id: number) => {
-    await dispatch(cancelBroadcast(id));
-    dispatch(fetchBroadcasts());
+    try {
+      await dispatch(cancelBroadcast(id)).unwrap();
+      toast({
+        title: "Broadcast cancelled",
+        description:
+          "The broadcast was marked as cancelled. Any in-flight send will stop on the next cycle.",
+      });
+      dispatch(fetchBroadcasts());
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to cancel broadcast",
+        description: getErrorMessage(error, "Please try again in a few seconds."),
+      });
+    }
   };
 
   const handleDelete = async () => {
@@ -1875,8 +2163,37 @@ function BroadcastHistory() {
     setConfirmDelete(null);
   };
 
+  const handleRetriggerPending = async (broadcastId: number) => {
+    try {
+      const result = await dispatch(retrySendPending(broadcastId)).unwrap();
+      toast({
+        title:
+          result.retried > 0
+            ? `Queued ${result.retried} pending recipient${result.retried > 1 ? "s" : ""}`
+            : "No pending recipients to queue",
+        description:
+          result.retried > 0
+            ? "Broadcast resend was re-triggered successfully."
+            : "This broadcast currently has no eligible pending recipients.",
+      });
+      dispatch(fetchBroadcasts());
+      setSelectedId(broadcastId);
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to re-trigger pending recipients",
+        description: getErrorMessage(error, "Please try again in a few seconds."),
+      });
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {!hasAnyCredits && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {INSUFFICIENT_CREDITS_MESSAGE}
+        </div>
+      )}
       {isLoading ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -1946,6 +2263,30 @@ function BroadcastHistory() {
                       className="flex items-center justify-end gap-1"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2"
+                        onClick={() => setSelectedId(b.id)}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                      {["failed", "sent", "cancelled"].includes(b.status) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-sky-600 hover:text-sky-700"
+                          disabled={isResending || !hasAnyCredits}
+                          onClick={() => handleRetriggerPending(b.id)}
+                          title={!hasAnyCredits ? INSUFFICIENT_CREDITS_MESSAGE : undefined}
+                        >
+                          {isResending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      )}
                       {["sending", "scheduled", "draft"].includes(b.status) && (
                         <Button
                           variant="ghost"
@@ -2012,7 +2353,14 @@ function BroadcastHistory() {
 
 export default function RealtorBroadcasts() {
   const dispatch = useAppDispatch();
+  const { credits } = useAppSelector((state) => state.realtorBroadcasts);
   const [activeTab, setActiveTab] = useState("new");
+  const availableCreditsUsd = credits?.available_balance_usd ?? 0;
+  const reservedCreditsUsd = credits?.reserved_balance_usd ?? 0;
+
+  useEffect(() => {
+    dispatch(fetchBroadcasts());
+  }, [dispatch]);
 
   const handleBroadcastSuccess = () => {
     // Switch to history tab and refresh
@@ -2034,9 +2382,29 @@ export default function RealtorBroadcasts() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/60 rounded-lg px-3 py-2">
-          <Info className="h-3.5 w-3.5 shrink-0" />
-          Unsubscribes and STOP replies are handled automatically.
+        <div className="flex flex-col items-start sm:items-end gap-1.5 shrink-0">
+          <div className="inline-flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+            <Info className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Broadcast credits:{" "}
+              <span className="font-semibold text-foreground tabular-nums">
+                {formatUsd(availableCreditsUsd)}
+              </span>
+              {reservedCreditsUsd > 0 && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  (reserved{" "}
+                  <span className="font-semibold tabular-nums">
+                    {formatUsd(reservedCreditsUsd)}
+                  </span>
+                  )
+                </span>
+              )}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground sm:text-right max-w-xs sm:max-w-sm leading-relaxed">
+            Unsubscribes and STOP replies are handled automatically.
+          </p>
         </div>
       </div>
 

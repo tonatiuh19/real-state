@@ -1350,6 +1350,7 @@ export interface GetConversationThreadsRequest {
   status?: "active" | "closed" | "all";
   priority?: "low" | "normal" | "high" | "urgent";
   search?: string;
+  include_broadcast?: boolean;
 }
 
 export interface GetConversationThreadsResponse {
@@ -2999,7 +3000,15 @@ export interface BroadcastAudiencePreview {
   email_count: number;
   sms_count: number;
   skipped_count: number;
+  estimated_cost_usd?: number;
   sample: BroadcastAudienceSampleItem[];
+}
+
+export interface BroadcastCreditSummary {
+  available_balance_usd: number;
+  reserved_balance_usd: number;
+  total_spent_usd: number;
+  currency: string;
 }
 
 export interface CreateBroadcastRequest {
@@ -3022,11 +3031,13 @@ export interface GetBroadcastsResponse {
   success: boolean;
   broadcasts: RealtorBroadcast[];
   total: number;
+  credits?: BroadcastCreditSummary;
 }
 
 export interface GetBroadcastResponse {
   success: boolean;
   broadcast: RealtorBroadcast;
+  credits?: BroadcastCreditSummary;
 }
 
 export interface CreateBroadcastResponse {
@@ -3034,11 +3045,14 @@ export interface CreateBroadcastResponse {
   broadcast_id: number;
   recipient_count: number;
   status: RealtorBroadcastStatus;
+  estimated_cost_usd?: number;
+  credits?: BroadcastCreditSummary;
 }
 
 export interface PreviewBroadcastAudienceResponse {
   success: boolean;
   preview: BroadcastAudiencePreview;
+  credits?: BroadcastCreditSummary;
 }
 
 export interface GetBroadcastRecipientsResponse {
@@ -3067,6 +3081,11 @@ export interface CreateSavedSegmentRequest {
 }
 
 export interface ResendFailedResponse {
+  success: boolean;
+  retried: number;
+}
+
+export interface ResendPendingResponse {
   success: boolean;
   retried: number;
 }

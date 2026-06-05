@@ -48,6 +48,7 @@ interface ConversationsState {
     status: string;
     priority: string;
     search: string;
+    include_broadcast: boolean;
     page: number;
     limit: number;
   };
@@ -113,6 +114,7 @@ const initialState: ConversationsState = {
     status: "all",
     priority: "",
     search: "",
+    include_broadcast: false,
     page: 1,
     limit: 20,
   },
@@ -176,6 +178,7 @@ export const fetchConversationThreads = createAsyncThunk(
       status?: string;
       priority?: string;
       search?: string;
+      include_broadcast?: boolean;
     } = {},
     { getState, rejectWithValue },
   ) => {
@@ -638,6 +641,7 @@ const conversationsSlice = createSlice({
         status: "all",
         priority: "",
         search: "",
+        include_broadcast: false,
         page: 1,
         limit: 20,
       };

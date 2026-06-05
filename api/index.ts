@@ -81,10 +81,20 @@ if (process.env.ABLY_API_KEY) {
   );
 }
 
+const ABLY_PUBLISH_TIMEOUT_MS = 4_000;
+
 async function publishToAbly(channel: string, event: string, data: unknown) {
   if (!ablyClient) return;
   try {
-    await ablyClient.channels.get(channel).publish(event, data);
+    await Promise.race([
+      ablyClient.channels.get(channel).publish(event, data),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Ably publish timeout")),
+          ABLY_PUBLISH_TIMEOUT_MS,
+        ),
+      ),
+    ]);
   } catch (err) {
     console.error("❌ Ably publish error:", err);
   }
@@ -305,6 +315,138 @@ const stripHtmlForStorage = (html: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** MySQL/TiDB TEXT max is 65535 bytes; leave headroom for utf8mb4 multibyte chars. */
+const COMMUNICATION_BODY_MAX_BYTES = 60_000;
+
+const truncateUtf8ToByteLength = (s: string, maxBytes: number): string => {
+  if (Buffer.byteLength(s, "utf8") <= maxBytes) return s;
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (Buffer.byteLength(s.slice(0, mid), "utf8") <= maxBytes) lo = mid;
+    else hi = mid - 1;
+  }
+  return s.slice(0, lo);
+};
+
+/** Plain-text body safe for communications.body (TEXT); strips HTML when needed. */
+const prepareEmailBodyForStorage = (
+  rawBody: string,
+  preview: string,
+): { body: string; truncated: boolean } => {
+  const raw = String(rawBody || "").trim();
+  const prev = String(preview || "").trim();
+  if (!raw && !prev) return { body: "(empty)", truncated: false };
+
+  const looksHtml = /<[a-z][\s\S]*>/i.test(raw);
+  let text = looksHtml ? stripHtmlForStorage(raw) : raw;
+  if (!text) text = prev;
+  if (!text) text = "(empty)";
+
+  if (Buffer.byteLength(text, "utf8") <= COMMUNICATION_BODY_MAX_BYTES) {
+    return { body: text, truncated: false };
+  }
+  const suffix = " [truncated]";
+  const maxBodyBytes =
+    COMMUNICATION_BODY_MAX_BYTES - Buffer.byteLength(suffix, "utf8");
+  return {
+    body: truncateUtf8ToByteLength(text, maxBodyBytes) + suffix,
+    truncated: true,
+  };
+};
+
+// ─── Scheduler timezone helpers (module-level for O365 sync + slot math) ─────
+
+const WINDOWS_TZ_TO_IANA: Record<string, string> = {
+  "Pacific Standard Time": "America/Los_Angeles",
+  "Mountain Standard Time": "America/Denver",
+  "US Mountain Standard Time": "America/Phoenix",
+  "Central Standard Time": "America/Chicago",
+  "Eastern Standard Time": "America/New_York",
+  "Alaskan Standard Time": "America/Anchorage",
+  "Hawaiian Standard Time": "Pacific/Honolulu",
+};
+
+const resolveIanaTimezone = (tz?: string | null, fallback = "UTC"): string => {
+  if (!tz?.trim()) return fallback;
+  const trimmed = tz.trim();
+  if (WINDOWS_TZ_TO_IANA[trimmed]) return WINDOWS_TZ_TO_IANA[trimmed];
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: trimmed });
+    return trimmed;
+  } catch {
+    return fallback;
+  }
+};
+
+/** UTC instant for wall-clock YYYY-MM-DD + HH:mm in an IANA timezone. */
+const schedulerBrokerLocalToUtc = (
+  dateStr: string,
+  timeStr: string,
+  timezone: string,
+): Date => {
+  const [y, mo, d] = dateStr.split("-").map(Number);
+  const [h, mi] = timeStr.split(":").map(Number);
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi, 0);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(utcGuess));
+  const get = (type: string) =>
+    parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+  const gotMs = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour") % 24,
+    get("minute"),
+    0,
+  );
+  const wantedMs = Date.UTC(y, mo - 1, d, h, mi, 0);
+  return new Date(utcGuess + (wantedMs - gotMs));
+};
+
+const schedulerUtcToLocalMinutes = (date: Date, timezone: string): number => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const h =
+    parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10) % 24;
+  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  return h * 60 + m;
+};
+
+/** MySQL DATETIME / ISO stored as UTC wall clock → JS Date (UTC instant). */
+const parseDbUtcDatetime = (value: Date | string): Date => {
+  if (value instanceof Date) {
+    return new Date(
+      Date.UTC(
+        value.getUTCFullYear(),
+        value.getUTCMonth(),
+        value.getUTCDate(),
+        value.getUTCHours(),
+        value.getUTCMinutes(),
+        value.getUTCSeconds(),
+      ),
+    );
+  }
+  const s = String(value).trim();
+  if (!s) return new Date(NaN);
+  if (s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s)) {
+    return new Date(s.includes("T") ? s : s.replace(" ", "T"));
+  }
+  return new Date(s.replace(" ", "T") + "Z");
+};
+
 /**
  * Strips quoted-reply content from a plain-text email body so previews only
  * show the new message, not the full reply chain.
@@ -398,18 +540,27 @@ function graphCalendarNextPath(
 
 /** Parse Graph event start/end (timed or all-day) into a UTC Date. */
 function parseGraphEventBound(
-  bound: { dateTime?: string; date?: string } | undefined,
-  endOfDay = false,
+  bound: { dateTime?: string; date?: string; timeZone?: string } | undefined,
+  defaultIanaTz = "UTC",
 ): Date | null {
   if (!bound) return null;
   if (bound.dateTime) {
-    const raw = bound.dateTime;
-    const hasTz = raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw);
-    const d = new Date(hasTz ? raw : `${raw.slice(0, 19)}Z`);
-    return Number.isNaN(d.getTime()) ? null : d;
+    const raw = String(bound.dateTime);
+    const hasTz = raw.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(raw);
+    if (hasTz) {
+      const d = new Date(raw);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    const normalized = raw.replace(/\.\d+/, "").slice(0, 19);
+    const datePart = normalized.slice(0, 10);
+    const timePart = normalized.slice(11, 16);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart) || !timePart) return null;
+    const iana = resolveIanaTimezone(bound.timeZone, defaultIanaTz);
+    return schedulerBrokerLocalToUtc(datePart, timePart, iana);
   }
   if (bound.date) {
-    const d = new Date(`${bound.date}T${endOfDay ? "23:59:59" : "00:00:00"}Z`);
+    // All-day: Graph uses date-only; end.date is exclusive (midnight at start of that day).
+    const d = new Date(`${bound.date}T00:00:00Z`);
     return Number.isNaN(d.getTime()) ? null : d;
   }
   return null;
@@ -1187,7 +1338,8 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
 
         const bodyContent = String(msg?.body?.content || "").trim();
         const bodyPreview = String(msg?.bodyPreview || "").trim();
-        const cleanBody = bodyContent || bodyPreview || "(empty)";
+        const { body: cleanBody, truncated: bodyTruncated } =
+          prepareEmailBodyForStorage(bodyContent, bodyPreview);
 
         // ── Resolve brokerId / clientId ───────────────────────────────────
         const [threadRows] = await pool.query<RowDataPacket[]>(
@@ -1326,6 +1478,7 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
               graph_conversation_id: msg?.conversationId || null,
               from_email: fromEmail || null,
               from_name: fromName || null,
+              ...(bodyTruncated ? { body_truncated: true } : {}),
               to_recipients: Array.isArray(msg?.toRecipients)
                 ? msg.toRecipients.map((r: any) => ({
                     email: r?.emailAddress?.address || "",
@@ -1404,6 +1557,20 @@ async function syncO365CalendarForBroker(
   mailbox: ConversationMailboxRow,
   brokerId: number,
 ): Promise<{ synced_count: number }> {
+  const [[tzRow]] = await pool.query<RowDataPacket[]>(
+    `SELECT COALESCE(ss.timezone, b.timezone, 'America/Chicago') AS tz
+     FROM brokers b
+     LEFT JOIN scheduler_settings ss
+       ON ss.broker_id = b.id AND ss.tenant_id = b.tenant_id
+     WHERE b.id = ? AND b.tenant_id = ?
+     LIMIT 1`,
+    [brokerId, MORTGAGE_TENANT_ID],
+  );
+  const brokerTz = resolveIanaTimezone(
+    (tzRow?.tz as string) ?? "America/Chicago",
+    "America/Chicago",
+  );
+
   const now = new Date();
   // Include all of today (sync at 3pm must still block a 9am meeting)
   const startOfToday = new Date(now);
@@ -1436,7 +1603,7 @@ async function syncO365CalendarForBroker(
       mailbox,
       (base) => `${base}${currentPath}`,
       {
-        headers: { Prefer: 'outlook.timezone="UTC"' },
+        headers: { Prefer: `outlook.timezone="${brokerTz}"` },
         retryDelegatedOn403: true,
       },
     );
@@ -1476,8 +1643,8 @@ async function syncO365CalendarForBroker(
 
     const values = blockingEvents
       .map((e) => {
-        const startUtc = parseGraphEventBound(e.start, false);
-        const endUtc = parseGraphEventBound(e.end, true);
+        const startUtc = parseGraphEventBound(e.start, brokerTz);
+        const endUtc = parseGraphEventBound(e.end, brokerTz);
         if (!startUtc || !endUtc || endUtc <= startUtc) {
           console.warn(
             `[syncO365Calendar] skip event ${e.id} — invalid start/end`,
@@ -1585,6 +1752,380 @@ const pool = mysql.createPool({
   // Force UTC so DATETIME values round-trip correctly to/from the DB.
   timezone: "+00:00",
 });
+
+const BROADCAST_CREDIT_UNIT_COST_USD = 0.0079;
+const BROADCAST_CREDIT_CURRENCY = "USD";
+
+function roundUsd(value: number): number {
+  return Number(Math.max(0, value).toFixed(2));
+}
+
+function estimateBroadcastCostUsd(deliveryUnits: number): number {
+  return roundUsd(deliveryUnits * BROADCAST_CREDIT_UNIT_COST_USD);
+}
+
+type BroadcastCreditSummary = {
+  available_balance_usd: number;
+  reserved_balance_usd: number;
+  total_spent_usd: number;
+  currency: string;
+};
+
+async function ensureBroadcastCreditWallet(tenantId: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO tenant_broadcast_credits
+       (tenant_id, available_balance_usd, reserved_balance_usd, total_spent_usd, currency)
+     VALUES (?, 0.00, 0.00, 0.00, ?)
+     ON DUPLICATE KEY UPDATE tenant_id = VALUES(tenant_id)`,
+    [tenantId, BROADCAST_CREDIT_CURRENCY],
+  );
+}
+
+async function getBroadcastCreditSummary(
+  tenantId: number,
+): Promise<BroadcastCreditSummary> {
+  await ensureBroadcastCreditWallet(tenantId);
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT available_balance_usd, reserved_balance_usd, total_spent_usd, currency
+     FROM tenant_broadcast_credits
+     WHERE tenant_id = ?
+     LIMIT 1`,
+    [tenantId],
+  );
+  const row = rows[0];
+  return {
+    available_balance_usd: Number(row?.available_balance_usd ?? 0),
+    reserved_balance_usd: Number(row?.reserved_balance_usd ?? 0),
+    total_spent_usd: Number(row?.total_spent_usd ?? 0),
+    currency: String(row?.currency || BROADCAST_CREDIT_CURRENCY),
+  };
+}
+
+async function getBroadcastReservedOutstanding(
+  tenantId: number,
+  broadcastId: number,
+): Promise<number> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT COALESCE(
+        SUM(
+          CASE action
+            WHEN 'reserve' THEN amount_usd
+            WHEN 'release' THEN -amount_usd
+            WHEN 'capture' THEN -amount_usd
+            ELSE 0
+          END
+        ),
+        0
+      ) AS reserved_outstanding
+     FROM tenant_broadcast_credit_ledger
+     WHERE tenant_id = ? AND broadcast_id = ?`,
+    [tenantId, broadcastId],
+  );
+  return roundUsd(Number(rows[0]?.reserved_outstanding ?? 0));
+}
+
+async function reserveBroadcastCredits(params: {
+  tenantId: number;
+  broadcastId: number;
+  brokerId: number | null;
+  estimatedCostUsd: number;
+  reason: string;
+  metadata?: Record<string, unknown>;
+}): Promise<
+  | { ok: true; summary: BroadcastCreditSummary }
+  | { ok: false; summary: BroadcastCreditSummary }
+> {
+  const estimatedCostUsd = roundUsd(params.estimatedCostUsd);
+  if (estimatedCostUsd <= 0) {
+    return {
+      ok: true,
+      summary: await getBroadcastCreditSummary(params.tenantId),
+    };
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `INSERT INTO tenant_broadcast_credits
+         (tenant_id, available_balance_usd, reserved_balance_usd, total_spent_usd, currency)
+       VALUES (?, 0.00, 0.00, 0.00, ?)
+       ON DUPLICATE KEY UPDATE tenant_id = VALUES(tenant_id)`,
+      [params.tenantId, BROADCAST_CREDIT_CURRENCY],
+    );
+    const [walletRows] = await conn.query<RowDataPacket[]>(
+      `SELECT available_balance_usd, reserved_balance_usd, total_spent_usd, currency
+       FROM tenant_broadcast_credits
+       WHERE tenant_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [params.tenantId],
+    );
+    const wallet = walletRows[0];
+    const available = Number(wallet?.available_balance_usd ?? 0);
+    if (available < estimatedCostUsd) {
+      await conn.rollback();
+      return {
+        ok: false,
+        summary: {
+          available_balance_usd: roundUsd(available),
+          reserved_balance_usd: Number(wallet?.reserved_balance_usd ?? 0),
+          total_spent_usd: Number(wallet?.total_spent_usd ?? 0),
+          currency: String(wallet?.currency || BROADCAST_CREDIT_CURRENCY),
+        },
+      };
+    }
+
+    await conn.query(
+      `UPDATE tenant_broadcast_credits
+       SET available_balance_usd = available_balance_usd - ?,
+           reserved_balance_usd = reserved_balance_usd + ?,
+           updated_at = NOW()
+       WHERE tenant_id = ?`,
+      [estimatedCostUsd, estimatedCostUsd, params.tenantId],
+    );
+    await conn.query(
+      `INSERT INTO tenant_broadcast_credit_ledger
+         (tenant_id, broadcast_id, action, amount_usd, note, metadata_json, created_by_broker_id)
+       VALUES (?, ?, 'reserve', ?, ?, ?, ?)`,
+      [
+        params.tenantId,
+        params.broadcastId,
+        estimatedCostUsd,
+        params.reason,
+        params.metadata ? JSON.stringify(params.metadata) : null,
+        params.brokerId,
+      ],
+    );
+
+    await conn.commit();
+    return {
+      ok: true,
+      summary: await getBroadcastCreditSummary(params.tenantId),
+    };
+  } catch (err) {
+    try {
+      await conn.rollback();
+    } catch {}
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+function getBroadcastSendLockName(broadcastId: number): string {
+  return `realtor_broadcast_send_${broadcastId}`;
+}
+
+async function acquireBroadcastSendLock(broadcastId: number): Promise<boolean> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT GET_LOCK(?, 0) AS acquired`,
+    [getBroadcastSendLockName(broadcastId)],
+  );
+  return Number(rows[0]?.acquired) === 1;
+}
+
+async function releaseBroadcastSendLock(broadcastId: number): Promise<void> {
+  try {
+    await pool.query(`SELECT RELEASE_LOCK(?)`, [
+      getBroadcastSendLockName(broadcastId),
+    ]);
+  } catch (err) {
+    console.error(`[Broadcast #${broadcastId}] release lock error:`, err);
+  }
+}
+
+async function releaseStuckBroadcastProcessing(
+  broadcastId: number,
+  tenantId: number,
+): Promise<void> {
+  await pool.query(
+    `UPDATE realtor_broadcast_recipients
+     SET email_status = 'pending', updated_at = NOW()
+     WHERE broadcast_id = ? AND tenant_id = ?
+       AND email_status = 'processing'
+       AND updated_at < NOW() - INTERVAL 15 MINUTE`,
+    [broadcastId, tenantId],
+  );
+  await pool.query(
+    `UPDATE realtor_broadcast_recipients
+     SET sms_status = 'pending', updated_at = NOW()
+     WHERE broadcast_id = ? AND tenant_id = ?
+       AND sms_status = 'processing'
+       AND updated_at < NOW() - INTERVAL 15 MINUTE`,
+    [broadcastId, tenantId],
+  );
+}
+
+async function claimBroadcastRecipientChannel(
+  recipientId: number,
+  broadcastId: number,
+  tenantId: number,
+  channel: "email" | "sms",
+): Promise<boolean> {
+  const statusColumn = channel === "email" ? "email_status" : "sms_status";
+  const [result] = await pool.query<ResultSetHeader>(
+    `UPDATE realtor_broadcast_recipients
+     SET ${statusColumn} = 'processing', updated_at = NOW()
+     WHERE id = ? AND broadcast_id = ? AND tenant_id = ?
+       AND ${statusColumn} = 'pending'`,
+    [recipientId, broadcastId, tenantId],
+  );
+  return result.affectedRows > 0;
+}
+
+async function settleBroadcastCredits(params: {
+  tenantId: number;
+  broadcastId: number;
+  brokerId: number | null;
+  deliveredUnits: number;
+  note: string;
+}): Promise<BroadcastCreditSummary> {
+  const deliveredUnits = Math.max(0, params.deliveredUnits);
+  const actualCostUsd = estimateBroadcastCostUsd(deliveredUnits);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      `INSERT INTO tenant_broadcast_credits
+         (tenant_id, available_balance_usd, reserved_balance_usd, total_spent_usd, currency)
+       VALUES (?, 0.00, 0.00, 0.00, ?)
+       ON DUPLICATE KEY UPDATE tenant_id = VALUES(tenant_id)`,
+      [params.tenantId, BROADCAST_CREDIT_CURRENCY],
+    );
+    const [walletRows] = await conn.query<RowDataPacket[]>(
+      `SELECT available_balance_usd, reserved_balance_usd
+       FROM tenant_broadcast_credits
+       WHERE tenant_id = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [params.tenantId],
+    );
+    const wallet = walletRows[0];
+    const available = Number(wallet?.available_balance_usd ?? 0);
+    const [reservedRows] = await conn.query<RowDataPacket[]>(
+      `SELECT COALESCE(
+          SUM(
+            CASE action
+              WHEN 'reserve' THEN amount_usd
+              WHEN 'release' THEN -amount_usd
+              WHEN 'capture' THEN -amount_usd
+              ELSE 0
+            END
+          ),
+          0
+        ) AS reserved_outstanding
+       FROM tenant_broadcast_credit_ledger
+       WHERE tenant_id = ? AND broadcast_id = ?
+       FOR UPDATE`,
+      [params.tenantId, params.broadcastId],
+    );
+    const [captureRows] = await conn.query<RowDataPacket[]>(
+      `SELECT COALESCE(
+          SUM(CASE WHEN action = 'capture' THEN amount_usd ELSE 0 END),
+          0
+        ) AS captured_total
+       FROM tenant_broadcast_credit_ledger
+       WHERE tenant_id = ? AND broadcast_id = ?
+       FOR UPDATE`,
+      [params.tenantId, params.broadcastId],
+    );
+    const capturedTotalAlready = roundUsd(
+      Number(captureRows[0]?.captured_total ?? 0),
+    );
+    const remainingActualCost = roundUsd(
+      Math.max(0, actualCostUsd - capturedTotalAlready),
+    );
+    const reservedOutstanding = roundUsd(
+      Number(reservedRows[0]?.reserved_outstanding ?? 0),
+    );
+    const captureFromReserve = roundUsd(
+      Math.min(reservedOutstanding, remainingActualCost),
+    );
+    const chargeFromAvailable = roundUsd(
+      Math.min(
+        available,
+        Math.max(0, remainingActualCost - captureFromReserve),
+      ),
+    );
+    const releaseAmount = roundUsd(
+      Math.max(0, reservedOutstanding - captureFromReserve),
+    );
+    const capturedTotal = roundUsd(captureFromReserve + chargeFromAvailable);
+    const unpaid = roundUsd(
+      Math.max(0, actualCostUsd - captureFromReserve - chargeFromAvailable),
+    );
+
+    await conn.query(
+      `UPDATE tenant_broadcast_credits
+       SET available_balance_usd = available_balance_usd - ? + ?,
+           reserved_balance_usd = GREATEST(0, reserved_balance_usd - ?),
+           total_spent_usd = total_spent_usd + ?,
+           updated_at = NOW()
+       WHERE tenant_id = ?`,
+      [
+        chargeFromAvailable,
+        releaseAmount,
+        roundUsd(captureFromReserve + releaseAmount),
+        capturedTotal,
+        params.tenantId,
+      ],
+    );
+
+    if (capturedTotal > 0) {
+      await conn.query(
+        `INSERT INTO tenant_broadcast_credit_ledger
+           (tenant_id, broadcast_id, action, amount_usd, note, metadata_json, created_by_broker_id)
+         VALUES (?, ?, 'capture', ?, ?, ?, ?)`,
+        [
+          params.tenantId,
+          params.broadcastId,
+          capturedTotal,
+          params.note,
+          JSON.stringify({
+            delivered_units: deliveredUnits,
+            actual_cost_usd: actualCostUsd,
+            already_captured_usd: capturedTotalAlready,
+            remaining_actual_cost_usd: remainingActualCost,
+            capture_from_reserved_usd: captureFromReserve,
+            capture_from_available_usd: chargeFromAvailable,
+            unpaid_usd: unpaid,
+          }),
+          params.brokerId,
+        ],
+      );
+    }
+    if (releaseAmount > 0) {
+      await conn.query(
+        `INSERT INTO tenant_broadcast_credit_ledger
+           (tenant_id, broadcast_id, action, amount_usd, note, metadata_json, created_by_broker_id)
+         VALUES (?, ?, 'release', ?, ?, ?, ?)`,
+        [
+          params.tenantId,
+          params.broadcastId,
+          releaseAmount,
+          `${params.note} (unused reserve release)`,
+          JSON.stringify({
+            delivered_units: deliveredUnits,
+            actual_cost_usd: actualCostUsd,
+          }),
+          params.brokerId,
+        ],
+      );
+    }
+
+    await conn.commit();
+    return await getBroadcastCreditSummary(params.tenantId);
+  } catch (err) {
+    try {
+      await conn.rollback();
+    } catch {}
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
 
 // =====================================================
 // DATA INTEGRITY HELPERS
@@ -1763,23 +2304,34 @@ async function _executeThreadUpsert(core: {
        client_email               = COALESCE(client_email, ?),
        inbox_number               = COALESCE(inbox_number, ?),
        mailbox_id           = COALESCE(mailbox_id, ?),
-       -- Auto-reopen closed threads when a client sends a new inbound message,
-       -- BUT only if the thread was not closed in the last 5 minutes.
-       -- The 5-minute guard prevents two known bugs:
-       --   1. Race condition: broker closes a thread while the async
-       --      fire-and-forget handler in handleVoiceIncoming is still running —
-       --      the handler would otherwise immediately reopen it.
-       --   2. Twilio webhook retries (or repeated calls from the same unknown
-       --      number) keep reopening a conversation the broker just dismissed.
-       -- After 5 minutes, any genuinely new inbound activity will still reopen
-       -- the thread as expected.
+       -- Auto-reopen on inbound: SMS always (client reply); voice/call/email keep
+       -- a 5-minute post-close guard (voice async race + webhook retries).
        status               = IF(
          ? = 'inbound'
-         AND (status != 'closed'
-              OR archived_at IS NULL
-              OR archived_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)),
+         AND (
+           ? = 'sms'
+           OR status != 'closed'
+           OR archived_at IS NULL
+           OR archived_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+         ),
          'active',
          status
+       ),
+       archived_at          = IF(
+         ? = 'inbound' AND ? = 'sms',
+         NULL,
+         archived_at
+       ),
+       tags                 = IF(
+         ? = 'inbound'
+         AND ? = 'sms'
+         AND tags IS NOT NULL
+         AND JSON_CONTAINS(tags, JSON_QUOTE('broadcast_hidden')) = 1,
+         JSON_REMOVE(
+           tags,
+           JSON_UNQUOTE(JSON_SEARCH(tags, 'one', 'broadcast_hidden'))
+         ),
+         tags
        ),
        updated_at           = NOW()`,
     [
@@ -1816,6 +2368,11 @@ async function _executeThreadUpsert(core: {
       inboxNumber,
       mailboxId,
       direction,
+      communicationType,
+      direction,
+      communicationType,
+      direction,
+      communicationType,
     ],
   );
 
@@ -1895,8 +2452,8 @@ async function _executeThreadUpsert(core: {
             ? `/admin/email?conversation=${encodeURIComponent(convId)}`
             : `/admin/conversations?conversation=${encodeURIComponent(convId)}`,
       });
-      // Notify the thread list to refresh so new threads appear immediately.
-      await publishToAbly("conversations:all", "thread-updated", {
+      // Non-blocking: cron/sync must not wait on Ably fallback retries.
+      void publishToAbly("conversations:all", "thread-updated", {
         conversationId: convId,
         communicationType,
       });
@@ -4463,7 +5020,9 @@ const handleAdminSendCode: RequestHandler = async (req, res) => {
     const quotaErrText =
       (error as { sqlMessage?: string })?.sqlMessage ??
       (error instanceof Error ? error.message : String(error));
-    if (/usage quota being exhausted|usage quota.*exhausted/i.test(quotaErrText)) {
+    if (
+      /usage quota being exhausted|usage quota.*exhausted/i.test(quotaErrText)
+    ) {
       return res.status(503).json({
         success: false,
         quota_exceeded: true,
@@ -7387,7 +7946,8 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
     };
 
     maybeSet("loan_type", loan_type);
-    if (loan_amount !== undefined) maybeSet("loan_amount", toSqlMoney(loan_amount));
+    if (loan_amount !== undefined)
+      maybeSet("loan_amount", toSqlMoney(loan_amount));
     if (property_value !== undefined)
       maybeSet("property_value", toSqlMoney(property_value));
     maybeSet("property_address", property_address);
@@ -19225,8 +19785,36 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     const fromPhone = fromRaw.replace(/[^\d+]/g, "");
     const toPhone = toRaw.replace(/[^\d+]/g, "") || null; // The Twilio number that received this SMS
 
-    // ── STOP opt-out — TCPA compliance for broadcast SMS ─────────────────────
-    if (body.trim().toUpperCase() === "STOP") {
+    // ── STOP/START consent handling for broadcast SMS ─────────────────────────
+    const inboundKeyword = body.trim().toUpperCase();
+    if (["START", "UNSTOP"].includes(inboundKeyword)) {
+      const fromDigitsNorm = fromPhone.replace(/\D/g, "");
+      const fromLast10 = fromDigitsNorm.slice(-10);
+      await pool.query(
+        `UPDATE brokers SET sms_blast_opted_in = 1, updated_at = NOW()
+         WHERE tenant_id = ?
+           AND (
+             REGEXP_REPLACE(twilio_caller_id, '[^0-9]', '') = ?
+             OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+           )`,
+        [MORTGAGE_TENANT_ID, fromDigitsNorm, fromLast10],
+      );
+      await pool.query(
+        `UPDATE clients
+         SET sms_blast_opted_in = 1, updated_at = NOW()
+         WHERE tenant_id = ?
+           AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?`,
+        [MORTGAGE_TENANT_ID, fromLast10],
+      );
+      res.set("Content-Type", "text/xml");
+      return res
+        .status(200)
+        .send(
+          "<Response><Message>You are now subscribed to SMS broadcast messages. Reply STOP to unsubscribe.</Message></Response>",
+        );
+    }
+
+    if (inboundKeyword === "STOP") {
       const fromDigitsNorm = fromPhone.replace(/\D/g, "");
       const fromLast10 = fromDigitsNorm.slice(-10);
       // Mark the sender opted out of broadcast SMS blasts
@@ -19238,6 +19826,13 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
              OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
            )`,
         [MORTGAGE_TENANT_ID, fromDigitsNorm, fromLast10],
+      );
+      await pool.query(
+        `UPDATE clients
+         SET sms_blast_opted_in = 0, updated_at = NOW()
+         WHERE tenant_id = ?
+           AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?`,
+        [MORTGAGE_TENANT_ID, fromLast10],
       );
       // Also mark any pending broadcast recipient rows as opted_out
       await pool.query(
@@ -19320,6 +19915,7 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     let conversationId: string | null = null;
 
     if (clientId) {
+      const canonicalClientConversationId = `conv_client_${clientId}`;
       // First: prefer the thread that was established on this exact inbox number.
       // This prevents an inbound message on Broker A's personal line from
       // being routed into a thread that belongs to Broker B just because
@@ -19328,9 +19924,17 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
         const [inboxThreadRows] = await pool.query<RowDataPacket[]>(
           `SELECT conversation_id FROM conversation_threads
            WHERE tenant_id = ? AND client_id = ? AND inbox_number = ?
-           ORDER BY last_message_at DESC, created_at DESC
+           ORDER BY
+             CASE WHEN conversation_id = ? THEN 0 ELSE 1 END,
+             last_message_at DESC,
+             created_at DESC
            LIMIT 1`,
-          [MORTGAGE_TENANT_ID, clientId, toPhone],
+          [
+            MORTGAGE_TENANT_ID,
+            clientId,
+            toPhone,
+            canonicalClientConversationId,
+          ],
         );
         if (inboxThreadRows.length > 0) {
           conversationId = inboxThreadRows[0].conversation_id;
@@ -19342,14 +19946,20 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
         const [threadRows] = await pool.query<RowDataPacket[]>(
           `SELECT conversation_id FROM conversation_threads
            WHERE tenant_id = ? AND client_id = ?
-           ORDER BY last_message_at DESC, created_at DESC
+           ORDER BY
+             CASE WHEN conversation_id = ? THEN 0 ELSE 1 END,
+             last_message_at DESC,
+             created_at DESC
            LIMIT 1`,
-          [MORTGAGE_TENANT_ID, clientId],
+          [MORTGAGE_TENANT_ID, clientId, canonicalClientConversationId],
         );
         if (threadRows.length > 0) {
           conversationId = threadRows[0].conversation_id;
         }
       }
+      console.log(
+        `[InboundSMS Trace] client=${clientId} canonical=${canonicalClientConversationId} selected=${conversationId ?? "none"} inbox=${toPhone ?? "none"}`,
+      );
     }
 
     if (!conversationId && clientId) {
@@ -19367,6 +19977,41 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       }
     }
 
+    // Phase C lazy-thread fallback:
+    // If no thread exists yet, bind inbound SMS to the most recent broadcast
+    // conversation sent to this phone (optionally same inbox number). This
+    // preserves reply context without creating blast threads at send-time.
+    if (!conversationId) {
+      const fromLastTen = fromPhone.replace(/\D/g, "").slice(-10);
+      if (fromLastTen.length === 10) {
+        const [broadcastRows] = await pool.query<RowDataPacket[]>(
+          `SELECT rbr.conversation_id
+           FROM realtor_broadcast_recipients rbr
+           JOIN realtor_broadcasts rb
+             ON rb.id = rbr.broadcast_id
+            AND rb.tenant_id = rbr.tenant_id
+           LEFT JOIN brokers sb
+             ON sb.id = rb.created_by
+            AND sb.tenant_id = rb.tenant_id
+           WHERE rbr.tenant_id = ?
+             AND rbr.conversation_id IS NOT NULL
+             AND rbr.sms_status = 'sent'
+             AND RIGHT(REGEXP_REPLACE(rbr.recipient_phone, '[^0-9]', ''), 10) = ?
+             AND (
+               ? IS NULL
+               OR RIGHT(REGEXP_REPLACE(sb.twilio_caller_id, '[^0-9]', ''), 10)
+                  = RIGHT(REGEXP_REPLACE(?, '[^0-9]', ''), 10)
+             )
+           ORDER BY rbr.sent_at DESC, rbr.id DESC
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, fromLastTen, toPhone || null, toPhone || null],
+        );
+        if (broadcastRows.length > 0) {
+          conversationId = broadcastRows[0].conversation_id as string;
+        }
+      }
+    }
+
     // Fall back to a deterministic ID if no thread found at all
     if (!conversationId && clientId) {
       conversationId = `conv_client_${clientId}`;
@@ -19377,6 +20022,20 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     if (!conversationId) {
       const sanitizedPhone = fromPhone.replace(/[^\d]/g, "");
       conversationId = `conv_unknown_${sanitizedPhone}`;
+    }
+
+    // Idempotency: Twilio may retry the same MessageSid — skip duplicate inserts.
+    if (messageSid) {
+      const [[existingSms]] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM communications
+         WHERE tenant_id = ? AND external_id = ? AND communication_type = 'sms'
+         LIMIT 1`,
+        [MORTGAGE_TENANT_ID, messageSid],
+      );
+      if (existingSms) {
+        res.set("Content-Type", "text/xml");
+        return res.status(200).send("<Response></Response>");
+      }
     }
 
     // ── Insert inbound communications record ─────────────────────────────────
@@ -19463,6 +20122,15 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
 
     // ── Notify connected browsers via Ably ───────────────────────────────────
     if (conversationId) {
+      const [[threadStatusRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT status FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ?
+         LIMIT 1`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+      const threadStatus =
+        (threadStatusRow?.status as string | undefined) ?? "active";
+
       await publishToAbly(`conversation:${conversationId}`, "new-message", {
         conversationId,
         direction: "inbound",
@@ -19471,7 +20139,7 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       });
       await publishToAbly("conversations:all", "thread-updated", {
         conversationId,
-        thread: { status: "active" },
+        thread: { status: threadStatus },
       });
     }
 
@@ -19544,6 +20212,7 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       search,
       folder,
       mailbox_id,
+      include_broadcast,
     } = req.query;
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -19614,6 +20283,35 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       whereConditions.push(
         "(ct.last_message_type IS NULL OR ct.last_message_type != 'email')",
       );
+
+      const includeBroadcastThreads =
+        String(include_broadcast || "")
+          .toLowerCase()
+          .trim() === "1" ||
+        String(include_broadcast || "")
+          .toLowerCase()
+          .trim() === "true";
+      if (!includeBroadcastThreads) {
+        // Phase A + reply-promotion:
+        // Hide broadcast-delivery threads by default, but auto-promote into the
+        // normal inbox once the contact replies (has inbound communication).
+        // Uses persisted tag (`broadcast_hidden`) with legacy ID-prefix fallback.
+        whereConditions.push(`(
+          (
+            ct.conversation_id NOT LIKE 'broadcast-%'
+            AND (
+              ct.tags IS NULL
+              OR JSON_CONTAINS(ct.tags, JSON_QUOTE('broadcast_hidden')) = 0
+            )
+          )
+          OR EXISTS (
+            SELECT 1 FROM communications c_in
+            WHERE c_in.conversation_id = ct.conversation_id
+              AND c_in.tenant_id = ct.tenant_id
+              AND c_in.direction = 'inbound'
+          )
+        )`);
+      }
     }
 
     if (priority) {
@@ -21540,11 +22238,14 @@ const handleGetConversationStats: RequestHandler = async (req, res) => {
         communication_type,
         COUNT(*) as count
       FROM communications c
-      JOIN conversation_threads ct ON c.conversation_id = ct.conversation_id
-      WHERE ct.broker_id = ? AND c.tenant_id = ?
+      LEFT JOIN conversation_threads ct
+        ON c.conversation_id = ct.conversation_id
+       AND ct.tenant_id = c.tenant_id
+      WHERE c.tenant_id = ?
+        AND (ct.broker_id = ? OR c.from_broker_id = ?)
         AND c.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
       GROUP BY communication_type`,
-      [brokerId, MORTGAGE_TENANT_ID],
+      [MORTGAGE_TENANT_ID, brokerId, brokerId],
     );
 
     // Priority breakdown
@@ -23115,7 +23816,7 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
       const [availableRows] = await pool.query<any>(
         `SELECT id FROM brokers
          WHERE tenant_id = ? AND status = 'active' AND voice_available = 1
-         ORDER BY id ASC
+         ORDER BY rbr.id ASC
          LIMIT 10`,
         [MORTGAGE_TENANT_ID],
       );
@@ -23829,6 +24530,56 @@ const handleRecordingCheck: RequestHandler = async (req, res) => {
     }
 
     if (!rows[0].recording_url) {
+      // Backfill fallback: if Twilio recording-status webhook was delayed/missed,
+      // query Twilio directly by CallSid and persist the first completed recording.
+      if (twilioClient && process.env.TWILIO_ACCOUNT_SID) {
+        try {
+          const recordings = await twilioClient.recordings.list({
+            callSid,
+            limit: 20,
+          });
+          const completed = recordings.find(
+            (r: any) =>
+              (r.status as string | undefined)?.toLowerCase?.() === "completed",
+          );
+          if (completed?.sid) {
+            const recordingUrl = `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Recordings/${completed.sid}.mp3`;
+            const recordingDuration =
+              completed.duration != null
+                ? parseInt(String(completed.duration), 10)
+                : null;
+
+            await pool.query(
+              `UPDATE communications
+               SET recording_url = COALESCE(recording_url, ?),
+                   recording_duration = COALESCE(recording_duration, ?),
+                   updated_at = NOW()
+               WHERE external_id = ? AND communication_type = 'call' AND tenant_id = ?`,
+              [
+                recordingUrl,
+                Number.isFinite(recordingDuration) ? recordingDuration : null,
+                callSid,
+                MORTGAGE_TENANT_ID,
+              ],
+            );
+
+            return res.json({
+              success: true,
+              ready: true,
+              recording_url: recordingUrl,
+              recording_duration: Number.isFinite(recordingDuration)
+                ? recordingDuration
+                : null,
+            });
+          }
+        } catch (twilioErr) {
+          console.warn(
+            `[handleRecordingCheck] Twilio fallback lookup failed for ${callSid}:`,
+            twilioErr,
+          );
+        }
+      }
+
       return res
         .status(202)
         .json({ success: true, ready: false, recording_url: null });
@@ -25286,7 +26037,9 @@ const handleAdminInit: RequestHandler = async (req, res) => {
     const quotaErrText =
       (error as { sqlMessage?: string })?.sqlMessage ??
       (error instanceof Error ? error.message : String(error));
-    if (/usage quota being exhausted|usage quota.*exhausted/i.test(quotaErrText)) {
+    if (
+      /usage quota being exhausted|usage quota.*exhausted/i.test(quotaErrText)
+    ) {
       return res.status(503).json({
         success: false,
         quota_exceeded: true,
@@ -29190,6 +29943,76 @@ function createServer() {
     };
   }
 
+  /** YYYY-MM-DD for "today" in broker IANA timezone. */
+  function todayDateStrInTimezone(timezone: string): string {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(
+      new Date(),
+    );
+  }
+
+  /** 0=Sun … 6=Sat for YYYY-MM-DD interpreted in broker timezone. */
+  function getDayOfWeekInTimezone(dateStr: string, timezone: string): number {
+    const noonUtc = new Date(`${dateStr}T12:00:00Z`);
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+    }).format(noonUtc);
+    const map: Record<string, number> = {
+      Sun: 0,
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+    };
+    return map[weekday] ?? noonUtc.getUTCDay();
+  }
+
+  /** UTC instant for wall-clock date + HH:mm in broker timezone. */
+  function brokerLocalDateTimeToUtc(
+    dateStr: string,
+    timeStr: string,
+    timezone: string,
+  ): Date {
+    const [y, mo, d] = dateStr.split("-").map(Number);
+    const [h, mi] = timeStr.split(":").map(Number);
+    const utcGuess = Date.UTC(y, mo - 1, d, h, mi, 0);
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date(utcGuess));
+    const get = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+    const gotMs = Date.UTC(
+      get("year"),
+      get("month") - 1,
+      get("day"),
+      get("hour") % 24,
+      get("minute"),
+      0,
+    );
+    const wantedMs = Date.UTC(y, mo - 1, d, h, mi, 0);
+    return new Date(utcGuess + (wantedMs - gotMs));
+  }
+
+  function addCalendarDaysInTimezone(
+    dateStr: string,
+    days: number,
+    timezone: string,
+  ): string {
+    const base = brokerLocalDateTimeToUtc(dateStr, "12:00", timezone);
+    const shifted = new Date(base.getTime() + days * 86_400_000);
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(
+      shifted,
+    );
+  }
+
   // ---- Helper: convert a UTC Date to minutes-from-midnight in a given IANA timezone ----
   function utcDateToLocalMinutes(date: Date, timezone: string): number {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -29217,8 +30040,7 @@ function createServer() {
     minBookingHours: number,
     brokerTimezone = "America/Chicago",
   ): Promise<Array<{ time: string; end_time: string; available: boolean }>> {
-    const date = new Date(dateStr + "T00:00:00");
-    const dayOfWeek = date.getDay();
+    const dayOfWeek = getDayOfWeekInTimezone(dateStr, brokerTimezone);
 
     const [avRows] = await pool.query<RowDataPacket[]>(
       `SELECT start_time, end_time FROM scheduler_availability
@@ -29265,8 +30087,12 @@ function createServer() {
         const slotTime = `${String(slotH).padStart(2, "0")}:${String(slotM).padStart(2, "0")}`;
         const slotEndTime = `${String(endH).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}`;
 
-        // Check minimum booking window
-        const slotDateTime = new Date(`${dateStr}T${slotTime}:00`);
+        // Check minimum booking window (broker-local wall clock → UTC)
+        const slotDateTime = brokerLocalDateTimeToUtc(
+          dateStr,
+          slotTime,
+          brokerTimezone,
+        );
         const tooSoon = slotDateTime.getTime() - now.getTime() < minBookingMs;
 
         // Check for conflict with existing meetings (include buffer)
@@ -29280,20 +30106,16 @@ function createServer() {
           return cursor < bookedEnd && cursor + slotMinutes > bookedStart;
         });
 
-        // Check for conflict with broker-blocked ranges.
-        // Convert stored UTC datetimes to broker-local minutes to match the cursor.
+        // Check for conflict with broker-blocked ranges (O365 + manual), incl. buffer.
         const blocked = blockedRows.some((br) => {
-          const brStart =
-            br.start_datetime instanceof Date
-              ? br.start_datetime
-              : new Date((br.start_datetime as string).replace(" ", "T") + "Z");
-          const brEnd =
-            br.end_datetime instanceof Date
-              ? br.end_datetime
-              : new Date((br.end_datetime as string).replace(" ", "T") + "Z");
-          const brStartMin = utcDateToLocalMinutes(brStart, brokerTimezone);
-          const brEndMin = utcDateToLocalMinutes(brEnd, brokerTimezone);
-          // Handle events that cross midnight in broker timezone
+          const brStart = parseDbUtcDatetime(
+            br.start_datetime as Date | string,
+          );
+          const brEnd = parseDbUtcDatetime(br.end_datetime as Date | string);
+          const brStartMin =
+            schedulerUtcToLocalMinutes(brStart, brokerTimezone) - bufferMinutes;
+          const brEndMin =
+            schedulerUtcToLocalMinutes(brEnd, brokerTimezone) + bufferMinutes;
           if (brEndMin <= brStartMin) {
             return cursor < brEndMin || cursor + slotMinutes > brStartMin;
           }
@@ -29377,25 +30199,24 @@ function createServer() {
       }
 
       // Build list of available dates in the next advance_booking_days days
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const brokerTimezone =
+        settings.timezone || (brokerRow as any).timezone || "America/Chicago";
+      let dateStr = todayDateStrInTimezone(brokerTimezone);
       const availableDates: string[] = [];
 
       for (let i = 0; i < settings.advance_booking_days; i++) {
-        const d = new Date(today);
-        d.setDate(today.getDate() + i);
-        const dateStr = d.toISOString().split("T")[0];
         const slots = await getAvailableSlotsForDate(
           brokerRow.id,
           dateStr,
           settings.slot_duration_minutes,
           settings.buffer_time_minutes,
           settings.min_booking_hours,
-          settings.timezone || (brokerRow as any).timezone || "America/Chicago",
+          brokerTimezone,
         );
         if (slots.some((s) => s.available)) {
           availableDates.push(dateStr);
         }
+        dateStr = addCalendarDaysInTimezone(dateStr, 1, brokerTimezone);
       }
 
       return res.json({
@@ -32664,21 +33485,19 @@ function createServer() {
         [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
       );
       for (const row of brokerRows) {
-        // Only brokers explicitly opted in (sms_blast_opted_in = 1) receive SMS
-        // NULL = not yet opted in; 0 = opted out via STOP reply
-        const smsEligible = row.sms_blast_opted_in === 1;
-        const skipReason = !smsEligible
-          ? row.sms_blast_opted_in === 0
-            ? "sms_opted_out"
-            : "sms_not_opted_in"
-          : null;
+        // Broadcast SMS policy:
+        // - 0 => explicitly opted out via STOP (block)
+        // - 1 or NULL => sendable (legacy contacts default-allow)
+        const smsEligible = row.sms_blast_opted_in !== 0;
+        const skipReason = !smsEligible ? "sms_opted_out" : null;
         candidates.push({
           key: row.email ?? row.phone ?? `broker-${row.id}`,
           source: "broker",
           sourceId: row.id,
           name: row.name || "Unknown",
           email: row.email || null,
-          phone: smsEligible ? row.phone || null : null,
+          // Keep phone visible in UI; consent is enforced via skipReason/status.
+          phone: row.phone || null,
           role: row.role as string,
           skipped: false,
           skipReason,
@@ -32751,7 +33570,7 @@ function createServer() {
     // 3. Active loan clients
     if (filter.segments.includes("all_clients")) {
       const [clientRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, email, phone
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, email, phone, sms_blast_opted_in
          FROM clients
          WHERE tenant_id = ? AND status = 'active'
            AND (email IS NULL OR LOWER(TRIM(email)) NOT IN (
@@ -32760,6 +33579,8 @@ function createServer() {
         [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
       );
       for (const row of clientRows) {
+        const smsEligible = row.sms_blast_opted_in !== 0;
+        const skipReason = !smsEligible ? "sms_opted_out" : null;
         candidates.push({
           key: row.email ?? row.phone ?? `client-${row.id}`,
           source: "client",
@@ -32768,7 +33589,7 @@ function createServer() {
           email: row.email || null,
           phone: row.phone || null,
           skipped: false,
-          skipReason: null,
+          skipReason,
         });
       }
     }
@@ -32828,13 +33649,31 @@ function createServer() {
   /**
    * Async send loop — runs detached after POST /api/realtor-broadcasts responds.
    */
+  const logBroadcastTrace = (
+    event: string,
+    details: Record<string, unknown>,
+  ) => {
+    try {
+      console.info(`[BroadcastTrace] ${event} ${JSON.stringify(details)}`);
+    } catch {
+      console.info(`[BroadcastTrace] ${event}`, details);
+    }
+  };
+
   async function sendBroadcastAsync(broadcastId: number): Promise<void> {
+    const lockAcquired = await acquireBroadcastSendLock(broadcastId);
+    if (!lockAcquired) {
+      logBroadcastTrace("send_loop_skipped_lock_held", { broadcastId });
+      return;
+    }
+
     let sentCount = 0;
     let failedCount = 0;
 
-    // Fetch broadcast meta
-    const [broadcastRows] = await pool.query<RowDataPacket[]>(
-      `SELECT rb.*, b.first_name, b.last_name,
+    try {
+      // Fetch broadcast meta
+      const [broadcastRows] = await pool.query<RowDataPacket[]>(
+        `SELECT rb.*, b.first_name, b.last_name,
               COALESCE(ts.setting_value, 'Encore Mortgage') AS company_name,
               COALESCE(ta.setting_value, '') AS company_address,
               b.twilio_caller_id AS from_number
@@ -32845,309 +33684,607 @@ function createServer() {
        LEFT JOIN system_settings ta ON ta.setting_key = 'company_address'
          AND ta.tenant_id = rb.tenant_id
        WHERE rb.id = ?`,
-      [broadcastId],
-    );
-    if (!broadcastRows.length) return;
+        [broadcastId],
+      );
+      if (!broadcastRows.length) return;
 
-    const broadcast = broadcastRows[0];
-    const tenantId: number = broadcast.tenant_id;
-    const createdBy: number = broadcast.created_by;
-    const senderFirstName: string = broadcast.first_name || "Team";
-    const senderLastName: string = broadcast.last_name || "";
-    const fromNumber: string | null = broadcast.from_number || null;
-    const companyName: string = broadcast.company_name || "Encore Mortgage";
-    const companyAddress: string = broadcast.company_address || "";
+      const broadcast = broadcastRows[0];
+      const tenantId: number = broadcast.tenant_id;
+      await releaseStuckBroadcastProcessing(broadcastId, tenantId);
+      const createdBy: number = broadcast.created_by;
+      const senderFirstName: string = broadcast.first_name || "Team";
+      const senderLastName: string = broadcast.last_name || "";
+      const fromNumber: string | null = broadcast.from_number || null;
+      const emailBody: string = (broadcast.body_email || "").trim();
+      const smsBody: string = (broadcast.body_sms || "").trim();
+      const companyName: string = broadcast.company_name || "Encore Mortgage";
+      const companyAddress: string = broadcast.company_address || "";
+      const loadAggregateCounts = async () => {
+        const [countRows] = await pool.query<RowDataPacket[]>(
+          `SELECT
+           SUM(CASE WHEN email_status = 'sent' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN sms_status = 'sent' THEN 1 ELSE 0 END) AS sent_total,
+           SUM(CASE WHEN email_status = 'failed' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN sms_status = 'failed' THEN 1 ELSE 0 END) AS failed_total
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+          [broadcastId, tenantId],
+        );
+        return {
+          sentTotal: Number(countRows[0]?.sent_total ?? 0),
+          failedTotal: Number(countRows[0]?.failed_total ?? 0),
+        };
+      };
 
-    await createAuditLog({
-      actorType: "broker",
-      actorId: createdBy,
-      action: "broadcast_send_started",
-      entityType: "realtor_broadcast",
-      entityId: broadcastId,
-      changes: { channel: broadcast.channel },
-    });
+      await createAuditLog({
+        actorType: "broker",
+        actorId: createdBy,
+        action: "broadcast_send_started",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+        changes: { channel: broadcast.channel },
+      });
 
-    // Fetch pending recipients
-    const [recipientRows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, broker_id, prospect_id, recipient_name,
+      // Only load recipients that still need delivery (avoids re-processing sent rows).
+      const [recipientRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, broker_id, prospect_id, recipient_name,
               recipient_email, recipient_phone,
               email_status, sms_status, unsubscribe_token
        FROM realtor_broadcast_recipients
-       WHERE broadcast_id = ? AND tenant_id = ?`,
-      [broadcastId, tenantId],
-    );
-
-    const total = recipientRows.length;
-    const smtpFromEmail =
-      RESEND_FROM.match(/<([^>]+)>/)?.[1] ?? "noreply@encoremortgage.org";
-    const emailDomain = smtpFromEmail.split("@")[1] ?? "encoremortgage.org";
-    const senderFrom = `${senderFirstName} ${senderLastName} at ${companyName} <${smtpFromEmail}>`;
-    const inboundMailbox = process.env.IMAP_USER;
-    const inboundDomain = process.env.INBOUND_EMAIL_DOMAIN;
-    const baseUrl = getBaseUrl();
-
-    for (const recipient of recipientRows) {
-      // Cancellation check each iteration
-      const [cancelCheck] = await pool.query<RowDataPacket[]>(
-        `SELECT is_cancelled FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
-        [broadcastId],
+       WHERE broadcast_id = ? AND tenant_id = ?
+         AND (
+           email_status IN ('pending', 'processing')
+           OR sms_status IN ('pending', 'processing')
+         )`,
+        [broadcastId, tenantId],
       );
-      if (cancelCheck[0]?.is_cancelled) {
-        await pool.query(
-          `UPDATE realtor_broadcasts
+
+      const total = recipientRows.length;
+      const pendingEmailRows = recipientRows.filter(
+        (r) => r.email_status === "pending",
+      ).length;
+      const pendingSmsRows = recipientRows.filter(
+        (r) => r.sms_status === "pending",
+      ).length;
+      const pendingDeliveryUnits = pendingEmailRows + pendingSmsRows;
+      logBroadcastTrace("send_loop_recipients_loaded", {
+        broadcastId,
+        totalRecipients: total,
+        pendingEmailRows,
+        pendingSmsRows,
+      });
+      const smtpFromEmail =
+        RESEND_FROM.match(/<([^>]+)>/)?.[1] ?? "noreply@encoremortgage.org";
+      const emailDomain = smtpFromEmail.split("@")[1] ?? "encoremortgage.org";
+      const senderFrom = `${senderFirstName} ${senderLastName} at ${companyName} <${smtpFromEmail}>`;
+      const inboundMailbox = process.env.IMAP_USER;
+      const inboundDomain = process.env.INBOUND_EMAIL_DOMAIN;
+      const baseUrl = getBaseUrl();
+      logBroadcastTrace("send_loop_start", {
+        broadcastId,
+        tenantId,
+        createdBy,
+        channel: broadcast.channel,
+        status: broadcast.status,
+        isCancelled: Boolean(broadcast.is_cancelled),
+        hasEmailBody: Boolean(emailBody),
+        hasSmsBody: Boolean(smsBody),
+        hasFromNumber: Boolean(fromNumber),
+      });
+
+      if (pendingDeliveryUnits > 0) {
+        const reservedOutstanding = await getBroadcastReservedOutstanding(
+          tenantId,
+          broadcastId,
+        );
+        if (reservedOutstanding <= 0) {
+          const estimatedCostUsd =
+            estimateBroadcastCostUsd(pendingDeliveryUnits);
+          const reserve = await reserveBroadcastCredits({
+            tenantId,
+            broadcastId,
+            brokerId: createdBy,
+            estimatedCostUsd,
+            reason: "Auto-reserved when send loop started",
+            metadata: {
+              source: "send_loop",
+              pending_email: pendingEmailRows,
+              pending_sms: pendingSmsRows,
+              pending_units: pendingDeliveryUnits,
+            },
+          });
+          if (!reserve.ok) {
+            await pool.query(
+              `UPDATE realtor_broadcast_recipients
+             SET email_status = CASE WHEN email_status = 'pending' THEN 'failed' ELSE email_status END,
+                 sms_status = CASE WHEN sms_status = 'pending' THEN 'failed' ELSE sms_status END,
+                 error_message = COALESCE(error_message, 'Insufficient broadcast credits to send'),
+                 updated_at = NOW()
+             WHERE broadcast_id = ? AND tenant_id = ?`,
+              [broadcastId, tenantId],
+            );
+            await pool.query(
+              `UPDATE realtor_broadcasts
+             SET status = 'failed',
+                 completed_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = ? AND tenant_id = ?`,
+              [broadcastId, tenantId],
+            );
+            logBroadcastTrace("send_loop_credit_reserve_failed", {
+              broadcastId,
+              pendingDeliveryUnits,
+              estimatedCostUsd,
+              availableBalanceUsd: reserve.summary.available_balance_usd,
+            });
+            return;
+          }
+        }
+      }
+
+      // Fail any pending rows that cannot be sent due to missing channel payload/config.
+      if (
+        (broadcast.channel === "email" || broadcast.channel === "both") &&
+        !emailBody
+      ) {
+        const [emailConfigFail] = await pool.query<ResultSetHeader>(
+          `UPDATE realtor_broadcast_recipients
+         SET email_status = 'failed',
+             error_message = COALESCE(error_message, 'Broadcast email body is empty'),
+             updated_at = NOW()
+         WHERE broadcast_id = ? AND tenant_id = ? AND email_status = 'pending'`,
+          [broadcastId, tenantId],
+        );
+        failedCount += emailConfigFail.affectedRows;
+        if (emailConfigFail.affectedRows > 0) {
+          logBroadcastTrace("send_loop_email_config_failed_rows", {
+            broadcastId,
+            affectedRows: emailConfigFail.affectedRows,
+            reason: "Broadcast email body is empty",
+          });
+        }
+      }
+
+      if (broadcast.channel === "sms" || broadcast.channel === "both") {
+        const smsFailureReason = !smsBody
+          ? "Broadcast SMS body is empty"
+          : !fromNumber
+            ? "Sender does not have an assigned Twilio number"
+            : "";
+
+        if (smsFailureReason) {
+          const [smsConfigFail] = await pool.query<ResultSetHeader>(
+            `UPDATE realtor_broadcast_recipients
+           SET sms_status = 'failed',
+               error_message = COALESCE(error_message, ?),
+               updated_at = NOW()
+           WHERE broadcast_id = ? AND tenant_id = ? AND sms_status = 'pending'`,
+            [smsFailureReason, broadcastId, tenantId],
+          );
+          failedCount += smsConfigFail.affectedRows;
+          if (smsConfigFail.affectedRows > 0) {
+            logBroadcastTrace("send_loop_sms_config_failed_rows", {
+              broadcastId,
+              affectedRows: smsConfigFail.affectedRows,
+              reason: smsFailureReason,
+            });
+          }
+        }
+      }
+
+      let processedCount = 0;
+      for (const recipient of recipientRows) {
+        // Cancellation check each iteration
+        const [cancelCheck] = await pool.query<RowDataPacket[]>(
+          `SELECT is_cancelled FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
+          [broadcastId],
+        );
+        if (cancelCheck[0]?.is_cancelled) {
+          const { sentTotal, failedTotal } = await loadAggregateCounts();
+          logBroadcastTrace("send_loop_cancel_observed", {
+            broadcastId,
+            processedCount,
+            sentCountRun: sentCount,
+            failedCountRun: failedCount,
+            sentTotal,
+            failedTotal,
+          });
+          await pool.query(
+            `UPDATE realtor_broadcasts
            SET status = 'cancelled', sent_count = ?, failed_count = ?,
                completed_at = NOW(), updated_at = NOW()
            WHERE id = ?`,
-          [sentCount, failedCount, broadcastId],
-        );
-        await createAuditLog({
-          actorType: "broker",
-          actorId: createdBy,
-          action: "broadcast_cancelled",
-          entityType: "realtor_broadcast",
-          entityId: broadcastId,
-          changes: { sentCount, failedCount },
-        });
-        return;
-      }
-
-      const recipientName: string = recipient.recipient_name || "Friend";
-      const convId = `broadcast-${broadcastId}-r${recipient.id}`;
-      const unsubscribeUrl = `${baseUrl}/api/realtor-broadcasts/unsubscribe?token=${recipient.unsubscribe_token}`;
-
-      // ── Email ──────────────────────────────────────────────────────────────
-      const shouldEmail =
-        (broadcast.channel === "email" || broadcast.channel === "both") &&
-        recipient.recipient_email &&
-        recipient.email_status === "pending";
-
-      if (shouldEmail && broadcast.body_email) {
-        try {
-          const resolvedBody = resolveMergeTags(
-            broadcast.body_email,
-            { name: recipientName },
-            { firstName: senderFirstName, lastName: senderLastName },
-            companyName,
-            unsubscribeUrl,
+            [sentTotal, failedTotal, broadcastId],
           );
-          const resolvedSubject = broadcast.subject
-            ? resolveMergeTags(
-                broadcast.subject,
+          await createAuditLog({
+            actorType: "broker",
+            actorId: createdBy,
+            action: "broadcast_cancelled",
+            entityType: "realtor_broadcast",
+            entityId: broadcastId,
+            changes: {
+              sentCountRun: sentCount,
+              failedCountRun: failedCount,
+              sentTotal,
+              failedTotal,
+            },
+          });
+          await settleBroadcastCredits({
+            tenantId,
+            broadcastId,
+            brokerId: createdBy,
+            deliveredUnits: sentTotal,
+            note: "Broadcast cancelled during send loop",
+          });
+          return;
+        }
+
+        await pool.query(
+          `UPDATE realtor_broadcasts
+         SET updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+          [broadcastId, tenantId],
+        );
+
+        const recipientName: string = recipient.recipient_name || "Friend";
+        const convId = `broadcast-${broadcastId}-r${recipient.id}`;
+        const unsubscribeUrl = `${baseUrl}/api/realtor-broadcasts/unsubscribe?token=${recipient.unsubscribe_token}`;
+
+        // ── Email ──────────────────────────────────────────────────────────────
+        const shouldEmail =
+          (broadcast.channel === "email" || broadcast.channel === "both") &&
+          recipient.recipient_email &&
+          emailBody;
+
+        if (shouldEmail) {
+          const emailClaimed = await claimBroadcastRecipientChannel(
+            recipient.id,
+            broadcastId,
+            tenantId,
+            "email",
+          );
+          if (!emailClaimed) {
+            logBroadcastTrace("send_loop_email_skip_not_pending", {
+              broadcastId,
+              recipientId: recipient.id,
+            });
+          } else {
+            try {
+              const resolvedBody = resolveMergeTags(
+                emailBody,
                 { name: recipientName },
                 { firstName: senderFirstName, lastName: senderLastName },
                 companyName,
-              )
-            : `Message from ${senderFirstName} ${senderLastName}`;
+                unsubscribeUrl,
+              );
+              const resolvedSubject = broadcast.subject
+                ? resolveMergeTags(
+                    broadcast.subject,
+                    { name: recipientName },
+                    { firstName: senderFirstName, lastName: senderLastName },
+                    companyName,
+                  )
+                : `Message from ${senderFirstName} ${senderLastName}`;
 
-          const trackingPixelUrl = `${baseUrl}/api/track/open/${recipient.unsubscribe_token}`;
-          const htmlWithFooter = `${resolvedBody}
+              const trackingPixelUrl = `${baseUrl}/api/track/open/${recipient.unsubscribe_token}`;
+              const htmlWithFooter = `${resolvedBody}
 <img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:none;border:0;outline:0;text-decoration:none;" />
 <p style="font-size:11px;color:#999;margin-top:24px;border-top:1px solid #eee;padding-top:8px;">
   ${companyName}${companyAddress ? ` · ${companyAddress}` : ""}<br/>
   <a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a> from broadcast emails.
 </p>`;
 
-          const messageId = `<enc-${convId}-${Date.now()}@${emailDomain}>`;
-          const replyTo = inboundMailbox
-            ? inboundMailbox
-            : inboundDomain
-              ? `reply+${convId}@${inboundDomain}`
-              : smtpFromEmail;
+              const messageId = `<enc-${convId}-${Date.now()}@${emailDomain}>`;
+              const replyTo = inboundMailbox
+                ? inboundMailbox
+                : inboundDomain
+                  ? `reply+${convId}@${inboundDomain}`
+                  : smtpFromEmail;
 
-          const emailResult = await sendViaResend({
-            from: senderFrom,
-            to: recipient.recipient_email,
-            subject: resolvedSubject,
-            html: htmlWithFooter,
-            replyTo,
-            headers: {
-              "Message-ID": messageId,
-              "X-Conversation-Id": convId,
-            },
-          });
+              const emailResult = await sendViaResend({
+                from: senderFrom,
+                to: recipient.recipient_email,
+                subject: resolvedSubject,
+                html: htmlWithFooter,
+                replyTo,
+                headers: {
+                  "Message-ID": messageId,
+                  "X-Conversation-Id": convId,
+                },
+              });
 
-          const [emailCommInsert] = await pool.query<ResultSetHeader>(
-            `INSERT INTO communications
+              await pool.query<ResultSetHeader>(
+                `INSERT INTO communications
                (tenant_id, from_broker_id, communication_type, direction,
                 subject, body, status, conversation_id, delivery_status,
                 external_id, sent_at)
              VALUES (?, ?, 'email', 'outbound', ?, ?, 'sent', ?, 'sent', ?, NOW())`,
-            [
-              tenantId,
-              createdBy,
-              resolvedSubject,
-              resolvedBody,
-              convId,
-              emailResult.messageId || null,
-            ],
-          );
+                [
+                  tenantId,
+                  createdBy,
+                  resolvedSubject,
+                  resolvedBody,
+                  convId,
+                  emailResult.messageId || null,
+                ],
+              );
 
-          await upsertConversationThread({
-            tenantId,
-            commId: emailCommInsert.insertId,
-            conversationId: convId,
-            applicationId: null,
-            leadId: null,
-            fromUserId: null,
-            fromBrokerId: createdBy,
-            toUserId: null,
-            toBrokerId: recipient.broker_id || null,
-            communicationType: "email",
-            direction: "outbound",
-            body: resolvedSubject,
-          });
+              // Phase C: lazy thread materialization.
+              // Keep per-recipient communication/audit records, but don't create
+              // conversation_threads during bulk send. Threads materialize on
+              // meaningful interaction (e.g. inbound reply) or explicit follow-up.
 
-          await pool.query(
-            `UPDATE realtor_broadcast_recipients
+              await pool.query(
+                `UPDATE realtor_broadcast_recipients
              SET email_status = 'sent', email_ext_id = ?,
                  conversation_id = ?, sent_at = NOW(), updated_at = NOW()
-             WHERE id = ?`,
-            [emailResult.messageId || null, convId, recipient.id],
-          );
-          sentCount++;
-        } catch (err: any) {
-          console.error(
-            `[Broadcast #${broadcastId}] Email failed for recipient #${recipient.id}:`,
-            err,
-          );
-          await pool.query(
-            `UPDATE realtor_broadcast_recipients
+             WHERE id = ? AND email_status = 'processing'`,
+                [emailResult.messageId || null, convId, recipient.id],
+              );
+              sentCount++;
+            } catch (err: any) {
+              console.error(
+                `[Broadcast #${broadcastId}] Email failed for recipient #${recipient.id}:`,
+                err,
+              );
+              await pool.query(
+                `UPDATE realtor_broadcast_recipients
              SET email_status = 'failed', error_message = ?, updated_at = NOW()
-             WHERE id = ?`,
-            [err.message?.slice(0, 500) || "Unknown error", recipient.id],
-          );
-          failedCount++;
+             WHERE id = ? AND email_status = 'processing'`,
+                [err.message?.slice(0, 500) || "Unknown error", recipient.id],
+              );
+              failedCount++;
+            }
+            // 100ms throttle between email sends (Resend batch-friendly)
+            await new Promise((r) => setTimeout(r, 100));
+          }
         }
-        // 100ms throttle between email sends (Resend batch-friendly)
-        await new Promise((r) => setTimeout(r, 100));
-      }
 
-      // ── SMS ────────────────────────────────────────────────────────────────
-      const shouldSms =
-        (broadcast.channel === "sms" || broadcast.channel === "both") &&
-        recipient.recipient_phone &&
-        fromNumber &&
-        recipient.sms_status === "pending";
+        // ── SMS ────────────────────────────────────────────────────────────────
+        const shouldSms =
+          (broadcast.channel === "sms" || broadcast.channel === "both") &&
+          recipient.recipient_phone &&
+          fromNumber &&
+          smsBody;
 
-      if (shouldSms && broadcast.body_sms) {
-        try {
-          const resolvedSmsBody = resolveMergeTags(
-            broadcast.body_sms,
-            { name: recipientName },
-            { firstName: senderFirstName, lastName: senderLastName },
-            companyName,
+        if (shouldSms) {
+          const smsClaimed = await claimBroadcastRecipientChannel(
+            recipient.id,
+            broadcastId,
+            tenantId,
+            "sms",
           );
-          const smsConvId = `broadcast-${broadcastId}-sms-r${recipient.id}`;
+          if (!smsClaimed) {
+            logBroadcastTrace("send_loop_sms_skip_not_pending", {
+              broadcastId,
+              recipientId: recipient.id,
+            });
+          } else {
+            try {
+              const resolvedSmsBody = resolveMergeTags(
+                smsBody,
+                { name: recipientName },
+                { firstName: senderFirstName, lastName: senderLastName },
+                companyName,
+              );
+              const smsConvId = `broadcast-${broadcastId}-sms-r${recipient.id}`;
 
-          const smsResult = await sendSMSMessage(
-            recipient.recipient_phone,
-            resolvedSmsBody,
-            undefined,
-            fromNumber,
-          );
+              const smsResult = await sendSMSMessage(
+                recipient.recipient_phone,
+                resolvedSmsBody,
+                undefined,
+                fromNumber,
+              );
 
-          if (!smsResult.success)
-            throw new Error(smsResult.error || "SMS send failed");
+              if (!smsResult.success)
+                throw new Error(smsResult.error || "SMS send failed");
 
-          const [smsCommInsert] = await pool.query<ResultSetHeader>(
-            `INSERT INTO communications
+              await pool.query<ResultSetHeader>(
+                `INSERT INTO communications
                (tenant_id, from_broker_id, communication_type, direction,
                 body, status, conversation_id, delivery_status,
                 external_id, sent_at)
              VALUES (?, ?, 'sms', 'outbound', ?, 'sent', ?, 'sent', ?, NOW())`,
-            [
-              tenantId,
-              createdBy,
-              resolvedSmsBody,
-              smsConvId,
-              smsResult.external_id || null,
-            ],
-          );
+                [
+                  tenantId,
+                  createdBy,
+                  resolvedSmsBody,
+                  smsConvId,
+                  smsResult.external_id || null,
+                ],
+              );
 
-          await upsertConversationThread({
-            tenantId,
-            commId: smsCommInsert.insertId,
-            conversationId: smsConvId,
-            applicationId: null,
-            leadId: null,
-            fromUserId: null,
-            fromBrokerId: createdBy,
-            toUserId: null,
-            toBrokerId: recipient.broker_id || null,
-            communicationType: "sms",
-            direction: "outbound",
-            body: resolvedSmsBody,
-            inboxNumber: fromNumber,
-            recipientPhone: recipient.recipient_phone,
-          });
+              // Phase C: same lazy-thread behavior for SMS broadcasts.
 
-          await pool.query(
-            `UPDATE realtor_broadcast_recipients
+              await pool.query(
+                `UPDATE realtor_broadcast_recipients
              SET sms_status = 'sent', sms_ext_id = ?,
                  conversation_id = COALESCE(conversation_id, ?),
                  sent_at = NOW(), updated_at = NOW()
-             WHERE id = ?`,
-            [smsResult.external_id || null, smsConvId, recipient.id],
-          );
-          sentCount++;
-        } catch (err: any) {
-          console.error(
-            `[Broadcast #${broadcastId}] SMS failed for recipient #${recipient.id}:`,
-            err,
-          );
-          await pool.query(
-            `UPDATE realtor_broadcast_recipients
+             WHERE id = ? AND sms_status = 'processing'`,
+                [smsResult.external_id || null, smsConvId, recipient.id],
+              );
+              sentCount++;
+            } catch (err: any) {
+              console.error(
+                `[Broadcast #${broadcastId}] SMS failed for recipient #${recipient.id}:`,
+                err,
+              );
+              await pool.query(
+                `UPDATE realtor_broadcast_recipients
              SET sms_status = 'failed', error_message = ?, updated_at = NOW()
-             WHERE id = ?`,
-            [err.message?.slice(0, 500) || "Unknown error", recipient.id],
-          );
-          failedCount++;
+             WHERE id = ? AND sms_status = 'processing'`,
+                [err.message?.slice(0, 500) || "Unknown error", recipient.id],
+              );
+              failedCount++;
+            }
+            // 1s throttle per SMS — respect A2P 10DLC carrier throughput limits
+            await new Promise((r) => setTimeout(r, 1000));
+          }
         }
-        // 1s throttle per SMS — respect A2P 10DLC carrier throughput limits
-        await new Promise((r) => setTimeout(r, 1000));
+
+        processedCount++;
+        if (
+          processedCount === 1 ||
+          processedCount === total ||
+          processedCount % 10 === 0
+        ) {
+          const { sentTotal, failedTotal } = await loadAggregateCounts();
+          await pool.query(
+            `UPDATE realtor_broadcasts
+           SET sent_count = ?, failed_count = ?, updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+            [sentTotal, failedTotal, broadcastId, tenantId],
+          );
+          logBroadcastTrace("send_loop_progress", {
+            broadcastId,
+            processedCount,
+            total,
+            sentCountRun: sentCount,
+            failedCountRun: failedCount,
+            sentTotal,
+            failedTotal,
+          });
+        }
       }
 
-      // Ably real-time progress — frontend live progress bar subscribes here
-      await publishToAbly(`broadcast:${broadcastId}`, "progress", {
-        sent: sentCount,
-        failed: failedCount,
-        total,
-      });
-    }
-
-    // Finalize
-    const finalStatus =
-      sentCount > 0 || failedCount > 0
-        ? failedCount === total
-          ? "failed"
-          : "sent"
-        : "sent";
-    await pool.query(
-      `UPDATE realtor_broadcasts
+      // Finalize
+      const { sentTotal, failedTotal } = await loadAggregateCounts();
+      const finalStatus = sentTotal > 0 ? "sent" : "failed";
+      await pool.query(
+        `UPDATE realtor_broadcasts
        SET status = IF(is_cancelled = 1, 'cancelled', ?),
            sent_count = ?, failed_count = ?,
            completed_at = NOW(), updated_at = NOW()
        WHERE id = ?`,
-      [finalStatus, sentCount, failedCount, broadcastId],
+        [finalStatus, sentTotal, failedTotal, broadcastId],
+      );
+      logBroadcastTrace("send_loop_finalize", {
+        broadcastId,
+        finalStatus,
+        sentCountRun: sentCount,
+        failedCountRun: failedCount,
+        sentTotal,
+        failedTotal,
+        total,
+      });
+
+      await createAuditLog({
+        actorType: "broker",
+        actorId: createdBy,
+        action: "broadcast_send_completed",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+        changes: {
+          sentCountRun: sentCount,
+          failedCountRun: failedCount,
+          sentTotal,
+          failedTotal,
+          total,
+        },
+      });
+      await settleBroadcastCredits({
+        tenantId,
+        broadcastId,
+        brokerId: createdBy,
+        deliveredUnits: sentTotal,
+        note: "Broadcast send completed",
+      });
+
+      await createBrokerNotification({
+        brokerIds: createdBy,
+        title: "Broadcast Complete",
+        message: `"${broadcast.title}" delivered to ${sentTotal} of ${total} contacts.${failedTotal > 0 ? ` ${failedTotal} failed — check the broadcast detail.` : ""}`,
+        category: "system",
+        type: failedTotal > 0 ? "warning" : "success",
+        actionUrl: `/admin/broadcasts`,
+      });
+    } finally {
+      await releaseBroadcastSendLock(broadcastId);
+    }
+  }
+
+  // Recover a broadcast stuck in "sending" due to worker crash/restart.
+  // Per-recipient channels are claimed atomically (pending → processing) before send.
+  async function resumeStaleSendingBroadcast(
+    broadcastId: number,
+    tenantId: number,
+  ): Promise<void> {
+    const [claim] = await pool.query<ResultSetHeader>(
+      `UPDATE realtor_broadcasts
+       SET updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?
+         AND status = 'sending'
+         AND is_cancelled = 0
+         AND updated_at < NOW() - INTERVAL 5 MINUTE`,
+      [broadcastId, tenantId],
     );
+    if (!claim.affectedRows) return;
 
-    await createAuditLog({
-      actorType: "broker",
-      actorId: createdBy,
-      action: "broadcast_send_completed",
-      entityType: "realtor_broadcast",
-      entityId: broadcastId,
-      changes: { sentCount, failedCount, total },
-    });
+    await releaseStuckBroadcastProcessing(broadcastId, tenantId);
 
-    await createBrokerNotification({
-      brokerIds: createdBy,
-      title: "Broadcast Complete",
-      message: `"${broadcast.title}" delivered to ${sentCount} of ${total} contacts.${failedCount > 0 ? ` ${failedCount} failed — check the broadcast detail.` : ""}`,
-      category: "system",
-      type: failedCount > 0 ? "warning" : "success",
-      actionUrl: `/admin/broadcasts`,
+    const [[pendingRow]] = await pool.query<RowDataPacket[]>(
+      `SELECT
+         SUM(CASE WHEN email_status = 'pending' THEN 1 ELSE 0 END)
+         + SUM(CASE WHEN sms_status = 'pending' THEN 1 ELSE 0 END) AS pending_total
+       FROM realtor_broadcast_recipients
+       WHERE broadcast_id = ? AND tenant_id = ?`,
+      [broadcastId, tenantId],
+    );
+    const pendingTotal = Number(pendingRow?.pending_total ?? 0);
+
+    if (pendingTotal <= 0) {
+      const [ownerRows] = await pool.query<RowDataPacket[]>(
+        `SELECT created_by FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ?
+         LIMIT 1`,
+        [broadcastId, tenantId],
+      );
+      const createdBy = Number(ownerRows[0]?.created_by ?? 0) || null;
+      const [[countRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT
+           SUM(CASE WHEN email_status = 'sent' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN sms_status = 'sent' THEN 1 ELSE 0 END) AS sent_total,
+           SUM(CASE WHEN email_status = 'failed' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN sms_status = 'failed' THEN 1 ELSE 0 END) AS failed_total
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [broadcastId, tenantId],
+      );
+      const sentTotal = Number(countRow?.sent_total ?? 0);
+      const failedTotal = Number(countRow?.failed_total ?? 0);
+      const finalStatus = sentTotal > 0 ? "sent" : "failed";
+      await pool.query(
+        `UPDATE realtor_broadcasts
+         SET status = IF(is_cancelled = 1, 'cancelled', ?),
+             sent_count = ?, failed_count = ?,
+             completed_at = NOW(), updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [finalStatus, sentTotal, failedTotal, broadcastId, tenantId],
+      );
+      await settleBroadcastCredits({
+        tenantId,
+        broadcastId,
+        brokerId: createdBy,
+        deliveredUnits: sentTotal,
+        note: "Settled after stale sending recovery",
+      });
+      logBroadcastTrace("stale_sending_finalized_without_pending", {
+        broadcastId,
+        sentTotal,
+        failedTotal,
+        finalStatus,
+      });
+      return;
+    }
+
+    logBroadcastTrace("stale_sending_resumed", {
+      broadcastId,
+      pendingTotal,
     });
+    sendBroadcastAsync(broadcastId).catch((err) =>
+      console.error(`[Broadcast #${broadcastId}] stale-resume error:`, err),
+    );
   }
 
   // POST /api/realtor-broadcasts/preview — resolve audience, return count + sample
@@ -33172,13 +34309,17 @@ function createServer() {
 
       const resolved = await resolveAudience(audience_filter);
       const emailCount = resolved.filter((r) => !r.skipped && r.email).length;
-      // smsOptedOut brokers have phone nulled out — exclude them from SMS count
       const smsCount = resolved.filter(
         (r) => !r.skipped && r.phone && r.skipReason !== "sms_opted_out",
       ).length;
       const skipped = resolved.filter(
         (r) => r.skipped || r.skipReason === "sms_opted_out",
       ).length;
+      const estimatedUnits =
+        (channel === "email" || channel === "both" ? emailCount : 0) +
+        (channel === "sms" || channel === "both" ? smsCount : 0);
+      const estimatedCostUsd = estimateBroadcastCostUsd(estimatedUnits);
+      const credits = await getBroadcastCreditSummary(MORTGAGE_TENANT_ID);
 
       return res.json({
         success: true,
@@ -33202,7 +34343,9 @@ function createServer() {
             skip_reason: r.skipReason,
             role: r.role ?? null,
           })),
+          estimated_cost_usd: estimatedCostUsd,
         },
+        credits,
       });
     } catch (err) {
       console.error("[Broadcast preview] error:", err);
@@ -33266,7 +34409,9 @@ function createServer() {
         }
       }
 
-      // Enforce daily blast caps from system_settings
+      // Daily blast caps temporarily disabled — billing is enforced via broadcast credits.
+      // Re-enable by uncommenting the block below.
+      /*
       if (send_now || !!scheduled_at) {
         const [capRows] = await pool.query<RowDataPacket[]>(
           `SELECT setting_key, setting_value FROM system_settings
@@ -33318,9 +34463,22 @@ function createServer() {
           }
         }
       }
+      */
 
       // Resolve recipients
       const recipients = await resolveAudience(audience_filter);
+      const estimatedEmailUnits =
+        channel === "email" || channel === "both"
+          ? recipients.filter((r) => !!r.email).length
+          : 0;
+      const estimatedSmsUnits =
+        channel === "sms" || channel === "both"
+          ? recipients.filter(
+              (r) => !!r.phone && r.skipReason !== "sms_opted_out",
+            ).length
+          : 0;
+      const estimatedDeliveryUnits = estimatedEmailUnits + estimatedSmsUnits;
+      const estimatedCostUsd = estimateBroadcastCostUsd(estimatedDeliveryUnits);
 
       // Determine initial status
       const isDraft = !send_now && !scheduled_at;
@@ -33339,14 +34497,21 @@ function createServer() {
         const token = crypto.randomUUID();
         const emailStatus =
           channel === "sms" ? null : r.email ? "pending" : "skipped_no_contact";
+        const smsBlockedByConsent = r.skipReason === "sms_opted_out";
         const smsStatus =
           channel === "email"
             ? null
-            : r.phone
-              ? "pending"
-              : "skipped_no_contact";
+            : smsBlockedByConsent
+              ? "opted_out"
+              : r.phone
+                ? "pending"
+                : "skipped_no_contact";
+        const initialErrorMessage =
+          channel !== "email" && smsBlockedByConsent
+            ? "Recipient opted out of SMS broadcasts"
+            : null;
 
-        recipientPlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        recipientPlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         recipientValues.push(
           MORTGAGE_TENANT_ID,
           r.source === "broker" ? r.sourceId : null,
@@ -33357,6 +34522,7 @@ function createServer() {
           emailStatus,
           smsStatus,
           token,
+          initialErrorMessage,
           0, // broadcast_id placeholder, updated below
         );
       }
@@ -33385,19 +34551,12 @@ function createServer() {
 
       // Bulk insert recipients (set correct broadcast_id)
       if (recipients.length > 0) {
-        // Replace the placeholder 0 with actual broadcastId
-        const correctedValues = recipientValues.map((v, i) => {
-          // Last element per row was 0 placeholder
-          if ((i + 1) % 10 === 0) return broadcastId;
-          return v;
-        });
-
         // Build corrected placeholders with broadcast_id first
         const finalPlaceholders: string[] = [];
         const finalValues: any[] = [];
         for (let i = 0; i < recipients.length; i++) {
-          const base = i * 10;
-          finalPlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+          const base = i * 11;
+          finalPlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
           finalValues.push(
             broadcastId,
             recipientValues[base], // tenant_id
@@ -33409,16 +34568,53 @@ function createServer() {
             recipientValues[base + 6], // email_status
             recipientValues[base + 7], // sms_status
             recipientValues[base + 8], // token
+            recipientValues[base + 9], // error_message
           );
         }
 
         await pool.query(
           `INSERT INTO realtor_broadcast_recipients
              (broadcast_id, tenant_id, broker_id, prospect_id, recipient_name,
-              recipient_email, recipient_phone, email_status, sms_status, unsubscribe_token)
+              recipient_email, recipient_phone, email_status, sms_status, unsubscribe_token, error_message)
            VALUES ${finalPlaceholders.join(",")}`,
           finalValues,
         );
+      }
+
+      if (!isDraft) {
+        const reserve = await reserveBroadcastCredits({
+          tenantId: MORTGAGE_TENANT_ID,
+          broadcastId,
+          brokerId,
+          estimatedCostUsd,
+          reason: "Reserved for broadcast send/schedule",
+          metadata: {
+            source: "create_broadcast",
+            channel,
+            estimated_email_units: estimatedEmailUnits,
+            estimated_sms_units: estimatedSmsUnits,
+            estimated_delivery_units: estimatedDeliveryUnits,
+          },
+        });
+        if (!reserve.ok) {
+          await pool.query(
+            `DELETE FROM realtor_broadcast_recipients
+             WHERE broadcast_id = ? AND tenant_id = ?`,
+            [broadcastId, MORTGAGE_TENANT_ID],
+          );
+          await pool.query(
+            `DELETE FROM realtor_broadcasts
+             WHERE id = ? AND tenant_id = ?`,
+            [broadcastId, MORTGAGE_TENANT_ID],
+          );
+          return res.status(402).json({
+            success: false,
+            error:
+              "Insufficient broadcast credits. Please contact your admin to add more credits before sending.",
+            credits: reserve.summary,
+            required_cost_usd: estimatedCostUsd,
+          });
+        }
       }
 
       await createAuditLog({
@@ -33447,6 +34643,8 @@ function createServer() {
         broadcast_id: broadcastId,
         recipient_count: recipients.length,
         status: initialStatus,
+        estimated_cost_usd: estimatedCostUsd,
+        credits: await getBroadcastCreditSummary(MORTGAGE_TENANT_ID),
       });
     } catch (err) {
       console.error("[Create broadcast] error:", err);
@@ -33469,9 +34667,9 @@ function createServer() {
       }
 
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, status FROM realtor_broadcasts
-         WHERE id = ? AND tenant_id = ? AND created_by = ?`,
-        [broadcastId, MORTGAGE_TENANT_ID, brokerId],
+        `SELECT id, status, sent_count, failed_count FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
       );
       if (!rows.length) {
         return res
@@ -33561,7 +34759,7 @@ function createServer() {
       }
 
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, status FROM realtor_broadcasts
+        `SELECT id, status, sent_count FROM realtor_broadcasts
          WHERE id = ? AND tenant_id = ? AND created_by = ?`,
         [broadcastId, MORTGAGE_TENANT_ID, brokerId],
       );
@@ -33570,6 +34768,13 @@ function createServer() {
           .status(404)
           .json({ success: false, error: "Broadcast not found" });
       }
+      logBroadcastTrace("cancel_requested", {
+        broadcastId,
+        brokerId,
+        currentStatus: rows[0].status,
+        sentCount: rows[0].sent_count ?? 0,
+        failedCount: rows[0].failed_count ?? 0,
+      });
       if (!["sending", "scheduled", "draft"].includes(rows[0].status)) {
         return res.status(400).json({
           success: false,
@@ -33579,7 +34784,10 @@ function createServer() {
 
       await pool.query(
         `UPDATE realtor_broadcasts
-         SET is_cancelled = 1, updated_at = NOW()
+         SET is_cancelled = 1,
+             status = 'cancelled',
+             completed_at = NOW(),
+             updated_at = NOW()
          WHERE id = ? AND tenant_id = ?`,
         [broadcastId, MORTGAGE_TENANT_ID],
       );
@@ -33590,6 +34798,19 @@ function createServer() {
         action: "broadcast_cancel_requested",
         entityType: "realtor_broadcast",
         entityId: broadcastId,
+      });
+      if (rows[0].status !== "sending") {
+        await settleBroadcastCredits({
+          tenantId: MORTGAGE_TENANT_ID,
+          broadcastId,
+          brokerId,
+          deliveredUnits: Number(rows[0].sent_count ?? 0),
+          note: "Broadcast cancelled by user",
+        });
+      }
+      logBroadcastTrace("cancel_applied", {
+        broadcastId,
+        brokerId,
       });
 
       return res.json({ success: true });
@@ -33620,16 +34841,28 @@ function createServer() {
       const statusFilter = (req.query.status as string) || undefined;
 
       const listQuery = `SELECT rb.*,
-              CONCAT(b.first_name, ' ', b.last_name) AS creator_name
+              CONCAT(b.first_name, ' ', b.last_name) AS creator_name,
+              COALESCE(rs.sent_count_live, rb.sent_count) AS sent_count_live,
+              COALESCE(rs.failed_count_live, rb.failed_count) AS failed_count_live
        FROM realtor_broadcasts rb
        LEFT JOIN brokers b ON b.id = rb.created_by
+       LEFT JOIN (
+         SELECT broadcast_id,
+                SUM(CASE WHEN email_status = 'sent' THEN 1 ELSE 0 END)
+                + SUM(CASE WHEN sms_status = 'sent' THEN 1 ELSE 0 END) AS sent_count_live,
+                SUM(CASE WHEN email_status = 'failed' THEN 1 ELSE 0 END)
+                + SUM(CASE WHEN sms_status = 'failed' THEN 1 ELSE 0 END) AS failed_count_live
+         FROM realtor_broadcast_recipients
+         WHERE tenant_id = ?
+         GROUP BY broadcast_id
+       ) rs ON rs.broadcast_id = rb.id
        WHERE rb.tenant_id = ?
          ${statusFilter ? "AND rb.status = ?" : ""}
        ORDER BY rb.created_at DESC
        LIMIT ? OFFSET ?`;
       const listParams: any[] = statusFilter
-        ? [MORTGAGE_TENANT_ID, statusFilter, limit, offset]
-        : [MORTGAGE_TENANT_ID, limit, offset];
+        ? [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, statusFilter, limit, offset]
+        : [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, limit, offset];
       const [rows] = await pool.query<RowDataPacket[]>(listQuery, listParams);
 
       const countQuery = `SELECT COUNT(*) AS total FROM realtor_broadcasts WHERE tenant_id = ?${statusFilter ? " AND status = ?" : ""}`;
@@ -33640,11 +34873,15 @@ function createServer() {
         countQuery,
         countParams,
       );
+      const credits = await getBroadcastCreditSummary(MORTGAGE_TENANT_ID);
 
       return res.json({
         success: true,
         broadcasts: rows.map((r) => ({
           ...r,
+          sent_count: Number(r.sent_count_live ?? r.sent_count ?? 0),
+          failed_count: Number(r.failed_count_live ?? r.failed_count ?? 0),
+          status: r.is_cancelled ? "cancelled" : r.status,
           audience_filter:
             typeof r.audience_filter === "string"
               ? JSON.parse(r.audience_filter)
@@ -33652,6 +34889,7 @@ function createServer() {
           is_cancelled: Boolean(r.is_cancelled),
         })),
         total: countRows[0]?.total || 0,
+        credits,
       });
     } catch (err) {
       console.error("[Get broadcasts] error:", err);
@@ -33672,13 +34910,26 @@ function createServer() {
       }
 
       const broadcastId = parseInt(req.params.id);
+      await resumeStaleSendingBroadcast(broadcastId, MORTGAGE_TENANT_ID);
       const [rows] = await pool.query<RowDataPacket[]>(
         `SELECT rb.*,
-                CONCAT(b.first_name, ' ', b.last_name) AS creator_name
+                CONCAT(b.first_name, ' ', b.last_name) AS creator_name,
+                COALESCE(rs.sent_count_live, rb.sent_count) AS sent_count_live,
+                COALESCE(rs.failed_count_live, rb.failed_count) AS failed_count_live
          FROM realtor_broadcasts rb
          LEFT JOIN brokers b ON b.id = rb.created_by
+         LEFT JOIN (
+           SELECT broadcast_id,
+                  SUM(CASE WHEN email_status = 'sent' THEN 1 ELSE 0 END)
+                  + SUM(CASE WHEN sms_status = 'sent' THEN 1 ELSE 0 END) AS sent_count_live,
+                  SUM(CASE WHEN email_status = 'failed' THEN 1 ELSE 0 END)
+                  + SUM(CASE WHEN sms_status = 'failed' THEN 1 ELSE 0 END) AS failed_count_live
+           FROM realtor_broadcast_recipients
+           WHERE tenant_id = ?
+           GROUP BY broadcast_id
+         ) rs ON rs.broadcast_id = rb.id
          WHERE rb.id = ? AND rb.tenant_id = ?`,
-        [broadcastId, MORTGAGE_TENANT_ID],
+        [MORTGAGE_TENANT_ID, broadcastId, MORTGAGE_TENANT_ID],
       );
 
       if (!rows.length) {
@@ -33688,16 +34939,21 @@ function createServer() {
       }
 
       const r = rows[0];
+      const credits = await getBroadcastCreditSummary(MORTGAGE_TENANT_ID);
       return res.json({
         success: true,
         broadcast: {
           ...r,
+          sent_count: Number(r.sent_count_live ?? r.sent_count ?? 0),
+          failed_count: Number(r.failed_count_live ?? r.failed_count ?? 0),
+          status: r.is_cancelled ? "cancelled" : r.status,
           audience_filter:
             typeof r.audience_filter === "string"
               ? JSON.parse(r.audience_filter)
               : r.audience_filter,
           is_cancelled: Boolean(r.is_cancelled),
         },
+        credits,
       });
     } catch (err) {
       console.error("[Get broadcast] error:", err);
@@ -33726,12 +34982,48 @@ function createServer() {
       const offset = (page - 1) * limit;
 
       const [rows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, broadcast_id, broker_id, prospect_id, recipient_name,
-                recipient_email, recipient_phone, email_status, sms_status,
-                email_ext_id, sms_ext_id, conversation_id, error_message, sent_at
-         FROM realtor_broadcast_recipients
-         WHERE broadcast_id = ? AND tenant_id = ?
-         ORDER BY id ASC
+        `SELECT rbr.id, rbr.broadcast_id, rbr.broker_id, rbr.prospect_id,
+                COALESCE(
+                  rbr.recipient_name,
+                  CONCAT_WS(' ', b.first_name, b.last_name),
+                  rp.contact_name
+                ) AS recipient_name,
+                COALESCE(rbr.recipient_email, b.email, rp.contact_email) AS recipient_email,
+                COALESCE(rbr.recipient_phone, b.phone, rp.contact_phone) AS recipient_phone,
+                rbr.email_status,
+                CASE
+                  WHEN rbr.sms_status = 'skipped_no_contact'
+                    AND COALESCE(rbr.recipient_phone, b.phone, rp.contact_phone) IS NOT NULL
+                    AND TRIM(COALESCE(rbr.recipient_phone, b.phone, rp.contact_phone)) != ''
+                    AND (b.sms_blast_opted_in = 0 OR c.sms_blast_opted_in = 0)
+                    THEN 'opted_out'
+                  ELSE rbr.sms_status
+                END AS sms_status,
+                rbr.email_ext_id, rbr.sms_ext_id, rbr.conversation_id,
+                COALESCE(
+                  rbr.error_message,
+                  CASE
+                    WHEN rbr.sms_status = 'skipped_no_contact'
+                      AND COALESCE(rbr.recipient_phone, b.phone, rp.contact_phone) IS NOT NULL
+                      AND TRIM(COALESCE(rbr.recipient_phone, b.phone, rp.contact_phone)) != ''
+                      AND (b.sms_blast_opted_in = 0 OR c.sms_blast_opted_in = 0)
+                      THEN 'Recipient opted out of SMS broadcasts'
+                    ELSE NULL
+                  END
+                ) AS error_message,
+                rbr.sent_at
+         FROM realtor_broadcast_recipients rbr
+         LEFT JOIN brokers b
+           ON b.id = rbr.broker_id AND b.tenant_id = rbr.tenant_id
+         LEFT JOIN realtor_prospects rp
+           ON rp.id = rbr.prospect_id AND rp.tenant_id = rbr.tenant_id
+         LEFT JOIN clients c
+           ON c.tenant_id = rbr.tenant_id
+          AND rbr.recipient_email IS NOT NULL
+          AND TRIM(rbr.recipient_email) != ''
+          AND LOWER(TRIM(c.email)) = LOWER(TRIM(rbr.recipient_email))
+         WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+         ORDER BY rbr.id ASC
          LIMIT ? OFFSET ?`,
         [broadcastId, MORTGAGE_TENANT_ID, limit, offset],
       );
@@ -33785,6 +35077,14 @@ function createServer() {
             "Only draft or scheduled broadcasts can be deleted. Sent broadcasts are retained for audit purposes.",
         });
       }
+
+      await settleBroadcastCredits({
+        tenantId: MORTGAGE_TENANT_ID,
+        broadcastId,
+        brokerId,
+        deliveredUnits: 0,
+        note: "Released reserve after draft/scheduled delete",
+      });
 
       await pool.query(
         `DELETE FROM realtor_broadcasts WHERE id = ? AND tenant_id = ?`,
@@ -33910,7 +35210,7 @@ function createServer() {
       }
 
       const [bRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, status, channel FROM realtor_broadcasts
+        `SELECT id, status, is_cancelled, channel FROM realtor_broadcasts
          WHERE id = ? AND tenant_id = ?`,
         [broadcastId, MORTGAGE_TENANT_ID],
       );
@@ -33919,7 +35219,17 @@ function createServer() {
           .status(404)
           .json({ success: false, error: "Broadcast not found" });
       }
-      if (["sending", "draft", "scheduled"].includes(bRows[0].status)) {
+      const effectiveStatus = bRows[0].is_cancelled
+        ? "cancelled"
+        : bRows[0].status;
+      logBroadcastTrace("resend_failed_requested", {
+        broadcastId,
+        brokerId,
+        rawStatus: bRows[0].status,
+        effectiveStatus,
+        channel: bRows[0].channel,
+      });
+      if (["sending", "draft", "scheduled"].includes(effectiveStatus)) {
         return res.status(400).json({
           success: false,
           error:
@@ -33928,6 +35238,58 @@ function createServer() {
       }
 
       const channel: string = bRows[0].channel;
+      const [failedRows] = await pool.query<RowDataPacket[]>(
+        `SELECT
+           SUM(
+             CASE
+               WHEN (? IN ('email','both'))
+                    AND email_status = 'failed'
+                    AND recipient_email IS NOT NULL
+                    AND TRIM(recipient_email) != ''
+               THEN 1 ELSE 0
+             END
+           ) AS email_failed,
+           SUM(
+             CASE
+               WHEN (? IN ('sms','both'))
+                    AND sms_status = 'failed'
+                    AND recipient_phone IS NOT NULL
+                    AND TRIM(recipient_phone) != ''
+               THEN 1 ELSE 0
+             END
+           ) AS sms_failed
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [channel, channel, broadcastId, MORTGAGE_TENANT_ID],
+      );
+      const emailFailed = Number(failedRows[0]?.email_failed ?? 0);
+      const smsFailed = Number(failedRows[0]?.sms_failed ?? 0);
+      const retriableUnits = emailFailed + smsFailed;
+      if (!retriableUnits) {
+        return res.json({ success: true, retried: 0 });
+      }
+      const reserve = await reserveBroadcastCredits({
+        tenantId: MORTGAGE_TENANT_ID,
+        broadcastId,
+        brokerId,
+        estimatedCostUsd: estimateBroadcastCostUsd(retriableUnits),
+        reason: "Reserved for resend failed recipients",
+        metadata: {
+          source: "resend_failed",
+          email_failed: emailFailed,
+          sms_failed: smsFailed,
+          retriable_units: retriableUnits,
+        },
+      });
+      if (!reserve.ok) {
+        return res.status(402).json({
+          success: false,
+          error:
+            "Insufficient broadcast credits. Please contact your admin to add more credits before retrying.",
+          credits: reserve.summary,
+          required_cost_usd: estimateBroadcastCostUsd(retriableUnits),
+        });
+      }
       const setClauses: string[] = [];
       if (channel === "email" || channel === "both") {
         setClauses.push(
@@ -33948,13 +35310,28 @@ function createServer() {
       );
 
       if (!updateResult.affectedRows) {
+        await settleBroadcastCredits({
+          tenantId: MORTGAGE_TENANT_ID,
+          broadcastId,
+          brokerId,
+          deliveredUnits: 0,
+          note: "Release reserve after resend-failed no-op",
+        });
+        logBroadcastTrace("resend_failed_noop", {
+          broadcastId,
+          reason: "No recipient rows updated",
+        });
         return res.json({ success: true, retried: 0 });
       }
 
       // Move broadcast back to sending so the UI reflects progress
       await pool.query(
         `UPDATE realtor_broadcasts
-         SET status = 'sending', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+         SET status = 'sending',
+             is_cancelled = 0,
+             completed_at = NULL,
+             started_at = COALESCE(started_at, NOW()),
+             updated_at = NOW()
          WHERE id = ? AND tenant_id = ?`,
         [broadcastId, MORTGAGE_TENANT_ID],
       );
@@ -33963,6 +35340,10 @@ function createServer() {
       sendBroadcastAsync(broadcastId).catch((err) =>
         console.error(`[Resend failed] Broadcast #${broadcastId} error:`, err),
       );
+      logBroadcastTrace("resend_failed_queued", {
+        broadcastId,
+        retriedRows: updateResult.affectedRows,
+      });
 
       await createAuditLog({
         actorType: "broker",
@@ -33976,6 +35357,264 @@ function createServer() {
     } catch (err) {
       console.error("[Resend failed] error:", err);
       return res.status(500).json({ success: false, error: "Failed to retry" });
+    }
+  };
+
+  // ─── Phase 4: Re-trigger pending recipients safely ────────────────────────
+  // POST /api/realtor-broadcasts/:id/resend-pending
+  const handleResendPending: RequestHandler = async (req, res) => {
+    try {
+      const brokerId = (req as any).brokerId as number;
+      const brokerRole = (req as any).brokerRole as string;
+      const broadcastId = parseInt(req.params.id);
+
+      if (brokerRole !== "platform_owner") {
+        return res
+          .status(403)
+          .json({ success: false, error: "Platform owner access required" });
+      }
+
+      const [bRows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, status, is_cancelled, channel FROM realtor_broadcasts
+         WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+      if (!bRows.length) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Broadcast not found" });
+      }
+      const effectiveStatus = bRows[0].is_cancelled
+        ? "cancelled"
+        : bRows[0].status;
+      logBroadcastTrace("resend_pending_requested", {
+        broadcastId,
+        brokerId,
+        rawStatus: bRows[0].status,
+        effectiveStatus,
+        channel: bRows[0].channel,
+      });
+      if (["sending", "draft", "scheduled"].includes(effectiveStatus)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Cannot re-trigger pending recipients while broadcast is in draft/scheduled/sending state",
+        });
+      }
+
+      const channel: string = bRows[0].channel;
+
+      // Rehydrate skipped rows from latest CRM contact data so previously
+      // unreachable recipients become re-triggerable after profile updates.
+      if (channel === "email" || channel === "both") {
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients rbr
+           JOIN brokers b ON b.id = rbr.broker_id AND b.tenant_id = rbr.tenant_id
+           SET rbr.recipient_email = b.email,
+               rbr.email_status = CASE
+                 WHEN rbr.email_status = 'skipped_no_contact'
+                      AND b.email IS NOT NULL AND TRIM(b.email) != ''
+                 THEN 'pending'
+                 ELSE rbr.email_status
+               END,
+               rbr.updated_at = NOW()
+           WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+             AND rbr.email_status = 'skipped_no_contact'`,
+          [broadcastId, MORTGAGE_TENANT_ID],
+        );
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients rbr
+           JOIN realtor_prospects rp ON rp.id = rbr.prospect_id AND rp.tenant_id = rbr.tenant_id
+           SET rbr.recipient_email = rp.contact_email,
+               rbr.email_status = CASE
+                 WHEN rbr.email_status = 'skipped_no_contact'
+                      AND rp.contact_email IS NOT NULL AND TRIM(rp.contact_email) != ''
+                 THEN 'pending'
+                 ELSE rbr.email_status
+               END,
+               rbr.updated_at = NOW()
+           WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+             AND rbr.email_status = 'skipped_no_contact'`,
+          [broadcastId, MORTGAGE_TENANT_ID],
+        );
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients rbr
+           JOIN clients c
+             ON c.tenant_id = rbr.tenant_id
+            AND rbr.recipient_phone IS NOT NULL
+            AND TRIM(rbr.recipient_phone) != ''
+            AND RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10)
+                = RIGHT(REGEXP_REPLACE(rbr.recipient_phone, '[^0-9]', ''), 10)
+           SET rbr.recipient_email = c.email,
+               rbr.email_status = CASE
+                 WHEN rbr.email_status = 'skipped_no_contact'
+                      AND c.email IS NOT NULL AND TRIM(c.email) != ''
+                 THEN 'pending'
+                 ELSE rbr.email_status
+               END,
+               rbr.updated_at = NOW()
+           WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+             AND rbr.email_status = 'skipped_no_contact'`,
+          [broadcastId, MORTGAGE_TENANT_ID],
+        );
+      }
+
+      if (channel === "sms" || channel === "both") {
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients rbr
+           JOIN brokers b ON b.id = rbr.broker_id AND b.tenant_id = rbr.tenant_id
+           SET rbr.recipient_phone = CASE
+                 WHEN COALESCE(b.sms_blast_opted_in, 1) = 1 THEN b.phone
+                 ELSE rbr.recipient_phone
+               END,
+               rbr.sms_status = CASE
+                 WHEN rbr.sms_status = 'skipped_no_contact'
+                      AND COALESCE(b.sms_blast_opted_in, 1) = 1
+                      AND b.phone IS NOT NULL AND TRIM(b.phone) != ''
+                 THEN 'pending'
+                 ELSE rbr.sms_status
+               END,
+               rbr.updated_at = NOW()
+           WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+             AND rbr.sms_status = 'skipped_no_contact'`,
+          [broadcastId, MORTGAGE_TENANT_ID],
+        );
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients rbr
+           JOIN realtor_prospects rp ON rp.id = rbr.prospect_id AND rp.tenant_id = rbr.tenant_id
+           SET rbr.recipient_phone = rp.contact_phone,
+               rbr.sms_status = CASE
+                 WHEN rbr.sms_status = 'skipped_no_contact'
+                      AND rp.contact_phone IS NOT NULL AND TRIM(rp.contact_phone) != ''
+                 THEN 'pending'
+                 ELSE rbr.sms_status
+               END,
+               rbr.updated_at = NOW()
+           WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+             AND rbr.sms_status = 'skipped_no_contact'`,
+          [broadcastId, MORTGAGE_TENANT_ID],
+        );
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients rbr
+           JOIN clients c
+             ON c.tenant_id = rbr.tenant_id
+            AND rbr.recipient_email IS NOT NULL
+            AND TRIM(rbr.recipient_email) != ''
+            AND LOWER(TRIM(c.email)) = LOWER(TRIM(rbr.recipient_email))
+           SET rbr.recipient_phone = c.phone,
+               rbr.sms_status = CASE
+                 WHEN rbr.sms_status = 'skipped_no_contact'
+                      AND COALESCE(c.sms_blast_opted_in, 1) = 1
+                      AND c.phone IS NOT NULL AND TRIM(c.phone) != ''
+                 THEN 'pending'
+                 ELSE rbr.sms_status
+               END,
+               rbr.updated_at = NOW()
+           WHERE rbr.broadcast_id = ? AND rbr.tenant_id = ?
+             AND rbr.sms_status = 'skipped_no_contact'`,
+          [broadcastId, MORTGAGE_TENANT_ID],
+        );
+      }
+
+      const [pendingRows] = await pool.query<RowDataPacket[]>(
+        `SELECT
+           SUM(
+             CASE
+               WHEN (? IN ('email','both'))
+                    AND email_status = 'pending'
+                    AND recipient_email IS NOT NULL
+                    AND TRIM(recipient_email) != ''
+               THEN 1 ELSE 0
+             END
+           ) AS email_pending,
+           SUM(
+             CASE
+               WHEN (? IN ('sms','both'))
+                    AND sms_status = 'pending'
+                    AND recipient_phone IS NOT NULL
+                    AND TRIM(recipient_phone) != ''
+               THEN 1 ELSE 0
+             END
+           ) AS sms_pending
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [channel, channel, broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      const emailPending = Number(pendingRows[0]?.email_pending ?? 0);
+      const smsPending = Number(pendingRows[0]?.sms_pending ?? 0);
+      const retried = emailPending + smsPending;
+      if (!retried) {
+        logBroadcastTrace("resend_pending_noop", {
+          broadcastId,
+          emailPending,
+          smsPending,
+        });
+        return res.json({ success: true, retried: 0 });
+      }
+      const reserve = await reserveBroadcastCredits({
+        tenantId: MORTGAGE_TENANT_ID,
+        broadcastId,
+        brokerId,
+        estimatedCostUsd: estimateBroadcastCostUsd(retried),
+        reason: "Reserved for resend pending recipients",
+        metadata: {
+          source: "resend_pending",
+          email_pending: emailPending,
+          sms_pending: smsPending,
+          retried_units: retried,
+        },
+      });
+      if (!reserve.ok) {
+        return res.status(402).json({
+          success: false,
+          error:
+            "Insufficient broadcast credits. Please contact your admin to add more credits before retrying.",
+          credits: reserve.summary,
+          required_cost_usd: estimateBroadcastCostUsd(retried),
+        });
+      }
+
+      // Move broadcast back to sending; clear cancellation for intentional re-run.
+      await pool.query(
+        `UPDATE realtor_broadcasts
+         SET status = 'sending',
+             is_cancelled = 0,
+             completed_at = NULL,
+             started_at = COALESCE(started_at, NOW()),
+             updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [broadcastId, MORTGAGE_TENANT_ID],
+      );
+
+      sendBroadcastAsync(broadcastId).catch((err) =>
+        console.error(`[Resend pending] Broadcast #${broadcastId} error:`, err),
+      );
+      logBroadcastTrace("resend_pending_queued", {
+        broadcastId,
+        retried,
+        emailPending,
+        smsPending,
+      });
+
+      await createAuditLog({
+        actorType: "broker",
+        actorId: brokerId,
+        action: "broadcast_resend_pending",
+        entityType: "realtor_broadcast",
+        entityId: broadcastId,
+        changes: { retried, emailPending, smsPending },
+      });
+
+      return res.json({ success: true, retried });
+    } catch (err) {
+      console.error("[Resend pending] error:", err);
+      return res
+        .status(500)
+        .json({
+          success: false,
+          error: "Failed to re-trigger pending recipients",
+        });
     }
   };
 
@@ -34164,6 +35803,10 @@ function createServer() {
          ORDER BY scheduled_at ASC
          LIMIT 10`,
       );
+      logBroadcastTrace("scheduled_cron_due_loaded", {
+        dueCount: due.length,
+        dueBroadcastIds: due.map((r) => r.id),
+      });
 
       for (const row of due) {
         // Mark sending before firing — prevents double-pickup
@@ -34176,6 +35819,9 @@ function createServer() {
         sendBroadcastAsync(row.id).catch((err) =>
           console.error(`❌ Scheduled broadcast #${row.id} failed:`, err),
         );
+        logBroadcastTrace("scheduled_cron_dispatched", {
+          broadcastId: row.id,
+        });
       }
 
       return res.json({ success: true, fired: due.length });
@@ -34231,6 +35877,11 @@ function createServer() {
     "/api/realtor-broadcasts/:id/resend-failed",
     verifyBrokerSession,
     handleResendFailed,
+  );
+  expressApp.post(
+    "/api/realtor-broadcasts/:id/resend-pending",
+    verifyBrokerSession,
+    handleResendPending,
   );
   expressApp.get(
     "/api/realtor-broadcasts/:id",

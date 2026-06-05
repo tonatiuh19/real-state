@@ -1415,3 +1415,37 @@ Replaces 20 `{{TOKEN}}` patterns in the HTML template. Notable behaviours:
 | Save / create / delete error | destructive |
 | Email send failed            | destructive |
 | PDF download failed          | destructive |
+
+---
+
+## Broadcast Center — quota UX (with billing)
+
+When `billing_quota_mode` ≥ `warn`, Broadcast Center uses **unified SMS/email quota** (not a separate dollar wallet):
+
+- Show remaining **SMS segments** (and emails if blast includes email) from tenant pool.
+- In send review: segment estimate (`recipients × ceil(body/160)`), % of monthly included, link to `/admin/billing`.
+- If reserve would exceed quota: destructive warning, disable send — "Insufficient SMS quota. Increase quota in Billing."
+- `broadcast_daily_*` caps still apply as 24h abuse guardrails (separate from monthly plan).
+
+---
+
+## Platform owner billing (`/admin/billing`)
+
+Gated by `billing_ui_enabled`. See `docs/BILLING_AND_QUOTA_PLAN.md`.
+
+### Usage meter colors
+
+| Dimension | Bar color | Notes |
+|-----------|-----------|-------|
+| Conversational SMS | `blue` | Stacked with broadcast on total SMS bar |
+| **Broadcast SMS** | `orange` | Dedicated section — highest variable cost |
+| Voice / email / scheduler | `blue` (in quota), `orange`/`red` overage | Standard TiDB-style thresholds |
+| **Mortgi AI tokens** | `purple` | Separate from SMS; Groq token pool |
+| Overage | `red` or `orange` | Past 100% of included quota |
+
+### Mortgi section
+
+- Purple `UsageBar` for `mortgi_ai_tokens` vs 500K included (proposal).
+- Show sessions count and COGS (~$0.70 / 1M tokens).
+- Per-user **50 messages/day** cap is an abuse guardrail — show as secondary text, not a second meter.
+- On enforce mode at 100%: block new `/api/ai/chat` with upgrade/top-up CTA (same pattern as SMS).

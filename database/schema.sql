@@ -2204,8 +2204,8 @@ CREATE TABLE IF NOT EXISTS `realtor_broadcast_recipients` (
   `recipient_name`    VARCHAR(255) DEFAULT NULL,
   `recipient_email`   VARCHAR(255) DEFAULT NULL,
   `recipient_phone`   VARCHAR(30) DEFAULT NULL,
-  `email_status`      ENUM('pending','sent','failed','bounced','unsubscribed','skipped_no_contact') DEFAULT NULL,
-  `sms_status`        ENUM('pending','sent','failed','undelivered','opted_out','skipped_no_contact') DEFAULT NULL,
+  `email_status`      ENUM('pending','processing','sent','failed','bounced','unsubscribed','skipped_no_contact') DEFAULT NULL,
+  `sms_status`        ENUM('pending','processing','sent','failed','undelivered','opted_out','skipped_no_contact') DEFAULT NULL,
   `email_ext_id`      VARCHAR(255) DEFAULT NULL,
   `sms_ext_id`        VARCHAR(255) DEFAULT NULL,
   `unsubscribe_token` VARCHAR(64) DEFAULT NULL,
@@ -2243,6 +2243,38 @@ CREATE TABLE IF NOT EXISTS `broadcast_saved_segments` (
   KEY `idx_bss_tenant` (`tenant_id`),
   CONSTRAINT `fk_bss_tenant`  FOREIGN KEY (`tenant_id`)  REFERENCES `tenants`(`id`)  ON DELETE CASCADE,
   CONSTRAINT `fk_bss_creator` FOREIGN KEY (`created_by`) REFERENCES `brokers`(`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Broadcast-only credit wallet and immutable ledger
+CREATE TABLE IF NOT EXISTS `tenant_broadcast_credits` (
+  `tenant_id`              INT NOT NULL,
+  `available_balance_usd`  DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `reserved_balance_usd`   DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `total_spent_usd`        DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `currency`               CHAR(3) NOT NULL DEFAULT 'USD',
+  `created_at`             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`tenant_id`),
+  CONSTRAINT `fk_tbc_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `tenant_broadcast_credit_ledger` (
+  `id`                   BIGINT NOT NULL AUTO_INCREMENT,
+  `tenant_id`            INT NOT NULL,
+  `broadcast_id`         INT DEFAULT NULL,
+  `action`               ENUM('seed','reserve','capture','release','adjustment') NOT NULL,
+  `amount_usd`           DECIMAL(12,2) NOT NULL,
+  `note`                 VARCHAR(255) DEFAULT NULL,
+  `metadata_json`        JSON DEFAULT NULL,
+  `created_by_broker_id` INT DEFAULT NULL,
+  `created_at`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_tbcl_tenant_created` (`tenant_id`, `created_at`),
+  KEY `idx_tbcl_tenant_broadcast` (`tenant_id`, `broadcast_id`),
+  KEY `idx_tbcl_tenant_action` (`tenant_id`, `action`),
+  CONSTRAINT `fk_tbcl_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_tbcl_broadcast` FOREIGN KEY (`broadcast_id`) REFERENCES `realtor_broadcasts`(`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_tbcl_broker` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- brokers.sms_blast_opted_in: NULL=unknown, 1=opted in, 0=STOP received
