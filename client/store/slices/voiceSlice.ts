@@ -16,9 +16,15 @@ export const fetchVoiceToken = createAsyncThunk(
       );
       return data.token;
     } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.message || "Failed to fetch voice token",
-      );
+      const data = error.response?.data;
+      const message =
+        data?.detail ||
+        data?.headline ||
+        data?.message ||
+        (error.response?.status === 402
+          ? "Voice minutes quota exceeded or billing action required"
+          : "Failed to fetch voice token");
+      return rejectWithValue(message);
     }
   },
 );

@@ -68,9 +68,15 @@ interface VoiceCallPanelProps {
   direction?: "inbound" | "outbound";
   /**
    * The Twilio Device's audio helper — required for inbound calls where the
-   * Device lives in GlobalVoiceManager. Outbound calls use their own device.
+   * Device lives in GlobalVoiceManager. Outbound calls use the shared Device.
    */
   deviceAudio?: Device["audio"] | null;
+  /**
+   * The single Twilio Device from GlobalVoiceManager. Outbound calls MUST reuse
+   * this instance — creating a second Device with the same broker identity
+   * causes register()/connect() to hang or silently fail (blank call UI).
+   */
+  sharedDevice?: Device | null;
 }
 
 const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
@@ -82,11 +88,14 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   activeCall,
   direction = "outbound",
   deviceAudio,
+  sharedDevice,
 }) => {
   const dispatch = useAppDispatch();
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
 
   const deviceRef = useRef<Device | null>(null);
+  /** True only when this panel created its own Device (legacy fallback). */
+  const ownsDeviceRef = useRef(false);
   const callRef = useRef<Call | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Prevents double-logging: when the broker clicks hang-up, handleHangUp calls
@@ -445,11 +454,12 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       callRef.current.removeAllListeners();
       callRef.current = null;
     }
-    if (deviceRef.current) {
+    if (ownsDeviceRef.current && deviceRef.current) {
       deviceRef.current.removeAllListeners();
       deviceRef.current.destroy();
-      deviceRef.current = null;
     }
+    deviceRef.current = null;
+    ownsDeviceRef.current = false;
   }, [stopTimer, stopMicMeter]);
 
   const handleHangUp = useCallback(
@@ -472,48 +482,51 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const initiateCall = useCallback(async () => {
     setCallState("initializing");
     setErrorMsg(null);
-    // Reset the log guard for the new call
     callAlreadyLoggedRef.current = false;
 
     try {
-      // 1. Fetch Access Token via Redux thunk
-      const tokenResult = await dispatch(fetchVoiceToken());
-      if (fetchVoiceToken.rejected.match(tokenResult)) {
-        throw new Error(
-          (tokenResult.payload as string) || "Token fetch failed",
-        );
+      let device: Device;
+
+      if (sharedDevice) {
+        // Reuse GlobalVoiceManager's Device — never spawn a second one with the
+        // same broker identity (causes blank/hung call UI for shared-line accounts).
+        device = sharedDevice;
+        deviceRef.current = device;
+        ownsDeviceRef.current = false;
+      } else {
+        // Fallback when GlobalVoiceManager is still booting (should be rare).
+        const tokenResult = await dispatch(fetchVoiceToken());
+        if (fetchVoiceToken.rejected.match(tokenResult)) {
+          throw new Error(
+            (tokenResult.payload as string) || "Token fetch failed",
+          );
+        }
+        const token = tokenResult.payload as string;
+        if (!token) throw new Error("Token fetch failed");
+
+        device = new Device(token, {
+          logLevel: 1,
+          codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
+          closeProtection: true,
+          maxAverageBitrate: 40000,
+          enableImprovedSignalingErrorPrecision: true,
+        });
+        deviceRef.current = device;
+        ownsDeviceRef.current = true;
+
+        device.on("error", (err) => {
+          logger.error("[VoiceCallPanel] Device error:", err);
+          setErrorMsg(err.message || "Device error");
+          setCallState("error");
+          cleanupDevice();
+        });
       }
-      const token = tokenResult.payload as string;
-      if (!token) throw new Error("Token fetch failed");
 
-      // 2. Create Device with HD audio settings
-      const device = new Device(token, {
-        logLevel: 1,
-        // Opus first for HD wideband audio (~16 kHz), PCMU as PSTN fallback
-        codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
-        // Keep the WebSocket alive during brief network drops (mobile switching
-        // from WiFi to cellular is the main cause of "low quality" reports)
-        closeProtection: true,
-        // Opus can use up to 40 kbps for wideband voice — big improvement over
-        // the 8 kbps PCMU default on poor connections
-        maxAverageBitrate: 40000,
-        // Surface precise error codes in the error handler so we can show
-        // actionable messages (e.g. mic blocked vs network error)
-        enableImprovedSignalingErrorPrecision: true,
-      });
-      deviceRef.current = device;
+      // Ensure the Device is registered before placing an outbound call.
+      if (device.state !== Device.State.Registered) {
+        await device.register();
+      }
 
-      device.on("error", (err) => {
-        logger.error("[VoiceCallPanel] Device error:", err);
-        setErrorMsg(err.message || "Device error");
-        setCallState("error");
-        cleanupDevice();
-      });
-
-      await device.register();
-
-      // Apply the devices the user pre-selected in the pre-call settings screen
-      // before the call is placed, so Twilio uses exactly those devices.
       const preCallAudio = device.audio;
       if (preCallAudio) {
         if (selectedMicId !== "default") {
@@ -528,9 +541,6 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
       setCallState("connecting");
 
-      // 3. Place call — rtcConstraints apply AGC/echo-cancellation to the actual
-      // WebRTC audio track sent to Twilio (and ultimately to the recipient).
-      // Without this they only apply to the mic-meter preview stream.
       const call = await device.connect({
         params: { To: phone },
         rtcConstraints: {
@@ -550,14 +560,12 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
         setCallState("in-call");
         startTimer();
 
-        // Re-enumerate so the in-call audio settings picker has up-to-date labels.
-        // We keep whatever the user already picked in the pre-call settings screen.
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
           setMicDevices(devices.filter((d) => d.kind === "audioinput"));
           setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
         } catch {
-          // Non-fatal — user can manually pick devices in the audio settings
+          // Non-fatal
         }
       });
 
@@ -583,14 +591,23 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     } catch (err: any) {
       logger.error("[VoiceCallPanel] Failed to initiate call:", err);
       setErrorMsg(
-        err?.response?.data?.error || err?.message || "Failed to start call",
+        sharedDevice
+          ? err?.message ||
+              "Voice system is still connecting — wait a moment and try again."
+          : err?.response?.data?.error ||
+              err?.message ||
+              "Failed to start call",
       );
       setCallState("error");
       cleanupDevice();
     }
   }, [
-    sessionToken,
+    sharedDevice,
     phone,
+    dispatch,
+    selectedMicId,
+    selectedSpeakerId,
+    supportsSinkId,
     startTimer,
     stopTimer,
     cleanupDevice,

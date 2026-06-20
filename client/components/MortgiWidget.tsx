@@ -27,6 +27,8 @@ import {
 } from "@/store/slices/mortgiSlice";
 import type { MortgiChatMessage } from "@/store/slices/mortgiSlice";
 import { logger } from "@/lib/logger";
+import { BillingActionGate } from "@/components/billing/BillingActionGate";
+import { useBillingAccess } from "@/hooks/useBillingAccess";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -113,6 +115,7 @@ const CLIENT_SUGGESTIONS = [
 
 export function MortgiWidget({ userType }: MortgiWidgetProps) {
   const dispatch = useAppDispatch();
+  const { isActionGateLocked } = useBillingAccess();
   const { messages, isTyping, chatError, isOpen } = useAppSelector(
     (s) => s.mortgi,
   );
@@ -142,6 +145,7 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
     async (text?: string) => {
       const msg = (text ?? input).trim();
       if (!msg || isTyping) return;
+      if (userType === "broker" && isActionGateLocked) return;
       setInput("");
       dispatch(clearChatError());
 
@@ -153,7 +157,7 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
         dispatch(sendClientMessage(msg));
       }
     },
-    [input, isTyping, userType, dispatch],
+    [input, isTyping, userType, dispatch, isActionGateLocked],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -278,7 +282,8 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
                       <button
                         key={s}
                         onClick={() => handleSend(s)}
-                        className="text-xs px-2.5 py-1 rounded-full border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"
+                        disabled={userType === "broker" && isActionGateLocked}
+                        className="text-xs px-2.5 py-1 rounded-full border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors disabled:opacity-40 disabled:pointer-events-none"
                       >
                         {s}
                       </button>
@@ -309,36 +314,71 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
 
             {/* Input area */}
             <div className="px-3 pb-3 pt-2 border-t border-border/40 shrink-0">
-              <div className="flex items-end gap-2 bg-muted/40 rounded-xl border border-border/50 px-3 py-2">
-                <Textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Ask Mortgi anything…"
-                  className="min-h-[36px] max-h-[100px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0 text-sm p-0 leading-relaxed"
-                  rows={1}
-                  maxLength={2000}
-                  disabled={isTyping}
-                />
-                <Button
-                  size="icon"
-                  className={cn(
-                    "h-8 w-8 shrink-0 rounded-lg transition-all",
-                    input.trim() && !isTyping
-                      ? "bg-gradient-to-br from-rose-600 to-red-600 hover:opacity-90 text-white"
-                      : "bg-muted text-muted-foreground",
-                  )}
-                  onClick={() => handleSend()}
-                  disabled={!input.trim() || isTyping}
-                >
-                  {isTyping ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Send className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </div>
+              {userType === "broker" ? (
+                <BillingActionGate className="p-0 border-0 bg-transparent">
+                  <div className="flex items-end gap-2 bg-muted/40 rounded-xl border border-border/50 px-3 py-2">
+                    <Textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Ask Mortgi anything…"
+                      className="min-h-[36px] max-h-[100px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0 text-sm p-0 leading-relaxed"
+                      rows={1}
+                      maxLength={2000}
+                      disabled={isTyping}
+                    />
+                    <Button
+                      size="icon"
+                      className={cn(
+                        "h-8 w-8 shrink-0 rounded-lg transition-all",
+                        input.trim() && !isTyping
+                          ? "bg-gradient-to-br from-rose-600 to-red-600 hover:opacity-90 text-white"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                      onClick={() => handleSend()}
+                      disabled={!input.trim() || isTyping}
+                    >
+                      {isTyping ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </BillingActionGate>
+              ) : (
+                <div className="flex items-end gap-2 bg-muted/40 rounded-xl border border-border/50 px-3 py-2">
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask Mortgi anything…"
+                    className="min-h-[36px] max-h-[100px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0 text-sm p-0 leading-relaxed"
+                    rows={1}
+                    maxLength={2000}
+                    disabled={isTyping}
+                  />
+                  <Button
+                    size="icon"
+                    className={cn(
+                      "h-8 w-8 shrink-0 rounded-lg transition-all",
+                      input.trim() && !isTyping
+                        ? "bg-gradient-to-br from-rose-600 to-red-600 hover:opacity-90 text-white"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                    onClick={() => handleSend()}
+                    disabled={!input.trim() || isTyping}
+                  >
+                    {isTyping ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
+              )}
               <p className="text-[10px] text-muted-foreground text-center mt-1.5">
                 Mortgi can make mistakes — verify important info
               </p>

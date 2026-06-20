@@ -28,6 +28,7 @@ import {
   MessageSquare,
   CalendarDays,
   Calculator,
+  CreditCard,
 } from "lucide-react";
 import { LiaRobotSolid } from "react-icons/lia";
 import { Button } from "@/components/ui/button";
@@ -52,9 +53,17 @@ import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
 import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
 import { selectRolePermissionsMap } from "@/store/slices/roleSectionPermissionsSlice";
 import { fetchEmailMailboxes } from "@/store/slices/emailSlice";
+import {
+  fetchBillingAccess,
+  fetchBillingConfig,
+  fetchBillingTeamNotice,
+} from "@/store/slices/billingSlice";
 import { useNavigate, useLocation } from "react-router-dom";
 import { MortgiWidget } from "@/components/MortgiWidget";
 import { DatabaseQuotaBanner } from "@/components/DatabaseQuotaBanner";
+import { BillingAccessBanner } from "@/components/billing/BillingAccessBanner";
+import { BillingTeamNoticeBanner } from "@/components/billing/BillingTeamNoticeBanner";
+import { BillingSuspendedWall } from "@/components/billing/BillingSuspendedWall";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -99,6 +108,15 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     useAppSelector((s) => s.adminSectionControls);
 
   const isPlatformOwner = user?.role === "platform_owner";
+  const billingUiEnabled = useAppSelector(
+    (s) => s.billing.config?.billingUiEnabled ?? false,
+  );
+  const stripeBillingEnabled = useAppSelector(
+    (s) => s.billing.config?.stripeEnabled ?? false,
+  );
+  const billingAccessBlocked = useAppSelector(
+    (s) => s.billing.access?.blocksCostActions ?? false,
+  );
 
   /**
    * Determine if a section should be visible for the current user.
@@ -140,8 +158,14 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     if (sessionToken) {
       dispatch(initAdminSession());
       dispatch(fetchEmailMailboxes());
+      if (isPlatformOwner) {
+        dispatch(fetchBillingAccess());
+        dispatch(fetchBillingConfig());
+      } else {
+        dispatch(fetchBillingTeamNotice());
+      }
     }
-  }, [dispatch, sessionToken]);
+  }, [dispatch, sessionToken, isPlatformOwner]);
 
   const handleLogout = async () => {
     setShowLogoutConfirm(false);
@@ -210,6 +234,15 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       hidden: !isPlatformOwner,
     },
     {
+      id: "billing",
+      label: "Billing",
+      icon: <CreditCard className="h-4 w-4" />,
+      path: "/admin/billing",
+      hidden:
+        !isPlatformOwner ||
+        (!billingUiEnabled && !stripeBillingEnabled && !billingAccessBlocked),
+    },
+    {
       id: "email",
       label: "Email",
       icon: <Mail className="h-4 w-4" />,
@@ -239,10 +272,10 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     },
     {
       id: "brokers",
-      label: "People Management",
+      label: "Realtor Management",
       icon: <UserCog className="h-4 w-4" />,
       path: "/admin/brokers",
-      hidden: !isPlatformOwner,
+      hidden: !isSectionVisible("brokers", true, false),
     },
     {
       id: "contact-submissions",
@@ -759,8 +792,14 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           <>
             <div className="px-4 pt-4 md:px-6 md:pt-4">
               <DatabaseQuotaBanner />
+              {isPlatformOwner ? (
+                <BillingAccessBanner />
+              ) : (
+                <BillingTeamNoticeBanner />
+              )}
             </div>
             {children}
+            {isPlatformOwner ? <BillingSuspendedWall /> : null}
           </>
         )}
       </main>

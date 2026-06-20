@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
+import { billingDenialMessage, parseBillingDenial } from "@/utils/billing-denial";
 import type { RootState } from "../index";
 import type {
   MortgiChatResponse,
@@ -104,10 +105,12 @@ export const sendBrokerMessage = createAsyncThunk(
         { headers: brokerAuthHeaders(state) },
       );
       return data;
-    } catch (err: any) {
-      return rejectWithValue(
-        err.response?.data?.error ?? "Failed to send message",
-      );
+    } catch (err: unknown) {
+      const denial = parseBillingDenial(err);
+      const fallback = axios.isAxiosError(err)
+        ? String(err.response?.data?.error ?? "Failed to send message")
+        : "Failed to send message";
+      return rejectWithValue(billingDenialMessage(denial, fallback));
     }
   },
 );
@@ -124,10 +127,12 @@ export const sendClientMessage = createAsyncThunk(
         { headers: clientAuthHeaders(state) },
       );
       return data;
-    } catch (err: any) {
-      return rejectWithValue(
-        err.response?.data?.error ?? "Failed to send message",
-      );
+    } catch (err: unknown) {
+      const denial = parseBillingDenial(err);
+      const fallback = axios.isAxiosError(err)
+        ? String(err.response?.data?.error ?? "Failed to send message")
+        : "Failed to send message";
+      return rejectWithValue(billingDenialMessage(denial, fallback));
     }
   },
 );

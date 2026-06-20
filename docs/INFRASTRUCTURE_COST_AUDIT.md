@@ -14,11 +14,15 @@
 | 2   | **Ably**                | Real-time pub/sub — notifications, live updates                  |
 | 3   | **Zoom**                | Video meeting scheduling (Server-to-Server OAuth)                |
 | 4   | **TiDB Cloud**          | Managed MySQL-compatible database (Serverless)                   |
-| 5   | **disruptinglabs.com**  | Custom CDN — avatar & document image storage                     |
-| 6   | **SendGrid Essentials** | Transactional email — outbound notifications, reminders, invites |
+| 5   | **disruptinglabs.com**  | Custom CDN — avatar, MMS upload, document storage                  |
+| 6   | **Resend**              | Outbound transactional + broadcast email (`RESEND_API_KEY`)      |
 | 7   | **IMAP (Hostgator)**    | Inbound email polling via `reply@disruptinglabs.com`             |
+| 8   | **Twilio**              | SMS, MMS, voice, WhatsApp (`TWILIO_*`) — variable COGS           |
+| 9   | **Groq**                | Mortgi AI (`GROQ_API_KEY`) — variable token COGS                 |
+| 10  | **Office 365 / Graph**  | Conversation mailboxes (`OFFICE365_*`) — tenant-provided         |
+| 11  | **Stripe**              | Platform fee + top-ups — ~2.9% + $0.30 per charge (not in infra) |
 
-> **Note:** Twilio (SMS + voice) excluded per request.  
+> **Billing model:** Fixed infra line items in `shared/billing-calculator.ts` (`FIXED_INFRA_BREAKDOWN`, sum **~$227/mo**). Twilio usage is variable. Stripe fees deducted from net margin.  
 > **Note:** Domain `encoremortgage.org` not costed — assumed separately managed.
 
 ---
@@ -32,7 +36,7 @@
 | Zoom (Pro, broker licenses)     | $16          | $133         | $267         |
 | TiDB Cloud (Serverless + usage) | $25          | $38          | $50          |
 | disruptinglabs CDN              | $10          | $20          | $30          |
-| SendGrid (Essentials → Pro)     | $20          | $20          | $90          |
+| Resend (Essentials-scale)       | $20          | $20          | $90          |
 | **TOTAL**                       | **~$173/mo** | **~$339/mo** | **~$592/mo** |
 
 > 🎯 **Realistic monthly spend at 500 concurrent users: ~$260 – $400**  
@@ -320,7 +324,9 @@ This is a **single point of failure** for all avatar images. Consider migrating 
 
 ---
 
-## 6. Email — SendGrid (Outbound) + IMAP (Inbound)
+## 6. Email — Resend (Outbound, live) + IMAP (Inbound)
+
+> **Code reality (June 2026):** Outbound uses **Resend** (`RESEND_API_KEY`). SendGrid sections below are historical planning notes — billing uses **$20/mo Resend** in `FIXED_INFRA_BREAKDOWN`.
 
 **Used in:** `api/index.ts` SMTP + IMAP configuration
 
@@ -433,7 +439,7 @@ This is a **single point of failure** for all avatar images. Consider migrating 
 | Zoom (Pro, broker licenses)     | $16          | $133         | $267         |
 | TiDB Cloud (Serverless + usage) | $25          | $38          | $50          |
 | disruptinglabs CDN              | $10          | $20          | $30          |
-| SendGrid (Essentials → Pro)     | $20          | $20          | $90          |
+| Resend (Essentials-scale)       | $20          | $20          | $90          |
 | **TOTAL**                       | **~$173/mo** | **~$339/mo** | **~$592/mo** |
 
 > 🎯 **Realistic monthly spend: ~$260 – $400/month**  

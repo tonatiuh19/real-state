@@ -1,6 +1,6 @@
 /**
  * Refresh TENANT_1_ACTUAL_30D from live DB (last 30 days UTC).
- * Updates shared/billing-calculator.ts and prints JSON for canvas sync.
+ * Updates api/lib/billing-calculator.ts and prints JSON for canvas sync.
  *
  * Usage: npx tsx scripts/refresh-billing-snapshot.ts
  *        npx tsx scripts/refresh-billing-snapshot.ts --tenant 1

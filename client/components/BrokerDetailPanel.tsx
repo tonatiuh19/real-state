@@ -186,6 +186,7 @@ export default function BrokerDetailPanel({
   const { user: currentBroker } = useAppSelector((s) => s.brokerAuth);
   const isAdmin =
     currentBroker?.role === "admin" || currentBroker?.role === "platform_owner";
+  const isPlatformOwner = currentBroker?.role === "platform_owner";
 
   // ── edit state ─────────────────────────────────────────────────────────────
   const [editing, setEditing] = useState(false);
@@ -249,9 +250,9 @@ export default function BrokerDetailPanel({
     if (isOpen && brokerId) {
       dispatch(fetchBrokerProfileForEdit(brokerId));
       dispatch(fetchConversationTemplates());
-      if (isAdmin) dispatch(fetchMortgageBankers());
+      if (isPlatformOwner) dispatch(fetchMortgageBankers());
     }
-  }, [isOpen, brokerId, dispatch, isAdmin]);
+  }, [isOpen, brokerId, dispatch, isPlatformOwner]);
 
   // populate edit fields when profile loads
   useEffect(() => {
@@ -336,11 +337,24 @@ export default function BrokerDetailPanel({
           email: editEmail || undefined,
           phone: editPhone || undefined,
           license_number: editLicense || undefined,
-          role: editRole,
-          specializations:
-            editSpecializations.length > 0 ? editSpecializations : undefined,
-          created_by_broker_id:
-            editRole === "broker" ? (editCreatedByBrokerId ?? null) : undefined,
+          ...(isPlatformOwner
+            ? {
+                role: editRole,
+                specializations:
+                  editSpecializations.length > 0
+                    ? editSpecializations
+                    : undefined,
+                created_by_broker_id:
+                  editRole === "broker"
+                    ? (editCreatedByBrokerId ?? null)
+                    : undefined,
+              }
+            : {
+                specializations:
+                  editSpecializations.length > 0
+                    ? editSpecializations
+                    : undefined,
+              }),
         }),
       ).unwrap();
       await dispatch(
@@ -1028,27 +1042,40 @@ export default function BrokerDetailPanel({
 
                         {/* Role + Years exp */}
                         <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">
-                              Role
-                            </Label>
-                            <Select
-                              value={editRole}
-                              onValueChange={(v) =>
-                                setEditRole(v as "broker" | "admin")
-                              }
-                            >
-                              <SelectTrigger className="h-8 text-sm">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="broker">Partner</SelectItem>
-                                <SelectItem value="admin">
-                                  Mortgage Banker
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
+                          {isPlatformOwner ? (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Role
+                              </Label>
+                              <Select
+                                value={editRole}
+                                onValueChange={(v) =>
+                                  setEditRole(v as "broker" | "admin")
+                                }
+                              >
+                                <SelectTrigger className="h-8 text-sm">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="broker">Partner</SelectItem>
+                                  <SelectItem value="admin">
+                                    Mortgage Banker
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Role
+                              </Label>
+                              <Input
+                                value="Partner Realtor"
+                                disabled
+                                className="h-8 text-sm bg-muted"
+                              />
+                            </div>
+                          )}
                           <div className="space-y-1">
                             <Label className="text-xs text-muted-foreground">
                               Years Experience
@@ -1065,8 +1092,8 @@ export default function BrokerDetailPanel({
                           </div>
                         </div>
 
-                        {/* Assigned MB — only for partner role */}
-                        {editRole === "broker" && (
+                        {/* Assigned MB — platform owner only */}
+                        {isPlatformOwner && editRole === "broker" && (
                           <div className="space-y-1">
                             <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
                               <Building2 className="h-3 w-3" /> Assigned
@@ -1313,10 +1340,13 @@ export default function BrokerDetailPanel({
                         {isPartner &&
                           (profile as any).created_by_broker_id &&
                           (() => {
-                            const mb = mortgageBankers.find(
-                              (m) =>
-                                m.id === (profile as any).created_by_broker_id,
-                            );
+                            const assignedMbId = (profile as any)
+                              .created_by_broker_id as number;
+                            const mb =
+                              mortgageBankers.find((m) => m.id === assignedMbId) ??
+                              (currentBroker?.id === assignedMbId
+                                ? currentBroker
+                                : null);
                             return mb ? (
                               <div className="flex items-center gap-3">
                                 <div className="p-1.5 bg-primary/10 rounded-md flex-shrink-0">

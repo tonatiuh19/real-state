@@ -2245,36 +2245,85 @@ CREATE TABLE IF NOT EXISTS `broadcast_saved_segments` (
   CONSTRAINT `fk_bss_creator` FOREIGN KEY (`created_by`) REFERENCES `brokers`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Broadcast-only credit wallet and immutable ledger
-CREATE TABLE IF NOT EXISTS `tenant_broadcast_credits` (
-  `tenant_id`              INT NOT NULL,
-  `available_balance_usd`  DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-  `reserved_balance_usd`   DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-  `total_spent_usd`        DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-  `currency`               CHAR(3) NOT NULL DEFAULT 'USD',
-  `created_at`             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at`             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+-- Unified billing & quota (default billing_quota_mode = off)
+CREATE TABLE IF NOT EXISTS `tenant_subscription` (
+  `tenant_id`                    INT NOT NULL,
+  `plan_code`                    VARCHAR(50) NOT NULL DEFAULT 'platform_standard',
+  `status`                       ENUM('active','trialing','past_due','canceled','inactive') NOT NULL DEFAULT 'active',
+  `platform_fee_usd`             DECIMAL(10,2) NOT NULL DEFAULT 350.00,
+  `period_start`                 DATE NOT NULL,
+  `period_end`                   DATE NULL,
+  `included_sms_segments`        INT NOT NULL DEFAULT 1000,
+  `included_voice_minutes`       INT NOT NULL DEFAULT 1500,
+  `included_email_sends`         INT NOT NULL DEFAULT 5000,
+  `included_scheduler_bookings`  INT NOT NULL DEFAULT 100,
+  `included_mortgi_ai_tokens`    BIGINT NOT NULL DEFAULT 500000,
+  `overage_enabled`              TINYINT(1) NOT NULL DEFAULT 0,
+  `stripe_customer_id`           VARCHAR(255) DEFAULT NULL,
+  `stripe_subscription_id`       VARCHAR(255) DEFAULT NULL,
+  `past_due_at`                  DATETIME DEFAULT NULL COMMENT 'When platform fee payment first failed',
+  `grace_ends_at`                DATETIME DEFAULT NULL COMMENT 'End of subscription grace window',
+  `restricted_at`                DATETIME DEFAULT NULL COMMENT 'When cost actions were restricted post-grace',
+  `suspended_at`                 DATETIME DEFAULT NULL COMMENT 'When full billing wall applies',
+  `created_at`                   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`                   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`tenant_id`),
-  CONSTRAINT `fk_tbc_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE
+  CONSTRAINT `fk_tenant_subscription_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS `tenant_broadcast_credit_ledger` (
-  `id`                   BIGINT NOT NULL AUTO_INCREMENT,
-  `tenant_id`            INT NOT NULL,
-  `broadcast_id`         INT DEFAULT NULL,
-  `action`               ENUM('seed','reserve','capture','release','adjustment') NOT NULL,
-  `amount_usd`           DECIMAL(12,2) NOT NULL,
-  `note`                 VARCHAR(255) DEFAULT NULL,
-  `metadata_json`        JSON DEFAULT NULL,
-  `created_by_broker_id` INT DEFAULT NULL,
-  `created_at`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE IF NOT EXISTS `tenant_usage_period` (
+  `tenant_id`       INT NOT NULL,
+  `period_start`    DATE NOT NULL,
+  `dimension`       ENUM('sms_segments','voice_minutes','email_sends','scheduler_bookings','mortgi_ai_tokens') NOT NULL,
+  `included_units`  BIGINT NOT NULL DEFAULT 0,
+  `used_units`      BIGINT NOT NULL DEFAULT 0,
+  `reserved_units`  BIGINT NOT NULL DEFAULT 0,
+  `updated_at`      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`tenant_id`, `period_start`, `dimension`),
+  CONSTRAINT `fk_tenant_usage_period_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `tenant_usage_ledger` (
+  `id`             BIGINT NOT NULL AUTO_INCREMENT,
+  `tenant_id`      INT NOT NULL,
+  `dimension`      ENUM('sms_segments','voice_minutes','email_sends','scheduler_bookings','mortgi_ai_tokens') NOT NULL,
+  `units`          DECIMAL(14,4) NOT NULL,
+  `source`         VARCHAR(50) NOT NULL,
+  `ref_type`       VARCHAR(50) DEFAULT NULL,
+  `ref_id`         VARCHAR(100) DEFAULT NULL,
+  `action`         ENUM('grant','consume','reserve','capture','release','top_up') NOT NULL,
+  `metadata_json`  JSON DEFAULT NULL,
+  `idempotency_key` VARCHAR(150) DEFAULT NULL,
+  `created_at`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  KEY `idx_tbcl_tenant_created` (`tenant_id`, `created_at`),
-  KEY `idx_tbcl_tenant_broadcast` (`tenant_id`, `broadcast_id`),
-  KEY `idx_tbcl_tenant_action` (`tenant_id`, `action`),
-  CONSTRAINT `fk_tbcl_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_tbcl_broadcast` FOREIGN KEY (`broadcast_id`) REFERENCES `realtor_broadcasts`(`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_tbcl_broker` FOREIGN KEY (`created_by_broker_id`) REFERENCES `brokers`(`id`) ON DELETE SET NULL
+  KEY `idx_tul_tenant_created` (`tenant_id`, `created_at`),
+  KEY `idx_tul_tenant_dimension` (`tenant_id`, `dimension`),
+  UNIQUE KEY `uk_tul_idempotency` (`tenant_id`, `idempotency_key`),
+  CONSTRAINT `fk_tenant_usage_ledger_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `tenant_usage_reservations` (
+  `id`           BIGINT NOT NULL AUTO_INCREMENT,
+  `tenant_id`    INT NOT NULL,
+  `broadcast_id` INT DEFAULT NULL,
+  `units_json`   JSON NOT NULL,
+  `expires_at`   DATETIME NOT NULL,
+  `status`       ENUM('pending','captured','released','expired') NOT NULL DEFAULT 'pending',
+  `created_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_tur_tenant_status` (`tenant_id`, `status`),
+  KEY `idx_tur_tenant_broadcast` (`tenant_id`, `broadcast_id`),
+  CONSTRAINT `fk_tenant_usage_reservations_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_tenant_usage_reservations_broadcast` FOREIGN KEY (`broadcast_id`) REFERENCES `realtor_broadcasts`(`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `stripe_webhook_events` (
+  `event_id`     VARCHAR(255) NOT NULL,
+  `event_type`   VARCHAR(100) NOT NULL,
+  `processed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`event_id`),
+  KEY `idx_swe_processed` (`processed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- brokers.sms_blast_opted_in: NULL=unknown, 1=opted in, 0=STOP received

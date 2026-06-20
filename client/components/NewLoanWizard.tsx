@@ -146,6 +146,21 @@ const step3Schema = Yup.object({
   property_state: Yup.string().required("Required"),
   property_zip: Yup.string().required("Required"),
   property_type: Yup.string().required("Required"),
+  dependent_count: Yup.number()
+    .transform((value, originalValue) =>
+      originalValue === "" || originalValue == null ? undefined : value,
+    )
+    .integer("Must be a whole number")
+    .min(0, "Cannot be negative")
+    .nullable()
+    .optional(),
+  years_at_address: Yup.number()
+    .transform((value, originalValue) =>
+      originalValue === "" || originalValue == null ? undefined : value,
+    )
+    .min(0, "Cannot be negative")
+    .nullable()
+    .optional(),
 });
 
 const fullSchema = step1Schema.concat(step2Schema).concat(step3Schema);
@@ -277,6 +292,9 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
           loan_amount: String(values.loan_amount),
           property_value: String(values.property_value),
           down_payment: String(values.down_payment),
+          ...(isAdmin && selectedBrokerId
+            ? { broker_user_id: selectedBrokerId }
+            : {}),
           dependent_count: (() => {
             if (values.dependent_count === "" || values.dependent_count == null)
               return undefined;

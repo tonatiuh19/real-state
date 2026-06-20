@@ -87,6 +87,9 @@ export default function Brokers() {
 
   const isAdmin =
     currentBroker?.role === "admin" || currentBroker?.role === "platform_owner";
+  const isPlatformOwner = currentBroker?.role === "platform_owner";
+
+  const listScope = isPlatformOwner ? undefined : ("realtors" as const);
 
   const doFetch = useCallback(
     (params: {
@@ -95,9 +98,15 @@ export default function Brokers() {
       sortOrder?: "ASC" | "DESC";
       search?: string;
     }) => {
-      dispatch(fetchBrokers({ limit: 30, ...params }));
+      dispatch(
+        fetchBrokers({
+          limit: 30,
+          scope: listScope,
+          ...params,
+        }),
+      );
     },
-    [dispatch],
+    [dispatch, listScope],
   );
 
   const handleSort = (field: string) => {
@@ -416,9 +425,13 @@ export default function Brokers() {
                 sortable: true,
                 shrink: true,
                 render: (b) => {
+                  const assignedMbId = b.created_by_broker_id;
                   const assignedMB =
-                    b.role === "broker" && b.created_by_broker_id
-                      ? brokers.find((mb) => mb.id === b.created_by_broker_id)
+                    b.role === "broker" && assignedMbId
+                      ? (brokers.find((mb) => mb.id === assignedMbId) ??
+                        (currentBroker?.id === assignedMbId
+                          ? currentBroker
+                          : null))
                       : null;
                   return (
                     <div className="space-y-1">

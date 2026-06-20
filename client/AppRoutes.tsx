@@ -41,6 +41,7 @@ import IncomeCalculator from "./pages/admin/IncomeCalculator";
 import Email from "./pages/admin/Email";
 import Mortgi from "./pages/admin/Mortgi";
 import RealtorBroadcasts from "./pages/admin/RealtorBroadcasts";
+import Billing from "./pages/admin/Billing";
 
 const AppRoutes = () => (
   <Routes>
@@ -320,6 +321,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <RealtorBroadcasts />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/billing"
+      element={
+        <AdminLayout>
+          <Billing />
         </AdminLayout>
       }
     />

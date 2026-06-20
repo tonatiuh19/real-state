@@ -1,16 +1,19 @@
 # Broker Ownership Model
 
-This document defines how data access is scoped to brokers across the API.
+This document defines how **data access is scoped** to brokers across the API.
+
+> **For roles, sidebar permissions, billing gates, and the full feature matrix, see [ROLES_AND_PERMISSIONS.md](./ROLES_AND_PERMISSIONS.md).**  
+> **`superadmin` is legacy dead code** — use `platform_owner` for tenant-wide loan/client/document access.
 
 ---
 
 ## Role Hierarchy
 
-| Role                      | Access Scope                                                            |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `superadmin`              | Full tenant-wide access — all clients, loans, tasks, threads            |
+| Role | Access Scope |
+| ---- | ------------ |
+| `platform_owner` | Tenant-wide loans, clients, documents, reports — **except** conversations/email (still ownership-scoped) |
 | `admin` (Mortgage Banker) | Own data only — access via all three ownership paths (same as `broker`) |
-| `broker` (Partner Broker) | Own data only — access via all three ownership paths below              |
+| `broker` (Partner Broker) | Own data only — access via all three ownership paths below |
 
 ---
 

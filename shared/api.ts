@@ -4,6 +4,8 @@
  * and/or small pure JS functions that can be used on both client and server
  */
 
+export type { BillingDenialPayload } from "./billing-denial";
+
 /**
  * Example response type for /api/demo
  */
@@ -41,6 +43,8 @@ export interface CreateLoanRequest {
   years_at_address?: number;
   estimated_close_date?: string;
   notes?: string;
+  /** Platform owner may assign loan to another mortgage banker; defaults to session broker */
+  broker_user_id?: number | null;
   tasks: Array<{
     title: string;
     description: string;
@@ -685,6 +689,19 @@ export interface GetBrokersResponse {
   success: boolean;
   brokers: Broker[];
   pagination: PaginationInfo;
+}
+
+/** GET /api/brokers scope — see docs/REALTOR_MANAGEMENT_MB_ACCESS_PLAN.md */
+export type BrokerListScope = "realtors" | "mortgage-bankers";
+
+export interface FetchBrokersParams {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+  search?: string;
+  role?: string;
+  scope?: BrokerListScope;
 }
 
 export interface CreateBrokerRequest {
@@ -3000,15 +3017,36 @@ export interface BroadcastAudiencePreview {
   email_count: number;
   sms_count: number;
   skipped_count: number;
-  estimated_cost_usd?: number;
+  estimated_sms_segments?: number;
+  estimated_email_sends?: number;
   sample: BroadcastAudienceSampleItem[];
 }
 
-export interface BroadcastCreditSummary {
-  available_balance_usd: number;
-  reserved_balance_usd: number;
-  total_spent_usd: number;
-  currency: string;
+export type BillingQuotaMode = "off" | "shadow" | "warn" | "enforce";
+
+export type UsageDimension =
+  | "sms_segments"
+  | "voice_minutes"
+  | "email_sends"
+  | "scheduler_bookings"
+  | "mortgi_ai_tokens";
+
+export interface QuotaUsageSlice {
+  dimension: UsageDimension;
+  used: number;
+  included: number;
+  reserved: number;
+  pct: number;
+}
+
+export interface UnifiedQuotaSummary {
+  mode: BillingQuotaMode;
+  periodStart: string;
+  sms_segments: QuotaUsageSlice;
+  voice_minutes: QuotaUsageSlice;
+  email_sends: QuotaUsageSlice;
+  scheduler_bookings: QuotaUsageSlice;
+  mortgi_ai_tokens: QuotaUsageSlice;
 }
 
 export interface CreateBroadcastRequest {
@@ -3025,19 +3063,20 @@ export interface CreateBroadcastRequest {
 export interface PreviewBroadcastAudienceRequest {
   audience_filter: RealtorBroadcastAudienceFilter;
   channel: RealtorBroadcastChannel;
+  body_sms?: string;
 }
 
 export interface GetBroadcastsResponse {
   success: boolean;
   broadcasts: RealtorBroadcast[];
   total: number;
-  credits?: BroadcastCreditSummary;
+  quota?: UnifiedQuotaSummary;
 }
 
 export interface GetBroadcastResponse {
   success: boolean;
   broadcast: RealtorBroadcast;
-  credits?: BroadcastCreditSummary;
+  quota?: UnifiedQuotaSummary;
 }
 
 export interface CreateBroadcastResponse {
@@ -3045,14 +3084,15 @@ export interface CreateBroadcastResponse {
   broadcast_id: number;
   recipient_count: number;
   status: RealtorBroadcastStatus;
-  estimated_cost_usd?: number;
-  credits?: BroadcastCreditSummary;
+  estimated_sms_segments?: number;
+  estimated_email_sends?: number;
+  quota?: UnifiedQuotaSummary;
 }
 
 export interface PreviewBroadcastAudienceResponse {
   success: boolean;
   preview: BroadcastAudiencePreview;
-  credits?: BroadcastCreditSummary;
+  quota?: UnifiedQuotaSummary;
 }
 
 export interface GetBroadcastRecipientsResponse {
@@ -3088,4 +3128,370 @@ export interface ResendFailedResponse {
 export interface ResendPendingResponse {
   success: boolean;
   retried: number;
+}
+
+// ─── Platform billing & quota ─────────────────────────────────────────────────
+
+export interface BillingPlanSnapshot {
+  platformFeeUsd: number;
+  includedSmsSegments: number;
+  includedVoiceMinutes: number;
+  includedEmailSends: number;
+  includedSchedulerBookings: number;
+  includedMortgiAiTokens: number;
+}
+
+export interface BillingSubscriptionSnapshot {
+  planCode: string;
+  status: string;
+  periodStart: string;
+  periodEnd: string | null;
+}
+
+export interface BillingConfigPayload {
+  billingQuotaMode: BillingQuotaMode;
+  billingUiEnabled: boolean;
+  billingOverageEnabled: boolean;
+  billingEnforceBroadcastDaily: boolean;
+  platformFeeUsd: number;
+  plan: BillingPlanSnapshot;
+  subscription: BillingSubscriptionSnapshot | null;
+  /** True when STRIPE_SECRET_KEY + STRIPE_PUBLISHABLE_KEY are set */
+  stripeEnabled?: boolean;
+  stripePublishableKey?: string | null;
+  stripeTestMode?: boolean;
+  stripeWebhookConfigured?: boolean;
+  /** True when STRIPE_PLATFORM_PRICE_ID is set */
+  stripePlatformSubscriptionConfigured?: boolean;
+  /** Stripe subscription id stored for this tenant */
+  stripeSubscriptionLinked?: boolean;
+  stripeSubscriptionActive?: boolean;
+  /** Latest status from Stripe (e.g. incomplete, active, past_due) */
+  stripeSubscriptionStatus?: string | null;
+  /** True when customer has a default payment method on file */
+  hasPaymentMethod?: boolean;
+  stripeCustomerId?: string | null;
+  /** Dev/finance only — when false, COGS/margin/infra breakdown are hidden and stripped from API */
+  billingInternalEconomicsEnabled?: boolean;
+}
+
+export interface GetBillingConfigResponse {
+  success: boolean;
+  config: BillingConfigPayload;
+}
+
+export type {
+  BillingAccessLevel,
+  BillingAccessState,
+  BillingGraceKind,
+  BillingTeamNotice,
+  BillingTeamNoticeLevel,
+} from "./billing-access";
+
+export interface GetBillingTeamNoticeResponse {
+  success: boolean;
+  notice: import("./billing-access").BillingTeamNotice;
+}
+
+export interface GetBillingAccessResponse {
+  success: boolean;
+  access: import("./billing-access").BillingAccessState;
+}
+
+export interface SimulateBillingAccessResponse {
+  success: boolean;
+  access: import("./billing-access").BillingAccessState;
+}
+
+export interface BillingUsageSnapshot {
+  periodStart: string;
+  periodEnd: string;
+  tenantId: number;
+  totalSmsSegments: number;
+  broadcastSmsSegments: number;
+  convoSmsSegments: number;
+  totalEmailSends: number;
+  broadcastEmailSends: number;
+  callsLogged: number;
+  voiceMinutesRecorded: number;
+  voiceMinutesEstimated?: number;
+  schedulerBookings: number;
+  mortgiAiTokens: number;
+  mortgiSessions: number;
+  mortgiUserMessages: number;
+}
+
+export interface BillingBroadcastEconomics {
+  smsSegments: number;
+  emailSends: number;
+  cogsUsd: number;
+  emailCogsUsd: number;
+  shareOfSmsPct: number;
+  shareOfVariableCogsPct: number;
+  pctOfIncludedSms: number;
+  pctOfIncludedEmail: number;
+}
+
+export interface BillingFixedInfraBreakdown {
+  vercelUsd: number;
+  ablyUsd: number;
+  tidbUsd: number;
+  resendUsd: number;
+  cdnHostgatorImapUsd: number;
+  tenDlcAmortizedUsd: number;
+  zoomApiLicenseUsd: number;
+}
+
+export interface BillingTopUpPackEconomics {
+  variableCogsUsd: number;
+  stripeFeeUsd: number;
+  netMarginUsd: number;
+  marginPct: number;
+}
+
+export interface BillingExpenditurePayload {
+  usage: BillingUsageSnapshot;
+  broadcast: BillingBroadcastEconomics;
+  voiceMinutesBilled: number;
+  variableUsageCogsUsd: number;
+  fixedInfraCogsUsd: number;
+  fixedInfraBreakdown: BillingFixedInfraBreakdown;
+  zoomBrokerCogsUsd: number;
+  totalPlatformCogsUsd: number;
+  overageRetailUsd: number;
+  platformFeeUsd: number;
+  addonsUsd: number;
+  ownerTotalUsd: number;
+  stripeFeesUsd: number;
+  grossMarginUsd: number;
+  /** Net margin after vendor COGS + Stripe */
+  estimatedMarginUsd: number;
+  pctSms: number;
+  pctVoice: number;
+  pctEmail: number;
+  pctScheduler: number;
+  pctMortgiAiTokens: number;
+  mortgiCogsUsd: number;
+}
+
+export interface GetBillingUsageResponse {
+  success: boolean;
+  usage: BillingUsageSnapshot;
+  expenditure: BillingExpenditurePayload;
+  refreshedAt: string;
+}
+
+export interface GetBillingQuotaResponse {
+  success: boolean;
+  quota: UnifiedQuotaSummary;
+}
+
+export interface BillingActivePeriodCapacity {
+  dimension: UsageDimension;
+  title: string;
+  planIncluded: number;
+  topUpIncluded: number;
+  totalIncluded: number;
+  used: number;
+  reserved: number;
+  pct: number;
+}
+
+export interface BillingActivePeriodSummary {
+  periodStart: string;
+  periodEnd: string | null;
+  subscriptionStatus: string | null;
+  platformFeeUsd: number;
+  capacities: BillingActivePeriodCapacity[];
+}
+
+export interface BillingCapacityPurchase {
+  id: number;
+  type: "top_up";
+  dimension: UsageDimension;
+  units: number;
+  amountCents: number | null;
+  label: string;
+  paymentIntentId: string | null;
+  source: string;
+  appliedPeriodStart: string | null;
+  activeForCurrentPeriod: boolean;
+  createdAt: string;
+}
+
+export interface GetBillingPurchasesResponse {
+  success: boolean;
+  activePeriod: BillingActivePeriodSummary;
+  purchases: BillingCapacityPurchase[];
+}
+
+export interface BillingStripePack {
+  id: string;
+  dimension: string;
+  units: number;
+  label: string;
+  amountCents: number;
+  economics?: BillingTopUpPackEconomics;
+}
+
+export interface GetBillingStripePacksResponse {
+  success: boolean;
+  packs: BillingStripePack[];
+}
+
+export interface BillingTopUpTierOption {
+  tierIndex: number;
+  tierId: string;
+  units: number;
+  amountCents: number;
+  label: string;
+  chipLabel: string;
+  economics?: BillingTopUpPackEconomics;
+}
+
+export interface BillingTopUpChannelOption {
+  dimension: UsageDimension;
+  title: string;
+  unitLabel: string;
+  unitLabelShort: string;
+  tiers: BillingTopUpTierOption[];
+}
+
+export interface GetBillingTopUpOptionsResponse {
+  success: boolean;
+  channels: BillingTopUpChannelOption[];
+}
+
+export interface BillingTopUpQuotePayload {
+  quoteKey: string;
+  tierId: string;
+  dimension: UsageDimension;
+  tierIndex: number;
+  units: number;
+  amountCents: number;
+  label: string;
+  economics?: BillingTopUpPackEconomics;
+}
+
+export interface PostBillingTopUpQuoteResponse {
+  success: boolean;
+  quote: BillingTopUpQuotePayload;
+}
+
+export interface BillingStripeChargeQuoteResponse {
+  success: boolean;
+  granted?: boolean;
+  already_fulfilled?: boolean;
+  quote?: BillingTopUpQuotePayload | null;
+  quota?: UnifiedQuotaSummary;
+  error?: string;
+  code?: string;
+  client_secret?: string;
+  payment_intent_id?: string;
+}
+
+export interface BillingStripeCheckoutResponse {
+  success: boolean;
+  url: string | null;
+  session_id: string;
+}
+
+export interface BillingStripePortalResponse {
+  success: boolean;
+  url: string;
+}
+
+export interface BillingSavedPaymentMethod {
+  id: string;
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+}
+
+export interface GetBillingPaymentMethodResponse {
+  success: boolean;
+  payment_method: BillingSavedPaymentMethod | null;
+}
+
+export interface BillingStripePaymentMethodSetupResponse {
+  success: boolean;
+  client_secret: string;
+  setup_intent_id: string;
+}
+
+export interface BillingStripeConfirmPaymentMethodResponse {
+  success: boolean;
+  payment_method: BillingSavedPaymentMethod | null;
+}
+
+export interface GetBillingStripeConfigResponse {
+  success: boolean;
+  enabled: boolean;
+  publishableKey: string | null;
+  testMode: boolean;
+  webhookConfigured: boolean;
+}
+
+export interface BillingStripeFulfillmentPayload {
+  granted: boolean;
+  already_fulfilled: boolean;
+  pack: BillingStripePack | null;
+  quota: UnifiedQuotaSummary;
+}
+
+export interface BillingStripeConfirmPaymentResponse {
+  success: boolean;
+  granted: boolean;
+  already_fulfilled: boolean;
+  pack: BillingStripePack | null;
+  quota: UnifiedQuotaSummary;
+}
+
+export interface BillingStripeChargePackResponse {
+  success: boolean;
+  granted?: boolean;
+  already_fulfilled?: boolean;
+  pack?: BillingStripePack | null;
+  quota?: UnifiedQuotaSummary;
+  error?: string;
+  code?: string;
+  client_secret?: string;
+  payment_intent_id?: string;
+}
+
+export interface BillingStripePaymentIntentResponse {
+  success: boolean;
+  client_secret: string;
+  payment_intent_id: string;
+  pack: BillingStripePack;
+}
+
+export interface BillingStripeSubscriptionSetupResponse {
+  success: boolean;
+  client_secret?: string | null;
+  subscription_id?: string;
+  stripe_status?: string;
+  already_active?: boolean;
+  error?: string;
+}
+
+export interface BillingStripeConfirmSubscriptionResponse {
+  success: boolean;
+  stripe_status: string;
+  subscription: BillingSubscriptionSnapshot | null;
+  payment_method?: BillingSavedPaymentMethod | null;
+  receipt_email?: {
+    sent: boolean;
+    skipped?: string;
+    error?: string;
+  };
+  error?: string;
+}
+
+export interface BillingStripeResetSubscriptionTestResponse {
+  success: boolean;
+  reset: boolean;
+  message: string;
+  error?: string;
 }

@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import { useBillingAccess } from "@/hooks/useBillingAccess";
+import { BillingActionGate } from "@/components/billing/BillingActionGate";
 import {
   fetchBroadcasts,
   fetchBroadcastDetail,
@@ -95,6 +97,14 @@ import type {
 } from "@shared/api";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "react-router-dom";
+import {
+  estimateBroadcastUnits,
+  INSUFFICIENT_QUOTA_MESSAGE,
+  quotaSliceRemaining,
+  wouldExceedQuota,
+} from "@/utils/billing-quota";
+import { billingTopUpHref, suggestTopUpPackId } from "@/utils/billing-payment-status";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -187,10 +197,6 @@ const STATUS_CONFIG: Record<
   },
 };
 
-const BROADCAST_COST_PER_DELIVERY_USD = 0.0079;
-const INSUFFICIENT_CREDITS_MESSAGE =
-  "Insufficient broadcast credits. Contact your admin to add more credits.";
-
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status];
   const fallback = {
@@ -243,16 +249,8 @@ function smsSegments(text: string): number {
   return Math.ceil((text || "").length / 160) || 1;
 }
 
-function estimateBroadcastCostUsd(deliveryCount: number): number {
-  return Number((Math.max(0, deliveryCount) * BROADCAST_COST_PER_DELIVERY_USD).toFixed(2));
-}
-
-function formatUsd(amount: number): string {
-  return `$${amount.toFixed(2)}`;
-}
-
-function smsCostEstimate(recipientCount: number): string {
-  return `≈ ${formatUsd(estimateBroadcastCostUsd(recipientCount))}`;
+function formatQuotaUnits(n: number): string {
+  return n.toLocaleString();
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -400,7 +398,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     error,
     latestDraft,
     savedSegments,
-    credits,
+    quota,
   } = useAppSelector((state) => state.realtorBroadcasts);
   const { toast } = useToast();
   const { user: currentBroker } = useAppSelector((state) => state.brokerAuth);
@@ -408,6 +406,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     (s) => s.communicationTemplates,
   );
   const hasTwilioNumber = !!(currentBroker as any)?.twilio_caller_id;
+  const isPlatformOwner = currentBroker?.role === "platform_owner";
 
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<WizardState>(WIZARD_DEFAULTS);
@@ -499,6 +498,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
       dispatch(
         previewBroadcastAudience({
           channel: form.channel,
+          body_sms: form.body_sms,
           audience_filter: {
             segments: form.segments,
             // excluded_ids intentionally NOT sent — selections are client-side only
@@ -536,11 +536,34 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
       (form.channel === "both" &&
         form.body_email.trim() &&
         form.body_sms.trim()));
-  const availableCreditsUsd = credits?.available_balance_usd ?? 0;
-  const estimatedCostUsd = audiencePreview?.estimated_cost_usd ?? 0;
+  const blastEstimate = audiencePreview
+    ? {
+        sms_segments:
+          audiencePreview.estimated_sms_segments ??
+          estimateBroadcastUnits({
+            channel: form.channel,
+            smsBody: form.body_sms,
+            emailRecipientCount: audiencePreview.email_count,
+            smsRecipientCount: audiencePreview.sms_count,
+          }).sms_segments,
+        email_sends:
+          audiencePreview.estimated_email_sends ?? audiencePreview.email_count,
+      }
+    : { sms_segments: 0, email_sends: 0 };
+  const smsRemaining = quotaSliceRemaining(quota?.sms_segments ?? { used: 0, included: 0, reserved: 0 });
   const isBillableSend = form.send_now || Boolean(form.scheduled_at);
-  const insufficientCredits =
-    isBillableSend && estimatedCostUsd > 0 && availableCreditsUsd < estimatedCostUsd;
+  const insufficientQuota =
+    isBillableSend && wouldExceedQuota(quota, blastEstimate);
+  const {
+    access: billingAccess,
+    teamNotice,
+    isActionGateLocked,
+    actionGateReason,
+  } = useBillingAccess();
+  const billingBlocksSend = isBillableSend && isActionGateLocked;
+  const topUpHref = isPlatformOwner
+    ? billingTopUpHref(suggestTopUpPackId({ expenditure: null, quota }))
+    : null;
 
   const handleSaveSegment = async () => {
     if (!saveSegmentName.trim()) return;
@@ -570,10 +593,30 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
   };
 
   const handleSend = async () => {
-    if (insufficientCredits) {
+    if (billingBlocksSend) {
+      const headline =
+        actionGateReason === "loading"
+          ? "Checking billing status"
+          : actionGateReason === "error"
+            ? "Billing status unavailable"
+            : isPlatformOwner
+              ? (billingAccess?.headline ?? "Cannot send broadcast")
+              : (teamNotice?.headline ?? "Cannot send broadcast");
+      const detail =
+        actionGateReason === "loading"
+          ? "Verifying whether outbound sends are allowed."
+          : actionGateReason === "error"
+            ? "We could not confirm billing status. Try again in a moment."
+            : isPlatformOwner
+              ? (billingAccess?.detail ?? "Resolve billing to resume sends.")
+              : (teamNotice?.detail ?? "Contact your platform owner.");
+      toast({ title: headline, description: detail, variant: "destructive" });
+      return;
+    }
+    if (insufficientQuota) {
       toast({
         title: "Cannot send broadcast",
-        description: INSUFFICIENT_CREDITS_MESSAGE,
+        description: INSUFFICIENT_QUOTA_MESSAGE,
         variant: "destructive",
       });
       return;
@@ -602,30 +645,40 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
       };
     }
 
-    await dispatch(
-      createBroadcast({
-        title: form.title,
-        channel: form.channel,
-        subject: form.subject || undefined,
-        body_email: form.body_email || undefined,
-        body_sms: form.body_sms || undefined,
-        audience_filter,
-        // datetime-local gives a local-timezone string — convert to UTC ISO before submitting
-        scheduled_at: form.scheduled_at
-          ? new Date(form.scheduled_at).toISOString()
-          : undefined,
-        send_now: form.send_now,
-      }),
-    ).unwrap();
-    setForm(WIZARD_DEFAULTS);
-    setStep(1);
-    setDraftId(null);
-    setConfirmed(false);
-    setRecipientSearch("");
-    setSaveSegmentName("");
-    setShowSaveSegment(false);
-    setShowSegmentPresets(false);
-    onSuccess();
+    try {
+      await dispatch(
+        createBroadcast({
+          title: form.title,
+          channel: form.channel,
+          subject: form.subject || undefined,
+          body_email: form.body_email || undefined,
+          body_sms: form.body_sms || undefined,
+          audience_filter,
+          // datetime-local gives a local-timezone string — convert to UTC ISO before submitting
+          scheduled_at: form.scheduled_at
+            ? new Date(form.scheduled_at).toISOString()
+            : undefined,
+          send_now: form.send_now,
+        }),
+      ).unwrap();
+      setForm(WIZARD_DEFAULTS);
+      setStep(1);
+      setDraftId(null);
+      setConfirmed(false);
+      setRecipientSearch("");
+      setSaveSegmentName("");
+      setShowSaveSegment(false);
+      setShowSegmentPresets(false);
+      onSuccess();
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : "Failed to create broadcast";
+      toast({
+        title: "Cannot send broadcast",
+        description: message,
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -925,7 +978,13 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
                     {audiencePreview && audiencePreview.sms_count > 0 && (
                       <span className="ml-1 text-amber-600">
                         ·{" "}
-                        {smsCostEstimate(audiencePreview.sms_count)}
+                        ~
+                        {formatQuotaUnits(
+                          audiencePreview.estimated_sms_segments ??
+                            audiencePreview.sms_count *
+                              smsSegments(form.body_sms),
+                        )}{" "}
+                        SMS seg total
                       </span>
                     )}
                   </span>
@@ -1608,26 +1667,52 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             </div>
           )}
 
-          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+          <div className="rounded-lg border border-orange-200/80 bg-orange-50/80 px-3 py-2 text-xs text-orange-900 dark:text-orange-200">
             <p className="font-medium">
-              This estimate includes multiple services running at the same time.
-              Final cost may vary based on successful deliveries.
+              Broadcast draws from your unified monthly SMS and email quotas.
             </p>
             <p className="mt-1">
-              Estimated send cost:{" "}
-              <span className="font-semibold">{formatUsd(estimatedCostUsd)}</span>.
-              Remaining credits:{" "}
-              <span className="font-semibold">
-                {formatUsd(availableCreditsUsd)}
+              This blast:{" "}
+              <span className="font-semibold tabular-nums">
+                {formatQuotaUnits(blastEstimate.sms_segments)} SMS seg
               </span>
-              .
+              {blastEstimate.email_sends > 0 ? (
+                <>
+                  {" "}
+                  ·{" "}
+                  <span className="font-semibold tabular-nums">
+                    {formatQuotaUnits(blastEstimate.email_sends)} email
+                  </span>
+                </>
+              ) : null}
+              . Pool remaining:{" "}
+              <span className="font-semibold tabular-nums">
+                {formatQuotaUnits(smsRemaining)} SMS seg
+              </span>
+              {quota && isPlatformOwner && topUpHref ? (
+                <Link to={topUpHref} className="ml-2 underline font-medium">
+                  Add capacity
+                </Link>
+              ) : null}
             </p>
           </div>
 
-          {insufficientCredits && (
-            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+          {insufficientQuota && !billingBlocksSend && (
+            <div className="flex flex-wrap items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
               <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-              <span>{INSUFFICIENT_CREDITS_MESSAGE}</span>
+              <span className="flex-1">
+                {isPlatformOwner
+                  ? INSUFFICIENT_QUOTA_MESSAGE
+                  : "Monthly SMS quota is exhausted. Contact your platform owner to add capacity."}
+              </span>
+              {isPlatformOwner && topUpHref ? (
+                <Link
+                  to={topUpHref}
+                  className="font-semibold underline underline-offset-2 shrink-0"
+                >
+                  Pay now
+                </Link>
+              ) : null}
             </div>
           )}
 
@@ -1650,42 +1735,46 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
               );
             })()}
 
-          {/* I confirm checkbox */}
-          <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border p-3 hover:bg-muted/30 transition-colors">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 accent-primary shrink-0"
-              checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-            />
-            <span className="text-sm">
-              I confirm I have reviewed the audience and content above and
-              authorise this broadcast.
-            </span>
-          </label>
+          <BillingActionGate blockWhenRestricted={isBillableSend}>
+            {/* I confirm checkbox */}
+            <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border p-3 hover:bg-muted/30 transition-colors">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-primary shrink-0"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+              />
+              <span className="text-sm">
+                I confirm I have reviewed the audience and content above and
+                authorise this broadcast.
+              </span>
+            </label>
 
-          <div className="flex justify-between pt-2">
-            <Button variant="outline" onClick={() => setStep(3)}>
-              <ChevronLeft className="mr-1 h-4 w-4" /> Back
-            </Button>
-            <Button
-              onClick={handleSend}
-              disabled={isSending || !confirmed || insufficientCredits}
-              className="min-w-[140px]"
-            >
-              {isSending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Queuing…
-                </>
-              ) : (
-                <>
-                  <Send className="mr-2 h-4 w-4" />
-                  {form.send_now ? "Send Broadcast" : "Schedule Broadcast"}
-                </>
-              )}
-            </Button>
-          </div>
+            <div className="flex justify-between pt-2">
+              <Button variant="outline" onClick={() => setStep(3)}>
+                <ChevronLeft className="mr-1 h-4 w-4" /> Back
+              </Button>
+              <Button
+                onClick={handleSend}
+                disabled={
+                  isSending || !confirmed || insufficientQuota || billingBlocksSend
+                }
+                className="min-w-[140px]"
+              >
+                {isSending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Queuing…
+                  </>
+                ) : (
+                  <>
+                    <Send className="mr-2 h-4 w-4" />
+                    {form.send_now ? "Send Broadcast" : "Schedule Broadcast"}
+                  </>
+                )}
+              </Button>
+            </div>
+          </BillingActionGate>
         </div>
       )}
     </div>
@@ -1711,8 +1800,9 @@ function BroadcastDetailDialog({
     isLoading,
     isResending,
     isExporting,
-    credits,
+    quota,
   } = useAppSelector((state) => state.realtorBroadcasts);
+  const { isActionGateLocked, access, teamNotice } = useBillingAccess();
   const [recipientsPage, setRecipientsPage] = useState(1);
 
   useEffect(() => {
@@ -1770,7 +1860,17 @@ function BroadcastDetailDialog({
       ? Math.round(((b.sent_count + b.failed_count) / b.recipient_count) * 100)
       : 0
     : 0;
-  const hasAnyCredits = (credits?.available_balance_usd ?? 0) > 0;
+  const canRetryQuota =
+    !isActionGateLocked &&
+    (!quota ||
+      quota.mode !== "enforce" ||
+      quota.sms_segments.pct < 100 ||
+      quota.email_sends.pct < 100);
+  const retryBlockedMessage = isActionGateLocked
+    ? (access?.detail ??
+      teamNotice?.detail ??
+      "Outbound sends are paused until billing is resolved.")
+    : INSUFFICIENT_QUOTA_MESSAGE;
 
   return (
     <Dialog open={!!broadcastId} onOpenChange={(open) => !open && onClose()}>
@@ -1857,7 +1957,7 @@ function BroadcastDetailDialog({
                     size="sm"
                     variant="outline"
                     className="text-blue-700 border-blue-300 hover:bg-blue-50"
-                    disabled={isResending || !hasAnyCredits}
+                    disabled={isResending || !canRetryQuota}
                     onClick={async () => {
                       try {
                         const result = await dispatch(
@@ -1906,7 +2006,7 @@ function BroadcastDetailDialog({
                       size="sm"
                       variant="outline"
                       className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                      disabled={isResending || !hasAnyCredits}
+                      disabled={isResending || !canRetryQuota}
                       onClick={async () => {
                         try {
                           const result = await dispatch(
@@ -1951,9 +2051,9 @@ function BroadcastDetailDialog({
                       Retry {b.failed_count} failed
                     </Button>
                   )}
-                  {!hasAnyCredits && (
+                  {!canRetryQuota && (
                     <span className="text-xs text-red-600">
-                      {INSUFFICIENT_CREDITS_MESSAGE}
+                      {retryBlockedMessage}
                     </span>
                   )}
                 </div>
@@ -2119,9 +2219,29 @@ function BroadcastDetailDialog({
 function BroadcastHistory() {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const { broadcasts, broadcastsTotal, isLoading, isResending, credits } =
+  const user = useAppSelector((state) => state.brokerAuth.user);
+  const isPlatformOwner = user?.role === "platform_owner";
+  const { broadcasts, broadcastsTotal, isLoading, isResending, quota } =
     useAppSelector((state) => state.realtorBroadcasts);
-  const hasAnyCredits = (credits?.available_balance_usd ?? 0) > 0;
+  const { isActionGateLocked, access, teamNotice } = useBillingAccess();
+  const canRetryQuota =
+    !isActionGateLocked &&
+    (!quota ||
+      quota.mode !== "enforce" ||
+      quota.sms_segments.pct < 100 ||
+      quota.email_sends.pct < 100);
+  const retryBlockedMessage = isActionGateLocked
+    ? isPlatformOwner
+      ? (access?.detail ??
+        "Outbound sends are paused until billing is resolved.")
+      : (teamNotice?.detail ??
+        "Outbound sends are paused. Contact your platform owner.")
+    : isPlatformOwner
+      ? INSUFFICIENT_QUOTA_MESSAGE
+      : "Monthly SMS quota is exhausted. Contact your platform owner to add capacity.";
+  const topUpHref = isPlatformOwner
+    ? billingTopUpHref(suggestTopUpPackId({ expenditure: null, quota }))
+    : null;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RealtorBroadcast | null>(
     null,
@@ -2189,9 +2309,14 @@ function BroadcastHistory() {
 
   return (
     <div className="space-y-4">
-      {!hasAnyCredits && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {INSUFFICIENT_CREDITS_MESSAGE}
+      {!canRetryQuota && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <span className="flex-1">{retryBlockedMessage}</span>
+          {isPlatformOwner && topUpHref ? (
+            <Link to={topUpHref} className="font-semibold underline underline-offset-2">
+              Pay now
+            </Link>
+          ) : null}
         </div>
       )}
       {isLoading ? (
@@ -2276,9 +2401,9 @@ function BroadcastHistory() {
                           variant="ghost"
                           size="sm"
                           className="h-7 px-2 text-sky-600 hover:text-sky-700"
-                          disabled={isResending || !hasAnyCredits}
+                          disabled={isResending || !canRetryQuota}
                           onClick={() => handleRetriggerPending(b.id)}
-                          title={!hasAnyCredits ? INSUFFICIENT_CREDITS_MESSAGE : undefined}
+                          title={!canRetryQuota ? INSUFFICIENT_QUOTA_MESSAGE : undefined}
                         >
                           {isResending ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2353,10 +2478,13 @@ function BroadcastHistory() {
 
 export default function RealtorBroadcasts() {
   const dispatch = useAppDispatch();
-  const { credits } = useAppSelector((state) => state.realtorBroadcasts);
+  const user = useAppSelector((state) => state.brokerAuth.user);
+  const isPlatformOwner = user?.role === "platform_owner";
+  const { quota } = useAppSelector((state) => state.realtorBroadcasts);
+  const topUpHref = isPlatformOwner
+    ? billingTopUpHref(suggestTopUpPackId({ expenditure: null, quota }))
+    : null;
   const [activeTab, setActiveTab] = useState("new");
-  const availableCreditsUsd = credits?.available_balance_usd ?? 0;
-  const reservedCreditsUsd = credits?.reserved_balance_usd ?? 0;
 
   useEffect(() => {
     dispatch(fetchBroadcasts());
@@ -2383,25 +2511,32 @@ export default function RealtorBroadcasts() {
         </div>
 
         <div className="flex flex-col items-start sm:items-end gap-1.5 shrink-0">
-          <div className="inline-flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
-            <Info className="h-3.5 w-3.5 shrink-0" />
-            <span>
-              Broadcast credits:{" "}
-              <span className="font-semibold text-foreground tabular-nums">
-                {formatUsd(availableCreditsUsd)}
-              </span>
-              {reservedCreditsUsd > 0 && (
-                <span className="text-muted-foreground">
-                  {" "}
-                  (reserved{" "}
-                  <span className="font-semibold tabular-nums">
-                    {formatUsd(reservedCreditsUsd)}
-                  </span>
-                  )
+          {quota ? (
+            <div className="inline-flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                SMS quota:{" "}
+                <span className="font-semibold text-foreground tabular-nums">
+                  {formatQuotaUnits(quota.sms_segments.used + quota.sms_segments.reserved)}
                 </span>
-              )}
-            </span>
-          </div>
+                /{formatQuotaUnits(quota.sms_segments.included)} seg
+                {quota.sms_segments.reserved > 0 ? (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({formatQuotaUnits(quota.sms_segments.reserved)} reserved)
+                  </span>
+                ) : null}
+                {isPlatformOwner && topUpHref ? (
+                  <>
+                    {" · "}
+                    <Link to={topUpHref} className="text-primary underline font-medium">
+                      Add capacity
+                    </Link>
+                  </>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
           <p className="text-xs text-muted-foreground sm:text-right max-w-xs sm:max-w-sm leading-relaxed">
             Unsubscribes and STOP replies are handled automatically.
           </p>

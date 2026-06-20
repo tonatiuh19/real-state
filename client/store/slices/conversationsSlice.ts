@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import axios from "axios";
+import { billingDenialMessage, parseBillingDenial } from "@/utils/billing-denial";
 import type { RootState } from "../index";
 import type {
   GetConversationThreadsResponse,
@@ -260,11 +261,19 @@ export const sendMessage = createAsyncThunk(
         communication_type: messageData.communication_type,
         from_broker_id: user?.id ?? null,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const denial = parseBillingDenial(error);
       return rejectWithValue(
-        error.response?.data?.error ||
-          error.response?.data?.message ||
-          "Failed to send message",
+        billingDenialMessage(
+          denial,
+          axios.isAxiosError(error)
+            ? String(
+                error.response?.data?.error ||
+                  error.response?.data?.message ||
+                  "Failed to send message",
+              )
+            : "Failed to send message",
+        ),
       );
     }
   },

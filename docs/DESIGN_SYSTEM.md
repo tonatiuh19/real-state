@@ -52,7 +52,7 @@
 | **Client Portal**           | Borrower-facing portal at `/portal`. Task list, document uploads, form submissions, e-signatures.                   |
 | **Task System**             | Configurable task templates (document collection, form fields, PDF signature zones). Broker approves each task.     |
 | **Documents**               | Centralized document library. All uploads tied to tasks, stored via CDN (disruptinglabs.com).                       |
-| **Conversations**           | Unified inbox for inbound/outbound email, SMS, and WhatsApp per client/loan thread.                                 |
+| **Conversations**           | Unified inbox for inbound/outbound email, SMS, and WhatsApp per client/loan thread. In-browser voice uses a **single** Twilio Device in `GlobalVoiceManager`; outbound `VoiceCallPanel` reuses it (never spawns a second Device per broker identity). |
 | **Communication Templates** | Reusable templates per channel (email, SMS, WhatsApp). Assignable per pipeline step.                                |
 | **Reminder Flows**          | Visual flow builder (nodes + edges) for automated multi-step reminder sequences. Triggered by pipeline events.      |
 | **Scheduler**               | Public booking page for clients. Admins manage availability windows, meeting types (phone/video), Zoom integration. |
@@ -721,7 +721,7 @@ The layout detects this with: `const isPartner = user?.role === "broker";`
 | Reminder Flows | ✓ | hidden |
 | Conversations | ✓ | hidden |
 | Reports & Analytics | ✓ | hidden |
-| People Management | ✓ | hidden |
+| People Management | ✓ (Realtor Management — owned partners) | hidden |
 | Contact Messages | ✓ | hidden |
 | Settings | ✓ | hidden |
 
@@ -739,7 +739,7 @@ Full menu items (shown to `admin`):
 | Reminder Flows | `/admin/reminder-flows` | AlarmClock |
 | Conversations | `/admin/conversations` | MessageCircle |
 | Reports & Analytics | `/admin/reports` | TrendingUp |
-| People Management | `/admin/brokers` | UserCog |
+| Realtor Management | `/admin/brokers` | UserCog |
 | Contact Messages | `/admin/contact-submissions` | MessageSquare |
 | Scheduler | `/admin/scheduler` | CalendarDays |
 | Settings | `/admin/settings` | Settings |
@@ -834,7 +834,7 @@ When `isPartner` is `true`, these sections are **completely removed** from the s
 | Reminder Flows      | `reminder-flows`          |     ✓      |      —       |
 | Conversations       | `conversations`           |     ✓      |      —       |
 | Reports & Analytics | `reports`                 |     ✓      |      —       |
-| People Management   | `brokers`                 |     ✓      |      —       |
+| Realtor Management   | `brokers`                 |     ✓      |      —       |
 | Contact Messages    | `contact-submissions`     |     ✓      |      —       |
 | Settings            | `settings`                |     ✓      |      —       |
 
@@ -1431,7 +1431,46 @@ When `billing_quota_mode` ≥ `warn`, Broadcast Center uses **unified SMS/email 
 
 ## Platform owner billing (`/admin/billing`)
 
-Gated by `billing_ui_enabled`. See `docs/BILLING_AND_QUOTA_PLAN.md`.
+**Platform owner only** — nav, `/admin/billing`, Stripe routes, and `/api/billing/access`. Brokers/admins get **`BillingTeamNoticeBanner`** via `GET /api/billing/team-notice` during grace, restricted, suspended, or quota block — administrator-focused copy, no payment links. Server-side quota enforcement still applies to their sends. Gated by `billing_ui_enabled` (nav + page) or Stripe keys. See `docs/BILLING_AND_QUOTA_PLAN.md`.
+
+**Components:** `client/pages/admin/Billing.tsx`, `BillingUsageMeter`, `BillingBudgetForecast`, `BillingAccessBanner`, `BillingSuspendedWall`, `BillingActionGate` (`client/components/billing/`). Data via `billingSlice` → `GET /api/billing/config`, `/access`, `/usage`, `/quota`; Stripe top-ups via `/api/billing/stripe/*`.
+
+**Tabs:** Live usage meters + expenditure cards; **Budget forecast** tab runs `computeBudgetForecast()` interactively.
+
+**Stripe:** `StripePlatformSubscription` ($350/mo) uses Payment Element once; card saved for renewals + top-ups. `StripeTopUpCheckout` charges the **saved card** via `POST /api/billing/stripe/charge-quote` after an **AlertDialog confirmation** (amount, pack label, card last4). Card-only, Link disabled. Test card `4242 4242 4242 4242`. Payment API failures show **“We're unable to take payment right now. Please try again later.”** to owners; real errors are logged server-side as `[billing] …` (see `sanitizeBillingError` + `shared/billing-errors.ts`).
+
+**Broadcast top-ups:** There is **no separate broadcast pack**. Blasts consume the unified SMS/email pools — `StripeTopUpCheckout` shows an orange **Broadcasting — unified quota** callout with last-30-day blast stats and shortcuts to the SMS/Email tabs. Full broadcast economics live in `BillingExpendedPeriod` above.
+
+**Economics (internal):** COGS math lives in `shared/billing-calculator.ts`. **Not shown to platform owners in production** — gated by `billingInternalEconomicsEnabled` on `GET /api/billing/config` (true only when `NODE_ENV=development` or `BILLING_INTERNAL_ECONOMICS=true`). When enabled: itemized fixed infra (`BillingInfraBreakdown`), margins, pack economics on top-up cards. Customers see usage vs quotas, retail prices, and owner spend only.
+
+**Payment flow:** subscribe → card on file → **capacity slider** (SMS / voice / email / scheduler / Mortgi tabs, tier slider + chips) → confirm modal → `charge-quote` → quota + purchase history refresh → quota granted idempotently. **`BillingPurchaseHistory`** shows active period plan vs top-up breakdown and Stripe top-ups with **Active this period** badges. Webhook backup. Deep links `/admin/billing?topup=1&pack=sms_1k` open SMS @ 1k tier. Encore HTML receipt on first grant (not Stripe receipt email). **Expended — last 30 days** counts historical sends only; top-ups update **Live quota balances** and meters, not past usage totals.
+
+**Payment required UX:** `BillingAccessBanner` (platform owner) at 80%+ quota, quota block, subscription grace (amber countdown), restricted, or suspended — **Pay now** / **Update payment** CTAs. `BillingTeamNoticeBanner` (brokers/admins) shows grace countdown, `soft_warn` at 80%+ (orange, sends not blocked), and “contact your administrator” copy with no billing links. `BillingSuspendedWall` is a full-screen overlay for platform owners only (billing page exempt). `BillingActionGate` wraps cost-generating controls (Conversations composer, Mortgi broker input, **Realtor Broadcasts** send step, etc.) with **fail-closed** behavior: locks while billing status is loading or fetch failed, and when `blocksCostActions` / `blocksOutbound` is true. Uses a disabled `<fieldset>` plus keyboard capture so Enter cannot bypass the overlay.
+
+**Metering:** Outbound SMS/email/WhatsApp use **precheck → send → record** (no consume-before-send). Auth OTP emails (`broker_otp`, `client_otp`) skip quota. API denials return **402** with `BillingDenialPayload`; client slices parse via `@/utils/billing-denial`. Stripe top-up syncs quota into Broadcast Center via `confirmStripePayment` / `fetchBillingQuota`.
+
+**Emergency rollback:** Set `billing_quota_mode=off` and call `POST /api/billing/access/simulate` with `{ "scenario": "active" }` (or resolve Stripe subscription) to clear ladder blocks without code deploy.
+
+### Billing access ladder
+
+| Level | UX | Sends |
+|-------|-----|-------|
+| `healthy` | No banner | All |
+| `soft_warn` | Orange banner at 80%+ quota | All |
+| `subscription_grace` | Emerald (onboarding) or amber (declined renewal) banner + live countdown — **3 days** (`billing_grace_days`) | All — nothing blocked during grace |
+| `quota_blocked` | Red banner + top-up CTA | Blocked (enforce, no overage) |
+| `subscription_restricted` | Red banner post-grace (day 4–7) | Cost actions blocked when enforce on |
+| `subscription_suspended` | Full wall + read-only list (after day 7) | Blocked when enforce on; billing page exempt |
+
+**Onboarding grace:** `billing_onboarding_started_at` starts when billing goes live (Stripe keys or `billing_ui_enabled`). Unpaid/incomplete subscriptions get 3 days before restrictions — not an immediate suspend.
+
+**Declined renewal:** `invoice.payment_failed` → `past_due` → same 3-day grace ladder → Encore-branded **payment failed** email to stored subscriber (or all platform owners) with grace countdown.
+
+**Reservation TTL:** Cron `GET /api/cron/expire-quota-reservations` releases stale broadcast quota holds (`tenant_usage_reservations` TTL 120 min).
+
+While `billing_quota_mode=off`, grace banners show but **no blocks or full wall** (safe deploy).
+
+Stripe webhooks `invoice.payment_failed`, `customer.subscription.updated` drive the ladder. Dev: `POST /api/billing/access/simulate` with `{ scenario: "past_due" | "active" }` in Stripe test mode.
 
 ### Usage meter colors
 

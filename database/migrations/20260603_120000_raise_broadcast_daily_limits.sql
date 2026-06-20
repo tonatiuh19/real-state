@@ -1,5 +1,5 @@
 -- Temporarily raise daily broadcast caps (abuse guardrails disabled for now).
--- Billing is enforced via tenant_broadcast_credits.
+-- Billing is enforced via unified QuotaService (tenant_usage_ledger).
 -- Safe to re-run: upserts by tenant_id + setting_key.
 
 INSERT INTO system_settings (tenant_id, setting_key, setting_value, updated_at)

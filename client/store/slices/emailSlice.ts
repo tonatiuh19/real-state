@@ -1,6 +1,7 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
+import { billingDenialMessage, parseBillingDenial } from "@/utils/billing-denial";
 import { disconnectConversationMailbox } from "./conversationsSlice";
 import type {
   ConversationThread,
@@ -203,10 +204,13 @@ export const sendEmailMessage = createAsyncThunk(
         body: messageData.body ?? null,
         subject: messageData.subject ?? null,
       };
-    } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.message || "Failed to send email",
-      );
+    } catch (error: unknown) {
+      const denial = parseBillingDenial(error);
+      const fallback = axios.isAxiosError(error)
+        ? (error.response?.data as { message?: string } | undefined)?.message ||
+          error.message
+        : "Failed to send email";
+      return rejectWithValue(billingDenialMessage(denial, fallback || "Failed to send email"));
     }
   },
 );

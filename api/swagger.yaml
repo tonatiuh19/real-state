@@ -81,6 +81,8 @@ tags:
     description: Unauthenticated public endpoints
   - name: Webhooks & Cron
     description: Inbound webhooks and scheduled cron triggers
+  - name: Billing
+    description: Platform-owner billing config and usage meters (gated by billing_ui_enabled)
 
 # ─── Security Schemes ─────────────────────────────────────────────────────────
 components:
@@ -151,6 +153,89 @@ components:
           example: "Something went wrong"
         message:
           type: string
+
+    BillingTeamNotice:
+      type: object
+      properties:
+        show: { type: boolean }
+        level:
+          type: string
+          nullable: true
+          enum:
+            - subscription_grace
+            - subscription_restricted
+            - subscription_suspended
+            - quota_blocked
+        headline: { type: string }
+        detail: { type: string }
+        blocksOutbound: { type: boolean }
+        secondsUntilGraceEnd: { type: integer, nullable: true }
+
+    BillingAccessState:
+      type: object
+      properties:
+        level:
+          type: string
+          enum:
+            - healthy
+            - soft_warn
+            - subscription_grace
+            - quota_blocked
+            - subscription_restricted
+            - subscription_suspended
+        blocksCostActions: { type: boolean }
+        showsFullWall: { type: boolean }
+        blocksBrokerSends: { type: boolean }
+        graceEndsAt: { type: string, format: date-time, nullable: true }
+        restrictedAt: { type: string, format: date-time, nullable: true }
+        suspendedAt: { type: string, format: date-time, nullable: true }
+        secondsUntilGraceEnd: { type: integer, nullable: true }
+        headline: { type: string }
+        detail: { type: string }
+        suggestedPackId: { type: string, nullable: true }
+        whatStillWorks:
+          type: array
+          items: { type: string }
+        showWarnBanner: { type: boolean }
+
+    QuotaUsageSlice:
+      type: object
+      properties:
+        dimension:
+          type: string
+          enum: [sms_segments, voice_minutes, email_sends, scheduler_bookings, mortgi_ai_tokens]
+        used: { type: integer }
+        included: { type: integer }
+        reserved: { type: integer }
+        pct: { type: integer }
+
+    UnifiedQuotaSummary:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [off, shadow, warn, enforce]
+        periodStart: { type: string, format: date }
+        sms_segments: { $ref: "#/components/schemas/QuotaUsageSlice" }
+        voice_minutes: { $ref: "#/components/schemas/QuotaUsageSlice" }
+        email_sends: { $ref: "#/components/schemas/QuotaUsageSlice" }
+        scheduler_bookings: { $ref: "#/components/schemas/QuotaUsageSlice" }
+        mortgi_ai_tokens: { $ref: "#/components/schemas/QuotaUsageSlice" }
+
+    BillingDenialPayload:
+      type: object
+      description: Unified 402 response when quota or subscription blocks a cost action
+      properties:
+        success: { type: boolean }
+        error: { type: string }
+        message: { type: string }
+        quota_exceeded: { type: boolean }
+        billing_action_required: { type: boolean }
+        billing_access_level: { type: string }
+        suggested_pack_id: { type: string, nullable: true }
+        quota:
+          $ref: "#/components/schemas/UnifiedQuotaSummary"
+        required_units: { type: integer }
 
     BrokerUser:
       type: object
@@ -841,6 +926,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "402":
+          description: Email quota or subscription blocks send
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingDenialPayload"
 
   # ── Dashboard ────────────────────────────────────────────────────────────────
   /dashboard/stats:
@@ -949,7 +1040,12 @@ paths:
   /loans/create:
     post:
       tags: [Loans]
-      summary: Create a new loan application (admin)
+      summary: Create a new loan application (Mortgage Banker / platform owner)
+      description: |
+        Requires `admin` or `platform_owner` role. Partners must use share-link / public apply flows.
+
+        `broker_user_id` (optional): platform owner may assign the loan to another active mortgage banker;
+        defaults to the session broker. Mortgage bankers always create under themselves.
       security:
         - BrokerAuth: []
       requestBody:
@@ -958,16 +1054,38 @@ paths:
           application/json:
             schema:
               type: object
-              required: [client_user_id, loan_type, loan_amount]
+              required:
+                - client_email
+                - client_first_name
+                - client_last_name
+                - client_phone
+                - loan_type
+                - loan_amount
+                - property_value
+                - down_payment
+                - property_address
+                - property_city
+                - property_state
+                - property_zip
+                - property_type
               properties:
-                client_user_id: { type: integer }
-                loan_type: { type: string }
+                broker_user_id:
+                  type: integer
+                  nullable: true
+                  description: Platform owner only — assign loan to another MB
+                client_email: { type: string, format: email }
+                client_first_name: { type: string }
+                client_last_name: { type: string }
+                client_phone: { type: string }
+                loan_type: { type: string, enum: [purchase, refinance] }
                 loan_amount: { type: number }
                 property_value: { type: number }
+                down_payment: { type: number }
                 property_address: { type: string }
                 property_city: { type: string }
                 property_state: { type: string }
                 property_zip: { type: string }
+                property_type: { type: string }
                 notes: { type: string }
       responses:
         "201":
@@ -979,7 +1097,13 @@ paths:
                   - $ref: "#/components/schemas/SuccessResponse"
                   - type: object
                     properties:
-                      loan: { $ref: "#/components/schemas/LoanApplication" }
+                      application_id: { type: integer }
+                      application_number: { type: string }
+        "403":
+          description: Partner role or client owned by another broker
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /loans/{loanId}:
     get:
@@ -1734,6 +1858,12 @@ paths:
               type: object
               properties:
                 To: { type: string, description: Destination phone number }
+                From:
+                  type: string
+                  description: Browser SDK identity, e.g. client:broker_270004
+                Identity:
+                  type: string
+                  description: Legacy/alternate identity field (broker_{id})
                 CallSid: { type: string }
       responses:
         "200":
@@ -2132,9 +2262,49 @@ paths:
   /brokers:
     get:
       tags: [Brokers]
-      summary: List all brokers / team members
+      summary: List brokers / team members (scoped)
+      description: |
+        Default (no `scope`): **platform owner only** — full tenant directory.
+
+        `scope=realtors`: **admin** or **platform owner** — partner realtors.
+        Mortgage bankers see only rows where `created_by_broker_id` equals their broker id;
+        platform owners see all staff.
+
+        `scope=mortgage-bankers`: **admin** or **platform owner** — active mortgage bankers
+        and platform owners (dropdowns for partner assignment).
       security:
         - BrokerAuth: []
+      parameters:
+        - in: query
+          name: scope
+          schema:
+            type: string
+            enum: [realtors, mortgage-bankers]
+          description: Optional list scope (see description above)
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: role
+          schema:
+            type: string
+            enum: [broker, admin, platform_owner]
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum: [first_name, last_name, email, role, status, license_number]
+        - in: query
+          name: sortOrder
+          schema:
+            type: string
+            enum: [ASC, DESC]
       responses:
         "200":
           description: Broker list
@@ -2152,8 +2322,9 @@ paths:
       tags: [Brokers]
       summary: Create a new broker / invite a partner
       description: |
-        Only `admin` (Mortgage Banker) can create brokers.
-        `role: "broker"` creates a Partner (Realtor); `role: "admin"` creates another Mortgage Banker.
+        **Mortgage bankers** (`admin`) and **platform owners** may create brokers.
+        Mortgage bankers always create **Partner** realtors owned by themselves (`created_by_broker_id` forced to session broker).
+        Platform owners may set `role: "broker"` (Partner) or `role: "admin"` (Mortgage Banker).
       security:
         - BrokerAuth: []
       requestBody:
@@ -5494,6 +5665,33 @@ paths:
                   checked: { type: integer }
                   updated: { type: integer }
                   unchanged: { type: integer }
+
+  /cron/expire-quota-reservations:
+    get:
+      tags: [Webhooks & Cron]
+      summary: Expire stale quota broadcast reservations (cron trigger)
+      description: |
+        Run every 15–30 minutes via cPanel cron:
+        `curl -s "https://yourdomain.com/api/cron/expire-quota-reservations?secret=CRON_SECRET"`
+
+        Releases reserved SMS/email units held by `tenant_usage_reservations` rows
+        past `expires_at` (default TTL 120 minutes).
+      parameters:
+        - in: query
+          name: secret
+          required: false
+          schema: { type: string }
+          description: Shared secret matching `CRON_SECRET` env var
+      responses:
+        "200":
+          description: Sweeper complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  expired: { type: integer }
                   errors: { type: integer }
 
   /cron/sync-o365-calendars:
@@ -5856,15 +6054,11 @@ paths:
                       email_count: { type: integer }
                       sms_count: { type: integer }
                       skipped_count: { type: integer }
-                      estimated_cost_usd: { type: number, format: float }
+                      estimated_sms_segments: { type: integer }
+                      estimated_email_sends: { type: integer }
                       sample: { type: array, items: { type: object } }
-                  credits:
-                    type: object
-                    properties:
-                      available_balance_usd: { type: number, format: float }
-                      reserved_balance_usd: { type: number, format: float }
-                      total_spent_usd: { type: number, format: float }
-                      currency: { type: string, example: USD }
+                  quota:
+                    $ref: "#/components/schemas/UnifiedQuotaSummary"
 
   /realtor-broadcasts/unsubscribe:
     get:
@@ -5906,13 +6100,8 @@ paths:
                   success: { type: boolean }
                   broadcasts: { type: array, items: { type: object } }
                   total: { type: integer }
-                  credits:
-                    type: object
-                    properties:
-                      available_balance_usd: { type: number, format: float }
-                      reserved_balance_usd: { type: number, format: float }
-                      total_spent_usd: { type: number, format: float }
-                      currency: { type: string, example: USD }
+                  quota:
+                    $ref: "#/components/schemas/UnifiedQuotaSummary"
     post:
       tags: [Broadcasts]
       summary: Create and optionally send a broadcast (platform_owner only)
@@ -5946,16 +6135,16 @@ paths:
                   broadcast_id: { type: integer }
                   recipient_count: { type: integer }
                   status: { type: string, enum: [draft, scheduled, sending] }
-                  estimated_cost_usd: { type: number, format: float }
-                  credits:
-                    type: object
-                    properties:
-                      available_balance_usd: { type: number, format: float }
-                      reserved_balance_usd: { type: number, format: float }
-                      total_spent_usd: { type: number, format: float }
-                      currency: { type: string, example: USD }
+                  estimated_sms_segments: { type: integer }
+                  estimated_email_sends: { type: integer }
+                  quota:
+                    $ref: "#/components/schemas/UnifiedQuotaSummary"
         "402":
-          description: Not enough broadcast credits to reserve send budget
+          description: Not enough unified quota to reserve broadcast send budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingDenialPayload"
 
   /realtor-broadcasts/{id}:
     get:
@@ -5978,13 +6167,8 @@ paths:
                 properties:
                   success: { type: boolean }
                   broadcast: { type: object }
-                  credits:
-                    type: object
-                    properties:
-                      available_balance_usd: { type: number, format: float }
-                      reserved_balance_usd: { type: number, format: float }
-                      total_spent_usd: { type: number, format: float }
-                      currency: { type: string, example: USD }
+                  quota:
+                    $ref: "#/components/schemas/UnifiedQuotaSummary"
     patch:
       tags: [Broadcasts]
       summary: Update a draft or scheduled broadcast
@@ -6084,7 +6268,11 @@ paths:
                   success: { type: boolean }
                   retried: { type: integer }
         "402":
-          description: Not enough broadcast credits to retry failed recipients
+          description: Not enough unified quota to retry failed recipients
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingDenialPayload"
 
   /realtor-broadcasts/{id}/resend-pending:
     post:
@@ -6108,7 +6296,11 @@ paths:
                   success: { type: boolean }
                   retried: { type: integer }
         "402":
-          description: Not enough broadcast credits to re-trigger pending recipients
+          description: Not enough unified quota to re-trigger pending recipients
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingDenialPayload"
 
   /realtor-broadcasts/{id}/recipients/export:
     get:
@@ -6219,6 +6411,672 @@ paths:
                 type: object
                 properties:
                   success: { type: boolean }
+
+  /billing/config:
+    get:
+      tags: [Billing]
+      summary: Billing flags and plan snapshot (platform_owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Billing configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  config:
+                    type: object
+                    properties:
+                      billingQuotaMode:
+                        type: string
+                        enum: [off, shadow, warn, enforce]
+                      billingUiEnabled: { type: boolean }
+                      billingOverageEnabled: { type: boolean }
+                      billingEnforceBroadcastDaily: { type: boolean }
+                      platformFeeUsd: { type: number }
+                      plan:
+                        type: object
+                        properties:
+                          platformFeeUsd: { type: number }
+                          includedSmsSegments: { type: integer }
+                          includedVoiceMinutes: { type: integer }
+                          includedEmailSends: { type: integer }
+                          includedSchedulerBookings: { type: integer }
+                          includedMortgiAiTokens: { type: integer }
+                      subscription:
+                        type: object
+                        nullable: true
+                        properties:
+                          planCode: { type: string }
+                          status: { type: string }
+                          periodStart: { type: string, format: date }
+                          periodEnd: { type: string, format: date, nullable: true }
+                      stripeEnabled: { type: boolean }
+                      stripePublishableKey: { type: string, nullable: true }
+                      stripeTestMode: { type: boolean }
+                      stripePlatformSubscriptionConfigured: { type: boolean }
+                      stripeSubscriptionLinked: { type: boolean }
+                      stripeSubscriptionActive: { type: boolean }
+                      stripeSubscriptionStatus: { type: string, nullable: true }
+                      hasPaymentMethod: { type: boolean }
+                      stripeCustomerId: { type: string, nullable: true }
+                      billingInternalEconomicsEnabled:
+                        type: boolean
+                        description: Dev/finance only — when false, COGS/margin/infra are stripped from API and UI
+        "403":
+          description: Not platform_owner
+
+  /billing/stripe/packs:
+    get:
+      tags: [Billing]
+      summary: Legacy flat pack catalog (prefer /top-up-options)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All tier pack ids with optional economics (internal mode)
+
+  /billing/stripe/top-up-options:
+    get:
+      tags: [Billing]
+      summary: Tiered top-up catalog by channel (platform_owner)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Channels with tier steps, chip labels, and optional economics
+
+  /billing/stripe/quote:
+    post:
+      tags: [Billing]
+      summary: Price a top-up tier before charge (platform_owner)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dimension, tier_index]
+              properties:
+                dimension:
+                  type: string
+                  enum: [sms_segments, voice_minutes, email_sends, scheduler_bookings, mortgi_ai_tokens]
+                tier_index: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Quote with units, amountCents, label
+
+  /billing/stripe/charge-quote:
+    post:
+      tags: [Billing]
+      summary: Charge saved card for a quoted top-up tier (platform_owner)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dimension, tier_index]
+              properties:
+                dimension:
+                  type: string
+                  enum: [sms_segments, voice_minutes, email_sends, scheduler_bookings, mortgi_ai_tokens]
+                tier_index: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Quota granted after successful charge
+        "402":
+          description: Card authentication required (3DS)
+
+  /billing/stripe/charge-pack:
+    post:
+      tags: [Billing]
+      summary: Charge a top-up pack using the saved payment method (platform_owner only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pack_id]
+              properties:
+                pack_id:
+                  type: string
+                  description: Legacy tier id (e.g. sms_1k, sms_5k, mortgi_250k)
+      responses:
+        "200":
+          description: Pack charged and quota granted
+        "400":
+          description: No payment method on file or invalid pack
+        "402":
+          description: Card authentication required (3DS)
+
+  /billing/estimate:
+    post:
+      tags: [Billing]
+      summary: Budget forecast estimate (canvas calculator parity)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                convoSmsPerMonth: { type: number }
+                convoEmailPerMonth: { type: number }
+                voiceMinutesPerMonth: { type: number }
+                schedulerBookingsPerMonth: { type: number }
+                blastsPerMonth: { type: number }
+                recipientsPerBlast: { type: number }
+                smsSegmentsPerRecipient: { type: number }
+                emailPerBlast: { type: boolean }
+                extraTwilioNumbers: { type: number }
+                zoomBrokerLicenses: { type: number }
+                mortgiAiTokensPerMonth: { type: number }
+      responses:
+        "200":
+          description: Forecast breakdown
+
+  /billing/usage:
+    get:
+      tags: [Billing]
+      summary: Live 30-day usage and expenditure (platform_owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Usage snapshot with expenditure breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  refreshedAt: { type: string, format: date-time }
+                  usage:
+                    type: object
+                    properties:
+                      periodStart: { type: string, format: date }
+                      periodEnd: { type: string, format: date }
+                      tenantId: { type: integer }
+                      totalSmsSegments: { type: integer }
+                      broadcastSmsSegments: { type: integer }
+                      convoSmsSegments: { type: integer }
+                      totalEmailSends: { type: integer }
+                      broadcastEmailSends: { type: integer }
+                      callsLogged: { type: integer }
+                      voiceMinutesRecorded: { type: number }
+                      voiceMinutesEstimated: { type: number }
+                      schedulerBookings: { type: integer }
+                      mortgiAiTokens: { type: integer }
+                      mortgiSessions: { type: integer }
+                      mortgiUserMessages: { type: integer }
+                  expenditure:
+                    type: object
+                    properties:
+                      voiceMinutesBilled: { type: number }
+                      variableUsageCogsUsd: { type: number }
+                      fixedInfraCogsUsd: { type: number }
+                      totalPlatformCogsUsd: { type: number }
+                      overageRetailUsd: { type: number }
+                      platformFeeUsd: { type: number }
+                      addonsUsd: { type: number }
+                      ownerTotalUsd: { type: number }
+                      estimatedMarginUsd: { type: number }
+                      pctSms: { type: integer }
+                      pctVoice: { type: integer }
+                      pctEmail: { type: integer }
+                      pctScheduler: { type: integer }
+                      pctMortgiAiTokens: { type: integer }
+                      mortgiCogsUsd: { type: number }
+        "403":
+          description: Not platform_owner
+
+  /billing/team-notice:
+    get:
+      tags: [Billing]
+      summary: Billing notice for brokers and admins (no payment UI)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Team-facing grace, restricted, suspended, or quota notice
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  notice:
+                    $ref: "#/components/schemas/BillingTeamNotice"
+
+  /billing/access:
+    get:
+      tags: [Billing]
+      summary: Billing access ladder state (grace, restricted, suspended, quota block)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current access level and gating flags (platform_owner only)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  access:
+                    $ref: "#/components/schemas/BillingAccessState"
+        "403":
+          description: Not platform_owner
+
+  /billing/access/simulate:
+    post:
+      tags: [Billing]
+      summary: Simulate subscription past_due or active (Stripe test mode, platform_owner)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenario]
+              properties:
+                scenario:
+                  type: string
+                  enum: [past_due, active]
+      responses:
+        "200":
+          description: Updated access state after simulation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  access:
+                    $ref: "#/components/schemas/BillingAccessState"
+        "403":
+          description: Not platform_owner or not in test mode
+
+  /billing/quota:
+    get:
+      tags: [Billing]
+      summary: Unified quota summary with reserved units (platform_owner only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Live quota balances per dimension
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  quota:
+                    $ref: "#/components/schemas/UnifiedQuotaSummary"
+        "403":
+          description: Not platform_owner
+
+  /billing/purchases:
+    get:
+      tags: [Billing]
+      summary: Active period capacity breakdown and top-up purchase history (platform_owner)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Plan vs top-up capacity per channel and recent Stripe top-ups
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  activePeriod:
+                    type: object
+                    properties:
+                      periodStart: { type: string }
+                      periodEnd: { type: string, nullable: true }
+                      subscriptionStatus: { type: string, nullable: true }
+                      platformFeeUsd: { type: number }
+                      capacities:
+                        type: array
+                        items:
+                          type: object
+                  purchases:
+                    type: array
+                    items:
+                      type: object
+        "403":
+          description: Not platform_owner
+
+  /billing/stripe/config:
+    get:
+      tags: [Billing]
+      summary: Stripe publishable key and test-mode flag (platform_owner)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Public Stripe config for Elements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  enabled: { type: boolean }
+                  publishableKey: { type: string, nullable: true }
+                  testMode: { type: boolean }
+                  webhookConfigured: { type: boolean }
+
+  /billing/stripe/packs:
+    get:
+      tags: [Billing]
+      summary: List available Stripe top-up packs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Top-up pack catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  packs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          enum:
+                            - sms_1k
+                            - voice_1k
+                            - email_1k
+                            - scheduler_50
+                            - mortgi_100k
+                        dimension: { type: string }
+                        units: { type: integer }
+                        label: { type: string }
+                        amountCents: { type: integer }
+
+  /billing/stripe/payment-intent:
+    post:
+      tags: [Billing]
+      summary: Create PaymentIntent for embedded Stripe Elements checkout
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pack_id]
+              properties:
+                pack_id: { type: string, example: sms_1k }
+      responses:
+        "200":
+          description: client_secret for Stripe Elements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  client_secret: { type: string }
+                  payment_intent_id: { type: string }
+                  pack:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      dimension: { type: string }
+                      units: { type: integer }
+                      label: { type: string }
+                      amountCents: { type: integer }
+        "503":
+          description: Stripe not configured
+
+  /billing/stripe/confirm-payment:
+    post:
+      tags: [Billing]
+      summary: Verify succeeded PaymentIntent and grant quota (idempotent)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_intent_id]
+              properties:
+                payment_intent_id: { type: string }
+      responses:
+        "200":
+          description: Quota updated or already fulfilled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  granted: { type: boolean }
+                  already_fulfilled: { type: boolean }
+                  pack:
+                    type: object
+                    nullable: true
+                  quota:
+                    $ref: "#/components/schemas/UnifiedQuotaSummary"
+
+  /billing/stripe/checkout:
+    post:
+      tags: [Billing]
+      summary: Create Stripe Checkout session for a quota top-up pack (redirect fallback)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pack_id]
+              properties:
+                pack_id: { type: string, example: sms_1k }
+      responses:
+        "200":
+          description: Checkout session URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  url: { type: string, nullable: true }
+                  session_id: { type: string }
+        "503":
+          description: Stripe not configured
+
+  /billing/stripe/subscription-setup:
+    post:
+      tags: [Billing]
+      summary: Start $350/mo platform subscription (Payment Element client_secret)
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force_new:
+                  type: boolean
+                  description: Cancel incomplete subscription and start fresh (Retry setup)
+      responses:
+        "200":
+          description: Subscription payment intent ready, or already active
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  client_secret: { type: string, nullable: true }
+                  subscription_id: { type: string }
+                  stripe_status: { type: string }
+                  already_active: { type: boolean }
+        "503":
+          description: Stripe or STRIPE_PLATFORM_PRICE_ID not configured
+
+  /billing/stripe/confirm-subscription:
+    post:
+      tags: [Billing]
+      summary: Sync tenant_subscription after successful subscription payment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscription_id]
+              properties:
+                subscription_id: { type: string }
+      responses:
+        "200":
+          description: Subscription active and synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  stripe_status: { type: string }
+                  subscription: { type: object, nullable: true }
+                  payment_method:
+                    type: object
+                    nullable: true
+                    properties:
+                      id: { type: string }
+                      brand: { type: string }
+                      last4: { type: string }
+                      expMonth: { type: integer }
+                      expYear: { type: integer }
+        "400":
+          description: Subscription not active yet
+
+  /billing/stripe/reset-subscription-test:
+    post:
+      tags: [Billing]
+      summary: Cancel all test Stripe subscriptions, reset quota periods/ledger, and clear billing state (Stripe test mode only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Subscription reset for retesting subscribe flow
+        "403":
+          description: Not available in live mode
+
+  /billing/stripe/payment-method:
+    get:
+      tags: [Billing]
+      summary: Get saved default payment method for the tenant Stripe customer
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Saved card summary or null
+
+  /billing/stripe/payment-method-setup:
+    post:
+      tags: [Billing]
+      summary: Create SetupIntent to update saved payment method (Payment Element)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: client_secret for embedded card update form
+
+  /billing/stripe/confirm-payment-method:
+    post:
+      tags: [Billing]
+      summary: Set default payment method after SetupIntent succeeds
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [setup_intent_id]
+              properties:
+                setup_intent_id: { type: string }
+      responses:
+        "200":
+          description: Payment method saved and set as default
+
+  /billing/stripe/portal:
+    post:
+      tags: [Billing]
+      summary: Open Stripe Customer Portal (optional payment_method_update flow)
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                flow:
+                  type: string
+                  enum: [payment_method_update]
+      responses:
+        "200":
+          description: Portal session URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  url: { type: string }
+        "400":
+          description: No Stripe customer on file
+
+  /billing/stripe/webhook:
+    post:
+      tags: [Billing]
+      summary: Stripe webhook (checkout.session.completed grants top-up units)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Event received
 
   /cron/process-scheduled-broadcasts:
     get:

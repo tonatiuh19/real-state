@@ -72,6 +72,7 @@ import BrokerDetailPanel from "@/components/BrokerDetailPanel";
 import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
 import PhoneNumbersPanel from "@/components/PhoneNumbersPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { BillingActionGate } from "@/components/billing/BillingActionGate";
 import NewConversationWizard from "@/components/NewConversationWizard";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
@@ -140,6 +141,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useBillingAccess } from "@/hooks/useBillingAccess";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchConversationThreads,
@@ -220,6 +222,7 @@ const Conversations = () => {
 
   const { toast } = useToast();
   const isMobile = useIsMobile();
+  const { isActionGateLocked } = useBillingAccess();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPriority, setSelectedPriority] = useState("");
@@ -513,6 +516,42 @@ const Conversations = () => {
       dispatch(fetchCallHistory({}));
     }
   }, [channelFilter, dispatch]);
+
+  // Delegate outbound calls to GlobalVoiceManager (never dispatch during render)
+  useEffect(() => {
+    if (!isCallActive || !currentThread?.client_phone) return;
+    dispatch(
+      startOutboundCall({
+        phone: currentThread.client_phone,
+        clientName: currentThread.client_name,
+        clientId: currentThread.client_id ?? undefined,
+        applicationId: currentThread.application_id ?? undefined,
+      }),
+    );
+    setIsCallActive(false);
+  }, [isCallActive, currentThread, dispatch]);
+
+  useEffect(() => {
+    if (!isDialerCallActive || !dialerNumber.trim()) return;
+    dispatch(
+      startOutboundCall({ phone: dialerNumber.trim(), clientName: null }),
+    );
+    setIsDialerCallActive(false);
+    setIsDialerOpen(false);
+    setDialerNumber("");
+  }, [isDialerCallActive, dialerNumber, dispatch]);
+
+  useEffect(() => {
+    if (!isCallDetailDialing || !selectedCall?.client_phone) return;
+    dispatch(
+      startOutboundCall({
+        phone: selectedCall.client_phone,
+        clientName: selectedCall.client_name || undefined,
+        clientId: selectedCall.client_id ?? undefined,
+      }),
+    );
+    setIsCallDetailDialing(false);
+  }, [isCallDetailDialing, selectedCall, dispatch]);
 
   // Real-time updates via Ably
   useEffect(() => {
@@ -1375,6 +1414,7 @@ const Conversations = () => {
             <Button
               variant="outline"
               size="sm"
+              disabled={isActionGateLocked}
               className={cn(
                 "h-8 gap-1.5 text-xs px-2 md:px-3",
                 isDialerOpen
@@ -1395,6 +1435,7 @@ const Conversations = () => {
             {/* New conversation — icon only on mobile */}
             <Button
               onClick={() => setIsNewConversationOpen(true)}
+              disabled={isActionGateLocked}
               size="sm"
               className="bg-primary hover:bg-primary/90 h-8 px-2 md:px-3 gap-1.5 text-xs"
             >
@@ -2094,22 +2135,7 @@ const Conversations = () => {
                 </div>
               </div>
 
-              {/* Active call panel */}
-              {isCallActive &&
-                currentThread.client_phone &&
-                (() => {
-                  // Delegate to GlobalVoiceManager's persistent panel and dismiss local flag
-                  dispatch(
-                    startOutboundCall({
-                      phone: currentThread.client_phone,
-                      clientName: currentThread.client_name,
-                      clientId: currentThread.client_id ?? undefined,
-                      applicationId: currentThread.application_id ?? undefined,
-                    }),
-                  );
-                  setIsCallActive(false);
-                  return null;
-                })()}
+              {/* Active call panel — delegated to GlobalVoiceManager via useEffect */}
 
               {/* Messages */}
               <ScrollArea className="flex-1 px-4 py-4">
@@ -2955,6 +2981,7 @@ const Conversations = () => {
                   )}
 
                   {/* Textarea + send button */}
+                  <BillingActionGate>
                   <div className="flex flex-col gap-2">
                     {/* MMS attachment preview (SMS only) */}
                     {messageType === "sms" && mmsAttachment && (
@@ -3151,6 +3178,7 @@ const Conversations = () => {
                         );
                       })()}
                   </div>
+                  </BillingActionGate>
 
                   {/* Live resolved preview toggle */}
                   {/* Failed message restore banner */}
@@ -3337,28 +3365,15 @@ const Conversations = () => {
                   </div>
 
                   {/* Call back button */}
-                  {selectedCall.client_phone &&
-                    (isCallDetailDialing ? (
-                      (() => {
-                        dispatch(
-                          startOutboundCall({
-                            phone: selectedCall.client_phone!,
-                            clientName: selectedCall.client_name || undefined,
-                            clientId: selectedCall.client_id ?? undefined,
-                          }),
-                        );
-                        setIsCallDetailDialing(false);
-                        return null;
-                      })()
-                    ) : (
-                      <Button
-                        className="w-full gap-2"
-                        onClick={() => setIsCallDetailDialing(true)}
-                      >
-                        <PhoneCall className="h-4 w-4" />
-                        Call Back
-                      </Button>
-                    ))}
+                  {selectedCall.client_phone && (
+                    <Button
+                      className="w-full gap-2"
+                      onClick={() => setIsCallDetailDialing(true)}
+                    >
+                      <PhoneCall className="h-4 w-4" />
+                      Call Back
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>
@@ -3673,6 +3688,7 @@ const Conversations = () => {
         onSendMessage={handleNewConversation}
         isSending={isSendingMessage}
         userRole={currentUser?.role}
+        billingLocked={isActionGateLocked}
       />
 
       {/* ── Schedule Meeting dialog ── */}
@@ -4300,18 +4316,7 @@ const Conversations = () => {
       {/* ── Dialpad overlay ── */}
       {isDialerOpen && (
         <div className="fixed bottom-6 right-6 z-50 w-80 animate-in slide-in-from-bottom-4 duration-300">
-          {isDialerCallActive && dialerNumber ? (
-            (() => {
-              dispatch(
-                startOutboundCall({ phone: dialerNumber, clientName: null }),
-              );
-              setIsDialerCallActive(false);
-              setIsDialerOpen(false);
-              setDialerNumber("");
-              return null;
-            })()
-          ) : (
-            <div className="bg-card border border-border shadow-2xl rounded-2xl overflow-hidden">
+          <div className="bg-card border border-border shadow-2xl rounded-2xl overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                 <div className="flex items-center gap-2">
@@ -4439,7 +4444,6 @@ const Conversations = () => {
                 </Button>
               </div>
             </div>
-          )}
         </div>
       )}
 

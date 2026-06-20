@@ -614,8 +614,7 @@ const Settings = () => {
                           },
                           {
                             id: "brokers",
-                            label: "People Management",
-                            locked: true,
+                            label: "Realtor Management",
                           },
                         ];
                         return (

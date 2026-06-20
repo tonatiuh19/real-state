@@ -74,6 +74,8 @@ interface NewConversationWizardProps {
   isSending: boolean;
   /** Role of the currently-logged-in user — broker search is only shown to admin/platform_owner */
   userRole?: string;
+  /** When true, outbound send is blocked by billing/quota gates */
+  billingLocked?: boolean;
 }
 
 type SelectedRecipient =
@@ -120,6 +122,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   onSendMessage,
   isSending,
   userRole,
+  billingLocked = false,
 }) => {
   const dispatch = useAppDispatch();
   const { clients, isLoading: clientsLoading } = useAppSelector(
@@ -218,7 +221,8 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     Boolean(recipient) &&
     (body.trim().length > 0 || !!mmsAttachment) &&
     !isSending &&
-    !isUploadingMMS;
+    !isUploadingMMS &&
+    !billingLocked;
 
   const getRecipientValue = (): {
     phone?: string;
@@ -271,7 +275,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   };
 
   const handleSend = useCallback(async () => {
-    if (!canSend) return;
+    if (!canSend || billingLocked) return;
     const rv = getRecipientValue();
 
     if (!rv.phone && !rv.brokerId) {
@@ -316,6 +320,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     canSend,
+    billingLocked,
     body,
     recipient,
     mmsAttachment,

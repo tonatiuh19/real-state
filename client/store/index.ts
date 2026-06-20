@@ -32,6 +32,7 @@ import realtorProspectingReducer from "./slices/realtorProspectingSlice";
 import emailReducer from "./slices/emailSlice";
 import mortgiReducer from "./slices/mortgiSlice";
 import realtorBroadcastsReducer from "./slices/realtorBroadcastSlice";
+import billingReducer from "./slices/billingSlice";
 
 export const store = configureStore({
   reducer: {
@@ -66,6 +67,7 @@ export const store = configureStore({
     email: emailReducer,
     mortgi: mortgiReducer,
     realtorBroadcasts: realtorBroadcastsReducer,
+    billing: billingReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

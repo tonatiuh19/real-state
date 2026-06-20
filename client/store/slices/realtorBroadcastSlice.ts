@@ -1,12 +1,20 @@
 import { createAsyncThunk, createSlice, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
+import {
+  billingDenialMessage,
+  parseBillingDenial,
+} from "@/utils/billing-denial";
 import type { RootState } from "@/store";
+import {
+  confirmStripePayment,
+  fetchBillingQuota,
+} from "@/store/slices/billingSlice";
 import type {
   RealtorBroadcast,
   RealtorBroadcastRecipient,
   BroadcastAudiencePreview,
   BroadcastSavedSegment,
-  BroadcastCreditSummary,
+  UnifiedQuotaSummary,
   CreateBroadcastRequest,
   PreviewBroadcastAudienceRequest,
   GetBroadcastsResponse,
@@ -30,7 +38,7 @@ interface RealtorBroadcastState {
   audiencePreview: BroadcastAudiencePreview | null;
   latestDraft: RealtorBroadcast | null;
   savedSegments: BroadcastSavedSegment[];
-  credits: BroadcastCreditSummary | null;
+  quota: UnifiedQuotaSummary | null;
   isLoading: boolean;
   isSending: boolean;
   isPreviewing: boolean;
@@ -48,7 +56,7 @@ const initialState: RealtorBroadcastState = {
   audiencePreview: null,
   latestDraft: null,
   savedSegments: [],
-  credits: null,
+  quota: null,
   isLoading: false,
   isSending: false,
   isPreviewing: false,
@@ -57,12 +65,31 @@ const initialState: RealtorBroadcastState = {
   error: null,
 };
 
+type BroadcastThunkReject = {
+  message: string;
+  quota?: UnifiedQuotaSummary | null;
+};
+
 function extractApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
     const apiError = (error.response?.data as { error?: string } | undefined)?.error;
     return apiError || error.message || fallback;
   }
   return fallback;
+}
+
+function rejectBroadcastError(
+  error: unknown,
+  fallback: string,
+): BroadcastThunkReject {
+  const denial = parseBillingDenial(error);
+  const quota = axios.isAxiosError(error)
+    ? (error.response?.data as { quota?: UnifiedQuotaSummary } | undefined)?.quota
+    : undefined;
+  return {
+    message: billingDenialMessage(denial, extractApiErrorMessage(error, fallback)),
+    quota,
+  };
 }
 
 // ─── Thunks ───────────────────────────────────────────────────────────────────
@@ -139,7 +166,7 @@ export const createBroadcast = createAsyncThunk(
       return data;
     } catch (error) {
       return rejectWithValue(
-        extractApiErrorMessage(error, "Failed to create broadcast"),
+        rejectBroadcastError(error, "Failed to create broadcast"),
       );
     }
   },
@@ -351,7 +378,7 @@ const realtorBroadcastSlice = createSlice({
         state.isLoading = false;
         state.broadcasts = action.payload.broadcasts;
         state.broadcastsTotal = action.payload.total;
-        state.credits = action.payload.credits ?? state.credits;
+        state.quota = action.payload.quota ?? state.quota;
       })
       .addCase(fetchBroadcasts.rejected, (state, action) => {
         state.isLoading = false;
@@ -367,7 +394,7 @@ const realtorBroadcastSlice = createSlice({
       .addCase(fetchBroadcastDetail.fulfilled, (state, action) => {
         state.isLoading = false;
         state.activeBroadcast = action.payload.broadcast;
-        state.credits = action.payload.credits ?? state.credits;
+        state.quota = action.payload.quota ?? state.quota;
       })
       .addCase(fetchBroadcastDetail.rejected, (state, action) => {
         state.isLoading = false;
@@ -398,7 +425,7 @@ const realtorBroadcastSlice = createSlice({
       .addCase(previewBroadcastAudience.fulfilled, (state, action) => {
         state.isPreviewing = false;
         state.audiencePreview = action.payload.preview;
-        state.credits = action.payload.credits ?? state.credits;
+        state.quota = action.payload.quota ?? state.quota;
       })
       .addCase(previewBroadcastAudience.rejected, (state, action) => {
         state.isPreviewing = false;
@@ -414,14 +441,20 @@ const realtorBroadcastSlice = createSlice({
       .addCase(createBroadcast.fulfilled, (state, action) => {
         state.isSending = false;
         state.latestDraft = null;
-        state.credits = action.payload.credits ?? state.credits;
+        state.quota = action.payload.quota ?? state.quota;
       })
       .addCase(createBroadcast.rejected, (state, action) => {
         state.isSending = false;
-        state.error =
-          (action.payload as string) ||
-          action.error.message ||
-          "Failed to create broadcast";
+        const payload = action.payload as BroadcastThunkReject | string | undefined;
+        if (payload && typeof payload === "object") {
+          state.error = payload.message;
+          if (payload.quota) state.quota = payload.quota;
+        } else {
+          state.error =
+            (payload as string) ||
+            action.error.message ||
+            "Failed to create broadcast";
+        }
       });
 
     // cancelBroadcast
@@ -515,6 +548,15 @@ const realtorBroadcastSlice = createSlice({
         (s) => s.id !== action.payload,
       );
     });
+
+    // Sync unified quota after Stripe top-up or billing page refresh
+    builder
+      .addCase(confirmStripePayment.fulfilled, (state, action) => {
+        if (action.payload.quota) state.quota = action.payload.quota;
+      })
+      .addCase(fetchBillingQuota.fulfilled, (state, action) => {
+        state.quota = action.payload;
+      });
   },
 });
 

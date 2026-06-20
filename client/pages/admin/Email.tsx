@@ -87,6 +87,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useBillingAccess } from "@/hooks/useBillingAccess";
 import { cn, stripHtml } from "@/lib/utils";
 import { getSharedAblyClient } from "@/lib/ably-client";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -873,6 +874,7 @@ function ComposeDialog({
   const dispatch = useAppDispatch();
   const { toast } = useToast();
   const { isSendingMessage } = useAppSelector((s) => s.email);
+  const { isActionGateLocked, actionGateReason } = useBillingAccess();
   const clients = useAppSelector((s) => s.clients.clients);
   const [to, setTo] = useState(defaultReplyTo ?? "");
   const [subject, setSubject] = useState(defaultSubject ?? "");
@@ -937,7 +939,24 @@ function ComposeDialog({
     to.trim().length > 0 && body.replace(/<[^>]+>/g, "").trim().length > 0;
 
   const handleSend = async () => {
-    if (!canSend) return;
+    if (!canSend || isActionGateLocked) {
+      if (isActionGateLocked) {
+        const headline =
+          actionGateReason === "loading"
+            ? "Checking billing status"
+            : actionGateReason === "error"
+              ? "Billing status unavailable"
+              : "Action unavailable";
+        const description =
+          actionGateReason === "loading"
+            ? "Verifying whether outbound actions are allowed."
+            : actionGateReason === "error"
+              ? "We could not confirm billing status. Outbound actions stay paused."
+              : "Email sends are paused until billing is resolved.";
+        toast({ title: headline, description, variant: "destructive" });
+      }
+      return;
+    }
     const result = await dispatch(
       sendEmailMessage({
         communication_type: "email",
@@ -1168,7 +1187,7 @@ function ComposeDialog({
           </Button>
           <Button
             onClick={handleSend}
-            disabled={isSendingMessage || !canSend}
+            disabled={isSendingMessage || !canSend || isActionGateLocked}
             className="gap-2"
           >
             {isSendingMessage ? (
@@ -1202,6 +1221,7 @@ function ReplyBox({
   const dispatch = useAppDispatch();
   const { toast } = useToast();
   const { isSendingMessage } = useAppSelector((s) => s.email);
+  const { isActionGateLocked, actionGateReason } = useBillingAccess();
   const [body, setBody] = useState("");
   const [focused, setFocused] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -1235,7 +1255,24 @@ function ReplyBox({
   };
 
   const handleSend = async () => {
-    if (!body.replace(/<[^>]+>/g, "").trim()) return;
+    if (!body.replace(/<[^>]+>/g, "").trim() || isActionGateLocked) {
+      if (isActionGateLocked) {
+        const headline =
+          actionGateReason === "loading"
+            ? "Checking billing status"
+            : actionGateReason === "error"
+              ? "Billing status unavailable"
+              : "Action unavailable";
+        const description =
+          actionGateReason === "loading"
+            ? "Verifying whether outbound actions are allowed."
+            : actionGateReason === "error"
+              ? "We could not confirm billing status. Outbound actions stay paused."
+              : "Email sends are paused until billing is resolved.";
+        toast({ title: headline, description, variant: "destructive" });
+      }
+      return;
+    }
     const result = await dispatch(
       sendEmailMessage({
         conversation_id: thread.conversation_id,
@@ -1408,7 +1445,11 @@ function ReplyBox({
           <Button
             size="sm"
             onClick={handleSend}
-            disabled={isSendingMessage || !body.replace(/<[^>]+>/g, "").trim()}
+            disabled={
+              isSendingMessage ||
+              !body.replace(/<[^>]+>/g, "").trim() ||
+              isActionGateLocked
+            }
             className="gap-1.5 h-8"
           >
             {isSendingMessage ? (
@@ -1473,6 +1514,7 @@ const Email = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
   const isMobile = useIsMobile();
+  const { isActionGateLocked } = useBillingAccess();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const {
@@ -1915,6 +1957,7 @@ const Email = () => {
               <Button
                 className="w-full gap-2 justify-start"
                 size="sm"
+                disabled={isActionGateLocked}
                 onClick={() => setComposeOpen(true)}
               >
                 <Pencil className="h-3.5 w-3.5" />
@@ -2603,9 +2646,10 @@ const Email = () => {
       {/* Mobile: Compose FAB — floats above bottom nav */}
       {isMobile && mobilePanel === "list" && isSelectedMailboxActive && (
         <button
-          onClick={() => setComposeOpen(true)}
+          onClick={() => !isActionGateLocked && setComposeOpen(true)}
+          disabled={isActionGateLocked}
           aria-label="Compose new email"
-          className="fixed bottom-36 right-5 z-50 h-14 w-14 rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/30 flex items-center justify-center active:scale-95 transition-all duration-150 hover:bg-primary/90"
+          className="fixed bottom-36 right-5 z-50 h-14 w-14 rounded-full bg-primary text-primary-foreground shadow-xl shadow-primary/30 flex items-center justify-center active:scale-95 transition-all duration-150 hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none"
         >
           <Pencil className="h-5 w-5" />
         </button>

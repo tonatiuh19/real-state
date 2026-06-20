@@ -15,6 +15,7 @@ import type {
   ConvertBrokerToClientRequest,
   ConvertBrokerToClientResponse,
   PaginationInfo,
+  FetchBrokersParams,
 } from "@shared/api";
 import type { RootState } from "../index";
 
@@ -50,14 +51,6 @@ const initialState: BrokersState = {
   brokerShareLink: null,
   shareLinkLoading: false,
 };
-
-interface FetchBrokersParams {
-  page?: number;
-  limit?: number;
-  sortBy?: string;
-  sortOrder?: "ASC" | "DESC";
-  search?: string;
-}
 
 export const fetchBrokers = createAsyncThunk(
   "brokers/fetchBrokers",
@@ -247,7 +240,7 @@ export const fetchMortgageBankers = createAsyncThunk(
       const { sessionToken } = (getState() as RootState).brokerAuth;
       const { data } = await axios.get<GetBrokersResponse>("/api/brokers", {
         headers: { Authorization: `Bearer ${sessionToken}` },
-        params: { role: "admin", limit: 100 },
+        params: { scope: "mortgage-bankers", limit: 100 },
       });
       return data.brokers;
     } catch (error: any) {

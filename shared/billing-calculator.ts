@@ -1,32 +1,192 @@
 /**
- * Platform-owner budget & expenditure math (proposal).
- * @see docs/BILLING_AND_QUOTA_PLAN.md §15
+ * Platform-owner budget & expenditure math — aligned with live .env services.
+ * @see docs/BILLING_AND_QUOTA_PLAN.md · docs/INFRASTRUCTURE_COST_AUDIT.md
  */
 
+/** Fixed infra line items (Vercel, Ably, TiDB, Resend, CDN/IMAP, 10DLC, Zoom API). */
+export const FIXED_INFRA_BREAKDOWN = {
+  vercelUsd: 65,
+  ablyUsd: 63,
+  tidbUsd: 38,
+  resendUsd: 20,
+  /** disruptinglabs CDN + Hostgator IMAP inbound */
+  cdnHostgatorImapUsd: 15,
+  /** US A2P 10DLC campaign amortized */
+  tenDlcAmortizedUsd: 10,
+  /** Single Zoom API / central scheduler license */
+  zoomApiLicenseUsd: 16,
+} as const;
+
+export type FixedInfraBreakdown = typeof FIXED_INFRA_BREAKDOWN;
+
+export function sumFixedInfraBreakdown(
+  lines: FixedInfraBreakdown = FIXED_INFRA_BREAKDOWN,
+): number {
+  return (
+    lines.vercelUsd +
+    lines.ablyUsd +
+    lines.tidbUsd +
+    lines.resendUsd +
+    lines.cdnHostgatorImapUsd +
+    lines.tenDlcAmortizedUsd +
+    lines.zoomApiLicenseUsd
+  );
+}
+
 export const BILLING_PLAN_DEFAULTS = {
-  platformFeeUsd: 499,
+  platformFeeUsd: 350,
   includedSmsSegments: 1000,
   includedVoiceMinutes: 1500,
   includedEmailSends: 5000,
   includedSchedulerBookings: 100,
-  /** Groq llama-3.3-70b — tenant-level monthly pool */
   includedMortgiAiTokens: 500_000,
-  overageSmsPer1kUsd: 18,
-  overageVoicePer1kUsd: 18,
-  overageEmailPer1kUsd: 5,
-  overageSchedulerPer50Usd: 10,
-  overageMortgiPer100kTokensUsd: 5,
+  overageSmsPer1kUsd: 20,
+  overageVoicePer1kUsd: 20,
+  overageEmailPer1kUsd: 6,
+  overageSchedulerPer50Usd: 12,
+  overageMortgiPer100kTokensUsd: 6,
+  /** Twilio US long-code all-in (base + carrier) */
   cogsSmsPerSegmentUsd: 0.012,
+  /** Twilio US voice blended */
   cogsVoicePerMinuteUsd: 0.011,
+  /** Resend Pro marginal per send (plan fee in fixed infra) */
   cogsEmailPerSendUsd: 0.0004,
-  /** ~$0.70 / 1M tokens blended (Groq llama-3.3-70b) */
+  /** Groq llama-3.3-70b blended */
   cogsMortgiPerTokenUsd: 0.0000007,
-  fixedInfraCogsUsd: 340,
+  /** WhatsApp/MMS often cost more — planning uplift when metered as SMS */
+  cogsWhatsappPerMessageUsd: 0.005,
+  cogsMmsPerMessageUsd: 0.022,
+  cogsTwilioNumberPerMonthUsd: 1.15,
+  /** Stripe US card-not-present */
+  cogsStripeFeePct: 0.029,
+  cogsStripeFeeFixedUsd: 0.3,
+  fixedInfraBreakdown: FIXED_INFRA_BREAKDOWN,
+  /** Sum of FIXED_INFRA_BREAKDOWN — replaces opaque $340 lump */
+  fixedInfraCogsUsd: sumFixedInfraBreakdown(),
   twilioNumberAddonUsd: 9,
+  /** Retail per broker Zoom seat (annual $13.33/mo) */
   zoomPerBrokerUsd: 13.33,
+  /** COGS per broker Zoom seat (pass-through) */
+  zoomPerBrokerCogsUsd: 13.33,
 } as const;
 
 export type BillingPlanConfig = typeof BILLING_PLAN_DEFAULTS;
+
+export type UsageDimension =
+  | "sms_segments"
+  | "voice_minutes"
+  | "email_sends"
+  | "scheduler_bookings"
+  | "mortgi_ai_tokens";
+
+import {
+  TOP_UP_PACK_DEFINITIONS,
+  TOP_UP_CHANNELS,
+  TOP_UP_TIERS_BY_DIMENSION,
+  computeTopUpQuote,
+  computeTopUpQuoteEconomics,
+  resolveLegacyTopUpPack,
+  getTopUpTiers,
+  isUsageDimension,
+  suggestTopUpDimensionFromLegacyPack,
+  type TopUpPackId,
+  type TopUpTier,
+  type TopUpQuote,
+  type TopUpChannelMeta,
+} from "./billing-top-up";
+
+export {
+  TOP_UP_PACK_DEFINITIONS,
+  TOP_UP_CHANNELS,
+  TOP_UP_TIERS_BY_DIMENSION,
+  computeTopUpQuote,
+  computeTopUpQuoteEconomics,
+  resolveLegacyTopUpPack,
+  getTopUpTiers,
+  isUsageDimension,
+  suggestTopUpDimensionFromLegacyPack,
+  type TopUpPackId,
+  type TopUpTier,
+  type TopUpQuote,
+  type TopUpChannelMeta,
+};
+
+export type TopUpPackEconomics = {
+  packId: string;
+  retailUsd: number;
+  variableCogsUsd: number;
+  stripeFeeUsd: number;
+  netMarginUsd: number;
+  marginPct: number;
+};
+
+export function computeTopUpPackEconomics(
+  packId: string,
+  plan: BillingPlanConfig = BILLING_PLAN_DEFAULTS,
+): TopUpPackEconomics {
+  const pack = TOP_UP_PACK_DEFINITIONS[packId];
+  if (!pack) {
+    return {
+      packId,
+      retailUsd: 0,
+      variableCogsUsd: 0,
+      stripeFeeUsd: 0,
+      netMarginUsd: 0,
+      marginPct: 0,
+    };
+  }
+  const retailUsd = pack.amountCents / 100;
+  const variableCogsUsd = computePackVariableCogsUsd(pack.dimension, pack.units, plan);
+  const stripeFeeUsd = computeStripeProcessingFeeUsd(retailUsd, plan);
+  const netMarginUsd = retailUsd - variableCogsUsd - stripeFeeUsd;
+  const marginPct =
+    retailUsd > 0 ? Math.round((netMarginUsd / retailUsd) * 100) : 0;
+  return {
+    packId,
+    retailUsd,
+    variableCogsUsd,
+    stripeFeeUsd,
+    netMarginUsd,
+    marginPct,
+  };
+}
+
+export function computeAllTopUpPackEconomics(
+  plan: BillingPlanConfig = BILLING_PLAN_DEFAULTS,
+): TopUpPackEconomics[] {
+  return Object.keys(TOP_UP_PACK_DEFINITIONS).map((id) =>
+    computeTopUpPackEconomics(id, plan),
+  );
+}
+
+export function computeStripeProcessingFeeUsd(
+  amountUsd: number,
+  plan: BillingPlanConfig = BILLING_PLAN_DEFAULTS,
+): number {
+  if (amountUsd <= 0) return 0;
+  return amountUsd * plan.cogsStripeFeePct + plan.cogsStripeFeeFixedUsd;
+}
+
+export function computePackVariableCogsUsd(
+  dimension: UsageDimension,
+  units: number,
+  plan: BillingPlanConfig = BILLING_PLAN_DEFAULTS,
+): number {
+  switch (dimension) {
+    case "sms_segments":
+      return units * plan.cogsSmsPerSegmentUsd;
+    case "voice_minutes":
+      return units * plan.cogsVoicePerMinuteUsd;
+    case "email_sends":
+      return units * plan.cogsEmailPerSendUsd;
+    case "scheduler_bookings":
+      return 0;
+    case "mortgi_ai_tokens":
+      return units * plan.cogsMortgiPerTokenUsd;
+    default:
+      return 0;
+  }
+}
 
 export type BudgetForecastInputs = {
   convoSmsPerMonth: number;
@@ -39,7 +199,6 @@ export type BudgetForecastInputs = {
   emailPerBlast: boolean;
   extraTwilioNumbers: number;
   zoomBrokerLicenses: number;
-  /** Forecast: Groq tokens / month (from Mortgi chat + tool rounds) */
   mortgiAiTokensPerMonth: number;
 };
 
@@ -61,7 +220,6 @@ export type UsageSnapshot = {
   mortgiUserMessages: number;
 };
 
-/** Production snapshot — refresh: npx tsx scripts/refresh-billing-snapshot.ts */
 export const TENANT_1_ACTUAL_30D: UsageSnapshot = {
   periodStart: "2026-05-06",
   periodEnd: "2026-06-05",
@@ -80,7 +238,6 @@ export const TENANT_1_ACTUAL_30D: UsageSnapshot = {
   mortgiUserMessages: 1,
 };
 
-/** Broadcast-only economics (shown as dedicated billing section — highest variable cost). */
 export type BroadcastEconomics = {
   blastsPerMonth: number;
   recipientsPerBlast: number;
@@ -89,15 +246,11 @@ export type BroadcastEconomics = {
   emailSends: number;
   cogsUsd: number;
   emailCogsUsd: number;
-  /** Single blast at current inputs */
   costPerBlastUsd: number;
-  /** % of total SMS segments */
   shareOfSmsPct: number;
-  /** % of variable usage COGS (SMS+email portions) */
   shareOfVariableCogsPct: number;
   pctOfIncludedSms: number;
   pctOfIncludedEmail: number;
-  /** SMS segments from broadcast that count toward overage */
   smsOverageAttributed: number;
   overageRetailAttributedUsd: number;
 };
@@ -182,7 +335,12 @@ export type BudgetBreakdown = {
   addonsUsd: number;
   ownerTotalUsd: number;
   variableCogsUsd: number;
+  fixedInfraCogsUsd: number;
+  fixedInfraBreakdown: FixedInfraBreakdown;
+  zoomBrokerCogsUsd: number;
   estimatedCogsUsd: number;
+  stripeFeesUsd: number;
+  grossMarginUsd: number;
   estimatedMarginUsd: number;
   pctSms: number;
   pctVoice: number;
@@ -197,13 +355,16 @@ export type ExpenditureBreakdown = {
   voiceMinutesBilled: number;
   variableUsageCogsUsd: number;
   fixedInfraCogsUsd: number;
+  fixedInfraBreakdown: FixedInfraBreakdown;
+  zoomBrokerCogsUsd: number;
   totalPlatformCogsUsd: number;
   overageRetailUsd: number;
   platformFeeUsd: number;
   addonsUsd: number;
-  /** Platform fee + overage + add-ons for this usage period */
   ownerTotalUsd: number;
-  /** ownerTotalUsd − totalPlatformCogsUsd */
+  stripeFeesUsd: number;
+  grossMarginUsd: number;
+  /** Net margin after vendor COGS + Stripe processing */
   estimatedMarginUsd: number;
   pctSms: number;
   pctVoice: number;
@@ -219,6 +380,22 @@ function ceilDiv(a: number, b: number): number {
 
 function pct(used: number, included: number): number {
   return included > 0 ? Math.min(100, Math.round((used / included) * 100)) : 0;
+}
+
+function computeRevenueStripeFees(
+  platformFeeUsd: number,
+  overageRetailUsd: number,
+  addonsUsd: number,
+  plan: BillingPlanConfig = BILLING_PLAN_DEFAULTS,
+): number {
+  let fees = computeStripeProcessingFeeUsd(platformFeeUsd, plan);
+  if (overageRetailUsd > 0) {
+    fees += computeStripeProcessingFeeUsd(overageRetailUsd, plan);
+  }
+  if (addonsUsd > 0) {
+    fees += computeStripeProcessingFeeUsd(addonsUsd, plan);
+  }
+  return fees;
 }
 
 export function computeBudgetForecast(
@@ -271,9 +448,22 @@ export function computeBudgetForecast(
     totalVoiceMinutes * plan.cogsVoicePerMinuteUsd +
     totalEmailSends * plan.cogsEmailPerSendUsd +
     mortgiCogsUsd +
-    inputs.extraTwilioNumbers * 1.15;
+    inputs.extraTwilioNumbers * plan.cogsTwilioNumberPerMonthUsd;
 
-  const estimatedCogsUsd = plan.fixedInfraCogsUsd + variableCogsUsd;
+  const fixedInfraCogsUsd = sumFixedInfraBreakdown(plan.fixedInfraBreakdown);
+  const zoomBrokerCogsUsd =
+    inputs.zoomBrokerLicenses * plan.zoomPerBrokerCogsUsd;
+  const estimatedCogsUsd =
+    fixedInfraCogsUsd + variableCogsUsd + zoomBrokerCogsUsd;
+
+  const stripeFeesUsd = computeRevenueStripeFees(
+    platformFeeUsd,
+    overageRetailUsd,
+    addonsUsd,
+    plan,
+  );
+  const grossMarginUsd = ownerTotalUsd - estimatedCogsUsd;
+  const estimatedMarginUsd = grossMarginUsd - stripeFeesUsd;
 
   const broadcast = computeBroadcastEconomics(
     {
@@ -310,8 +500,13 @@ export function computeBudgetForecast(
     addonsUsd,
     ownerTotalUsd,
     variableCogsUsd,
+    fixedInfraCogsUsd,
+    fixedInfraBreakdown: plan.fixedInfraBreakdown,
+    zoomBrokerCogsUsd,
     estimatedCogsUsd,
-    estimatedMarginUsd: ownerTotalUsd - estimatedCogsUsd,
+    stripeFeesUsd,
+    grossMarginUsd,
+    estimatedMarginUsd,
     pctSms: pct(totalSmsSegments, plan.includedSmsSegments),
     pctVoice: pct(totalVoiceMinutes, plan.includedVoiceMinutes),
     pctEmail: pct(totalEmailSends, plan.includedEmailSends),
@@ -322,8 +517,8 @@ export function computeBudgetForecast(
 
 export type ExpenditureOptions = {
   extraTwilioNumbers?: number;
+  /** Extra broker Zoom seats beyond the central API license in fixed infra */
   zoomBrokerLicenses?: number;
-  /** Use estimated voice minutes when recorded duration under-reports */
   preferEstimatedVoiceMinutes?: boolean;
 };
 
@@ -333,7 +528,7 @@ export function computeActualExpenditure(
   plan: BillingPlanConfig = BILLING_PLAN_DEFAULTS,
 ): ExpenditureBreakdown {
   const extraTwilioNumbers = options.extraTwilioNumbers ?? 0;
-  const zoomBrokerLicenses = options.zoomBrokerLicenses ?? 10;
+  const zoomBrokerLicenses = options.zoomBrokerLicenses ?? 0;
 
   const voiceMinutesBilled =
     options.preferEstimatedVoiceMinutes && usage.voiceMinutesEstimated != null
@@ -346,9 +541,12 @@ export function computeActualExpenditure(
     voiceMinutesBilled * plan.cogsVoicePerMinuteUsd +
     usage.totalEmailSends * plan.cogsEmailPerSendUsd +
     mortgiCogsUsd +
-    extraTwilioNumbers * 1.15;
+    extraTwilioNumbers * plan.cogsTwilioNumberPerMonthUsd;
 
-  const totalPlatformCogsUsd = plan.fixedInfraCogsUsd + variableUsageCogsUsd;
+  const fixedInfraCogsUsd = sumFixedInfraBreakdown(plan.fixedInfraBreakdown);
+  const zoomBrokerCogsUsd = zoomBrokerLicenses * plan.zoomPerBrokerCogsUsd;
+  const totalPlatformCogsUsd =
+    fixedInfraCogsUsd + variableUsageCogsUsd + zoomBrokerCogsUsd;
 
   const forecast = computeBudgetForecast(
     {
@@ -368,7 +566,9 @@ export function computeActualExpenditure(
   );
 
   const ownerTotalUsd = forecast.ownerTotalUsd;
-  const estimatedMarginUsd = ownerTotalUsd - totalPlatformCogsUsd;
+  const stripeFeesUsd = forecast.stripeFeesUsd;
+  const grossMarginUsd = ownerTotalUsd - totalPlatformCogsUsd;
+  const estimatedMarginUsd = grossMarginUsd - stripeFeesUsd;
 
   const broadcast = computeBroadcastEconomics(
     {
@@ -384,7 +584,7 @@ export function computeActualExpenditure(
     },
     plan,
   );
-  // Override with actual blast-derived segments (no blast count in snapshot)
+
   const broadcastCogsUsd =
     usage.broadcastSmsSegments * plan.cogsSmsPerSegmentUsd +
     usage.broadcastEmailSends * plan.cogsEmailPerSendUsd;
@@ -420,12 +620,16 @@ export function computeActualExpenditure(
     broadcast: broadcastActual,
     voiceMinutesBilled,
     variableUsageCogsUsd,
-    fixedInfraCogsUsd: plan.fixedInfraCogsUsd,
+    fixedInfraCogsUsd,
+    fixedInfraBreakdown: plan.fixedInfraBreakdown,
+    zoomBrokerCogsUsd,
     totalPlatformCogsUsd,
     overageRetailUsd: forecast.overageRetailUsd,
     platformFeeUsd: plan.platformFeeUsd,
     addonsUsd: forecast.addonsUsd,
     ownerTotalUsd,
+    stripeFeesUsd,
+    grossMarginUsd,
     estimatedMarginUsd,
     pctSms: pct(usage.totalSmsSegments, plan.includedSmsSegments),
     pctVoice: pct(voiceMinutesBilled, plan.includedVoiceMinutes),

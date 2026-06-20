@@ -3,7 +3,7 @@
 **Encore Mortgage CRM Platform** · June 2026  
 **Purpose:** Align product, finance, and engineering on platform-owner billing, usage quotas, and margins before implementation.
 
-**Status:** Draft for decisions — not yet implemented in code.
+**Status:** Implemented — rollout via per-tenant feature flags (§16). Default `billing_quota_mode=off` until deliberately enabled.
 
 **North star:** **One integrated billing & quota system** for platform_owner — SMS, voice, email, scheduler, broadcast, **Mortgi AI**, and database visibility — not parallel silos.
 
@@ -50,6 +50,8 @@ Use this section when implementation is done. Until then, everything below is **
 | **5. Mortgi AI** | Same mode as above | `mortgi_ai_tokens` pool; per-user 50/day cap always on |
 
 ### Rollout ladder (recommended order)
+
+**Scheduled go-live:** `2026-06-05` (UTC). Onboarding grace (`billing_onboarding_started_at`) starts that day; **3-day window ends 2026-06-08** for tenants without an active subscription when enforcement is on.
 
 ```text
 Step 0  Deploy code          billing_quota_mode = off     (production unchanged)
@@ -135,7 +137,7 @@ VALUES (@tid, 'billing_ui_enabled', 'true', 'boolean', 'Show /admin/billing to p
 | Topic | Recommendation (pending approval) |
 |-------|-----------------------------------|
 | **Who pays** | `platform_owner` per tenant (mortgage company), not individual brokers |
-| **Platform fee** | **$499/mo** per tenant (~$144 above ~$355 COGS at current Encore volume — revisit when Zoom seats grow) |
+| **Platform fee** | **$499/mo** per tenant (~**$239 net/mo** after ~$245 COGS + ~$15 Stripe at Encore volume — see `shared/billing-calculator.ts`) |
 | **Quota style** | **Single `QuotaService`** — all billable actions (including broadcast) call the same API |
 | **Integration** | Broadcast uses **same** SMS/email meters as everything else — one pool, `source=broadcast` breakdown in UI |
 | **Broadcast** | Pre-send `QuotaService.reserve()` on SMS/email segments; `broadcast_daily_*` stays as 24h abuse cap only |
@@ -147,7 +149,7 @@ VALUES (@tid, 'billing_ui_enabled', 'true', 'boolean', 'Show /admin/billing to p
 | **Twilio numbers** | ~**2 active numbers** today (1 shared + 1 broker-assigned), not one per broker |
 | **Rollout** | Default **`off`** (no behavior change) → `shadow` → `warn` (pre-Stripe OK) → **`enforce` only after Stripe** (§0, §16) |
 
-**Net:** At current volume, platform fee at $499 yields ~**$144/mo** gross margin per tenant before overages; additional profit from overage packs, extra phone lines, and multi-tenant scale. One dashboard, one “increase quota” flow. **Turn on without redeploy** via `system_settings` once built.
+**Net:** At current Encore volume, $499/mo yields ~**$239/mo net margin** after itemized infra ($227), variable Twilio/Resend (~$18), and Stripe (~$15). Central Zoom API is in fixed infra — broker seat add-ons are optional pass-through. Top-up packs show **net margin after COGS + Stripe** in `/admin/billing`. **Turn on without redeploy** via `system_settings` once built.
 
 ---
 
@@ -307,7 +309,7 @@ flowchart LR
   end
 
   subgraph COGS["Vendor COGS"]
-    FIX[Fixed infra ~$340/mo]
+    FIX[Fixed infra ~$227/mo]
     SMS[SMS ~$0.012/segment]
     VOX[Voice ~$0.011/min]
     EM[Email ~$0.0004/send in plan]
@@ -363,7 +365,7 @@ flowchart TB
   PO -->|Top-up packs\nSMS · voice · email| CRM
   PO -->|Add-ons\nTwilio # · Zoom seats| CRM
 
-  CRM -->|~$340/mo fixed| V
+  CRM -->|~$227/mo fixed| V
   CRM -->|Usage COGS| V
 
   subgraph Vendors["Vendors (COGS)"]
@@ -393,16 +395,16 @@ flowchart TB
   end
 
   subgraph COGS["COGS (USD/mo)"]
-    C1[Fixed infra ~340]
-    C2[Twilio usage ~15]
+    C1[Fixed infra ~227]
+    C2[Twilio usage ~18]
     C3[Email marginal ~0]
-    CT[Total COGS ~355]
+    CT[Total COGS ~245]
   end
 
   subgraph Margin["Margin"]
-    M1[Gross at base fee\n499 − 355 ≈ +144]
-    M2[+ Overage margin\n~40–50% of pack price]
-    M3[+ Multi-tenant scale\nshared infra]
+    M1[Gross at base fee\n499 − 245 ≈ +254]
+    M2[Stripe ~15]
+    M3[Net ~239]
     MP[Target: positive\nbase fee + overages + tenants]
   end
 
@@ -413,11 +415,11 @@ flowchart TB
   M1 --> M2 --> M3 --> MP
 ```
 
-| Scenario | Revenue | COGS | Gross margin | Notes |
-|----------|---------|------|--------------|-------|
-| Base plan only | $499 | ~$355 | **~+$144** | Platform fee covers COGS with headroom |
-| Plan + $36 SMS top-up | $535 | ~$367 | **~+$168** | ~50% margin on $18 pack COGS ~$12 |
-| 3 tenants @ $499 | $1,497 | ~$500–600 | **~+$900** | Infra sub-linear |
+| Scenario | Revenue | COGS | Gross margin | Net (after Stripe) | Notes |
+|----------|---------|------|--------------|-------------------|-------|
+| Base plan only | $499 | ~$245 | **~+$254** | **~+$239** | Itemized fixed infra + Encore variable usage |
+| Plan + $18 SMS top-up | $517 | ~$257 | **~+$260** | **~+$244** | Pack net ~$5.18 after COGS + Stripe |
+| 3 tenants @ $499 | $1,497 | ~$450–500 | **~+$1,000** | **~+$950** | Infra sub-linear across tenants |
 
 ---
 
@@ -428,26 +430,26 @@ flowchart LR
   subgraph SMS["+1,000 SMS segments"]
     SC[COGS ~$12]
     SR[Retail $18]
-    SM[Margin ~$6 · 50%]
+    SM[Net ~$5.18 · 29%]
     SC --> SR --> SM
   end
 
   subgraph VOX["+1,000 voice minutes"]
     VC[COGS ~$11]
     VR[Retail $18]
-    VM[Margin ~$7 · 64%]
+    VM[Net ~$6.18 · 34%]
     VC --> VR --> VM
   end
 
   subgraph EM["+1,000 emails"]
-    EC[COGS ~$1]
+    EC[COGS ~$0.40]
     ER[Retail $5]
-    EM[Margin ~$4 · high]
+    EM[Net ~$4.15 · 83%]
     EC --> ER --> EM
   end
 
   subgraph Plat["Platform fee $499"]
-    PF[Covers fixed infra ~$340]
+    PF[Covers fixed infra ~$227]
     PU[Usage included:\n1k SMS · 1.5k min · 5k email]
     PF --- PU
   end
@@ -806,15 +808,18 @@ Snapshot from production DB (June 2026). Use for calibration; re-run before lock
 
 ### 8.1 COGS estimate (Encore-scale today)
 
+Source: `FIXED_INFRA_BREAKDOWN` + variable rates in `shared/billing-calculator.ts`.
+
 | Line item | Estimate (USD/mo) |
 |-----------|-------------------|
-| Infra (audit mid-case) | ~340 |
-| Twilio numbers (×2) | ~2 |
-| SMS (831 × $0.012) | ~10 |
-| Voice (~694 min est. × $0.011) | ~8 |
-| Email (1,037 in Resend plan) | ~0 marginal |
-| Mortgi AI (802 tokens × $0.0000007) | ~0 |
-| **Total COGS** | **~358** |
+| Fixed infra (Vercel $65 + Ably $63 + TiDB $38 + Resend $20 + CDN/IMAP $15 + 10DLC $10 + Zoom API $16) | **~227** |
+| Variable usage (831 SMS + 694 voice min + 1,037 email + Mortgi) | **~18** |
+| Zoom broker add-on seats (optional pass-through) | **$0** at Encore (central API in fixed infra) |
+| **Total vendor COGS** | **~245** |
+| Stripe on $499 subscription (2.9% + $0.30) | **~15** |
+| **Net margin at $499** | **~$239** |
+
+Top-up **net** margins (after COGS + Stripe): SMS +1k **~$5.18** (~29%), voice +1k **~$6.18** (~34%), email +1k **~$4.15** (~83%).
 
 ### 8.2 Platform fee & quotas
 
@@ -844,16 +849,21 @@ All sources share the same counters. Observed 30d already **includes** broadcast
 
 ### 9.2 Overage / top-up retail (proposal)
 
-| Pack | COGS (approx) | Retail (proposal) | Margin |
-|------|---------------|-------------------|--------|
-| +1,000 SMS segments | ~$12 | **$18** | ~50% |
-| +1,000 voice minutes | ~$11 | **$18** | ~64% |
-| +1,000 emails | ~$1 | **$5** | high |
-| +50 scheduler bookings | ~$0 | **$10** | policy |
-| +100,000 Mortgi AI tokens | ~$0.07 | **$5** | high margin |
+| Pack | COGS (approx) | Retail | Net margin (after Stripe) |
+|------|---------------|--------|-------------------------|
+| +1,000 SMS segments | ~$12 | **$20** | **~$5.72** (~29%) |
+| +2,500 SMS segments | ~$30 | **$48** | **~$15.31** (~32%) |
+| +5,000 SMS segments | ~$60 | **$90** | **~$27.09** (~30%) |
+| +10,000 SMS segments | ~$120 | **$170** | **~$45.77** (~27%) |
+| +1,000 voice minutes | ~$11 | **$20** | **~$6.72** (~34%) |
+| +1,000 emails | ~$0.40 | **$6** | **~$5.03** (~84%) |
+| +50 scheduler bookings | ~$0 | **$12** | **~$11.35** (~95%) |
+| +100,000 Mortgi AI tokens | ~$0.07 | **$6** | **~$5.53** (~92%) |
 | Extra Twilio number | ~$1.15+ | **$9/mo** add-on | covers admin |
 
-No separate “broadcast wallet” top-up — owner buys **+1,000 SMS** or **+1,000 emails** (same packs as conversational).
+No separate “broadcast wallet” top-up — owner buys **+SMS / +email** via the **capacity slider** (tiered steps per channel). Legacy `pack_id` deep links still map to the matching tier.
+
+**UI:** `StripeTopUpCheckout` — channel tabs, tier slider + quick-pick chips, `POST /api/billing/stripe/charge-quote`. Catalog: `GET /api/billing/stripe/top-up-options`.
 
 ### 9.3 Internal units (one ledger)
 
@@ -1182,13 +1192,14 @@ Snapshot **2026-05-06 → 2026-06-05** (refresh: `npx tsx scripts/refresh-billin
 | Line | USD | Notes |
 |------|-----|-------|
 | Variable usage COGS (SMS + voice est. + email + Mortgi) | **~$18.02** | 831×$0.012 + 694×$0.011 + 1037×$0.0004 + 802×$0.0000007 |
-| Fixed infra COGS (allocated) | **~$340** | Vercel, Ably, TiDB, Resend, Zoom, CDN — see infra audit |
-| **Total platform COGS** | **~$358** | What it costs to run the tenant this month |
+| Fixed infra COGS (allocated) | **~$227** | `FIXED_INFRA_BREAKDOWN` — see infra audit |
+| **Total platform COGS** | **~$245** | Fixed + variable usage |
 | Overage retail | **$0** | All dimensions under included caps |
 | Platform fee | **$499** | Monthly subscription |
-| Add-ons (e.g. 10 Zoom) | **~$133** | Often paid outside CRM invoice |
-| **Owner total** | **~$632** | $499 + $0 overage + ~$133 Zoom |
-| **Est. margin** | **~+$274** | Owner total − platform COGS |
+| Stripe processing (2.9% + $0.30) | **~$15** | On $499 subscription charge |
+| **Gross margin** | **~+$254** | $499 − $245 COGS |
+| **Net margin** | **~+$239** | Gross − Stripe |
+| Add-ons (e.g. 10 Zoom seats) | **~$133** | Optional pass-through — neutral if billed at COGS |
 
 #### Broadcasting expended (dedicated — highest cost)
 
@@ -1216,11 +1227,11 @@ One typical blast at 100 recipients × 2 segments ≈ **$2.40 COGS** per send.
 ├─────────────────────────────────────────────────────────┤
 │  ALL CHANNELS                                            │
 │  SMS      831 / 1,000  83%  (blue convo + orange bcast)  │
-│  Voice    694 / 1,500  46%  │  Forecast total: ~$632    │
+│  Voice    694 / 1,500  46%  │  Owner total: $499        │
 │  Email  1,037 / 5,000  21%  │                           │
 │  Sched      7 / 100     7%  │                           │
 ├─────────────────────────────────────────────────────────┤
-│  Owner total: ~$632  │  Platform COGS: ~$358  │  Margin: ~+$274 │
+│  Platform COGS: ~$245  │  Gross: ~+$254  │  Net: ~+$239  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -1288,17 +1299,21 @@ owner_total = platform_fee + overage_usd + addons
 **Internal COGS estimate (optional):**
 
 ```
-cogs ≈ $340 + total_sms×$0.012 + total_voice×$0.011 + total_email×$0.0004 + total_mortgi×$0.0000007 + N_tw×$1.15
-margin ≈ owner_total − cogs
+cogs ≈ $227 + total_sms×$0.012 + total_voice×$0.011 + total_email×$0.0004 + total_mortgi×$0.0000007 + N_tw×$1.15 + N_zoom×$13.33
+gross_margin ≈ owner_total − cogs
+stripe_fees ≈ platform_fee×0.029 + 0.30 + sum(top_up_charges)×0.029 + 0.30×count(top_ups)
+net_margin ≈ gross_margin − stripe_fees
 ```
 
 **Actual expenditure (from usage snapshot):**
 
 ```
 variable_cogs = total_sms×$0.012 + voice_min×$0.011 + total_email×$0.0004
-total_cogs    = $340 + variable_cogs
+total_cogs       = $227 + variable_cogs + N_zoom×$13.33
 owner_total      = $499 + overage_retail + addons
-estimated_margin = owner_total − total_cogs
+gross_margin     = owner_total − total_cogs
+stripe_fees      = computeStripeProcessingFeeUsd(owner_total)
+net_margin       = gross_margin − stripe_fees
 ```
 
 ### 15.5 Worked example (Encore defaults in Canvas)

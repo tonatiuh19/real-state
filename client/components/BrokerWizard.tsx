@@ -150,20 +150,22 @@ export function BrokerWizard({
 
   const { selectedBrokerProfile, profileLoading, mortgageBankers } =
     useAppSelector((state) => state.brokers);
+  const { user: currentUser } = useAppSelector((state) => state.brokerAuth);
+  const isPlatformOwner = currentUser?.role === "platform_owner";
 
   // Fetch full profile when editing
   useEffect(() => {
     if (open && mode === "edit" && broker?.id) {
       dispatch(fetchBrokerProfileForEdit(broker.id));
     }
-    if (open) {
+    if (open && isPlatformOwner) {
       dispatch(fetchMortgageBankers());
     }
     if (!open) {
       setActiveTab("info");
       dispatch(clearSelectedBrokerProfile());
     }
-  }, [open, mode, broker?.id, dispatch]);
+  }, [open, mode, broker?.id, dispatch, isPlatformOwner]);
 
   const formik = useFormik<BrokerFormValues>({
     initialValues: {
@@ -179,7 +181,9 @@ export function BrokerWizard({
         broker?.specializations && Array.isArray(broker.specializations)
           ? broker.specializations
           : [],
-      created_by_broker_id: broker?.created_by_broker_id ?? null,
+      created_by_broker_id:
+        broker?.created_by_broker_id ??
+        (!isPlatformOwner && currentUser?.id ? currentUser.id : null),
       bio: "",
       office_address: "",
       office_city: "",
@@ -220,6 +224,14 @@ export function BrokerWizard({
       }
     },
   });
+
+  useEffect(() => {
+    if (open && !isPlatformOwner && currentUser?.id && mode === "create") {
+      formik.setFieldValue("role", "broker");
+      formik.setFieldValue("created_by_broker_id", currentUser.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isPlatformOwner, currentUser?.id, mode]);
 
   // Pre-fill profile fields once they load
   useEffect(() => {
@@ -452,32 +464,43 @@ export function BrokerWizard({
                       </h3>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="role">
-                          Role <span className="text-red-500">*</span>
-                        </Label>
-                        <Select
-                          value={formik.values.role}
-                          onValueChange={(value) =>
-                            formik.setFieldValue("role", value)
-                          }
-                        >
-                          <SelectTrigger id="role">
-                            <SelectValue placeholder="Select role" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="broker">Partner</SelectItem>
-                            <SelectItem value="admin">
-                              Mortgage Banker
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                        {formik.touched.role && formik.errors.role && (
-                          <p className="text-xs text-red-500">
-                            {formik.errors.role}
-                          </p>
-                        )}
-                      </div>
+                      {isPlatformOwner ? (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="role">
+                            Role <span className="text-red-500">*</span>
+                          </Label>
+                          <Select
+                            value={formik.values.role}
+                            onValueChange={(value) =>
+                              formik.setFieldValue("role", value)
+                            }
+                          >
+                            <SelectTrigger id="role">
+                              <SelectValue placeholder="Select role" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="broker">Partner</SelectItem>
+                              <SelectItem value="admin">
+                                Mortgage Banker
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {formik.touched.role && formik.errors.role && (
+                            <p className="text-xs text-red-500">
+                              {formik.errors.role}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <Label>Role</Label>
+                          <Input
+                            value="Partner Realtor"
+                            disabled
+                            className="bg-muted"
+                          />
+                        </div>
+                      )}
 
                       <div className="space-y-1.5">
                         <Label htmlFor="license_number">License Number</Label>
@@ -488,8 +511,8 @@ export function BrokerWizard({
                       </div>
                     </div>
 
-                    {/* Assigned Mortgage Banker — only for partners */}
-                    {formik.values.role === "broker" && (
+                    {/* Assigned Mortgage Banker — platform owner only */}
+                    {isPlatformOwner && formik.values.role === "broker" && (
                       <div className="space-y-1.5">
                         <Label
                           htmlFor="created_by_broker_id"
