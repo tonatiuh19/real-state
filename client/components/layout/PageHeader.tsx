@@ -48,32 +48,6 @@ interface PageHeaderProps {
 
 /**
  * Reusable admin page header.
- *
- * Usage (default):
- * ```tsx
- * <PageHeader
- *   icon={<Users className="h-7 w-7 text-primary" />}
- *   title="Clients"
- *   description="Manage your client relationships"
- *   actions={
- *     <div className="flex items-center gap-3">
- *       <Button>New Client</Button>
- *     </div>
- *   }
- * />
- * ```
- *
- * Usage (toolbar — full-screen panels):
- * ```tsx
- * <PageHeader
- *   variant="toolbar"
- *   icon={<MessageCircle className="h-5 w-5 md:h-6 md:w-6 text-primary" />}
- *   title="Conversations"
- *   description="Manage client communications"
- *   mobileBack={() => setMobilePanel("list")}
- *   actions={<><Button>...</Button><Button>...</Button></>}
- * />
- * ```
  */
 export function PageHeader({
   icon,
@@ -89,12 +63,12 @@ export function PageHeader({
     return (
       <div
         className={cn(
-          "bg-card border-b border-border px-4 md:px-6 py-3 md:py-4 flex-shrink-0",
+          "bg-card border-b border-border px-3 sm:px-4 md:px-6 py-3 md:py-4 flex-shrink-0",
           className,
         )}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
             {mobileBack && (
               <Button
                 variant="ghost"
@@ -105,13 +79,13 @@ export function PageHeader({
                 <ChevronLeft className="h-4 w-4" />
               </Button>
             )}
-            <div className="min-w-0">
-              <h1 className="text-xl md:text-2xl font-bold tracking-tight flex items-center gap-2 text-foreground truncate">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-bold tracking-tight flex items-center gap-2 text-foreground min-w-0">
                 {icon && <span className="flex-shrink-0">{icon}</span>}
-                <span className="hidden sm:inline">{title}</span>
+                <span className="truncate">{title}</span>
               </h1>
               {description && (
-                <p className="hidden md:block text-xs text-muted-foreground mt-0.5">
+                <p className="hidden sm:block text-xs text-muted-foreground mt-0.5 truncate">
                   {description}
                 </p>
               )}
@@ -119,7 +93,9 @@ export function PageHeader({
           </div>
 
           {actions && (
-            <div className="flex items-center gap-1.5">{actions}</div>
+            <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end w-full sm:w-auto max-w-full overflow-x-auto pb-0.5 sm:pb-0 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {actions}
+            </div>
           )}
         </div>
       </div>

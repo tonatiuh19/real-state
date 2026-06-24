@@ -89,6 +89,10 @@ import {
 } from "lucide-react";
 import ReactQuill from "react-quill-new";
 import "react-quill-new/dist/quill.snow.css";
+import {
+  bindQuillMergeTagListeners,
+  insertMergeTagInQuill,
+} from "@/lib/quillMergeTags";
 import type {
   RealtorBroadcast,
   RealtorBroadcastChannel,
@@ -336,12 +340,21 @@ const MERGE_TAGS = [
 function MergeTagDropdown({
   onSelect,
   onClose,
+  inline = false,
 }: {
   onSelect: (tag: string) => void;
   onClose: () => void;
+  /** When true, render in-place (for Quill editors) instead of below a text field. */
+  inline?: boolean;
 }) {
   return (
-    <div className="absolute z-50 left-0 top-full mt-1 w-64 rounded-md border bg-popover shadow-lg animate-in fade-in slide-in-from-top-1 duration-100">
+    <div
+      className={
+        inline
+          ? "z-50 w-64 rounded-md border bg-popover shadow-lg animate-in fade-in slide-in-from-top-1 duration-100"
+          : "absolute z-50 left-0 top-full mt-1 w-64 rounded-md border bg-popover shadow-lg animate-in fade-in slide-in-from-top-1 duration-100"
+      }
+    >
       <div className="p-1">
         <p className="px-2 py-1 text-[11px] text-muted-foreground font-semibold uppercase tracking-wide">
           Insert merge tag
@@ -430,6 +443,42 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
   const [showSubjectTags, setShowSubjectTags] = useState(false);
   const [showSmsTags, setShowSmsTags] = useState(false);
   const [showQuillTags, setShowQuillTags] = useState(false);
+
+  // Quill clears selection during React onChange — listen on native text-change instead.
+  useEffect(() => {
+    if (step !== 1) {
+      setShowQuillTags(false);
+      return;
+    }
+    if (form.channel !== "email" && form.channel !== "both") {
+      setShowQuillTags(false);
+      return;
+    }
+
+    let cleanup: (() => void) | undefined;
+    const attach = () => {
+      const editor = quillRef.current?.getEditor();
+      if (!editor) return false;
+      cleanup = bindQuillMergeTagListeners(editor, ({ active }) =>
+        setShowQuillTags(active),
+      );
+      return true;
+    };
+
+    if (!attach()) {
+      const timer = window.setTimeout(attach, 50);
+      return () => {
+        window.clearTimeout(timer);
+        cleanup?.();
+        setShowQuillTags(false);
+      };
+    }
+
+    return () => {
+      cleanup?.();
+      setShowQuillTags(false);
+    };
+  }, [step, form.channel]);
 
   const updateForm = useCallback(
     (patch: Partial<WizardState>) => setForm((prev) => ({ ...prev, ...patch })),
@@ -898,39 +947,30 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
               </div>
               <div className="space-y-1">
                 <Label>Email body</Label>
-                <div className="relative rounded-md border overflow-hidden [&_.ql-toolbar]:rounded-t-md [&_.ql-container]:rounded-b-md [&_.ql-container]:min-h-[180px] [&_.ql-editor]:min-h-[160px] [&_.ql-editor]:text-sm">
+                <div
+                  className="relative rounded-md border [&_.ql-toolbar]:rounded-t-md [&_.ql-container]:rounded-b-md [&_.ql-container]:min-h-[180px] [&_.ql-editor]:min-h-[160px] [&_.ql-editor]:text-sm"
+                  onKeyDown={(e) =>
+                    e.key === "Escape" && setShowQuillTags(false)
+                  }
+                >
                   <ReactQuill
                     ref={quillRef}
                     theme="snow"
                     value={form.body_email}
-                    onChange={(val) => {
-                      updateForm({ body_email: val });
-                      // Detect {{ typed at cursor
-                      const editor = quillRef.current?.getEditor();
-                      if (editor) {
-                        const sel = editor.getSelection();
-                        if (sel) {
-                          const textBefore = editor.getText(0, sel.index);
-                          setShowQuillTags(textBefore.endsWith("{{"));
-                        }
-                      }
-                    }}
+                    onChange={(val) => updateForm({ body_email: val })}
                     modules={QUILL_MODULES}
                     formats={QUILL_FORMATS}
                     placeholder="Hi {{first_name}}, rates have dropped to historic lows…"
                   />
                   {showQuillTags && (
-                    <div className="absolute left-2 bottom-2 z-50">
+                    <div className="absolute left-2 top-11 z-[60]">
                       <MergeTagDropdown
+                        inline
                         onSelect={(tag) => {
                           const editor = quillRef.current?.getEditor();
                           if (!editor) return;
-                          const sel = editor.getSelection();
-                          if (sel) {
-                            editor.deleteText(sel.index - 2, 2);
-                            editor.insertText(sel.index - 2, tag);
-                            editor.setSelection(sel.index - 2 + tag.length, 0);
-                          }
+                          insertMergeTagInQuill(editor, tag);
+                          setShowQuillTags(false);
                         }}
                         onClose={() => setShowQuillTags(false)}
                       />

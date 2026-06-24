@@ -22,7 +22,18 @@ import type {
   ConnectOffice365MailboxResponse,
   SyncConversationMailboxResponse,
   AssignConversationMailboxResponse,
+  CreateGroupConversationRequest,
+  CreateGroupConversationResponse,
+  PatchGroupConversationRequest,
+  PatchGroupConversationResponse,
+  SendGroupMessageRequest,
+  GetGroupParticipantsResponse,
+  GetConversationsConfigResponse,
+  GetGroupsByApplicationResponse,
+  GetGroupsByClientResponse,
+  GroupParticipant,
 } from "@shared/api";
+import { initAdminSession } from "./brokerAuthSlice";
 
 interface ConversationsState {
   // Thread management
@@ -91,6 +102,15 @@ interface ConversationsState {
   // Error handling
   error: string | null;
   isDeletingMessageId: number | string | null;
+
+  groupConversationsEnabled: boolean;
+  isCreatingGroup: boolean;
+  isSendingGroupMessage: boolean;
+  groupParticipants: GroupParticipant[];
+  isLoadingGroupParticipants: boolean;
+  groupsByApplication: Record<number, ConversationThread[]>;
+  groupsByClient: Record<number, ConversationThread[]>;
+  isLoadingLoanGroups: boolean;
 }
 
 const initialState: ConversationsState = {
@@ -148,6 +168,15 @@ const initialState: ConversationsState = {
 
   error: null,
   isDeletingMessageId: null,
+
+  groupConversationsEnabled: true,
+  isCreatingGroup: false,
+  isSendingGroupMessage: false,
+  groupParticipants: [],
+  isLoadingGroupParticipants: false,
+  groupsByApplication: {},
+  groupsByClient: {},
+  isLoadingLoanGroups: false,
 };
 
 // Async thunks
@@ -233,6 +262,167 @@ export const fetchConversationMessages = createAsyncThunk(
       return rejectWithValue(
         error.response?.data?.message ||
           "Failed to fetch conversation messages",
+      );
+    }
+  },
+);
+
+export const fetchConversationsConfig = createAsyncThunk(
+  "conversations/fetchConfig",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetConversationsConfigResponse>(
+        "/api/conversations/config",
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to load config",
+      );
+    }
+  },
+);
+
+export const createGroupConversation = createAsyncThunk(
+  "conversations/createGroup",
+  async (
+    payload: CreateGroupConversationRequest,
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<CreateGroupConversationResponse>(
+        "/api/conversations/groups",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to create group",
+      );
+    }
+  },
+);
+
+export const patchGroupConversation = createAsyncThunk(
+  "conversations/patchGroup",
+  async (
+    {
+      conversationId,
+      ...body
+    }: PatchGroupConversationRequest & { conversationId: string },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.patch<PatchGroupConversationResponse>(
+        `/api/conversations/groups/${conversationId}`,
+        body,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to update group",
+      );
+    }
+  },
+);
+
+export const sendGroupMessage = createAsyncThunk(
+  "conversations/sendGroupMessage",
+  async (
+    {
+      conversationId,
+      ...body
+    }: SendGroupMessageRequest & { conversationId: string },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<SendMessageResponse>(
+        `/api/conversations/groups/${conversationId}/send`,
+        body,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: unknown) {
+      const denial = parseBillingDenial(error);
+      if (denial) {
+        return rejectWithValue(
+          billingDenialMessage(
+            denial,
+            axios.isAxiosError(error)
+              ? String(
+                  error.response?.data?.error ||
+                    error.response?.data?.message ||
+                    "Failed to send group message",
+                )
+              : "Failed to send group message",
+          ),
+        );
+      }
+      return rejectWithValue(
+        axios.isAxiosError(error)
+          ? error.response?.data?.message || "Failed to send group message"
+          : "Failed to send group message",
+      );
+    }
+  },
+);
+
+export const fetchGroupParticipants = createAsyncThunk(
+  "conversations/fetchGroupParticipants",
+  async (conversationId: string, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetGroupParticipantsResponse>(
+        `/api/conversations/groups/${conversationId}/participants`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to load participants",
+      );
+    }
+  },
+);
+
+export const fetchGroupsByApplication = createAsyncThunk(
+  "conversations/fetchGroupsByApplication",
+  async (applicationId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetGroupsByApplicationResponse>(
+        `/api/conversations/groups/by-application/${applicationId}`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { applicationId, threads: data.threads };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to load loan groups",
+      );
+    }
+  },
+);
+
+export const fetchGroupsByClient = createAsyncThunk(
+  "conversations/fetchGroupsByClient",
+  async (clientId: number, { getState, rejectWithValue }) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetGroupsByClientResponse>(
+        `/api/conversations/groups/by-client/${clientId}`,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      return { clientId, threads: data.threads };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || "Failed to load client groups",
       );
     }
   },
@@ -1259,6 +1449,97 @@ const conversationsSlice = createSlice({
           ...(changed ? { conversation_id: finalConvId } : {}),
         };
       }
+    });
+
+    builder.addCase(initAdminSession.fulfilled, (state, action) => {
+      state.groupConversationsEnabled =
+        action.payload.group_conversations_enabled;
+    });
+
+    builder.addCase(fetchConversationsConfig.fulfilled, (state, action) => {
+      state.groupConversationsEnabled =
+        action.payload.group_conversations_enabled;
+    });
+
+    builder
+      .addCase(createGroupConversation.pending, (state) => {
+        state.isCreatingGroup = true;
+        state.error = null;
+      })
+      .addCase(createGroupConversation.fulfilled, (state, action) => {
+        state.isCreatingGroup = false;
+        if (action.payload.thread) {
+          state.threads.unshift(action.payload.thread);
+          state.currentThread = action.payload.thread;
+          const appId = action.payload.thread.application_id;
+          if (appId) {
+            const existing = state.groupsByApplication[appId] ?? [];
+            state.groupsByApplication[appId] = [
+              action.payload.thread,
+              ...existing.filter(
+                (t) =>
+                  t.conversation_id !== action.payload.thread!.conversation_id,
+              ),
+            ];
+          }
+        }
+      })
+      .addCase(createGroupConversation.rejected, (state, action) => {
+        state.isCreatingGroup = false;
+        state.error = action.payload as string;
+      });
+
+    builder.addCase(patchGroupConversation.fulfilled, (state, action) => {
+      const updated = action.payload.thread;
+      if (!updated) return;
+      const idx = state.threads.findIndex(
+        (t) => t.conversation_id === updated.conversation_id,
+      );
+      if (idx >= 0) state.threads[idx] = { ...state.threads[idx], ...updated };
+      if (state.currentThread?.conversation_id === updated.conversation_id) {
+        state.currentThread = { ...state.currentThread, ...updated };
+      }
+    });
+
+    builder
+      .addCase(sendGroupMessage.pending, (state) => {
+        state.isSendingGroupMessage = true;
+      })
+      .addCase(sendGroupMessage.fulfilled, (state) => {
+        state.isSendingGroupMessage = false;
+      })
+      .addCase(sendGroupMessage.rejected, (state, action) => {
+        state.isSendingGroupMessage = false;
+        state.error = action.payload as string;
+      });
+
+    builder
+      .addCase(fetchGroupParticipants.pending, (state) => {
+        state.isLoadingGroupParticipants = true;
+      })
+      .addCase(fetchGroupParticipants.fulfilled, (state, action) => {
+        state.isLoadingGroupParticipants = false;
+        state.groupParticipants = action.payload.participants;
+      })
+      .addCase(fetchGroupParticipants.rejected, (state) => {
+        state.isLoadingGroupParticipants = false;
+      });
+
+    builder
+      .addCase(fetchGroupsByApplication.pending, (state) => {
+        state.isLoadingLoanGroups = true;
+      })
+      .addCase(fetchGroupsByApplication.fulfilled, (state, action) => {
+        state.isLoadingLoanGroups = false;
+        state.groupsByApplication[action.payload.applicationId] =
+          action.payload.threads;
+      })
+      .addCase(fetchGroupsByApplication.rejected, (state) => {
+        state.isLoadingLoanGroups = false;
+      });
+
+    builder.addCase(fetchGroupsByClient.fulfilled, (state, action) => {
+      state.groupsByClient[action.payload.clientId] = action.payload.threads;
     });
   },
 });

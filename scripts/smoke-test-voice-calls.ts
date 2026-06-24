@@ -200,21 +200,21 @@ async function main() {
   const apiIndex = fs.readFileSync(path.join(root, "api/index.ts"), "utf8");
 
   if (
-    globalVoice.includes("sharedDevice") &&
-    voicePanel.includes("sharedDevice") &&
-    voicePanel.includes("ownsDeviceRef")
+    globalVoice.includes("VoiceDeviceProvider") &&
+    voicePanel.includes("waitForDevice") &&
+    !voicePanel.includes("new Device(token")
   ) {
-    pass("Outbound uses shared Twilio Device (no second Device per call)");
+    pass("Outbound uses shared Twilio Device via VoiceDeviceContext (no fallback Device)");
   } else {
     fail(
       "Shared Device pattern",
-      "VoiceCallPanel must reuse GlobalVoiceManager Device — dual Device causes blank/hung UI",
+      "VoiceCallPanel must wait for GlobalVoiceManager Device — fallback Device causes blank/hung UI",
     );
     finding(
       "V2",
       "critical",
       "Dual Twilio Device on outbound",
-      "GlobalVoiceManager registers broker_{id}. A second Device+register in VoiceCallPanel with the same identity conflicts — UI stuck on 'Setting up…' (reported as blank screen). Encore accounts with Available toggled on hit this reliably; Daniel may work if inbound Device failed to register.",
+      "GlobalVoiceManager registers broker_{id}. A fallback second Device in VoiceCallPanel with the same identity conflicts — UI stuck on 'Setting up…' (reported as blank screen).",
     );
   }
 

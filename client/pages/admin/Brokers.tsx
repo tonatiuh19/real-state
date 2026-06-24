@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   fetchBrokers,
@@ -38,6 +39,7 @@ import {
   Phone,
   Link2,
   CalendarDays,
+  Upload,
 } from "lucide-react";
 import type { Broker } from "@shared/api";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -46,6 +48,8 @@ import { adminPageMeta } from "@/lib/seo-helpers";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import BrokerDetailPanel from "@/components/BrokerDetailPanel";
+import BulkImportWizard from "@/components/bulk-import/BulkImportWizard";
+import { openBulkImportWizard, closeBulkImportWizard } from "@/store/slices/bulkImportSlice";
 
 export default function Brokers() {
   const dispatch = useAppDispatch();
@@ -56,6 +60,10 @@ export default function Brokers() {
   const { user: currentBroker, sessionToken } = useAppSelector(
     (state) => state.brokerAuth,
   );
+  const bulkCsvImportEnabled = useAppSelector(
+    (state) => state.bulkImport.bulkCsvImportEnabled,
+  );
+  const location = useLocation();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("first_name");
@@ -135,6 +143,12 @@ export default function Brokers() {
   useEffect(() => {
     doFetch({ page: 1, sortBy, sortOrder: sortDir });
   }, [dispatch]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(closeBulkImportWizard());
+    };
+  }, [location.pathname, dispatch]);
 
   const handleCreateBroker = () => {
     setWizardMode("create");
@@ -356,10 +370,22 @@ export default function Brokers() {
           className="mb-0"
           actions={
             isAdmin ? (
-              <Button onClick={handleCreateBroker} className="gap-2">
-                <Plus className="h-4 w-4" />
-                Add Realtor
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {isPlatformOwner && bulkCsvImportEnabled && (
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => dispatch(openBulkImportWizard("realtors"))}
+                  >
+                    <Upload className="h-4 w-4" />
+                    Import
+                  </Button>
+                )}
+                <Button onClick={handleCreateBroker} className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Realtor
+                </Button>
+              </div>
             ) : undefined
           }
         />
@@ -759,6 +785,7 @@ export default function Brokers() {
           }}
           brokerId={detailBrokerId}
         />
+        <BulkImportWizard entity="realtors" />
       </div>
     </>
   );

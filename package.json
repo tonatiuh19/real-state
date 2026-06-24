@@ -22,7 +22,10 @@
     "validate:realtor-management": "tsx scripts/smoke-test-realtor-management.ts",
     "validate:loans-pipeline": "tsx scripts/smoke-test-loans-pipeline.ts",
     "validate:voice-calls": "tsx scripts/smoke-test-voice-calls.ts",
-    "validate:all": "npm run typecheck && npm test && npm run validate:create-loan && npm run validate:realtor-management && npm run validate:loans-pipeline && npm run validate:voice-calls && npm run build",
+    "validate:group-conversations": "tsx scripts/smoke-test-group-conversations.ts",
+    "validate:direct-conversations": "tsx scripts/smoke-test-direct-conversations.ts",
+    "validate:bulk-import": "tsx scripts/smoke-test-bulk-import.ts",
+    "validate:all": "npm run typecheck && npm test && npm run validate:create-loan && npm run validate:realtor-management && npm run validate:loans-pipeline && npm run validate:voice-calls && npm run validate:group-conversations && npm run validate:direct-conversations && npm run validate:bulk-import && npm run build",
     "teams:policy-sync": "bash scripts/teams-policy-sync.sh",
     "purge:data": "node scripts/purge-old-data.mjs"
   },

@@ -907,6 +907,16 @@ const Pipeline = () => {
               onClose={handleClosePanel}
               selectedLoan={selectedLoan}
               isLoadingDetails={isLoadingDetails}
+              onOpenGroupConversation={(conversationId) => {
+                navigate("/admin/conversations", {
+                  state: { openThreadId: conversationId },
+                });
+              }}
+              onCreateLoanGroup={(applicationId) => {
+                navigate("/admin/conversations", {
+                  state: { openGroupWizard: true, applicationId },
+                });
+              }}
             />
 
             {/* New Loan Wizard */}

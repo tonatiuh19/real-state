@@ -38,6 +38,7 @@ import {
   Loader2,
   ArrowRight,
   Save,
+  MessageSquare,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -113,6 +114,7 @@ import {
 import PDFSigningViewer from "@/components/PDFSigningViewer";
 import { PreApprovalLetterModal } from "@/components/PreApprovalLetterModal";
 import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
+import { fetchGroupsByApplication } from "@/store/slices/conversationsSlice";
 import { fetchPreApprovalLetter } from "@/store/slices/preApprovalSlice";
 import { fetchAnnualMetrics } from "@/store/slices/dashboardSlice";
 import { toast } from "@/hooks/use-toast";
@@ -125,6 +127,8 @@ interface LoanOverlayProps {
   onClose: () => void;
   selectedLoan: any;
   isLoadingDetails: boolean;
+  onOpenGroupConversation?: (conversationId: string) => void;
+  onCreateLoanGroup?: (applicationId: number) => void;
 }
 
 export function LoanOverlay({
@@ -132,10 +136,14 @@ export function LoanOverlay({
   onClose,
   selectedLoan,
   isLoadingDetails,
+  onOpenGroupConversation,
+  onCreateLoanGroup,
 }: LoanOverlayProps) {
   const dispatch = useAppDispatch();
   const { sessionToken, user } = useAppSelector((state) => state.brokerAuth);
   const { brokers } = useAppSelector((state) => state.brokers);
+  const { groupConversationsEnabled, groupsByApplication, isLoadingLoanGroups } =
+    useAppSelector((state) => state.conversations);
   const { tasks: taskTemplates } = useAppSelector((state) => state.tasks);
   const { emailTemplates } = useAppSelector(
     (state) => state.communicationTemplates,
@@ -268,6 +276,12 @@ export function LoanOverlay({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLoan?.id]);
+
+  useEffect(() => {
+    if (isOpen && selectedLoan?.id && groupConversationsEnabled) {
+      dispatch(fetchGroupsByApplication(selectedLoan.id));
+    }
+  }, [isOpen, selectedLoan?.id, groupConversationsEnabled, dispatch]);
 
   const handleDraftFieldChange = (field: string, value: string) => {
     setDraftForm((prev) => ({ ...prev, [field]: value }));
@@ -2047,6 +2061,75 @@ export function LoanOverlay({
                           </Badge>
                         )}
                       </div>
+
+                      {groupConversationsEnabled && selectedLoan?.id && (
+                        <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                              <Users className="h-3.5 w-3.5 text-primary" />
+                              Group conversations
+                            </p>
+                            {onCreateLoanGroup && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs gap-1"
+                                onClick={() =>
+                                  onCreateLoanGroup(selectedLoan.id)
+                                }
+                              >
+                                <Plus className="h-3 w-3" />
+                                Create
+                              </Button>
+                            )}
+                          </div>
+                          {isLoadingLoanGroups ? (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Loading groups…
+                            </div>
+                          ) : (groupsByApplication[selectedLoan.id] ?? [])
+                              .length === 0 ? (
+                            <p className="text-xs text-muted-foreground">
+                              No group threads linked to this loan yet.
+                            </p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {(groupsByApplication[selectedLoan.id] ?? []).map(
+                                (g) => (
+                                  <button
+                                    key={g.conversation_id}
+                                    type="button"
+                                    className="w-full flex items-center gap-2 rounded-md border bg-card px-2.5 py-2 text-left hover:border-primary/40 hover:bg-primary/[0.02] transition-colors"
+                                    onClick={() =>
+                                      onOpenGroupConversation?.(
+                                        g.conversation_id,
+                                      )
+                                    }
+                                  >
+                                    <MessageSquare className="h-3.5 w-3.5 text-primary shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-xs font-medium truncate">
+                                        {g.display_title ||
+                                          g.title ||
+                                          g.client_name ||
+                                          "Group"}
+                                      </p>
+                                      {g.last_message_preview ? (
+                                        <p className="text-[10px] text-muted-foreground truncate">
+                                          {g.last_message_preview}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
+                                  </button>
+                                ),
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Detail grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 pt-1">

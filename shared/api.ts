@@ -1008,6 +1008,22 @@ export interface GetClientDetailProfileResponse {
     status: string;
     priority: string | null;
     last_message_preview: string | null;
+    thread_type?: "direct" | "group";
+  }>;
+  group_threads?: Array<{
+    id: number;
+    conversation_id: string;
+    title?: string | null;
+    last_message_at: string | null;
+    message_count: number;
+    unread_count: number;
+    last_message_type: string | null;
+    status: string;
+    priority: string | null;
+    last_message_preview: string | null;
+    thread_type: "group";
+    channel?: "sms" | "whatsapp" | "internal";
+    creation_source?: "encore" | "phone_synced";
   }>;
   communications: Array<{
     id: number;
@@ -1287,6 +1303,16 @@ export interface ConversationThread {
   tags?: string[] | null;
   created_at: string;
   updated_at: string;
+  /** Group threads only — direct threads omit or use 'direct' */
+  thread_type?: "direct" | "group";
+  title?: string | null;
+  /** Always set for group threads — title or auto-generated */
+  display_title?: string | null;
+  participant_count?: number;
+  participants_preview?: { name: string; type: string }[];
+  /** encore = wizard-created; phone_synced = inbound Group MMS */
+  creation_source?: "encore" | "phone_synced";
+  channel?: "sms" | "whatsapp" | "internal";
 }
 
 export interface Communication {
@@ -1439,6 +1465,95 @@ export interface SendMessageResponse {
   conversation_id: string;
   external_id?: string;
   cost?: number;
+}
+
+export type GroupParticipantInput =
+  | { type: "client"; client_id: number }
+  | { type: "broker"; broker_id: number }
+  | { type: "lead"; lead_id: number }
+  | { type: "phone"; phone: string; display_name?: string };
+
+export interface CreateGroupConversationRequest {
+  title?: string;
+  channel: "sms" | "internal";
+  application_id?: number;
+  participants: GroupParticipantInput[];
+  /** Optional first message (internal note or SMS) */
+  body?: string;
+}
+
+export interface CreateGroupConversationResponse {
+  success: boolean;
+  conversation_id: string;
+  thread: ConversationThread;
+  message?: string;
+}
+
+export interface PatchGroupConversationRequest {
+  title?: string;
+  application_id?: number | null;
+}
+
+export interface PatchGroupConversationResponse {
+  success: boolean;
+  thread: ConversationThread;
+}
+
+export interface GroupParticipant {
+  id: number;
+  participant_type: "client" | "broker" | "lead" | "external_phone";
+  client_id?: number | null;
+  broker_id?: number | null;
+  lead_id?: number | null;
+  phone_e164?: string | null;
+  display_name: string;
+  role: "owner" | "member";
+  joined_at: string;
+  left_at?: string | null;
+}
+
+export interface GetGroupParticipantsResponse {
+  success: boolean;
+  participants: GroupParticipant[];
+}
+
+export interface AddGroupParticipantRequest {
+  participant: GroupParticipantInput;
+}
+
+export interface SendGroupMessageRequest {
+  body: string;
+  communication_type?: "sms" | "internal_note";
+  media_url?: string;
+  media_content_type?: string;
+  media_filename?: string;
+}
+
+export interface GetConversationsConfigResponse {
+  success: boolean;
+  group_conversations_enabled: boolean;
+}
+
+export interface GetGroupsByApplicationResponse {
+  success: boolean;
+  threads: ConversationThread[];
+}
+
+export interface GetGroupsByClientResponse {
+  success: boolean;
+  threads: ConversationThread[];
+}
+
+export interface SimulateInboundGroupRequest {
+  from: string;
+  to: string;
+  body?: string;
+  otherRecipients?: string | string[];
+}
+
+export interface SimulateInboundGroupResponse {
+  success: boolean;
+  message?: string;
 }
 
 export interface ConversationMailbox {
@@ -2419,6 +2534,10 @@ export interface AdminInitResponse {
   profile: BrokerProfileDetails;
   controls: AdminSectionControl[];
   rolePermissions: RoleSectionPermission[];
+  /** Server feature flag — off in production unless GROUP_CONVERSATIONS_ALLOW_PRODUCTION=1 */
+  group_conversations_enabled: boolean;
+  /** Server feature flag — off in production unless BULK_CSV_IMPORT_ENABLED=1 or BULK_CSV_IMPORT_ALLOW_PRODUCTION=1 */
+  bulk_csv_import_enabled: boolean;
 }
 
 // ─── Contact Form ─────────────────────────────────────────────────────────────
@@ -3494,4 +3613,79 @@ export interface BillingStripeResetSubscriptionTestResponse {
   reset: boolean;
   message: string;
   error?: string;
+}
+
+// ─── Bulk CSV import (platform owner) ───────────────────────────────────────
+
+export type BulkImportEntityType = "clients" | "realtors";
+
+export interface BulkImportCommitOptions {
+  link_phone_threads?: boolean;
+  send_welcome_emails?: boolean;
+}
+
+export interface BulkImportRowPreviewDto {
+  row_number: number;
+  status: "will_create" | "skipped" | "error";
+  message?: string;
+  external_ref?: string | null;
+  display_name: string;
+  email?: string | null;
+  phone?: string | null;
+  badge?: string | null;
+  conflict_entity_id?: number | null;
+}
+
+export interface BulkImportValidateResponse {
+  success: boolean;
+  message?: string;
+  file_error?: string;
+  file_error_code?: string;
+  job_id?: number;
+  entity?: BulkImportEntityType;
+  file_name?: string;
+  row_count?: number;
+  will_create_count?: number;
+  skipped_count?: number;
+  error_count?: number;
+  preview_rows?: BulkImportRowPreviewDto[];
+  breakdown?: Record<string, number>;
+  expires_at?: string;
+}
+
+export interface BulkImportCommitResultRow {
+  row_number: number;
+  external_ref?: string | null;
+  status: "created" | "skipped" | "error";
+  entity_id?: number | null;
+  owner_broker_id?: number | null;
+  message?: string;
+}
+
+export interface BulkImportCommitResponse {
+  success: boolean;
+  message?: string;
+  job_id?: number;
+  created_count?: number;
+  skipped_count?: number;
+  error_count?: number;
+  results?: BulkImportCommitResultRow[];
+}
+
+export interface BulkImportJobResponse {
+  success: boolean;
+  job?: {
+    id: number;
+    entity: BulkImportEntityType;
+    status: string;
+    file_name: string;
+    row_count: number;
+    created_count: number;
+    skipped_count: number;
+    error_count: number;
+    expires_at: string;
+    committed_at?: string | null;
+    preview_rows?: BulkImportRowPreviewDto[];
+    results?: BulkImportCommitResultRow[];
+  };
 }

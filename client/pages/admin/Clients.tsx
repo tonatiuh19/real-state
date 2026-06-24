@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { Users, Search, Phone, Trash2, Plus, UserCircle2 } from "lucide-react";
+import { useLocation } from "react-router-dom";
+import { Users, Search, Phone, Trash2, Plus, UserCircle2, Upload } from "lucide-react";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import ClientFormDialog from "@/components/ClientFormDialog";
@@ -31,6 +32,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { DataGrid, type DataGridColumn } from "@/components/ui/data-grid";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchClients, deleteClient } from "@/store/slices/clientsSlice";
+import { openBulkImportWizard, closeBulkImportWizard } from "@/store/slices/bulkImportSlice";
+import BulkImportWizard from "@/components/bulk-import/BulkImportWizard";
 import { useToast } from "@/hooks/use-toast";
 import type { GetClientsResponse } from "@shared/api";
 
@@ -45,6 +48,10 @@ const Clients = () => {
     pagination,
   } = useAppSelector((state) => state.clients);
   const { user } = useAppSelector((state) => state.brokerAuth);
+  const bulkCsvImportEnabled = useAppSelector(
+    (state) => state.bulkImport.bulkCsvImportEnabled,
+  );
+  const location = useLocation();
   const isPartner = user?.role === "broker";
   const isPlatformOwner = user?.role === "platform_owner";
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -77,6 +84,12 @@ const Clients = () => {
       search: searchQuery || undefined,
     });
   }, [dispatch]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(closeBulkImportWizard());
+    };
+  }, [location.pathname, dispatch]);
 
   const handleSort = (field: string) => {
     const newDir = sortBy === field && sortDir === "ASC" ? "DESC" : "ASC";
@@ -352,6 +365,16 @@ const Clients = () => {
                   New Client
                 </Button>
               )}
+              {isPlatformOwner && bulkCsvImportEnabled && (
+                <Button
+                  variant="outline"
+                  className="gap-1.5 whitespace-nowrap"
+                  onClick={() => dispatch(openBulkImportWizard("clients"))}
+                >
+                  <Upload className="h-4 w-4" />
+                  Import
+                </Button>
+              )}
             </div>
           }
         />
@@ -555,6 +578,7 @@ const Clients = () => {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        <BulkImportWizard entity="clients" />
       </div>
     </>
   );

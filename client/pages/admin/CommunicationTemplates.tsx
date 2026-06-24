@@ -73,6 +73,10 @@ import {
 import type { CommunicationType } from "@shared/api";
 import ReactQuill from "react-quill-new";
 import "react-quill-new/dist/quill.snow.css";
+import {
+  bindQuillMergeTagListeners,
+  insertMergeTagInQuill,
+} from "@/lib/quillMergeTags";
 import { cn } from "@/lib/utils";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -225,55 +229,52 @@ const CommunicationTemplates = () => {
     selectedIndex: number;
   }>({ open: false, filter: "", selectedIndex: 0 });
 
+  useEffect(() => {
+    if (!isEditorOpen || channelTab !== "email") {
+      setQuillVarDropdown({ open: false, filter: "", selectedIndex: 0 });
+      return;
+    }
+
+    let cleanup: (() => void) | undefined;
+    const attach = () => {
+      const editor = quillRef.current?.getEditor();
+      if (!editor) return false;
+      cleanup = bindQuillMergeTagListeners(editor, ({ active, filter }) => {
+        setQuillVarDropdown((prev) => ({
+          open: active,
+          filter,
+          selectedIndex: active ? 0 : prev.selectedIndex,
+        }));
+      });
+      return true;
+    };
+
+    if (!attach()) {
+      const timer = window.setTimeout(attach, 50);
+      return () => {
+        window.clearTimeout(timer);
+        cleanup?.();
+      };
+    }
+
+    return () => cleanup?.();
+  }, [isEditorOpen, channelTab]);
+
   const insertQuillVariable = (varName: string) => {
     const editor = quillRef.current?.getEditor();
     if (!editor) return;
-    const range = editor.getSelection(true);
-    const index = range ? range.index : editor.getLength();
-    editor.insertText(index, `{{${varName}}}`, "user");
-    editor.setSelection(index + `{{${varName}}}`.length, 0);
+    insertMergeTagInQuill(editor, `{{${varName}}}`);
   };
 
   const insertQuillVariableFromDropdown = (varName: string) => {
     const editor = quillRef.current?.getEditor();
     if (!editor) return;
-    const selection = editor.getSelection();
-    if (!selection) {
-      insertQuillVariable(varName);
-      setQuillVarDropdown({ open: false, filter: "", selectedIndex: 0 });
-      return;
-    }
-    const cursorIndex = selection.index;
-    const textBeforeCursor = editor.getText(0, cursorIndex);
-    const match = textBeforeCursor.match(/\{\{([a-z_]*)$/);
-    if (match) {
-      editor.deleteText(cursorIndex - match[0].length, match[0].length, "user");
-      const insertAt = cursorIndex - match[0].length;
-      editor.insertText(insertAt, `{{${varName}}}`, "user");
-      editor.setSelection(insertAt + `{{${varName}}}`.length, 0);
-    } else {
-      insertQuillVariable(varName);
-    }
+    insertMergeTagInQuill(editor, `{{${varName}}}`);
     setQuillVarDropdown({ open: false, filter: "", selectedIndex: 0 });
   };
 
   const handleQuillChange = (content: string) => {
     setEmailFormData((prev) => ({ ...prev, body_html: content }));
-    const editor = quillRef.current?.getEditor();
-    if (!editor) return;
-    const sel = editor.getSelection();
-    if (!sel) return;
-    const textBefore = editor.getText(0, sel.index);
-    const match = textBefore.match(/\{\{([a-z_]*)$/);
-    if (match) {
-      setQuillVarDropdown({
-        open: true,
-        filter: match[1] || "",
-        selectedIndex: 0,
-      });
-    } else {
-      setQuillVarDropdown((prev) => ({ ...prev, open: false }));
-    }
   };
 
   const handleQuillKeyDown = (e: React.KeyboardEvent) => {

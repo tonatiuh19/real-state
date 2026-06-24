@@ -901,6 +901,8 @@ export default function ClientDetailPanel({
   const client = profile?.client;
   const loans = profile?.loans ?? [];
   const conversations = profile?.conversations ?? [];
+  const groupThreads = profile?.group_threads ?? [];
+  const allConversationThreads = [...conversations, ...groupThreads];
   const communications = profile?.communications ?? [];
   const hasAssignedBroker = Boolean(client?.assigned_broker?.id);
 
@@ -1195,7 +1197,9 @@ export default function ClientDetailPanel({
                 Pipeline{loans.length > 0 && ` (${loans.length})`}
               </TabsTrigger>
               <TabsTrigger value="conversations" className="text-xs">
-                Convos{conversations.length > 0 && ` (${conversations.length})`}
+                Convos
+                {allConversationThreads.length > 0 &&
+                  ` (${allConversationThreads.length})`}
               </TabsTrigger>
               <TabsTrigger value="activity" className="text-xs">
                 Activity
@@ -1821,8 +1825,11 @@ export default function ClientDetailPanel({
                   {/* toolbar */}
                   <div className="flex items-center justify-between px-6 pt-3 pb-2 shrink-0">
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      {conversations.length} thread
-                      {conversations.length !== 1 ? "s" : ""}
+                      {allConversationThreads.length} thread
+                      {allConversationThreads.length !== 1 ? "s" : ""}
+                      {groupThreads.length > 0
+                        ? ` · ${groupThreads.length} group`
+                        : ""}
                     </p>
                     {canMessage ? (
                       <Button
@@ -1885,7 +1892,7 @@ export default function ClientDetailPanel({
 
                   <ScrollArea className="flex-1">
                     <div className="px-6 pb-4 space-y-2.5">
-                      {conversations.length === 0 ? (
+                      {allConversationThreads.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
                           <MessageSquare className="w-12 h-12 text-muted-foreground/30" />
                           <p className="text-sm text-muted-foreground">
@@ -1907,21 +1914,35 @@ export default function ClientDetailPanel({
                           )}
                         </div>
                       ) : (
-                        conversations.map((conv) => {
-                          const typeIcon =
-                            conv.last_message_type === "email" ? (
-                              <Mail className="w-4 h-4" />
-                            ) : conv.last_message_type === "whatsapp" ? (
-                              <MessageCircle className="w-4 h-4 text-green-500" />
-                            ) : conv.last_message_type === "call" ? (
-                              <PhoneCall className="w-4 h-4" />
-                            ) : (
-                              <Smartphone className="w-4 h-4" />
-                            );
+                        allConversationThreads.map((conv) => {
+                          const isGroup = conv.thread_type === "group";
+                          const typeIcon = isGroup ? (
+                            <Users className="w-4 h-4 text-primary" />
+                          ) : conv.last_message_type === "email" ? (
+                            <Mail className="w-4 h-4" />
+                          ) : conv.last_message_type === "whatsapp" ? (
+                            <MessageCircle className="w-4 h-4 text-green-500" />
+                          ) : conv.last_message_type === "call" ? (
+                            <PhoneCall className="w-4 h-4" />
+                          ) : (
+                            <Smartphone className="w-4 h-4" />
+                          );
+                          const title: string = isGroup
+                            ? String(
+                                (conv as { title?: string | null }).title ||
+                                  "Group conversation",
+                              )
+                            : `${conv.last_message_type ?? "SMS"} thread`;
                           return (
                             <button
-                              key={conv.id}
-                              onClick={() => openThread(conv.conversation_id)}
+                              key={`${conv.conversation_id}-${conv.id}`}
+                              onClick={() => {
+                                if (isGroup && onOpenConversation) {
+                                  onOpenConversation(conv.conversation_id);
+                                  return;
+                                }
+                                openThread(conv.conversation_id);
+                              }}
                               className="w-full text-left group rounded-xl border bg-card hover:border-primary/40 hover:bg-primary/[0.02] hover:shadow-sm transition-all p-3.5"
                             >
                               <div className="flex items-center gap-3">
@@ -1930,9 +1951,17 @@ export default function ClientDetailPanel({
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center justify-between gap-2">
-                                    <p className="text-sm font-semibold text-foreground capitalize">
-                                      {conv.last_message_type ?? "SMS"} thread
+                                    <p className="text-sm font-semibold text-foreground capitalize truncate">
+                                      {title}
                                     </p>
+                                    {isGroup && (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-[9px] py-0 px-1 shrink-0"
+                                      >
+                                        Group
+                                      </Badge>
+                                    )}
                                     <div className="flex items-center gap-1.5 shrink-0">
                                       {conv.unread_count > 0 && (
                                         <span className="text-[10px] font-bold bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full leading-none">

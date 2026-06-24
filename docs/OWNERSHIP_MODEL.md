@@ -116,6 +116,19 @@ Threads are visible to a broker if **any** of the following are true:
 3. Broker sent a message in the thread (`communications.from_broker_id = brokerId`)
 4. The thread's linked loan is owned by the broker via any of the 3 ownership paths
 
+### Group conversations (`thread_type = 'group'`)
+
+When `GROUP_CONVERSATIONS_ENABLED=1`, group threads use **`conversation_participants`** instead of a single `client_id`:
+
+| Visibility path | Rule |
+| --- | --- |
+| Participant broker | Broker is an active participant (`cp.broker_id = brokerId`) |
+| Client co-ownership | Any participant client matches the standard 3-path ownership model |
+
+Group threads **never** reuse `conv_client_{id}`. Phone-synced Group MMS threads get `creation_source = phone_synced`; Encore-created groups use `encore`.
+
+API: `api/index.ts` (group conversations section) — `assertGroupThreadAccess`, `groupVisibilitySql()`.
+
 ---
 
 ## Data Flow on Creation

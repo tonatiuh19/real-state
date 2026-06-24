@@ -33,6 +33,9 @@ interface ClientsState {
   clients: GetClientsResponse["clients"];
   pagination: PaginationInfo | null;
   isLoading: boolean;
+  /** Ephemeral results for messaging/contact pickers — does not replace list grid */
+  pickerSearchResults: GetClientsResponse["clients"];
+  isPickerSearching: boolean;
   error: string | null;
 }
 
@@ -40,6 +43,8 @@ const initialState: ClientsState = {
   clients: [],
   pagination: null,
   isLoading: false,
+  pickerSearchResults: [],
+  isPickerSearching: false,
   error: null,
 };
 
@@ -56,6 +61,29 @@ export const fetchClients = createAsyncThunk(
     } catch (error: any) {
       return rejectWithValue(
         error.response?.data?.error || "Failed to fetch clients",
+      );
+    }
+  },
+);
+
+/** Server-side search for New Message / group wizards — avoids paging blind spots. */
+export const searchClientsForPicker = createAsyncThunk(
+  "clients/searchClientsForPicker",
+  async (search: string, { getState, rejectWithValue }) => {
+    try {
+      const q = search.trim();
+      if (q.length < 2) {
+        return { clients: [] as GetClientsResponse["clients"] };
+      }
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.get<GetClientsResponse>("/api/clients", {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+        params: { search: q, limit: 20 },
+      });
+      return { clients: data.clients };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.error || "Failed to search clients",
       );
     }
   },
@@ -199,6 +227,17 @@ const clientsSlice = createSlice({
       .addCase(fetchClients.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload as string;
+      })
+      .addCase(searchClientsForPicker.pending, (state) => {
+        state.isPickerSearching = true;
+      })
+      .addCase(searchClientsForPicker.fulfilled, (state, action) => {
+        state.isPickerSearching = false;
+        state.pickerSearchResults = action.payload.clients;
+      })
+      .addCase(searchClientsForPicker.rejected, (state) => {
+        state.isPickerSearching = false;
+        state.pickerSearchResults = [];
       })
       .addCase(deleteClient.fulfilled, (state, action) => {
         state.clients = state.clients.filter(

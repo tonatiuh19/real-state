@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import { useAppDispatch } from "@/store/hooks";
-import { fetchVoiceToken, logVoiceCall } from "@/store/slices/voiceSlice";
+import { logVoiceCall } from "@/store/slices/voiceSlice";
 import {
   Phone,
   PhoneOff,
@@ -40,6 +40,8 @@ import {
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { useAppSelector } from "@/store/hooks";
+import { useVoiceDeviceOptional } from "@/contexts/VoiceDeviceContext";
+import { Loader2 } from "lucide-react";
 
 export type CallState =
   | "idle"
@@ -71,12 +73,6 @@ interface VoiceCallPanelProps {
    * Device lives in GlobalVoiceManager. Outbound calls use the shared Device.
    */
   deviceAudio?: Device["audio"] | null;
-  /**
-   * The single Twilio Device from GlobalVoiceManager. Outbound calls MUST reuse
-   * this instance — creating a second Device with the same broker identity
-   * causes register()/connect() to hang or silently fail (blank call UI).
-   */
-  sharedDevice?: Device | null;
 }
 
 const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
@@ -88,14 +84,13 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   activeCall,
   direction = "outbound",
   deviceAudio,
-  sharedDevice,
 }) => {
   const dispatch = useAppDispatch();
+  const voiceDevice = useVoiceDeviceOptional();
+  const deviceStatus = useAppSelector((s) => s.voice.deviceStatus);
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
 
   const deviceRef = useRef<Device | null>(null);
-  /** True only when this panel created its own Device (legacy fallback). */
-  const ownsDeviceRef = useRef(false);
   const callRef = useRef<Call | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Prevents double-logging: when the broker clicks hang-up, handleHangUp calls
@@ -454,12 +449,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       callRef.current.removeAllListeners();
       callRef.current = null;
     }
-    if (ownsDeviceRef.current && deviceRef.current) {
-      deviceRef.current.removeAllListeners();
-      deviceRef.current.destroy();
-    }
     deviceRef.current = null;
-    ownsDeviceRef.current = false;
   }, [stopTimer, stopMicMeter]);
 
   const handleHangUp = useCallback(
@@ -485,44 +475,24 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     callAlreadyLoggedRef.current = false;
 
     try {
-      let device: Device;
-
-      if (sharedDevice) {
-        // Reuse GlobalVoiceManager's Device — never spawn a second one with the
-        // same broker identity (causes blank/hung call UI for shared-line accounts).
-        device = sharedDevice;
-        deviceRef.current = device;
-        ownsDeviceRef.current = false;
-      } else {
-        // Fallback when GlobalVoiceManager is still booting (should be rare).
-        const tokenResult = await dispatch(fetchVoiceToken());
-        if (fetchVoiceToken.rejected.match(tokenResult)) {
-          throw new Error(
-            (tokenResult.payload as string) || "Token fetch failed",
-          );
-        }
-        const token = tokenResult.payload as string;
-        if (!token) throw new Error("Token fetch failed");
-
-        device = new Device(token, {
-          logLevel: 1,
-          codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
-          closeProtection: true,
-          maxAverageBitrate: 40000,
-          enableImprovedSignalingErrorPrecision: true,
-        });
-        deviceRef.current = device;
-        ownsDeviceRef.current = true;
-
-        device.on("error", (err) => {
-          logger.error("[VoiceCallPanel] Device error:", err);
-          setErrorMsg(err.message || "Device error");
-          setCallState("error");
-          cleanupDevice();
-        });
+      if (!voiceDevice) {
+        throw new Error(
+          "Voice system is not ready. Refresh the page and try again.",
+        );
       }
 
-      // Ensure the Device is registered before placing an outbound call.
+      const device =
+        voiceDevice.getDevice() ?? (await voiceDevice.waitForDevice(15000));
+      if (!device) {
+        throw new Error(
+          deviceStatus === "error"
+            ? "Voice connection failed. Check your network or refresh the page."
+            : "Voice system is still connecting. Wait a moment and try again.",
+        );
+      }
+
+      deviceRef.current = device;
+
       if (device.state !== Device.State.Registered) {
         await device.register();
       }
@@ -590,21 +560,14 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       });
     } catch (err: any) {
       logger.error("[VoiceCallPanel] Failed to initiate call:", err);
-      setErrorMsg(
-        sharedDevice
-          ? err?.message ||
-              "Voice system is still connecting — wait a moment and try again."
-          : err?.response?.data?.error ||
-              err?.message ||
-              "Failed to start call",
-      );
+      setErrorMsg(err?.message || "Failed to start call");
       setCallState("error");
       cleanupDevice();
     }
   }, [
-    sharedDevice,
+    voiceDevice,
+    deviceStatus,
     phone,
-    dispatch,
     selectedMicId,
     selectedSpeakerId,
     supportsSinkId,
@@ -835,9 +798,17 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
         </div>
       )}
 
-      {/* Pre-call settings screen (Teams-style) */}
-      {callState === "idle" && (
-        <div className="space-y-3">
+      {/* Pre-call settings screen (Teams-style) — keep visible while initializing */}
+      {(callState === "idle" || callState === "initializing") && (
+        <div className="space-y-3 relative">
+          {callState === "initializing" && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                <span>Connecting voice…</span>
+              </div>
+            </div>
+          )}
           <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-3">
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
               <Settings2 className="h-3 w-3" />
@@ -983,6 +954,9 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
                 <Button
                   className="w-full bg-green-600 hover:bg-green-700 text-white gap-2 h-10"
                   onClick={initiateCall}
+                  disabled={
+                    callState === "initializing" || deviceStatus === "error"
+                  }
                 >
                   <Phone className="h-4 w-4" />
                   Start Call

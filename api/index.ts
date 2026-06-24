@@ -4,6 +4,19 @@ import express, { type RequestHandler } from "express";
 import { create } from "xmlbuilder2";
 import cors from "cors";
 import multer from "multer";
+import {
+  BULK_IMPORT_JOB_TTL_MS,
+  BULK_IMPORT_MAX_FILE_BYTES,
+  buildClientTemplateCsv,
+  buildRealtorTemplateCsv,
+  isBulkCsvImportEnabled,
+  resolveBulkCsvImportEnabled,
+  parseAndValidateBulkCsv,
+  type BulkImportEntity,
+  type BulkImportValidationResult,
+  type NormalizedClientBulkRow,
+  type NormalizedRealtorBulkRow,
+} from "../shared/bulk-import.js";
 import axios from "axios";
 import mysql, {
   type ResultSetHeader,
@@ -22,7 +35,6 @@ import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import Groq from "groq-sdk";
 import type { Pool, PoolConnection } from "mysql2/promise";
-
 // =====================================================
 // Billing & quota (inlined for Vercel serverless — no local imports)
 // =====================================================
@@ -245,14 +257,16 @@ const TOP_UP_TIERS_BY_DIMENSION: Record<UsageDimension, TopUpTier[]> = {
 };
 
 /** Legacy deep-link pack ids → dimension + tier index. */
-const LEGACY_TOP_UP_PACK_IDS: Record<string, { dimension: UsageDimension; tierIndex: number }> =
-  {
-    sms_1k: { dimension: "sms_segments", tierIndex: 0 },
-    voice_1k: { dimension: "voice_minutes", tierIndex: 1 },
-    email_1k: { dimension: "email_sends", tierIndex: 0 },
-    scheduler_50: { dimension: "scheduler_bookings", tierIndex: 1 },
-    mortgi_100k: { dimension: "mortgi_ai_tokens", tierIndex: 0 },
-  };
+const LEGACY_TOP_UP_PACK_IDS: Record<
+  string,
+  { dimension: UsageDimension; tierIndex: number }
+> = {
+  sms_1k: { dimension: "sms_segments", tierIndex: 0 },
+  voice_1k: { dimension: "voice_minutes", tierIndex: 1 },
+  email_1k: { dimension: "email_sends", tierIndex: 0 },
+  scheduler_50: { dimension: "scheduler_bookings", tierIndex: 1 },
+  mortgi_100k: { dimension: "mortgi_ai_tokens", tierIndex: 0 },
+};
 
 type TopUpQuote = {
   quoteKey: string;
@@ -309,10 +323,9 @@ function resolveLegacyTopUpPack(
   const direct = LEGACY_TOP_UP_PACK_IDS[packId];
   if (direct) return direct;
 
-  for (const [dimension, tiers] of Object.entries(TOP_UP_TIERS_BY_DIMENSION) as [
-    UsageDimension,
-    TopUpTier[],
-  ][]) {
+  for (const [dimension, tiers] of Object.entries(
+    TOP_UP_TIERS_BY_DIMENSION,
+  ) as [UsageDimension, TopUpTier[]][]) {
     const idx = tiers.findIndex((t) => t.tierId === packId);
     if (idx >= 0) return { dimension, tierIndex: idx };
   }
@@ -346,12 +359,16 @@ function buildLegacyTopUpPackCatalog(): Record<
 > {
   const catalog: Record<
     string,
-    { dimension: UsageDimension; units: number; label: string; amountCents: number }
+    {
+      dimension: UsageDimension;
+      units: number;
+      label: string;
+      amountCents: number;
+    }
   > = {};
-  for (const [dimension, tiers] of Object.entries(TOP_UP_TIERS_BY_DIMENSION) as [
-    UsageDimension,
-    TopUpTier[],
-  ][]) {
+  for (const [dimension, tiers] of Object.entries(
+    TOP_UP_TIERS_BY_DIMENSION,
+  ) as [UsageDimension, TopUpTier[]][]) {
     for (const tier of tiers) {
       catalog[tier.tierId] = {
         dimension,
@@ -371,7 +388,6 @@ type TopUpPackId = string;
 function suggestTopUpDimensionFromLegacyPack(packId: string): UsageDimension {
   return resolveLegacyTopUpPack(packId)?.dimension ?? "sms_segments";
 }
-
 
 /**
  * Platform-owner budget & expenditure math — aligned with live .env services.
@@ -447,7 +463,6 @@ const BILLING_PLAN_DEFAULTS = {
 
 type BillingPlanConfig = typeof BILLING_PLAN_DEFAULTS;
 
-
 type TopUpPackEconomics = {
   packId: string;
   retailUsd: number;
@@ -473,7 +488,11 @@ function computeTopUpPackEconomics(
     };
   }
   const retailUsd = pack.amountCents / 100;
-  const variableCogsUsd = computePackVariableCogsUsd(pack.dimension, pack.units, plan);
+  const variableCogsUsd = computePackVariableCogsUsd(
+    pack.dimension,
+    pack.units,
+    plan,
+  );
   const stripeFeeUsd = computeStripeProcessingFeeUsd(retailUsd, plan);
   const netMarginUsd = retailUsd - variableCogsUsd - stripeFeeUsd;
   const marginPct =
@@ -644,7 +663,9 @@ function computeBroadcastEconomics(
         ? Math.round((smsSegments / params.totalSmsSegments) * 100)
         : 0,
     shareOfVariableCogsPct:
-      variableCogs > 0 ? Math.round((broadcastVariable / variableCogs) * 100) : 0,
+      variableCogs > 0
+        ? Math.round((broadcastVariable / variableCogs) * 100)
+        : 0,
     pctOfIncludedSms: pct(smsSegments, plan.includedSmsSegments),
     pctOfIncludedEmail: pct(emailSends, plan.includedEmailSends),
     smsOverageAttributed,
@@ -942,14 +963,8 @@ function computeActualExpenditure(
       variableUsageCogsUsd > 0
         ? Math.round((broadcastCogsUsd / variableUsageCogsUsd) * 100)
         : 0,
-    pctOfIncludedSms: pct(
-      usage.broadcastSmsSegments,
-      plan.includedSmsSegments,
-    ),
-    pctOfIncludedEmail: pct(
-      usage.broadcastEmailSends,
-      plan.includedEmailSends,
-    ),
+    pctOfIncludedSms: pct(usage.broadcastSmsSegments, plan.includedSmsSegments),
+    pctOfIncludedEmail: pct(usage.broadcastEmailSends, plan.includedEmailSends),
   };
 
   return {
@@ -976,8 +991,6 @@ function computeActualExpenditure(
     mortgiCogsUsd,
   };
 }
-
-
 
 /** Encore-internal COGS/margin — never expose to paying customers in production. */
 function isBillingInternalEconomicsEnabled(
@@ -1047,8 +1060,6 @@ function stripInternalPackEconomics(
 ): Array<Record<string, unknown>> {
   return packs.map(({ economics: _economics, ...pack }) => pack);
 }
-
-
 
 /**
  * Billing access ladder — subscription grace/restricted/suspended + quota blocks.
@@ -1346,8 +1357,7 @@ function computeBillingAccessState(
       level === "subscription_restricted" ||
       level === "subscription_suspended");
 
-  const showsFullWall =
-    blocksEnforcement && level === "subscription_suspended";
+  const showsFullWall = blocksEnforcement && level === "subscription_suspended";
 
   const blocksBrokerSends = blocksCostActions;
   const showWarnBanner =
@@ -1445,9 +1455,7 @@ const TEAM_NOTICE_LEVELS: BillingTeamNoticeLevel[] = [
   "quota_blocked",
 ];
 
-function buildBillingTeamNotice(
-  access: BillingAccessState,
-): BillingTeamNotice {
+function buildBillingTeamNotice(access: BillingAccessState): BillingTeamNotice {
   const empty: BillingTeamNotice = {
     show: false,
     level: null,
@@ -1563,7 +1571,6 @@ const execFileAsync = promisify(execFile);
 
 export type BillingQuotaMode = "off" | "shadow" | "warn" | "enforce";
 
-
 export type BillingConfig = {
   billingQuotaMode: BillingQuotaMode;
   billingUiEnabled: boolean;
@@ -1638,7 +1645,8 @@ const VOICE_MIN_PER_CALL_EST = 2.4;
 const SINCE_EXPR = "DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY)";
 const COGS_SMS_PER_SEGMENT = BILLING_PLAN_DEFAULTS.cogsSmsPerSegmentUsd;
 const COGS_EMAIL_PER_SEND = BILLING_PLAN_DEFAULTS.cogsEmailPerSendUsd;
-const COGS_WHATSAPP_PER_MESSAGE = BILLING_PLAN_DEFAULTS.cogsWhatsappPerMessageUsd;
+const COGS_WHATSAPP_PER_MESSAGE =
+  BILLING_PLAN_DEFAULTS.cogsWhatsappPerMessageUsd;
 const COGS_MMS_PER_MESSAGE = BILLING_PLAN_DEFAULTS.cogsMmsPerMessageUsd;
 const BILLING_SUBSCRIBER_EMAIL_KEY = "billing_subscriber_email";
 
@@ -1798,13 +1806,17 @@ export function reserveDenialPayload(result: ReserveResult) {
   });
 }
 
-function parseBool(value: string | null | undefined, fallback = false): boolean {
+function parseBool(
+  value: string | null | undefined,
+  fallback = false,
+): boolean {
   if (value == null || value === "") return fallback;
   return value === "true" || value === "1";
 }
 
 function parseMode(value: string | null | undefined): BillingQuotaMode {
-  if (value === "shadow" || value === "warn" || value === "enforce") return value;
+  if (value === "shadow" || value === "warn" || value === "enforce")
+    return value;
   return "off";
 }
 
@@ -1890,19 +1902,23 @@ export async function getBillingConfig(
         ...BILLING_PLAN_DEFAULTS,
         platformFeeUsd,
         includedSmsSegments: Number(
-          sub.included_sms_segments ?? BILLING_PLAN_DEFAULTS.includedSmsSegments,
+          sub.included_sms_segments ??
+            BILLING_PLAN_DEFAULTS.includedSmsSegments,
         ),
         includedVoiceMinutes: Number(
-          sub.included_voice_minutes ?? BILLING_PLAN_DEFAULTS.includedVoiceMinutes,
+          sub.included_voice_minutes ??
+            BILLING_PLAN_DEFAULTS.includedVoiceMinutes,
         ),
         includedEmailSends: Number(
           sub.included_email_sends ?? BILLING_PLAN_DEFAULTS.includedEmailSends,
         ),
         includedSchedulerBookings: Number(
-          sub.included_scheduler_bookings ?? BILLING_PLAN_DEFAULTS.includedSchedulerBookings,
+          sub.included_scheduler_bookings ??
+            BILLING_PLAN_DEFAULTS.includedSchedulerBookings,
         ),
         includedMortgiAiTokens: Number(
-          sub.included_mortgi_ai_tokens ?? BILLING_PLAN_DEFAULTS.includedMortgiAiTokens,
+          sub.included_mortgi_ai_tokens ??
+            BILLING_PLAN_DEFAULTS.includedMortgiAiTokens,
         ),
       } as BillingPlanConfig)
     : BILLING_PLAN_DEFAULTS;
@@ -1910,7 +1926,10 @@ export async function getBillingConfig(
   return {
     billingQuotaMode: parseMode(settingsMap.get("billing_quota_mode")),
     billingUiEnabled: parseBool(settingsMap.get("billing_ui_enabled"), false),
-    billingOverageEnabled: parseBool(settingsMap.get("billing_overage_enabled"), false),
+    billingOverageEnabled: parseBool(
+      settingsMap.get("billing_overage_enabled"),
+      false,
+    ),
     billingEnforceBroadcastDaily: parseBool(
       settingsMap.get("billing_enforce_broadcast_daily"),
       true,
@@ -2115,7 +2134,8 @@ export async function getUnifiedQuotaSummary(
         pct: pct(liveUsed + row.reserved, effectiveIncluded),
       };
     }
-    const effectiveUsed = mode === "off" && liveUsed != null ? liveUsed : row.used;
+    const effectiveUsed =
+      mode === "off" && liveUsed != null ? liveUsed : row.used;
     return {
       dimension,
       used: effectiveUsed,
@@ -2131,10 +2151,7 @@ export async function getUnifiedQuotaSummary(
   return {
     mode,
     periodStart,
-    sms_segments: await buildSlice(
-      "sms_segments",
-      snapshot?.totalSmsSegments,
-    ),
+    sms_segments: await buildSlice("sms_segments", snapshot?.totalSmsSegments),
     voice_minutes: await buildSlice(
       "voice_minutes",
       snapshot
@@ -2165,7 +2182,9 @@ const BILLING_CAPACITY_DIMENSIONS: UsageDimension[] = [
 ];
 
 function topUpChannelTitle(dimension: UsageDimension): string {
-  return TOP_UP_CHANNELS.find((c) => c.dimension === dimension)?.title ?? dimension;
+  return (
+    TOP_UP_CHANNELS.find((c) => c.dimension === dimension)?.title ?? dimension
+  );
 }
 
 function resolveTopUpPackDetails(
@@ -2229,8 +2248,7 @@ export async function buildBillingPurchasesResponse(
     const dimension = String(row.dimension) as UsageDimension;
     const units = Number(row.units ?? 0);
     const meta = safeJsonParse<Record<string, unknown>>(row.metadata_json, {});
-    const packId =
-      typeof meta.pack_id === "string" ? meta.pack_id : undefined;
+    const packId = typeof meta.pack_id === "string" ? meta.pack_id : undefined;
     const { label, amountCents: packAmount } = resolveTopUpPackDetails(
       packId,
       dimension,
@@ -2238,9 +2256,7 @@ export async function buildBillingPurchasesResponse(
     );
     const metaAmount = Number(meta.amount_cents);
     const amountCents =
-      Number.isFinite(metaAmount) && metaAmount > 0
-        ? metaAmount
-        : packAmount;
+      Number.isFinite(metaAmount) && metaAmount > 0 ? metaAmount : packAmount;
     const appliedPeriodStart =
       typeof meta.period_start === "string"
         ? meta.period_start.slice(0, 10)
@@ -2398,7 +2414,9 @@ export async function fetchTenantUsageSnapshot(
 
 export function createQuotaService(pool: Pool) {
   async function getMode(tenantId: number): Promise<BillingQuotaMode> {
-    return parseMode(await getTenantSetting(pool, tenantId, "billing_quota_mode", "off"));
+    return parseMode(
+      await getTenantSetting(pool, tenantId, "billing_quota_mode", "off"),
+    );
   }
 
   async function writeLedger(
@@ -2481,7 +2499,12 @@ export function createQuotaService(pool: Pool) {
 
   async function isOverageEnabled(tenantId: number): Promise<boolean> {
     return parseBool(
-      await getTenantSetting(pool, tenantId, "billing_overage_enabled", "false"),
+      await getTenantSetting(
+        pool,
+        tenantId,
+        "billing_overage_enabled",
+        "false",
+      ),
     );
   }
 
@@ -2492,7 +2515,9 @@ export function createQuotaService(pool: Pool) {
     // Subscription ladder and quota blocks only apply in enforce mode.
     if (config.billingQuotaMode !== "enforce") return null;
     const quota = await getUnifiedQuotaSummary(pool, tenantId);
-    const access = await getBillingAccessState(pool, tenantId, config, { quota });
+    const access = await getBillingAccessState(pool, tenantId, config, {
+      quota,
+    });
     if (!access.blocksCostActions) return null;
     return {
       allowed: false,
@@ -2564,14 +2589,20 @@ export function createQuotaService(pool: Pool) {
     },
 
     /** Record usage after a successful vendor call (no re-gate). */
-    async recordConsumption(tenantId: number, req: ConsumeRequest): Promise<void> {
+    async recordConsumption(
+      tenantId: number,
+      req: ConsumeRequest,
+    ): Promise<void> {
       const mode = await getMode(tenantId);
       if (mode === "off") return;
       await writeLedger(pool, tenantId, req, "consume");
       await adjustPeriod(pool, tenantId, req.dimension, { used: req.units });
     },
 
-    async precheck(tenantId: number, req: ConsumeRequest): Promise<QuotaResult> {
+    async precheck(
+      tenantId: number,
+      req: ConsumeRequest,
+    ): Promise<QuotaResult> {
       const billingGate = await billingCostActionGate(tenantId);
       if (billingGate) return billingGate;
 
@@ -2582,7 +2613,13 @@ export function createQuotaService(pool: Pool) {
       const usage = await evaluateUsage(tenantId, req.dimension, req.units);
       const overageEnabled = await isOverageEnabled(tenantId);
       if (mode === "warn") {
-        return { allowed: true, mode, recorded: false, usage, warn: usage.pct >= 80 };
+        return {
+          allowed: true,
+          mode,
+          recorded: false,
+          usage,
+          warn: usage.pct >= 80,
+        };
       }
       if (usage.pct >= 100 && !overageEnabled) {
         return {
@@ -2646,19 +2683,18 @@ export function createQuotaService(pool: Pool) {
         }
       }
 
-      const expiresAt = new Date(Date.now() + (opts.ttlMinutes ?? 120) * 60_000);
+      const expiresAt = new Date(
+        Date.now() + (opts.ttlMinutes ?? 120) * 60_000,
+      );
       const [result] = await pool.query(
         `INSERT INTO tenant_usage_reservations
            (tenant_id, broadcast_id, units_json, expires_at, status)
          VALUES (?, ?, ?, ?, 'pending')`,
-        [
-          tenantId,
-          opts.broadcastId ?? null,
-          JSON.stringify(units),
-          expiresAt,
-        ],
+        [tenantId, opts.broadcastId ?? null, JSON.stringify(units), expiresAt],
       );
-      const reservationId = Number((result as { insertId?: number }).insertId ?? 0);
+      const reservationId = Number(
+        (result as { insertId?: number }).insertId ?? 0,
+      );
 
       for (const [dimension, unitCount] of Object.entries(units)) {
         if (!unitCount || unitCount <= 0) continue;
@@ -2667,10 +2703,13 @@ export function createQuotaService(pool: Pool) {
           units: unitCount,
           source: opts.source ?? "broadcast",
           refType: "broadcast",
-          refId: opts.broadcastId != null ? String(opts.broadcastId) : undefined,
+          refId:
+            opts.broadcastId != null ? String(opts.broadcastId) : undefined,
         };
         await writeLedger(pool, tenantId, req, "reserve");
-        await adjustPeriod(pool, tenantId, req.dimension, { reserved: unitCount });
+        await adjustPeriod(pool, tenantId, req.dimension, {
+          reserved: unitCount,
+        });
       }
 
       return { allowed: true, mode, reservationId };
@@ -2697,7 +2736,8 @@ export function createQuotaService(pool: Pool) {
           units: unitCount,
           source: "broadcast",
           refType: "broadcast_recipient",
-          refId: recipientId != null ? String(recipientId) : String(broadcastId),
+          refId:
+            recipientId != null ? String(recipientId) : String(broadcastId),
         };
         if (hasPending) {
           await writeLedger(pool, tenantId, req, "capture");
@@ -2844,15 +2884,17 @@ export function createQuotaService(pool: Pool) {
         if (mode !== "off") {
           const config = await getBillingConfig(pool, tenantId);
           const periodStart = currentPeriodStart(config);
-          const units = safeJsonParse<ReserveUnits>(
-            row.units_json,
-            {},
-          );
+          const units = safeJsonParse<ReserveUnits>(row.units_json, {});
 
           for (const [dimension, reservedTotal] of Object.entries(units)) {
             if (!reservedTotal || reservedTotal <= 0) continue;
             const dim = dimension as UsageDimension;
-            const periodRow = await readPeriodRow(pool, tenantId, periodStart, dim);
+            const periodRow = await readPeriodRow(
+              pool,
+              tenantId,
+              periodStart,
+              dim,
+            );
             const releaseUnits = Math.min(periodRow.reserved, reservedTotal);
             if (releaseUnits <= 0) continue;
             const req: ConsumeRequest = {
@@ -2863,7 +2905,9 @@ export function createQuotaService(pool: Pool) {
               refId: String(reservationId),
             };
             await writeLedger(pool, tenantId, req, "release");
-            await adjustPeriod(pool, tenantId, dim, { reserved: -releaseUnits });
+            await adjustPeriod(pool, tenantId, dim, {
+              reserved: -releaseUnits,
+            });
           }
         }
 
@@ -2921,7 +2965,11 @@ export function createQuotaService(pool: Pool) {
       units: number,
       packId: string,
       source: "webhook" | "confirm",
-    ): Promise<{ granted: boolean; alreadyFulfilled: boolean; repaired?: boolean }> {
+    ): Promise<{
+      granted: boolean;
+      alreadyFulfilled: boolean;
+      repaired?: boolean;
+    }> {
       const packDetails = resolveTopUpPackDetails(packId, dimension, units);
       const req: ConsumeRequest = {
         dimension,
@@ -3032,8 +3080,10 @@ export function createQuotaService(pool: Pool) {
     },
 
     getBillingConfig: (tenantId: number) => getBillingConfig(pool, tenantId),
-    fetchUsageSnapshot: (tenantId: number) => fetchTenantUsageSnapshot(pool, tenantId),
-    getUnifiedQuotaSummary: (tenantId: number) => getUnifiedQuotaSummary(pool, tenantId),
+    fetchUsageSnapshot: (tenantId: number) =>
+      fetchTenantUsageSnapshot(pool, tenantId),
+    getUnifiedQuotaSummary: (tenantId: number) =>
+      getUnifiedQuotaSummary(pool, tenantId),
     ensurePeriodGrants: async (tenantId: number) => {
       const config = await getBillingConfig(pool, tenantId);
       await ensurePeriodGrants(pool, tenantId, config);
@@ -3042,7 +3092,6 @@ export function createQuotaService(pool: Pool) {
 }
 
 export type QuotaService = ReturnType<typeof createQuotaService>;
-
 
 type SubscriptionRow = {
   status: string;
@@ -3077,7 +3126,12 @@ export async function resolveSubscriptionTimeline(
   const now = new Date();
 
   if (sub.status === "active" || sub.status === "trialing") {
-    if (sub.past_due_at || sub.grace_ends_at || sub.restricted_at || sub.suspended_at) {
+    if (
+      sub.past_due_at ||
+      sub.grace_ends_at ||
+      sub.restricted_at ||
+      sub.suspended_at
+    ) {
       await pool.query(
         `UPDATE tenant_subscription
          SET past_due_at = NULL, grace_ends_at = NULL,
@@ -3100,7 +3154,10 @@ export async function resolveSubscriptionTimeline(
   if (sub.status !== "past_due") {
     if (
       (sub.status === "inactive" || sub.status === "incomplete") &&
-      (sub.past_due_at || sub.grace_ends_at || sub.restricted_at || sub.suspended_at)
+      (sub.past_due_at ||
+        sub.grace_ends_at ||
+        sub.restricted_at ||
+        sub.suspended_at)
     ) {
       await pool.query(
         `UPDATE tenant_subscription
@@ -3226,7 +3283,10 @@ export async function markSubscriptionPastDue(
   );
 }
 
-export async function markSubscriptionActive(pool: Pool, tenantId: number): Promise<void> {
+export async function markSubscriptionActive(
+  pool: Pool,
+  tenantId: number,
+): Promise<void> {
   await ensureTenantSubscription(pool, tenantId);
   await pool.query(
     `UPDATE tenant_subscription
@@ -3267,28 +3327,20 @@ export async function getBillingAccessState(
   await ensureBillingOnboardingStarted(pool, tenantId, config.billingUiEnabled);
   const onboardingStartedAt = await getOnboardingStartedAt(pool, tenantId);
 
-  const sub = await resolveSubscriptionTimeline(pool, tenantId, graceDays, suspendDays);
+  const sub = await resolveSubscriptionTimeline(
+    pool,
+    tenantId,
+    graceDays,
+    suspendDays,
+  );
 
-  const pctSms =
-    options?.pctSms ??
-    options?.quota?.sms_segments.pct ??
-    0;
-  const pctEmail =
-    options?.pctEmail ??
-    options?.quota?.email_sends.pct ??
-    0;
-  const pctVoice =
-    options?.pctVoice ??
-    options?.quota?.voice_minutes.pct ??
-    0;
+  const pctSms = options?.pctSms ?? options?.quota?.sms_segments.pct ?? 0;
+  const pctEmail = options?.pctEmail ?? options?.quota?.email_sends.pct ?? 0;
+  const pctVoice = options?.pctVoice ?? options?.quota?.voice_minutes.pct ?? 0;
   const pctScheduler =
-    options?.pctScheduler ??
-    options?.quota?.scheduler_bookings.pct ??
-    0;
+    options?.pctScheduler ?? options?.quota?.scheduler_bookings.pct ?? 0;
   const pctMortgi =
-    options?.pctMortgi ??
-    options?.quota?.mortgi_ai_tokens.pct ??
-    0;
+    options?.pctMortgi ?? options?.quota?.mortgi_ai_tokens.pct ?? 0;
 
   const suggestedPackId =
     options?.suggestedPackId ??
@@ -3395,7 +3447,6 @@ export function billingAccessDeniedPayload(access: BillingAccessState) {
     billing_action_required: true,
   };
 }
-
 
 const ENCORE_LOGO_URL =
   "https://disruptinglabs.com/data/encore/assets/images/logo.png";
@@ -3640,7 +3691,12 @@ export async function fetchTenantCompanyName(
   tenantId: number,
   fallback = "Encore Mortgage",
 ): Promise<string> {
-  const fromSettings = await getTenantSetting(pool, tenantId, "company_name", "");
+  const fromSettings = await getTenantSetting(
+    pool,
+    tenantId,
+    "company_name",
+    "",
+  );
   if (fromSettings) return fromSettings;
 
   const [rows] = await pool.query<RowDataPacket[]>(
@@ -3649,7 +3705,6 @@ export async function fetchTenantCompanyName(
   );
   return (rows[0]?.name as string | undefined) || fallback;
 }
-
 
 /** @deprecated Use TOP_UP_PACK_DEFINITIONS from @shared/billing-calculator */
 export const TOP_UP_PACKS = TOP_UP_PACK_DEFINITIONS;
@@ -3686,7 +3741,10 @@ type StripeClient = {
       id: string,
       params?: Record<string, unknown>,
     ) => Promise<Record<string, unknown>>;
-    update: (id: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    update: (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
   };
   setupIntents: {
     create: (params: Record<string, unknown>) => Promise<{
@@ -3734,12 +3792,17 @@ type StripeClient = {
     retrieve: (id: string) => Promise<Record<string, unknown>>;
   };
   subscriptions: {
-    create: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    create: (
+      params: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
     retrieve: (
       id: string,
       params?: Record<string, unknown>,
     ) => Promise<Record<string, unknown>>;
-    update: (id: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    update: (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
     cancel: (id: string) => Promise<Record<string, unknown>>;
     list: (params: Record<string, unknown>) => Promise<{
       data: Array<Record<string, unknown>>;
@@ -3751,7 +3814,11 @@ type StripeClient = {
       payload: string | Buffer,
       signature: string,
       secret: string,
-    ) => { id: string; type: string; data: { object: Record<string, unknown> } };
+    ) => {
+      id: string;
+      type: string;
+      data: { object: Record<string, unknown> };
+    };
   };
 };
 
@@ -4271,21 +4338,46 @@ export async function resetTenantBillingQuotaToPlanDefaults(
   const sub = subRows[0];
   if (!sub) return;
 
-  const periodStart = toSqlDate(sub.period_start) ?? currentCalendarMonthStart();
+  const periodStart =
+    toSqlDate(sub.period_start) ?? currentCalendarMonthStart();
 
-  await pool.query(`DELETE FROM tenant_usage_period WHERE tenant_id = ?`, [tenantId]);
+  await pool.query(`DELETE FROM tenant_usage_period WHERE tenant_id = ?`, [
+    tenantId,
+  ]);
 
   const dimensions: Array<[UsageDimension, number]> = [
-    ["sms_segments", Number(sub.included_sms_segments ?? BILLING_PLAN_DEFAULTS.includedSmsSegments)],
-    ["voice_minutes", Number(sub.included_voice_minutes ?? BILLING_PLAN_DEFAULTS.includedVoiceMinutes)],
-    ["email_sends", Number(sub.included_email_sends ?? BILLING_PLAN_DEFAULTS.includedEmailSends)],
+    [
+      "sms_segments",
+      Number(
+        sub.included_sms_segments ?? BILLING_PLAN_DEFAULTS.includedSmsSegments,
+      ),
+    ],
+    [
+      "voice_minutes",
+      Number(
+        sub.included_voice_minutes ??
+          BILLING_PLAN_DEFAULTS.includedVoiceMinutes,
+      ),
+    ],
+    [
+      "email_sends",
+      Number(
+        sub.included_email_sends ?? BILLING_PLAN_DEFAULTS.includedEmailSends,
+      ),
+    ],
     [
       "scheduler_bookings",
-      Number(sub.included_scheduler_bookings ?? BILLING_PLAN_DEFAULTS.includedSchedulerBookings),
+      Number(
+        sub.included_scheduler_bookings ??
+          BILLING_PLAN_DEFAULTS.includedSchedulerBookings,
+      ),
     ],
     [
       "mortgi_ai_tokens",
-      Number(sub.included_mortgi_ai_tokens ?? BILLING_PLAN_DEFAULTS.includedMortgiAiTokens),
+      Number(
+        sub.included_mortgi_ai_tokens ??
+          BILLING_PLAN_DEFAULTS.includedMortgiAiTokens,
+      ),
     ],
   ];
 
@@ -4333,14 +4425,22 @@ export async function resetStripeSubscriptionForTest(
 
   if (billing.stripeCustomerId) {
     try {
-      await cancelAllStripeCustomerSubscriptions(stripe, billing.stripeCustomerId);
+      await cancelAllStripeCustomerSubscriptions(
+        stripe,
+        billing.stripeCustomerId,
+      );
     } catch (err) {
-      console.error("Stripe test reset: cancel customer subscriptions failed:", err);
+      console.error(
+        "Stripe test reset: cancel customer subscriptions failed:",
+        err,
+      );
       throw new Error("Failed to cancel Stripe test subscriptions");
     }
   } else if (billing.stripeSubscriptionId) {
     try {
-      const sub = await stripe.subscriptions.retrieve(billing.stripeSubscriptionId);
+      const sub = await stripe.subscriptions.retrieve(
+        billing.stripeSubscriptionId,
+      );
       const status = String(sub.status ?? "");
       if (status !== "canceled" && status !== "incomplete_expired") {
         await stripe.subscriptions.cancel(billing.stripeSubscriptionId);
@@ -4450,7 +4550,11 @@ function extractSubscriptionPaymentClientSecret(
     return confirmationSecret.client_secret;
   }
 
-  const pi = invoice.payment_intent as Record<string, unknown> | string | null | undefined;
+  const pi = invoice.payment_intent as
+    | Record<string, unknown>
+    | string
+    | null
+    | undefined;
   if (pi && typeof pi !== "string") {
     const legacySecret = pi.client_secret;
     if (typeof legacySecret === "string") return legacySecret;
@@ -4485,11 +4589,13 @@ async function loadTenantStripeBilling(
      FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
     [tenantId],
   );
-  const row = (rows as {
-    stripe_customer_id?: string;
-    stripe_subscription_id?: string;
-    status?: string;
-  }[])[0];
+  const row = (
+    rows as {
+      stripe_customer_id?: string;
+      stripe_subscription_id?: string;
+      status?: string;
+    }[]
+  )[0];
   return {
     stripeCustomerId: row?.stripe_customer_id ?? null,
     stripeSubscriptionId: row?.stripe_subscription_id ?? null,
@@ -4504,7 +4610,9 @@ async function syncStripeSubscriptionToDb(
 ): Promise<void> {
   await ensureTenantSubscription(pool, tenantId);
   const subId = String(subscription.id ?? "");
-  const mapped = mapStripeSubscriptionStatus(String(subscription.status ?? "inactive"));
+  const mapped = mapStripeSubscriptionStatus(
+    String(subscription.status ?? "inactive"),
+  );
   const periodStart = stripePeriodToSqlDate(subscription.current_period_start);
   const periodEnd = stripePeriodToSqlDate(subscription.current_period_end);
 
@@ -4586,12 +4694,16 @@ async function fetchSavedPaymentMethodSummary(
     });
     const subPm = sub.default_payment_method;
     if (subPm && typeof subPm !== "string") {
-      const summarized = summarizePaymentMethod(subPm as Record<string, unknown>);
+      const summarized = summarizePaymentMethod(
+        subPm as Record<string, unknown>,
+      );
       if (summarized) return summarized;
     }
     if (typeof subPm === "string") {
       const retrieved = await stripe.paymentMethods.retrieve(subPm);
-      return summarizePaymentMethod(retrieved as unknown as Record<string, unknown>);
+      return summarizePaymentMethod(
+        retrieved as unknown as Record<string, unknown>,
+      );
     }
   } catch (err) {
     console.warn("Stripe subscription payment method lookup failed:", err);
@@ -4617,7 +4729,11 @@ async function syncSubscriptionDefaultPaymentMethod(
       | null
       | undefined;
     if (invoice && typeof invoice !== "string") {
-      const pi = invoice.payment_intent as Record<string, unknown> | string | null | undefined;
+      const pi = invoice.payment_intent as
+        | Record<string, unknown>
+        | string
+        | null
+        | undefined;
       if (pi && typeof pi !== "string") {
         pmId = paymentMethodIdFromSetupIntent(
           pi.payment_method as string | { id?: string } | null,
@@ -4663,7 +4779,9 @@ async function loadStripe(): Promise<StripeClient | null> {
   if (!key) return null;
   try {
     const Stripe = (await import("stripe")).default;
-    return new Stripe(key, { apiVersion: "2025-02-24.acacia" }) as unknown as StripeClient;
+    return new Stripe(key, {
+      apiVersion: "2025-02-24.acacia",
+    }) as unknown as StripeClient;
   } catch {
     return null;
   }
@@ -4695,10 +4813,7 @@ function quoteMetadata(tenantId: number, quote: TopUpQuote) {
   };
 }
 
-function serializeTopUpQuote(
-  quote: TopUpQuote,
-  includeEconomics: boolean,
-) {
+function serializeTopUpQuote(quote: TopUpQuote, includeEconomics: boolean) {
   const payload = {
     quoteKey: quote.quoteKey,
     tierId: quote.tierId,
@@ -4731,7 +4846,8 @@ async function getOrCreateStripeCustomer(
     `SELECT stripe_customer_id FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
     [tenantId],
   );
-  const existing = (rows as { stripe_customer_id?: string }[])[0]?.stripe_customer_id;
+  const existing = (rows as { stripe_customer_id?: string }[])[0]
+    ?.stripe_customer_id;
   if (existing) {
     try {
       await stripe.customers.retrieve(existing);
@@ -4859,7 +4975,9 @@ async function getGraceDays(pool: Pool, tenantId: number): Promise<number> {
      ORDER BY tenant_id DESC LIMIT 1`,
     [tenantId],
   );
-  const val = Number((rows as { setting_value?: string }[])[0]?.setting_value ?? 3);
+  const val = Number(
+    (rows as { setting_value?: string }[])[0]?.setting_value ?? 3,
+  );
   return Math.max(1, val || 3);
 }
 
@@ -4961,151 +5079,1194 @@ async function processStripeWebhookEvent(
   pool: Pool,
   stripe: StripeClient,
   defaultTenantId: number,
-  event: { id: string; type: string; data: { object: Record<string, unknown> } },
+  event: {
+    id: string;
+    type: string;
+    data: { object: Record<string, unknown> };
+  },
   fulfill: StripeFulfillFn,
   onTopUpGranted?: TopUpGrantedHandler,
 ): Promise<void> {
-        if (event.type === "checkout.session.completed") {
-          const session = event.data.object;
-          const metadata = (session.metadata ?? {}) as Record<string, string>;
-          if (session.mode === "subscription" && session.subscription) {
-            const tid = await resolveTenantIdFromStripeObject(pool, session);
-            const subId =
-              typeof session.subscription === "string"
-                ? session.subscription
-                : String((session.subscription as { id?: string }).id ?? "");
-            if (tid && subId) {
-              const sub = await stripe.subscriptions.retrieve(subId);
-              await syncStripeSubscriptionToDb(pool, tid, sub);
-            }
-          } else if (metadata.pack_id) {
-            const piId =
-              typeof session.payment_intent === "string"
-                ? session.payment_intent
-                : null;
-            if (piId) {
-              await fulfillFromMetadata(
-                fulfill,
-                defaultTenantId,
-                piId,
-                metadata,
-                "webhook",
-                onTopUpGranted,
-              );
-            }
-          }
-        }
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const metadata = (session.metadata ?? {}) as Record<string, string>;
+    if (session.mode === "subscription" && session.subscription) {
+      const tid = await resolveTenantIdFromStripeObject(pool, session);
+      const subId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : String((session.subscription as { id?: string }).id ?? "");
+      if (tid && subId) {
+        const sub = await stripe.subscriptions.retrieve(subId);
+        await syncStripeSubscriptionToDb(pool, tid, sub);
+      }
+    } else if (metadata.pack_id) {
+      const piId =
+        typeof session.payment_intent === "string"
+          ? session.payment_intent
+          : null;
+      if (piId) {
+        await fulfillFromMetadata(
+          fulfill,
+          defaultTenantId,
+          piId,
+          metadata,
+          "webhook",
+          onTopUpGranted,
+        );
+      }
+    }
+  }
 
-        if (event.type === "payment_intent.succeeded") {
-          const intent = event.data.object;
-          const metadata = (intent.metadata ?? {}) as Record<string, string>;
-          const piId = String(intent.id ?? "");
-          if (piId && metadata.pack_id) {
-            await fulfillFromMetadata(
-              fulfill,
-              defaultTenantId,
-              piId,
-              metadata,
-              "webhook",
-              onTopUpGranted,
-            );
-          }
-        }
+  if (event.type === "payment_intent.succeeded") {
+    const intent = event.data.object;
+    const metadata = (intent.metadata ?? {}) as Record<string, string>;
+    const piId = String(intent.id ?? "");
+    if (piId && metadata.pack_id) {
+      await fulfillFromMetadata(
+        fulfill,
+        defaultTenantId,
+        piId,
+        metadata,
+        "webhook",
+        onTopUpGranted,
+      );
+    }
+  }
 
-        if (event.type === "customer.subscription.created") {
-          const subscription = event.data.object;
-          const tid = await resolveTenantIdFromStripeObject(pool, subscription);
-          if (tid) {
-            await syncStripeSubscriptionToDb(pool, tid, subscription);
-          } else {
-            console.warn("Stripe customer.subscription.created: unresolved tenant, skipping");
-          }
-        }
+  if (event.type === "customer.subscription.created") {
+    const subscription = event.data.object;
+    const tid = await resolveTenantIdFromStripeObject(pool, subscription);
+    if (tid) {
+      await syncStripeSubscriptionToDb(pool, tid, subscription);
+    } else {
+      console.warn(
+        "Stripe customer.subscription.created: unresolved tenant, skipping",
+      );
+    }
+  }
 
-        if (event.type === "setup_intent.succeeded") {
-          const setupIntent = event.data.object;
-          const tid = await resolveTenantIdFromStripeObject(pool, setupIntent);
-          const pmId = paymentMethodIdFromSetupIntent(
-            setupIntent.payment_method as string | { id?: string } | null,
+  if (event.type === "setup_intent.succeeded") {
+    const setupIntent = event.data.object;
+    const tid = await resolveTenantIdFromStripeObject(pool, setupIntent);
+    const pmId = paymentMethodIdFromSetupIntent(
+      setupIntent.payment_method as string | { id?: string } | null,
+    );
+    if (tid && pmId) {
+      await applyDefaultPaymentMethod(pool, stripe, tid, pmId);
+    } else {
+      console.warn(
+        "Stripe setup_intent.succeeded: unresolved tenant or payment method",
+      );
+    }
+  }
+
+  if (event.type === "invoice.payment_failed") {
+    const invoice = event.data.object;
+    const tid = await resolveTenantIdFromStripeObject(pool, invoice);
+    if (tid) {
+      const graceDays = await getGraceDays(pool, tid);
+      await markSubscriptionPastDue(pool, tid, graceDays);
+      const [subRows] = await pool.query<RowDataPacket[]>(
+        `SELECT grace_ends_at FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
+        [tid],
+      );
+      const graceEndsRaw = subRows[0]?.grace_ends_at;
+      const graceEndsAt = graceEndsRaw
+        ? new Date(String(graceEndsRaw))
+        : new Date(Date.now() + graceDays * 86400000);
+      sendBillingPaymentFailedEmail(pool, tid, invoice, graceEndsAt).catch(
+        (err) => console.error("[billing] Payment failed email error:", err),
+      );
+    } else {
+      console.warn(
+        "Stripe invoice.payment_failed: unresolved tenant, skipping",
+      );
+    }
+  }
+
+  if (event.type === "invoice.payment_succeeded") {
+    const invoice = event.data.object;
+    if (invoice.subscription) {
+      const tid = await resolveTenantIdFromStripeObject(pool, invoice);
+      if (tid) {
+        const subId =
+          typeof invoice.subscription === "string"
+            ? invoice.subscription
+            : String((invoice.subscription as { id?: string }).id ?? "");
+        if (subId) {
+          const sub = await stripe.subscriptions.retrieve(subId, {
+            expand: ["latest_invoice"],
+          });
+          await syncStripeSubscriptionToDb(pool, tid, sub);
+          sendBillingSubscriptionReceiptEmail(pool, tid, sub).catch((err) =>
+            console.error("[billing] Subscription receipt email failed:", err),
           );
-          if (tid && pmId) {
-            await applyDefaultPaymentMethod(pool, stripe, tid, pmId);
-          } else {
-            console.warn("Stripe setup_intent.succeeded: unresolved tenant or payment method");
-          }
+        } else {
+          await markSubscriptionActive(pool, tid);
+        }
+      } else {
+        console.warn(
+          "Stripe invoice.payment_succeeded: unresolved tenant, skipping",
+        );
+      }
+    }
+  }
+
+  if (event.type === "customer.subscription.updated") {
+    const subscription = event.data.object;
+    const tid = await resolveTenantIdFromStripeObject(pool, subscription);
+    if (!tid) {
+      console.warn(
+        "Stripe customer.subscription.updated: unresolved tenant, skipping",
+      );
+    } else {
+      await syncStripeSubscriptionToDb(pool, tid, subscription);
+    }
+  }
+
+  if (event.type === "customer.subscription.deleted") {
+    const subscription = event.data.object;
+    const tid = await resolveTenantIdFromStripeObject(pool, subscription);
+    if (tid) {
+      await pool.query(
+        `UPDATE tenant_subscription SET status = 'canceled', updated_at = UTC_TIMESTAMP() WHERE tenant_id = ?`,
+        [tid],
+      );
+    } else {
+      console.warn(
+        "Stripe customer.subscription.deleted: unresolved tenant, skipping",
+      );
+    }
+  }
+}
+
+// =====================================================
+// Bulk CSV import (inlined for Vercel serverless — no local api imports)
+// =====================================================
+
+export interface BulkImportRouteDeps {
+  pool: Pool;
+  tenantId: number;
+  verifyBrokerSession: RequestHandler;
+  createAuditLog: (params: {
+    actorType: "user" | "broker";
+    actorId: number;
+    action: string;
+    entityType?: string;
+    entityId?: number;
+    changes?: unknown;
+    status?: "success" | "failure" | "warning";
+  }) => Promise<void>;
+  sendClientManualWelcomeEmail?: (
+    email: string,
+    firstName: string,
+    lastName: string,
+    brokerName: string,
+  ) => Promise<void>;
+  sendBrokerManualWelcomeEmail?: (
+    email: string,
+    firstName: string,
+    lastName: string,
+    role: string,
+  ) => Promise<void>;
+}
+
+const bulkImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: BULK_IMPORT_MAX_FILE_BYTES },
+});
+
+const requireBulkImportEnabled: RequestHandler = (_req, res, next) => {
+  if (!resolveBulkCsvImportEnabled()) {
+    return res.status(404).json({
+      success: false,
+      message: "Bulk CSV import is not enabled",
+    });
+  }
+  next();
+};
+
+const requireBulkImportPlatformOwner: RequestHandler = (req, res, next) => {
+  const brokerRole = (req as express.Request & { brokerRole?: string }).brokerRole;
+  if (brokerRole !== "platform_owner") {
+    return res.status(403).json({
+      success: false,
+      message: "Only platform owners can bulk import",
+    });
+  }
+  next();
+};
+
+async function cleanupExpiredBulkImportJobs(pool: Pool, tenantId: number): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE bulk_import_jobs SET status = 'expired'
+       WHERE tenant_id = ? AND status = 'validated' AND expires_at < NOW()
+       LIMIT 200`,
+      [tenantId],
+    );
+    await pool.query(
+      `DELETE FROM bulk_import_jobs
+       WHERE tenant_id = ? AND status IN ('expired', 'failed')
+         AND expires_at < DATE_SUB(NOW(), INTERVAL 7 DAY)
+       LIMIT 200`,
+      [tenantId],
+    );
+  } catch {
+    // non-blocking housekeeping
+  }
+}
+
+const BULK_PREFLIGHT_IN_CHUNK = 100;
+
+async function loadClientEmailConflicts(
+  pool: Pool,
+  tenantId: number,
+  emails: string[],
+): Promise<Map<string, RowDataPacket>> {
+  const map = new Map<string, RowDataPacket>();
+  for (let i = 0; i < emails.length; i += BULK_PREFLIGHT_IN_CHUNK) {
+    const chunk = emails.slice(i, i + BULK_PREFLIGHT_IN_CHUNK);
+    if (!chunk.length) continue;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, first_name, last_name, email FROM clients
+       WHERE tenant_id = ? AND email IN (${chunk.map(() => "?").join(",")})`,
+      [tenantId, ...chunk],
+    );
+    for (const row of rows) {
+      map.set(String(row.email).toLowerCase(), row);
+    }
+  }
+  return map;
+}
+
+async function loadClientPhoneConflicts(
+  pool: Pool,
+  tenantId: number,
+  phones: string[],
+): Promise<Map<string, RowDataPacket>> {
+  const map = new Map<string, RowDataPacket>();
+  for (let i = 0; i < phones.length; i += BULK_PREFLIGHT_IN_CHUNK) {
+    const chunk = phones.slice(i, i + BULK_PREFLIGHT_IN_CHUNK);
+    if (!chunk.length) continue;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, first_name, last_name, normalized_phone FROM clients
+       WHERE tenant_id = ? AND normalized_phone IN (${chunk.map(() => "?").join(",")})
+         AND phone IS NOT NULL`,
+      [tenantId, ...chunk],
+    );
+    for (const row of rows) {
+      map.set(String(row.normalized_phone), row);
+    }
+  }
+  return map;
+}
+
+async function loadBrokerEmailConflicts(
+  pool: Pool,
+  tenantId: number,
+  emails: string[],
+): Promise<Map<string, RowDataPacket>> {
+  const map = new Map<string, RowDataPacket>();
+  for (let i = 0; i < emails.length; i += BULK_PREFLIGHT_IN_CHUNK) {
+    const chunk = emails.slice(i, i + BULK_PREFLIGHT_IN_CHUNK);
+    if (!chunk.length) continue;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, email FROM brokers
+       WHERE tenant_id = ? AND email IN (${chunk.map(() => "?").join(",")})`,
+      [tenantId, ...chunk],
+    );
+    for (const row of rows) {
+      map.set(String(row.email).toLowerCase(), row);
+    }
+  }
+  return map;
+}
+
+async function loadBrokerPhoneConflicts(
+  pool: Pool,
+  tenantId: number,
+  last10List: string[],
+): Promise<Map<string, RowDataPacket>> {
+  const map = new Map<string, RowDataPacket>();
+  for (let i = 0; i < last10List.length; i += 20) {
+    const chunk = last10List.slice(i, i + 20);
+    if (!chunk.length) continue;
+    const conditions = chunk.map(() => `REGEXP_REPLACE(phone, '[^0-9]', '') LIKE ?`).join(" OR ");
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, phone FROM brokers WHERE tenant_id = ? AND (${conditions})`,
+      [tenantId, ...chunk.map((d) => `%${d}`)],
+    );
+    for (const row of rows) {
+      const digits = String(row.phone ?? "").replace(/\D/g, "").slice(-10);
+      if (digits) map.set(digits, row);
+    }
+  }
+  return map;
+}
+
+async function applyClientDbPreflight(
+  pool: Pool,
+  tenantId: number,
+  validation: BulkImportValidationResult,
+): Promise<BulkImportValidationResult> {
+  if (!validation.normalized_clients) return validation;
+
+  const rows = validation.normalized_clients;
+  const ready = rows.filter((r) => r.status === "will_create");
+  const emails = [
+    ...new Set(
+      ready.map((r) => r.email).filter((e): e is string => Boolean(e)),
+    ),
+  ];
+  const phones = [
+    ...new Set(
+      ready
+        .map((r) => r.normalized_phone)
+        .filter((p): p is string => Boolean(p)),
+    ),
+  ];
+
+  const [emailMap, phoneMap] = await Promise.all([
+    loadClientEmailConflicts(pool, tenantId, emails),
+    loadClientPhoneConflicts(pool, tenantId, phones),
+  ]);
+
+  for (const row of rows) {
+    if (row.status !== "will_create") continue;
+
+    if (row.email) {
+      const existing = emailMap.get(row.email.toLowerCase());
+      if (existing) {
+        row.status = "skipped";
+        row.message = `Email already exists (client #${existing.id})`;
+        row.conflict_client_id = existing.id as number;
+        continue;
+      }
+    }
+
+    if (row.normalized_phone) {
+      const phoneRow = phoneMap.get(row.normalized_phone);
+      if (phoneRow) {
+        row.status = "skipped";
+        row.message = `Phone already exists (client #${phoneRow.id})`;
+        row.conflict_client_id = phoneRow.id as number;
+      }
+    }
+  }
+
+  return rebuildClientValidation(validation, rows);
+}
+
+async function applyRealtorDbPreflight(
+  pool: Pool,
+  tenantId: number,
+  validation: BulkImportValidationResult,
+): Promise<BulkImportValidationResult> {
+  if (!validation.normalized_realtors) return validation;
+
+  const rows = validation.normalized_realtors;
+  const ready = rows.filter((r) => r.status === "will_create");
+  const emails = [
+    ...new Set(ready.map((r) => r.email).filter(Boolean)),
+  ];
+  const phoneLast10 = [
+    ...new Set(
+      ready
+        .map((r) => r.phone?.replace(/\D/g, "").slice(-10) ?? "")
+        .filter((d) => d.length === 10),
+    ),
+  ];
+
+  const [emailMap, phoneMap] = await Promise.all([
+    loadBrokerEmailConflicts(pool, tenantId, emails),
+    loadBrokerPhoneConflicts(pool, tenantId, phoneLast10),
+  ]);
+
+  for (const row of rows) {
+    if (row.status !== "will_create") continue;
+
+    const existing = emailMap.get(row.email.toLowerCase());
+    if (existing) {
+      row.status = "skipped";
+      row.message = `Email already exists (broker #${existing.id})`;
+      row.conflict_broker_id = existing.id as number;
+      continue;
+    }
+
+    const last10 = row.phone?.replace(/\D/g, "").slice(-10);
+    if (last10) {
+      const phoneRow = phoneMap.get(last10);
+      if (phoneRow) {
+        row.status = "skipped";
+        row.message = `Phone already exists (broker #${phoneRow.id})`;
+        row.conflict_broker_id = phoneRow.id as number;
+      }
+    }
+  }
+
+  return rebuildRealtorValidation(validation, rows);
+}
+
+function rebuildClientValidation(
+  validation: BulkImportValidationResult,
+  rows: NormalizedClientBulkRow[],
+): BulkImportValidationResult {
+  const preview_rows = rows.map((row) => ({
+    row_number: row.row_number,
+    status: row.status,
+    message: row.message,
+    external_ref: row.external_ref,
+    display_name: `${row.first_name} ${row.last_name}`.trim(),
+    email: row.email,
+    phone: row.phone,
+    badge: row.lead_source,
+    conflict_entity_id: row.conflict_client_id ?? null,
+  }));
+
+  const breakdown: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.status === "will_create") {
+      breakdown[row.lead_source] = (breakdown[row.lead_source] ?? 0) + 1;
+    }
+  }
+
+  const will_create_count = preview_rows.filter((r) => r.status === "will_create").length;
+  const skipped_count = preview_rows.filter((r) => r.status === "skipped").length;
+  const error_count = preview_rows.filter((r) => r.status === "error").length;
+
+  return {
+    ...validation,
+    normalized_clients: rows,
+    preview_rows,
+    breakdown,
+    will_create_count,
+    skipped_count,
+    error_count,
+  };
+}
+
+function rebuildRealtorValidation(
+  validation: BulkImportValidationResult,
+  rows: NormalizedRealtorBulkRow[],
+): BulkImportValidationResult {
+  const preview_rows = rows.map((row) => ({
+    row_number: row.row_number,
+    status: row.status,
+    message: row.message,
+    external_ref: row.external_ref,
+    display_name: `${row.first_name} ${row.last_name}`.trim(),
+    email: row.email,
+    phone: row.phone,
+    badge: row.partner_type,
+    conflict_entity_id: row.conflict_broker_id ?? null,
+  }));
+
+  const breakdown: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.status === "will_create") {
+      breakdown[row.partner_type] = (breakdown[row.partner_type] ?? 0) + 1;
+    }
+  }
+
+  const will_create_count = preview_rows.filter((r) => r.status === "will_create").length;
+  const skipped_count = preview_rows.filter((r) => r.status === "skipped").length;
+  const error_count = preview_rows.filter((r) => r.status === "error").length;
+
+  return {
+    ...validation,
+    normalized_realtors: rows,
+    preview_rows,
+    breakdown,
+    will_create_count,
+    skipped_count,
+    error_count,
+  };
+}
+
+function validationToPreviewPayload(validation: BulkImportValidationResult) {
+  return {
+    entity: validation.entity,
+    row_count: validation.row_count,
+    will_create_count: validation.will_create_count,
+    skipped_count: validation.skipped_count,
+    error_count: validation.error_count,
+    preview_rows: validation.preview_rows,
+    breakdown: validation.breakdown,
+    normalized_clients: validation.normalized_clients,
+    normalized_realtors: validation.normalized_realtors,
+  };
+}
+
+async function linkClientPhoneThreads(
+  pool: Pool,
+  tenantId: number,
+  clientId: number,
+  brokerId: number,
+  phone: string | null,
+  email: string | null,
+  clientFullName: string,
+): Promise<void> {
+  if (!phone) return;
+  const lastTen = phone.replace(/\D/g, "").slice(-10);
+  if (lastTen.length !== 10) return;
+
+  await pool.query(
+    `UPDATE conversation_threads
+     SET client_id    = COALESCE(client_id, ?),
+         client_name  = COALESCE(client_name, ?),
+         client_email = COALESCE(client_email, ?),
+         broker_id    = COALESCE(broker_id, ?),
+         updated_at   = NOW()
+     WHERE tenant_id = ?
+       AND client_id IS NULL
+       AND (
+         (conversation_id LIKE 'conv_phone_%'
+          AND RIGHT(REGEXP_REPLACE(conversation_id, '[^0-9]', ''), 10) = ?)
+         OR
+         (client_phone IS NOT NULL
+          AND RIGHT(REGEXP_REPLACE(client_phone, '[^0-9]', ''), 10) = ?)
+       )`,
+    [clientId, clientFullName, email, brokerId, tenantId, lastTen, lastTen],
+  );
+}
+
+export function registerBulkImportRoutes(
+  expressApp: express.Application,
+  deps: BulkImportRouteDeps,
+): void {
+  const ownerAuth = [
+    deps.verifyBrokerSession,
+    requireBulkImportEnabled,
+    requireBulkImportPlatformOwner,
+  ];
+
+  expressApp.get(
+    "/api/admin/bulk-import/templates/clients.csv",
+    ...ownerAuth,
+    (_req, res) => {
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="encore_clients_import_template.csv"',
+      );
+      res.send(buildClientTemplateCsv());
+    },
+  );
+
+  expressApp.get(
+    "/api/admin/bulk-import/templates/realtors.csv",
+    ...ownerAuth,
+    (_req, res) => {
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="encore_realtors_import_template.csv"',
+      );
+      res.send(buildRealtorTemplateCsv());
+    },
+  );
+
+  expressApp.post(
+    "/api/admin/bulk-import/validate",
+    ...ownerAuth,
+    bulkImportUpload.single("file"),
+    async (req, res) => {
+      try {
+        await cleanupExpiredBulkImportJobs(deps.pool, deps.tenantId);
+
+        const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const entity = (req.body?.entity ?? "") as BulkImportEntity;
+        if (entity !== "clients" && entity !== "realtors") {
+          return res.status(400).json({
+            success: false,
+            message: "entity must be clients or realtors",
+          });
         }
 
-        if (event.type === "invoice.payment_failed") {
-          const invoice = event.data.object;
-          const tid = await resolveTenantIdFromStripeObject(pool, invoice);
-          if (tid) {
-            const graceDays = await getGraceDays(pool, tid);
-            await markSubscriptionPastDue(pool, tid, graceDays);
-            const [subRows] = await pool.query<RowDataPacket[]>(
-              `SELECT grace_ends_at FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
-              [tid],
-            );
-            const graceEndsRaw = subRows[0]?.grace_ends_at;
-            const graceEndsAt = graceEndsRaw
-              ? new Date(String(graceEndsRaw))
-              : new Date(Date.now() + graceDays * 86400000);
-            sendBillingPaymentFailedEmail(pool, tid, invoice, graceEndsAt).catch(
-              (err) =>
-                console.error("[billing] Payment failed email error:", err),
-            );
-          } else {
-            console.warn("Stripe invoice.payment_failed: unresolved tenant, skipping");
-          }
+        const file = req.file;
+        if (!file?.buffer?.length) {
+          return res.status(400).json({
+            success: false,
+            message: "CSV file is required",
+          });
         }
 
-        if (event.type === "invoice.payment_succeeded") {
-          const invoice = event.data.object;
-          if (invoice.subscription) {
-            const tid = await resolveTenantIdFromStripeObject(pool, invoice);
-            if (tid) {
-              const subId =
-                typeof invoice.subscription === "string"
-                  ? invoice.subscription
-                  : String((invoice.subscription as { id?: string }).id ?? "");
-              if (subId) {
-                const sub = await stripe.subscriptions.retrieve(subId, {
-                  expand: ["latest_invoice"],
-                });
-                await syncStripeSubscriptionToDb(pool, tid, sub);
-                sendBillingSubscriptionReceiptEmail(pool, tid, sub).catch((err) =>
-                  console.error("[billing] Subscription receipt email failed:", err),
-                );
-              } else {
-                await markSubscriptionActive(pool, tid);
+        const text = file.buffer.toString("utf8");
+        let validation = parseAndValidateBulkCsv(text, entity);
+        if (!validation.success) {
+          return res.status(400).json({
+            success: false,
+            file_error: validation.file_error,
+            file_error_code: validation.file_error_code,
+            message: validation.file_error,
+          });
+        }
+
+        validation =
+          entity === "clients"
+            ? await applyClientDbPreflight(deps.pool, deps.tenantId, validation)
+            : await applyRealtorDbPreflight(deps.pool, deps.tenantId, validation);
+
+        const fileSha = crypto
+          .createHash("sha256")
+          .update(file.buffer)
+          .digest("hex");
+        const expiresAt = new Date(Date.now() + BULK_IMPORT_JOB_TTL_MS);
+        const previewPayload = validationToPreviewPayload(validation);
+
+        const [ins] = await deps.pool.query<ResultSetHeader>(
+          `INSERT INTO bulk_import_jobs
+             (tenant_id, entity, uploaded_by_broker_id, file_name, file_sha256,
+              status, options_json, preview_json, row_count, created_count, skipped_count,
+              error_count, expires_at)
+           VALUES (?, ?, ?, ?, ?, 'validated', ?, ?, ?, 0, ?, ?, ?)`,
+          [
+            deps.tenantId,
+            entity,
+            brokerId,
+            file.originalname?.slice(0, 255) || "import.csv",
+            fileSha,
+            JSON.stringify({
+              link_phone_threads: true,
+              send_welcome_emails: false,
+            }),
+            JSON.stringify(previewPayload),
+            validation.row_count,
+            validation.skipped_count,
+            validation.error_count,
+            expiresAt,
+          ],
+        );
+
+        return res.json({
+          success: true,
+          job_id: ins.insertId,
+          entity,
+          file_name: file.originalname,
+          row_count: validation.row_count,
+          will_create_count: validation.will_create_count,
+          skipped_count: validation.skipped_count,
+          error_count: validation.error_count,
+          preview_rows: validation.preview_rows,
+          breakdown: validation.breakdown,
+          expires_at: expiresAt.toISOString(),
+        });
+      } catch (err) {
+        console.error("[bulk-import] validate error:", err);
+        return res.status(500).json({
+          success: false,
+          message: err instanceof Error ? err.message : "Validation failed",
+        });
+      }
+    },
+  );
+
+  expressApp.get(
+    "/api/admin/bulk-import/:jobId",
+    ...ownerAuth,
+    async (req, res) => {
+      try {
+        const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const jobId = parseInt(req.params.jobId, 10);
+        if (Number.isNaN(jobId)) {
+          return res.status(400).json({ success: false, message: "Invalid job id" });
+        }
+
+        const [rows] = await deps.pool.query<RowDataPacket[]>(
+          `SELECT * FROM bulk_import_jobs
+           WHERE id = ? AND tenant_id = ? AND uploaded_by_broker_id = ?
+           LIMIT 1`,
+          [jobId, deps.tenantId, brokerId],
+        );
+        if (!rows.length) {
+          return res.status(404).json({ success: false, message: "Job not found" });
+        }
+
+        const job = rows[0];
+        const preview = job.preview_json
+          ? typeof job.preview_json === "string"
+            ? JSON.parse(job.preview_json)
+            : job.preview_json
+          : {};
+        const results = job.result_json
+          ? typeof job.result_json === "string"
+            ? JSON.parse(job.result_json)
+            : job.result_json
+          : null;
+
+        return res.json({
+          success: true,
+          job: {
+            id: job.id,
+            entity: job.entity,
+            status: job.status,
+            file_name: job.file_name,
+            row_count: job.row_count,
+            created_count: job.created_count,
+            skipped_count: job.skipped_count,
+            error_count: job.error_count,
+            expires_at: job.expires_at,
+            committed_at: job.committed_at,
+            preview_rows: preview.preview_rows,
+            results: results?.results,
+          },
+        });
+      } catch (err) {
+        console.error("[bulk-import] get job error:", err);
+        return res.status(500).json({ success: false, message: "Failed to load job" });
+      }
+    },
+  );
+
+  expressApp.post(
+    "/api/admin/bulk-import/:jobId/commit",
+    ...ownerAuth,
+    async (req, res) => {
+      try {
+        const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const jobId = parseInt(req.params.jobId, 10);
+        if (Number.isNaN(jobId)) {
+          return res.status(400).json({ success: false, message: "Invalid job id" });
+        }
+
+        const linkPhoneThreads = req.body?.link_phone_threads !== false;
+        const sendWelcomeEmails = req.body?.send_welcome_emails === true;
+
+        const [jobRows] = await deps.pool.query<RowDataPacket[]>(
+          `SELECT * FROM bulk_import_jobs
+           WHERE id = ? AND tenant_id = ? AND uploaded_by_broker_id = ?
+           LIMIT 1`,
+          [jobId, deps.tenantId, brokerId],
+        );
+        if (!jobRows.length) {
+          return res.status(404).json({ success: false, message: "Job not found" });
+        }
+
+        const job = jobRows[0];
+        if (job.status === "committed") {
+          return res.status(409).json({
+            success: false,
+            message: "Job already committed",
+          });
+        }
+        if (job.status === "processing") {
+          return res.status(409).json({
+            success: false,
+            message: "Import is already in progress for this job",
+          });
+        }
+        if (new Date(job.expires_at as string) < new Date()) {
+          await deps.pool.query(
+            `UPDATE bulk_import_jobs SET status = 'expired' WHERE id = ?`,
+            [jobId],
+          );
+          return res.status(410).json({
+            success: false,
+            message: "Import job expired — please re-upload",
+          });
+        }
+
+        const [claim] = await deps.pool.query<ResultSetHeader>(
+          `UPDATE bulk_import_jobs SET status = 'processing'
+           WHERE id = ? AND tenant_id = ? AND uploaded_by_broker_id = ? AND status = 'validated'`,
+          [jobId, deps.tenantId, brokerId],
+        );
+        if (claim.affectedRows === 0) {
+          return res.status(409).json({
+            success: false,
+            message: "Job is no longer available to commit",
+          });
+        }
+
+        try {
+          const preview = job.preview_json
+            ? typeof job.preview_json === "string"
+              ? JSON.parse(job.preview_json)
+              : job.preview_json
+            : null;
+          if (!preview) {
+            await deps.pool.query(
+              `UPDATE bulk_import_jobs SET status = 'failed' WHERE id = ? AND status = 'processing'`,
+              [jobId],
+            );
+            return res.status(400).json({ success: false, message: "Invalid job data" });
+          }
+
+          const entity = job.entity as BulkImportEntity;
+        const results: Array<{
+          row_number: number;
+          external_ref?: string | null;
+          status: "created" | "skipped" | "error";
+          entity_id?: number | null;
+          owner_broker_id?: number | null;
+          message?: string;
+        }> = [];
+
+        let createdCount = 0;
+        let skippedCount = 0;
+        let errorCount = 0;
+
+        const [[importer]] = await deps.pool.query<RowDataPacket[]>(
+          `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [brokerId, deps.tenantId],
+        );
+        const brokerFullName = importer
+          ? `${importer.first_name} ${importer.last_name}`.trim()
+          : "Your Loan Officer";
+
+        if (entity === "clients" && preview.normalized_clients) {
+          const rows = preview.normalized_clients as NormalizedClientBulkRow[];
+          const willCreate = rows.filter((r) => r.status === "will_create");
+          const [clientEmailDups, clientPhoneDups] = await Promise.all([
+            loadClientEmailConflicts(
+              deps.pool,
+              deps.tenantId,
+              [
+                ...new Set(
+                  willCreate
+                    .map((r) => r.email)
+                    .filter((e): e is string => Boolean(e)),
+                ),
+              ],
+            ),
+            loadClientPhoneConflicts(
+              deps.pool,
+              deps.tenantId,
+              [
+                ...new Set(
+                  willCreate
+                    .map((r) => r.normalized_phone)
+                    .filter((p): p is string => Boolean(p)),
+                ),
+              ],
+            ),
+          ]);
+
+          for (const row of rows) {
+            if (row.status === "error") {
+              errorCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "error",
+                message: row.message,
+              });
+              continue;
+            }
+            if (row.status === "skipped") {
+              skippedCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "skipped",
+                entity_id: row.conflict_client_id ?? null,
+                message: row.message,
+              });
+              continue;
+            }
+
+            try {
+              const trimmedEmail = row.email;
+              if (trimmedEmail) {
+                const dup = clientEmailDups.get(trimmedEmail.toLowerCase());
+                if (dup) {
+                  skippedCount++;
+                  results.push({
+                    row_number: row.row_number,
+                    external_ref: row.external_ref,
+                    status: "skipped",
+                    entity_id: dup.id as number,
+                    message: "Email already exists",
+                  });
+                  continue;
+                }
               }
-            } else {
-              console.warn("Stripe invoice.payment_succeeded: unresolved tenant, skipping");
+
+              if (row.normalized_phone) {
+                const dupPhone = clientPhoneDups.get(row.normalized_phone);
+                if (dupPhone) {
+                  skippedCount++;
+                  results.push({
+                    row_number: row.row_number,
+                    external_ref: row.external_ref,
+                    status: "skipped",
+                    entity_id: dupPhone.id as number,
+                    message: "Phone already exists",
+                  });
+                  continue;
+                }
+              }
+
+              const finalEmail =
+                trimmedEmail ??
+                `noemail_job${jobId}_r${row.row_number}_${crypto.randomBytes(4).toString("hex")}@noemail.placeholder`;
+
+              const [ins] = await deps.pool.query<ResultSetHeader>(
+                `INSERT INTO clients
+                   (tenant_id, first_name, middle_name, last_name, email, phone, normalized_phone,
+                    alternate_phone, date_of_birth, address_street, address_unit, address_city,
+                    address_state, address_zip, citizenship_status, status, assigned_broker_id,
+                    income_type, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'W-2', ?)`,
+                [
+                  deps.tenantId,
+                  row.first_name,
+                  row.middle_name,
+                  row.last_name,
+                  finalEmail,
+                  row.phone,
+                  row.normalized_phone,
+                  row.alternate_phone,
+                  row.date_of_birth,
+                  row.address_street,
+                  row.address_unit,
+                  row.address_city,
+                  row.address_state,
+                  row.address_zip,
+                  row.citizenship_status,
+                  brokerId,
+                  row.lead_source,
+                ],
+              );
+
+              const newId = ins.insertId;
+              createdCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "created",
+                entity_id: newId,
+                owner_broker_id: brokerId,
+              });
+
+              const clientFullName = `${row.first_name} ${row.last_name}`.trim();
+              if (linkPhoneThreads) {
+                await linkClientPhoneThreads(
+                  deps.pool,
+                  deps.tenantId,
+                  newId,
+                  brokerId,
+                  row.phone,
+                  trimmedEmail,
+                  clientFullName,
+                );
+              }
+
+              if (
+                sendWelcomeEmails &&
+                deps.sendClientManualWelcomeEmail &&
+                trimmedEmail &&
+                !finalEmail.startsWith("noemail_")
+              ) {
+                deps
+                  .sendClientManualWelcomeEmail(
+                    trimmedEmail,
+                    row.first_name,
+                    row.last_name,
+                    brokerFullName,
+                  )
+                  .catch(() => undefined);
+              }
+            } catch (rowErr) {
+              errorCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "error",
+                message:
+                  rowErr instanceof Error ? rowErr.message : "Insert failed",
+              });
+            }
+          }
+        } else if (entity === "realtors" && preview.normalized_realtors) {
+          const rows = preview.normalized_realtors as NormalizedRealtorBulkRow[];
+          const willCreate = rows.filter((r) => r.status === "will_create");
+          const realtorEmailDups = await loadBrokerEmailConflicts(
+            deps.pool,
+            deps.tenantId,
+            [...new Set(willCreate.map((r) => r.email))],
+          );
+
+          for (const row of rows) {
+            if (row.status === "error") {
+              errorCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "error",
+                message: row.message,
+              });
+              continue;
+            }
+            if (row.status === "skipped") {
+              skippedCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "skipped",
+                entity_id: row.conflict_broker_id ?? null,
+                message: row.message,
+              });
+              continue;
+            }
+
+            try {
+              const dup = realtorEmailDups.get(row.email.toLowerCase());
+              if (dup) {
+                skippedCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "skipped",
+                  entity_id: dup.id as number,
+                  message: "Email already exists",
+                });
+                continue;
+              }
+
+              const [ins] = await deps.pool.query<ResultSetHeader>(
+                `INSERT INTO brokers
+                   (tenant_id, email, first_name, last_name, phone, role, license_number,
+                    specializations, status, email_verified, created_by_broker_id, public_token)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, UUID())`,
+                [
+                  deps.tenantId,
+                  row.email,
+                  row.first_name,
+                  row.last_name,
+                  row.phone,
+                  row.role,
+                  row.license_number,
+                  row.specializations ? JSON.stringify(row.specializations) : null,
+                  brokerId,
+                ],
+              );
+
+              const newBrokerId = ins.insertId;
+
+              const hasProfile =
+                row.office_address ||
+                row.office_city ||
+                row.office_state ||
+                row.office_zip ||
+                row.bio;
+              if (hasProfile) {
+                await deps.pool.query(
+                  `INSERT INTO broker_profiles
+                     (broker_id, bio, office_address, office_city, office_state, office_zip)
+                   VALUES (?, ?, ?, ?, ?, ?)`,
+                  [
+                    newBrokerId,
+                    row.bio,
+                    row.office_address,
+                    row.office_city,
+                    row.office_state,
+                    row.office_zip,
+                  ],
+                );
+              }
+
+              createdCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "created",
+                entity_id: newBrokerId,
+                owner_broker_id: brokerId,
+              });
+
+              if (sendWelcomeEmails && deps.sendBrokerManualWelcomeEmail) {
+                deps
+                  .sendBrokerManualWelcomeEmail(
+                    row.email,
+                    row.first_name,
+                    row.last_name,
+                    row.role,
+                  )
+                  .catch(() => undefined);
+              }
+            } catch (rowErr) {
+              errorCount++;
+              results.push({
+                row_number: row.row_number,
+                external_ref: row.external_ref,
+                status: "error",
+                message:
+                  rowErr instanceof Error ? rowErr.message : "Insert failed",
+              });
             }
           }
         }
 
-        if (event.type === "customer.subscription.updated") {
-          const subscription = event.data.object;
-          const tid = await resolveTenantIdFromStripeObject(pool, subscription);
-          if (!tid) {
-            console.warn("Stripe customer.subscription.updated: unresolved tenant, skipping");
-          } else {
-            await syncStripeSubscriptionToDb(pool, tid, subscription);
-          }
-        }
+          const resultJson = { results };
+          await deps.pool.query(
+            `UPDATE bulk_import_jobs SET
+               status = 'committed',
+               created_count = ?,
+               skipped_count = ?,
+               error_count = ?,
+               result_json = ?,
+               committed_at = NOW(),
+               options_json = ?
+             WHERE id = ? AND tenant_id = ? AND status = 'processing'`,
+            [
+              createdCount,
+              skippedCount,
+              errorCount,
+              JSON.stringify(resultJson),
+              JSON.stringify({
+                link_phone_threads: linkPhoneThreads,
+                send_welcome_emails: sendWelcomeEmails,
+              }),
+              jobId,
+              deps.tenantId,
+            ],
+          );
 
-        if (event.type === "customer.subscription.deleted") {
-          const subscription = event.data.object;
-          const tid = await resolveTenantIdFromStripeObject(pool, subscription);
-          if (tid) {
-            await pool.query(
-              `UPDATE tenant_subscription SET status = 'canceled', updated_at = UTC_TIMESTAMP() WHERE tenant_id = ?`,
-              [tid],
-            );
-          } else {
-            console.warn("Stripe customer.subscription.deleted: unresolved tenant, skipping");
-          }
+          await deps.createAuditLog({
+            actorType: "broker",
+            actorId: brokerId,
+            action:
+              entity === "clients" ? "bulk_import_clients" : "bulk_import_realtors",
+            entityType: "bulk_import_job",
+            entityId: jobId,
+            changes: {
+              created_count: createdCount,
+              skipped_count: skippedCount,
+              error_count: errorCount,
+              file_name: job.file_name,
+            },
+          });
+
+          return res.json({
+            success: true,
+            job_id: jobId,
+            created_count: createdCount,
+            skipped_count: skippedCount,
+            error_count: errorCount,
+            results,
+            message: `Imported ${createdCount} record(s)`,
+          });
+        } catch (commitErr) {
+          await deps.pool
+            .query(
+              `UPDATE bulk_import_jobs SET status = 'failed' WHERE id = ? AND status = 'processing'`,
+              [jobId],
+            )
+            .catch(() => undefined);
+          throw commitErr;
         }
+      } catch (err) {
+        console.error("[bulk-import] commit error:", err);
+        return res.status(500).json({
+          success: false,
+          message: err instanceof Error ? err.message : "Commit failed",
+        });
+      }
+    },
+  );
 }
 
 export function registerStripeBillingRoutes(
@@ -5118,7 +6279,8 @@ export function registerStripeBillingRoutes(
   onTopUpGranted?: TopUpGrantedHandler,
 ) {
   const requirePlatformOwner: RequestHandler = (req, res, next) => {
-    const brokerRole = (req as express.Request & { brokerRole?: string }).brokerRole;
+    const brokerRole = (req as express.Request & { brokerRole?: string })
+      .brokerRole;
     if (brokerRole !== "platform_owner") {
       return res.status(403).json({
         success: false,
@@ -5182,46 +6344,61 @@ export function registerStripeBillingRoutes(
     });
   });
 
-  app.get("/api/billing/stripe/top-up-options", ...billingOwnerAuth, (_req, res) => {
-    const internal = isBillingInternalEconomicsEnabled();
-    const channels = TOP_UP_CHANNELS.map((channel) => ({
-      ...channel,
-      tiers: TOP_UP_TIERS_BY_DIMENSION[channel.dimension].map((tier, tierIndex) => {
-        const quote = computeTopUpQuote(channel.dimension, tierIndex)!;
-        const economics = internal ? computeTopUpQuoteEconomics(quote) : null;
-        return {
-          tierIndex,
-          tierId: tier.tierId,
-          units: tier.units,
-          amountCents: tier.amountCents,
-          label: tier.label,
-          chipLabel: tier.chipLabel,
-          ...(economics
-            ? {
-                economics: {
-                  variableCogsUsd: economics.variableCogsUsd,
-                  stripeFeeUsd: economics.stripeFeeUsd,
-                  netMarginUsd: economics.netMarginUsd,
-                  marginPct: economics.marginPct,
-                },
-              }
-            : {}),
-        };
-      }),
-    }));
-    return res.json({ success: true, channels });
-  });
+  app.get(
+    "/api/billing/stripe/top-up-options",
+    ...billingOwnerAuth,
+    (_req, res) => {
+      const internal = isBillingInternalEconomicsEnabled();
+      const channels = TOP_UP_CHANNELS.map((channel) => ({
+        ...channel,
+        tiers: TOP_UP_TIERS_BY_DIMENSION[channel.dimension].map(
+          (tier, tierIndex) => {
+            const quote = computeTopUpQuote(channel.dimension, tierIndex)!;
+            const economics = internal
+              ? computeTopUpQuoteEconomics(quote)
+              : null;
+            return {
+              tierIndex,
+              tierId: tier.tierId,
+              units: tier.units,
+              amountCents: tier.amountCents,
+              label: tier.label,
+              chipLabel: tier.chipLabel,
+              ...(economics
+                ? {
+                    economics: {
+                      variableCogsUsd: economics.variableCogsUsd,
+                      stripeFeeUsd: economics.stripeFeeUsd,
+                      netMarginUsd: economics.netMarginUsd,
+                      marginPct: economics.marginPct,
+                    },
+                  }
+                : {}),
+            };
+          },
+        ),
+      }));
+      return res.json({ success: true, channels });
+    },
+  );
 
   app.post("/api/billing/stripe/quote", ...billingOwnerAuth, (req, res) => {
-    const body = (req.body ?? {}) as { dimension?: string; tier_index?: number };
+    const body = (req.body ?? {}) as {
+      dimension?: string;
+      tier_index?: number;
+    };
     const dimension = String(body.dimension ?? "");
     if (!isUsageDimension(dimension)) {
-      return res.status(400).json({ success: false, error: "Invalid dimension" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid dimension" });
     }
     const tierIndex = Number(body.tier_index ?? 0);
     const quote = computeTopUpQuote(dimension, tierIndex);
     if (!quote) {
-      return res.status(400).json({ success: false, error: "Invalid tier_index" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid tier_index" });
     }
     return res.json({
       success: true,
@@ -5243,19 +6420,28 @@ export function registerStripeBillingRoutes(
           });
         }
 
-        const body = (req.body ?? {}) as { dimension?: string; tier_index?: number };
+        const body = (req.body ?? {}) as {
+          dimension?: string;
+          tier_index?: number;
+        };
         const dimension = String(body.dimension ?? "");
         if (!isUsageDimension(dimension)) {
-          return res.status(400).json({ success: false, error: "Invalid dimension" });
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid dimension" });
         }
         const tierIndex = Number(body.tier_index ?? 0);
         const quote = computeTopUpQuote(dimension, tierIndex);
         if (!quote) {
-          return res.status(400).json({ success: false, error: "Invalid tier_index" });
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid tier_index" });
         }
 
         const metadata = quoteMetadata(tenantId, quote);
-        const broker = (req as express.Request & { broker?: { email?: string } }).broker;
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
         const customerId = await getOrCreateStripeCustomer(
           pool,
           stripe,
@@ -5269,11 +6455,15 @@ export function registerStripeBillingRoutes(
           });
         }
 
-        const savedPm = await fetchSavedPaymentMethodSummary(stripe, customerId);
+        const savedPm = await fetchSavedPaymentMethodSummary(
+          stripe,
+          customerId,
+        );
         if (!savedPm) {
           return res.status(400).json({
             success: false,
-            error: "No payment method on file. Complete subscription payment to save your card.",
+            error:
+              "No payment method on file. Complete subscription payment to save your card.",
             code: "no_payment_method",
           });
         }
@@ -5356,7 +6546,10 @@ export function registerStripeBillingRoutes(
       try {
         const stripe = await loadStripe();
         if (!stripe) {
-          logBillingPaymentError("payment-intent", "Stripe keys not configured");
+          logBillingPaymentError(
+            "payment-intent",
+            "Stripe keys not configured",
+          );
           return res.status(503).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -5366,15 +6559,21 @@ export function registerStripeBillingRoutes(
         const packId = String((req.body as { pack_id?: string }).pack_id ?? "");
         const pack = TOP_UP_PACKS[packId];
         if (!pack) {
-          return res.status(400).json({ success: false, error: "Invalid pack_id" });
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid pack_id" });
         }
 
         const metadata = packMetadata(tenantId, packId);
         if (!metadata) {
-          return res.status(400).json({ success: false, error: "Invalid pack" });
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid pack" });
         }
 
-        const broker = (req as express.Request & { broker?: { email?: string } }).broker;
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
         const customerId = await getOrCreateStripeCustomer(
           pool,
           stripe,
@@ -5394,7 +6593,10 @@ export function registerStripeBillingRoutes(
         });
 
         if (!intent.client_secret) {
-          logBillingPaymentError("payment-intent", "Stripe returned no client_secret");
+          logBillingPaymentError(
+            "payment-intent",
+            "Stripe returned no client_secret",
+          );
           return res.status(500).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -5430,15 +6632,21 @@ export function registerStripeBillingRoutes(
         const packId = String((req.body as { pack_id?: string }).pack_id ?? "");
         const pack = TOP_UP_PACKS[packId];
         if (!pack) {
-          return res.status(400).json({ success: false, error: "Invalid pack_id" });
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid pack_id" });
         }
 
         const metadata = packMetadata(tenantId, packId);
         if (!metadata) {
-          return res.status(400).json({ success: false, error: "Invalid pack" });
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid pack" });
         }
 
-        const broker = (req as express.Request & { broker?: { email?: string } }).broker;
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
         const customerId = await getOrCreateStripeCustomer(
           pool,
           stripe,
@@ -5452,11 +6660,15 @@ export function registerStripeBillingRoutes(
           });
         }
 
-        const savedPm = await fetchSavedPaymentMethodSummary(stripe, customerId);
+        const savedPm = await fetchSavedPaymentMethodSummary(
+          stripe,
+          customerId,
+        );
         if (!savedPm) {
           return res.status(400).json({
             success: false,
-            error: "No payment method on file. Complete subscription payment to save your card.",
+            error:
+              "No payment method on file. Complete subscription payment to save your card.",
             code: "no_payment_method",
           });
         }
@@ -5545,7 +6757,10 @@ export function registerStripeBillingRoutes(
       try {
         const stripe = await loadStripe();
         if (!stripe) {
-          logBillingPaymentError("confirm-payment", "Stripe keys not configured");
+          logBillingPaymentError(
+            "confirm-payment",
+            "Stripe keys not configured",
+          );
           return res.status(503).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -5593,9 +6808,11 @@ export function registerStripeBillingRoutes(
           });
         }
 
-        const broker = (req as express.Request & {
-          broker?: { email?: string };
-        }).broker;
+        const broker = (
+          req as express.Request & {
+            broker?: { email?: string };
+          }
+        ).broker;
 
         const result = await fulfillFromMetadata(
           fulfill,
@@ -5631,130 +6848,74 @@ export function registerStripeBillingRoutes(
     },
   );
 
-  app.post("/api/billing/stripe/checkout", ...billingOwnerAuth, async (req, res) => {
-    try {
-      const stripe = await loadStripe();
-      if (!stripe) {
-        logBillingPaymentError("checkout", "Stripe keys not configured");
-        return res.status(503).json({
-          success: false,
-          error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
-        });
-      }
-
-      const packId = String((req.body as { pack_id?: string }).pack_id ?? "");
-      const pack = TOP_UP_PACKS[packId];
-      if (!pack) {
-        return res.status(400).json({ success: false, error: "Invalid pack_id" });
-      }
-
-      const baseUrl = getBillingReturnBaseUrl();
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        line_items: [
-          {
-            price_data: {
-              currency: "usd",
-              unit_amount: pack.amountCents,
-              product_data: { name: pack.label },
-            },
-            quantity: 1,
-          },
-        ],
-        success_url: `${baseUrl}/admin/billing?payment=success`,
-        cancel_url: `${baseUrl}/admin/billing?payment=cancel`,
-        metadata: packMetadata(tenantId, packId) ?? {},
-      });
-
-      return res.json({ success: true, url: session.url, session_id: session.id });
-    } catch (error: unknown) {
-      return respondPaymentUnavailable(res, "checkout", error);
-    }
-  });
-
-  app.post("/api/billing/stripe/portal", ...billingOwnerAuth, async (req, res) => {
-    try {
-      const stripe = await loadStripe();
-      if (!stripe) {
-        logBillingPaymentError("portal", "Stripe keys not configured");
-        return res.status(503).json({
-          success: false,
-          error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
-        });
-      }
-
-      const broker = (req as express.Request & { broker?: { email?: string } }).broker;
-      const customerId = await getOrCreateStripeCustomer(
-        pool,
-        stripe,
-        tenantId,
-        broker?.email,
-      );
-      if (!customerId) {
-        return res.status(400).json({
-          success: false,
-          error: "Subscribe or complete a payment first to create your Stripe customer profile.",
-        });
-      }
-
-      const flow = String((req.body as { flow?: string }).flow ?? "");
-      const baseUrl = getBillingReturnBaseUrl();
-      const sessionParams: Record<string, unknown> = {
-        customer: customerId,
-        return_url: `${baseUrl}/admin/billing`,
-      };
-      if (flow === "payment_method_update") {
-        sessionParams.flow_data = { type: "payment_method_update" };
-      }
-
-      const session = await stripe.billingPortal.sessions.create(sessionParams);
-      return res.json({ success: true, url: session.url });
-    } catch (error: unknown) {
-      return respondPaymentUnavailable(res, "portal", error);
-    }
-  });
-
-  app.get("/api/billing/stripe/payment-method", ...billingOwnerAuth, async (_req, res) => {
-    try {
-      const stripe = await loadStripe();
-      if (!stripe) {
-        logBillingPaymentError("payment-method", "Stripe keys not configured");
-        return res.status(503).json({
-          success: false,
-          error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
-        });
-      }
-
-      const billing = await loadTenantStripeBilling(pool, tenantId);
-      if (!billing.stripeCustomerId) {
-        return res.json({ success: true, payment_method: null });
-      }
-
-      const paymentMethod = await fetchSavedPaymentMethodSummary(
-        stripe,
-        billing.stripeCustomerId,
-      );
-      return res.json({ success: true, payment_method: paymentMethod });
-    } catch (error: unknown) {
-      return respondPaymentUnavailable(res, "payment-method", error);
-    }
-  });
-
   app.post(
-    "/api/billing/stripe/payment-method-setup",
+    "/api/billing/stripe/checkout",
     ...billingOwnerAuth,
     async (req, res) => {
       try {
         const stripe = await loadStripe();
         if (!stripe) {
-          logBillingPaymentError("payment-method-setup", "Stripe keys not configured");
+          logBillingPaymentError("checkout", "Stripe keys not configured");
           return res.status(503).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
           });
         }
 
-        const broker = (req as express.Request & { broker?: { email?: string } }).broker;
+        const packId = String((req.body as { pack_id?: string }).pack_id ?? "");
+        const pack = TOP_UP_PACKS[packId];
+        if (!pack) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid pack_id" });
+        }
+
+        const baseUrl = getBillingReturnBaseUrl();
+        const session = await stripe.checkout.sessions.create({
+          mode: "payment",
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                unit_amount: pack.amountCents,
+                product_data: { name: pack.label },
+              },
+              quantity: 1,
+            },
+          ],
+          success_url: `${baseUrl}/admin/billing?payment=success`,
+          cancel_url: `${baseUrl}/admin/billing?payment=cancel`,
+          metadata: packMetadata(tenantId, packId) ?? {},
+        });
+
+        return res.json({
+          success: true,
+          url: session.url,
+          session_id: session.id,
+        });
+      } catch (error: unknown) {
+        return respondPaymentUnavailable(res, "checkout", error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/billing/stripe/portal",
+    ...billingOwnerAuth,
+    async (req, res) => {
+      try {
+        const stripe = await loadStripe();
+        if (!stripe) {
+          logBillingPaymentError("portal", "Stripe keys not configured");
+          return res.status(503).json({
+            success: false,
+            error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
+          });
+        }
+
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
         const customerId = await getOrCreateStripeCustomer(
           pool,
           stripe,
@@ -5764,7 +6925,94 @@ export function registerStripeBillingRoutes(
         if (!customerId) {
           return res.status(400).json({
             success: false,
-            error: "Subscribe or complete a payment first to save a card on file.",
+            error:
+              "Subscribe or complete a payment first to create your Stripe customer profile.",
+          });
+        }
+
+        const flow = String((req.body as { flow?: string }).flow ?? "");
+        const baseUrl = getBillingReturnBaseUrl();
+        const sessionParams: Record<string, unknown> = {
+          customer: customerId,
+          return_url: `${baseUrl}/admin/billing`,
+        };
+        if (flow === "payment_method_update") {
+          sessionParams.flow_data = { type: "payment_method_update" };
+        }
+
+        const session =
+          await stripe.billingPortal.sessions.create(sessionParams);
+        return res.json({ success: true, url: session.url });
+      } catch (error: unknown) {
+        return respondPaymentUnavailable(res, "portal", error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/billing/stripe/payment-method",
+    ...billingOwnerAuth,
+    async (_req, res) => {
+      try {
+        const stripe = await loadStripe();
+        if (!stripe) {
+          logBillingPaymentError(
+            "payment-method",
+            "Stripe keys not configured",
+          );
+          return res.status(503).json({
+            success: false,
+            error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
+          });
+        }
+
+        const billing = await loadTenantStripeBilling(pool, tenantId);
+        if (!billing.stripeCustomerId) {
+          return res.json({ success: true, payment_method: null });
+        }
+
+        const paymentMethod = await fetchSavedPaymentMethodSummary(
+          stripe,
+          billing.stripeCustomerId,
+        );
+        return res.json({ success: true, payment_method: paymentMethod });
+      } catch (error: unknown) {
+        return respondPaymentUnavailable(res, "payment-method", error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/billing/stripe/payment-method-setup",
+    ...billingOwnerAuth,
+    async (req, res) => {
+      try {
+        const stripe = await loadStripe();
+        if (!stripe) {
+          logBillingPaymentError(
+            "payment-method-setup",
+            "Stripe keys not configured",
+          );
+          return res.status(503).json({
+            success: false,
+            error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
+          });
+        }
+
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
+        const customerId = await getOrCreateStripeCustomer(
+          pool,
+          stripe,
+          tenantId,
+          broker?.email,
+        );
+        if (!customerId) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "Subscribe or complete a payment first to save a card on file.",
           });
         }
 
@@ -5804,7 +7052,10 @@ export function registerStripeBillingRoutes(
       try {
         const stripe = await loadStripe();
         if (!stripe) {
-          logBillingPaymentError("confirm-payment-method", "Stripe keys not configured");
+          logBillingPaymentError(
+            "confirm-payment-method",
+            "Stripe keys not configured",
+          );
           return res.status(503).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -5855,7 +7106,10 @@ export function registerStripeBillingRoutes(
 
         const billing = await loadTenantStripeBilling(pool, tenantId);
         const paymentMethod = billing.stripeCustomerId
-          ? await fetchSavedPaymentMethodSummary(stripe, billing.stripeCustomerId)
+          ? await fetchSavedPaymentMethodSummary(
+              stripe,
+              billing.stripeCustomerId,
+            )
           : null;
 
         return res.json({ success: true, payment_method: paymentMethod });
@@ -5873,7 +7127,10 @@ export function registerStripeBillingRoutes(
         const stripe = await loadStripe();
         const priceId = getPlatformPriceId();
         if (!stripe) {
-          logBillingPaymentError("subscription-setup", "Stripe keys not configured");
+          logBillingPaymentError(
+            "subscription-setup",
+            "Stripe keys not configured",
+          );
           return res.status(503).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -5890,11 +7147,14 @@ export function registerStripeBillingRoutes(
           });
         }
 
-        const broker = (req as express.Request & { broker?: { email?: string } }).broker;
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
         if (!broker?.email) {
           return res.status(400).json({
             success: false,
-            error: "Your broker account must have an email address to start a subscription.",
+            error:
+              "Your broker account must have an email address to start a subscription.",
           });
         }
 
@@ -5905,7 +7165,10 @@ export function registerStripeBillingRoutes(
           broker.email,
         );
         if (!customerId) {
-          logBillingPaymentError("subscription-setup", "getOrCreateStripeCustomer returned null");
+          logBillingPaymentError(
+            "subscription-setup",
+            "getOrCreateStripeCustomer returned null",
+          );
           return res.status(500).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -5945,9 +7208,12 @@ export function registerStripeBillingRoutes(
         }
 
         if (billing.stripeSubscriptionId) {
-          const existing = await stripe.subscriptions.retrieve(billing.stripeSubscriptionId, {
-            expand: [...SUBSCRIPTION_PAYMENT_EXPAND],
-          });
+          const existing = await stripe.subscriptions.retrieve(
+            billing.stripeSubscriptionId,
+            {
+              expand: [...SUBSCRIPTION_PAYMENT_EXPAND],
+            },
+          );
           const stripeStatus = String(existing.status ?? "");
           const existingPriceId = getSubscriptionPlatformPriceId(
             existing as Record<string, unknown>,
@@ -5964,7 +7230,10 @@ export function registerStripeBillingRoutes(
                 await stripe.subscriptions.cancel(billing.stripeSubscriptionId);
               }
             } catch (cancelErr) {
-              console.warn("Stripe subscription price-mismatch cancel failed:", cancelErr);
+              console.warn(
+                "Stripe subscription price-mismatch cancel failed:",
+                cancelErr,
+              );
             }
             await clearDbStripeSubscriptionId(pool, tenantId);
             billing.stripeSubscriptionId = null;
@@ -5984,7 +7253,8 @@ export function registerStripeBillingRoutes(
               });
             }
           } else if (stripeStatus === "incomplete") {
-            const clientSecret = extractSubscriptionPaymentClientSecret(existing);
+            const clientSecret =
+              extractSubscriptionPaymentClientSecret(existing);
             if (clientSecret) {
               return res.json({
                 success: true,
@@ -6006,7 +7276,8 @@ export function registerStripeBillingRoutes(
         });
 
         const subscriptionId = String(subscription.id ?? "");
-        const clientSecret = extractSubscriptionPaymentClientSecret(subscription);
+        const clientSecret =
+          extractSubscriptionPaymentClientSecret(subscription);
         if (!subscriptionId || !clientSecret) {
           logBillingPaymentError(
             "subscription-setup",
@@ -6044,7 +7315,10 @@ export function registerStripeBillingRoutes(
       try {
         const stripe = await loadStripe();
         if (!stripe) {
-          logBillingPaymentError("confirm-subscription", "Stripe keys not configured");
+          logBillingPaymentError(
+            "confirm-subscription",
+            "Stripe keys not configured",
+          );
           return res.status(503).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -6064,7 +7338,10 @@ export function registerStripeBillingRoutes(
         let subscription = await stripe.subscriptions.retrieve(subscriptionId, {
           expand: ["latest_invoice", "default_payment_method"],
         });
-        const metadata = (subscription.metadata ?? {}) as Record<string, string>;
+        const metadata = (subscription.metadata ?? {}) as Record<
+          string,
+          string
+        >;
         const tid = Number(metadata.tenant_id ?? tenantId);
         if (tid !== tenantId) {
           return res.status(403).json({
@@ -6100,7 +7377,9 @@ export function registerStripeBillingRoutes(
           tenantId,
           subscription,
         );
-        const broker = (req as express.Request & { broker?: { email?: string } }).broker;
+        const broker = (
+          req as express.Request & { broker?: { email?: string } }
+        ).broker;
         if (broker?.email) {
           await storeBillingSubscriberEmail(pool, tenantId, broker.email);
         }
@@ -6149,7 +7428,11 @@ export function registerStripeBillingRoutes(
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
           });
         }
-        const result = await resetStripeSubscriptionForTest(pool, stripe, tenantId);
+        const result = await resetStripeSubscriptionForTest(
+          pool,
+          stripe,
+          tenantId,
+        );
         return res.json({ success: true, ...result });
       } catch (error: unknown) {
         console.error("Stripe test reset error:", error);
@@ -6161,7 +7444,6 @@ export function registerStripeBillingRoutes(
     },
   );
 }
-
 
 // Validate critical environment variables
 if (
@@ -7945,6 +9227,38 @@ function quotaTenantId(ctx: QuotaWireContext): number {
   return ctx.tenantId ?? MORTGAGE_TENANT_ID;
 }
 
+async function recordSmsQuotaUnits(
+  units: number,
+  ctx: QuotaWireContext,
+): Promise<void> {
+  if (ctx.skipQuota || (ctx.refType && AUTH_SMS_QUOTA_REFS.has(ctx.refType))) {
+    return;
+  }
+  await quotaService.recordConsumption(quotaTenantId(ctx), {
+    dimension: "sms_segments",
+    units,
+    source: ctx.source,
+    refType: ctx.refType,
+    refId: ctx.refId,
+  });
+}
+
+async function precheckSmsQuotaUnits(
+  units: number,
+  ctx: QuotaWireContext,
+): Promise<QuotaResult> {
+  if (ctx.skipQuota || (ctx.refType && AUTH_SMS_QUOTA_REFS.has(ctx.refType))) {
+    return { allowed: true, mode: "off", recorded: false };
+  }
+  return quotaService.precheck(quotaTenantId(ctx), {
+    dimension: "sms_segments",
+    units,
+    source: ctx.source,
+    refType: ctx.refType,
+    refId: ctx.refId,
+  });
+}
+
 async function precheckSmsQuota(
   body: string,
   ctx: QuotaWireContext,
@@ -7961,11 +9275,11 @@ async function precheckSmsQuota(
   });
 }
 
-async function recordSmsQuota(body: string, ctx: QuotaWireContext): Promise<void> {
-  if (
-    ctx.skipQuota ||
-    (ctx.refType && AUTH_SMS_QUOTA_REFS.has(ctx.refType))
-  ) {
+async function recordSmsQuota(
+  body: string,
+  ctx: QuotaWireContext,
+): Promise<void> {
+  if (ctx.skipQuota || (ctx.refType && AUTH_SMS_QUOTA_REFS.has(ctx.refType))) {
     return;
   }
   await quotaService.recordConsumption(quotaTenantId(ctx), {
@@ -8344,6 +9658,99 @@ function phoneLast10(phone: string | null | undefined): string | null {
   return digits.slice(-10);
 }
 
+/** Parse conv_client_{id} — returns null for loan/flow suffixed ids. */
+function parseClientIdFromConversationId(
+  conversationId: string | null | undefined,
+): number | null {
+  if (!conversationId) return null;
+  const match = conversationId.match(/^conv_client_(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function formatClientPhoneE164(
+  phone: string | null | undefined,
+): string | null {
+  const last10 = phoneLast10(phone);
+  if (!last10) return phone?.trim() || null;
+  if (phone?.trim().startsWith("+")) return phone.trim();
+  if (last10.length === 10) return `+1${last10}`;
+  return `+${last10}`;
+}
+
+/**
+ * SMS/call/WhatsApp use the number on the wire. When that differs from the CRM
+ * client profile, promote the channel number to clients.phone and preserve the
+ * old value in alternate_phone (when empty) so Clients and Conversations agree.
+ */
+async function syncClientPhoneFromSmsChannel(
+  pool: Pool,
+  tenantId: number,
+  clientId: number,
+  channelPhone: string | null | undefined,
+): Promise<void> {
+  const last10 = phoneLast10(channelPhone);
+  if (!last10) return;
+
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT phone, normalized_phone, alternate_phone
+     FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+    [clientId, tenantId],
+  );
+  if (rows.length === 0) return;
+
+  const existing = rows[0];
+  if (existing.normalized_phone === last10) return;
+
+  const [[conflict]] = await pool.query<RowDataPacket[]>(
+    `SELECT id FROM clients
+     WHERE tenant_id = ? AND normalized_phone = ? AND id != ? AND phone IS NOT NULL
+     LIMIT 1`,
+    [tenantId, last10, clientId],
+  );
+  if (conflict) {
+    console.warn(
+      `[syncClientPhoneFromSmsChannel] skip client=${clientId} — ${last10} owned by client=${conflict.id}`,
+    );
+    return;
+  }
+
+  const formatted = formatClientPhoneE164(channelPhone) ?? `+1${last10}`;
+  const preserveAlternate =
+    existing.phone &&
+    phoneLast10(existing.phone) !== last10 &&
+    !existing.alternate_phone
+      ? existing.phone
+      : existing.alternate_phone;
+
+  await pool.query(
+    `UPDATE clients
+     SET phone = ?, normalized_phone = ?, alternate_phone = ?, updated_at = NOW()
+     WHERE id = ? AND tenant_id = ?`,
+    [formatted, last10, preserveAlternate, clientId, tenantId],
+  );
+}
+
+/** Stamp canonical SMS thread phone after upsert — COALESCE on INSERT cannot fix stale values. */
+async function stampCanonicalThreadPhone(
+  pool: Pool,
+  tenantId: number,
+  conversationId: string,
+  clientId: number,
+  channelPhone: string | null | undefined,
+): Promise<void> {
+  const last10 = phoneLast10(channelPhone);
+  if (!last10 || !conversationId.startsWith("conv_client_")) return;
+
+  const formatted = formatClientPhoneE164(channelPhone) ?? channelPhone;
+  await pool.query(
+    `UPDATE conversation_threads
+     SET client_phone = ?, normalized_client_phone = ?, updated_at = NOW()
+     WHERE tenant_id = ? AND conversation_id = ? AND client_id = ?`,
+    [formatted, last10, tenantId, conversationId, clientId],
+  );
+  await syncClientPhoneFromSmsChannel(pool, tenantId, clientId, channelPhone);
+}
+
 async function resolveClientIdByPhone(
   pool: Pool,
   tenantId: number,
@@ -8360,14 +9767,19 @@ async function resolveClientIdByPhone(
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT id FROM clients
      WHERE tenant_id = ?
+       AND phone IS NOT NULL
        AND (
          phone = ?
          OR REGEXP_REPLACE(phone, '[^0-9]', '') = ?
          OR REGEXP_REPLACE(phone, '[^0-9]', '') = ?
          OR normalized_phone = ?
+         OR (
+           alternate_phone IS NOT NULL
+           AND RIGHT(REGEXP_REPLACE(alternate_phone, '[^0-9]', ''), 10) = ?
+         )
        )
      LIMIT 1`,
-    [tenantId, fromPhone, fromDigits, fromDigits10, last10],
+    [tenantId, fromPhone, fromDigits, fromDigits10, last10, last10],
   );
   return rows.length > 0 ? (rows[0].id as number) : null;
 }
@@ -8400,9 +9812,18 @@ async function resolvePhoneConversationId(
       `SELECT conversation_id FROM conversation_threads
        WHERE tenant_id = ?
          AND normalized_client_phone = ?
-       ORDER BY last_message_at DESC
+       ORDER BY
+         CASE WHEN client_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM clients cl
+             WHERE cl.id = conversation_threads.client_id
+               AND cl.tenant_id = conversation_threads.tenant_id
+               AND cl.phone IS NOT NULL
+               AND RIGHT(REGEXP_REPLACE(cl.phone, '[^0-9]', ''), 10) = ?
+           ) THEN 0 ELSE 1 END,
+         last_message_at DESC
        LIMIT 1`,
-      [tenantId, last10],
+      [tenantId, last10, last10],
     );
     if (existing.length > 0) {
       return existing[0].conversation_id as string;
@@ -8800,7 +10221,14 @@ async function upsertConversationThread(params: {
       );
       if (rows.length > 0) {
         clientName = rows[0].name;
-        clientPhone = rows[0].phone ?? clientPhone;
+        const isPhoneChannel = ["sms", "call", "whatsapp"].includes(
+          communicationType,
+        );
+        // SMS/call/WhatsApp: the number on the wire is authoritative.
+        clientPhone =
+          isPhoneChannel && recipientPhone
+            ? recipientPhone
+            : (rows[0].phone ?? clientPhone);
         clientEmail = rows[0].email ?? null;
         if (resolvedBrokerId == null && rows[0].assigned_broker_id != null) {
           resolvedBrokerId = rows[0].assigned_broker_id as number;
@@ -8925,10 +10353,2164 @@ async function upsertConversationThread(params: {
       direction,
       unreadDelta,
     });
+
+    const isPhoneChannel = ["sms", "call", "whatsapp"].includes(
+      communicationType,
+    );
+    const linkedClientId =
+      finalClientId ?? parseClientIdFromConversationId(convId);
+    if (isPhoneChannel && clientPhone && linkedClientId) {
+      await stampCanonicalThreadPhone(
+        pool,
+        tenantId,
+        convId,
+        linkedClientId,
+        clientPhone,
+      );
+    }
   } catch (err) {
     console.error("upsertConversationThread error:", err);
     throw err;
   }
+}
+
+// =====================================================
+// GROUP CONVERSATIONS (inlined for Vercel serverless — no local imports)
+// =====================================================
+
+const GROUP_MMS_MAX_PARTICIPANTS = 10;
+
+function groupConvNormalizeE164(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  if (!digits) return phone.trim();
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return phone.startsWith("+") ? `+${digits}` : `+${digits}`;
+}
+
+function groupConvPhoneLast10(phone: string): string {
+  return phone.replace(/\D/g, "").slice(-10);
+}
+
+function groupConvComputeParticipantFingerprint(
+  inboxNumber: string | null,
+  phones: string[],
+): string {
+  const normalized = [
+    ...new Set(
+      phones
+        .map((p) => groupConvNormalizeE164(p))
+        .filter((p) => p.replace(/\D/g, "").length >= 10),
+    ),
+  ].sort();
+  const inbox = inboxNumber ? groupConvNormalizeE164(inboxNumber) : "";
+  const payload = `${inbox}|${normalized.join(",")}`;
+  return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
+function groupConvBuildAutoGroupTitle(
+  participants: { display_name: string }[],
+): string {
+  const names = participants
+    .map((p) => p.display_name?.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  if (names.length === 0) return "Group conversation";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  const extra = names.length - 2;
+  const base = `${names[0]}, ${names[1]}`;
+  const suffix = extra > 0 ? ` +${extra}` : "";
+  const full = `${base}${suffix}`;
+  return full.length > 255 ? `${full.slice(0, 252)}...` : full;
+}
+
+function groupConvParseOtherRecipients(
+  body: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!body) return [];
+  const out: string[] = [];
+  for (let i = 0; i < GROUP_MMS_MAX_PARTICIPANTS; i++) {
+    const key = `OtherRecipients${i}`;
+    const val = body[key];
+    if (typeof val === "string" && val.trim()) {
+      out.push(groupConvNormalizeE164(val.trim()));
+    }
+  }
+  if (Array.isArray(body.recipients)) {
+    for (const r of body.recipients) {
+      if (typeof r === "string" && r.trim()) {
+        out.push(groupConvNormalizeE164(r.trim()));
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
+function groupConvFormatPhoneLabel(phone: string): string {
+  const d = phone.replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) {
+    const a = d.slice(1, 4);
+    const b = d.slice(4, 7);
+    const c = d.slice(7);
+    return `(${a}) ${b}-${c}`;
+  }
+  if (d.length === 10) {
+    return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  }
+  return phone;
+}
+
+function groupConvResolveDisplayTitle(
+  title: string | null | undefined,
+  participants: { display_name: string }[],
+): string {
+  const trimmed = title?.trim();
+  if (trimmed) return trimmed;
+  return groupConvBuildAutoGroupTitle(participants);
+}
+
+function isGroupConversationsEnabled(envValue: string | undefined): boolean {
+  const v = (envValue ?? "").toLowerCase().trim();
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+  return true;
+}
+
+function isTruthyGroupEnvFlag(value: string | undefined): boolean {
+  const v = (value ?? "").toLowerCase().trim();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+/** Master switch + production gate (see GROUP_CONVERSATIONS_ALLOW_PRODUCTION). */
+function resolveGroupConversationsEnabled(): boolean {
+  if (!isGroupConversationsEnabled(process.env.GROUP_CONVERSATIONS_ENABLED)) {
+    return false;
+  }
+  const runtime = (
+    process.env.VERCEL_ENV ??
+    process.env.NODE_ENV ??
+    ""
+  ).toLowerCase();
+  if (runtime !== "production") return true;
+  return isTruthyGroupEnvFlag(process.env.GROUP_CONVERSATIONS_ALLOW_PRODUCTION);
+}
+
+function newGroupConversationId(): string {
+  const uuid = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  return `conv_group_${uuid}`;
+}
+
+function groupSmsQuotaUnits(body: string, recipientCount: number): number {
+  const segments = Math.ceil(Math.max((body || "").length, 1) / 160);
+  return segments * Math.max(recipientCount, 1);
+}
+
+type GroupParticipantType =
+  | "client"
+  | "broker"
+  | "lead"
+  | "external_phone";
+
+interface GroupParticipantRow {
+  id?: number;
+  participant_type: GroupParticipantType;
+  client_id: number | null;
+  broker_id: number | null;
+  lead_id: number | null;
+  phone_e164: string | null;
+  display_name: string;
+  role?: string;
+  joined_at?: string;
+  left_at?: string | null;
+}
+
+interface GroupParticipantInput {
+  type: GroupParticipantType;
+  client_id?: number;
+  broker_id?: number;
+  lead_id?: number;
+  phone?: string;
+  display_name?: string;
+}
+
+interface GroupThreadEnrichment {
+  thread_type: "group";
+  title: string | null;
+  display_title: string;
+  participant_count: number;
+  participants_preview: { name: string; type: string }[];
+  creation_source: string;
+  channel: string;
+  client_name: string;
+}
+
+type ExecuteThreadUpsert = (core: {
+  tenantId: number;
+  convId: string;
+  applicationId: number | null;
+  resolvedLeadId: number | null;
+  finalClientId: number | null;
+  resolvedBrokerId: number | null;
+  finalContactBrokerId: number | null;
+  clientName: string | null;
+  clientPhone: string | null;
+  clientEmail: string | null;
+  inboxNumber: string | null;
+  mailboxId: number | null;
+  preview: string;
+  communicationType: string;
+  direction: string;
+  unreadDelta: number;
+  senderDisplayName?: string | null;
+}) => Promise<void>;
+
+interface GroupConversationsModule {
+  enabled: boolean;
+  handleGetConversationsConfig: RequestHandler;
+  handleCreateGroup: RequestHandler;
+  handlePatchGroup: RequestHandler;
+  handleGetGroupParticipants: RequestHandler;
+  handleAddGroupParticipant: RequestHandler;
+  handleRemoveGroupParticipant: RequestHandler;
+  handleSendGroupMessage: RequestHandler;
+  handleGetGroupsByApplication: RequestHandler;
+  handleGetGroupsByClient: RequestHandler;
+  handleSimulateInboundGroup: RequestHandler;
+  processInboundGroupMms: (params: InboundGroupMmsParams) => Promise<boolean>;
+  /** Route 1:1 SMS replies into the group thread when sender is a group member. */
+  processInboundGroupIndividualReply: (
+    params: InboundGroupMmsParams,
+  ) => Promise<boolean>;
+  enrichThreadRows: (
+    threads: RowDataPacket[],
+  ) => Promise<Record<string, Partial<GroupThreadEnrichment>>>;
+  groupVisibilitySql: () => string;
+  groupSearchSql: () => string;
+}
+
+interface InboundGroupMmsParams {
+  tenantId: number;
+  fromRaw: string;
+  toRaw: string;
+  body: string;
+  messageSid: string;
+  primaryMediaUrl: string | null;
+  primaryContentType: string | null;
+  msgType: string;
+  webhookBody: Record<string, unknown>;
+  /** When 1:1 client lookup already ran, prefer matching an active group by client id too. */
+  knownClientId?: number | null;
+}
+
+interface ResolvedParticipant {
+  participant_type: GroupParticipantRow["participant_type"];
+  client_id: number | null;
+  broker_id: number | null;
+  lead_id: number | null;
+  phone_e164: string | null;
+  display_name: string;
+}
+
+let gcPool: Pool;
+let gcTenantId: number;
+let gcGetTwilioClient: () => twilio.Twilio | null;
+let gcExecuteThreadUpsert: ExecuteThreadUpsert;
+let gcAssertClientOwnershipForBroker: (
+  clientId: number,
+  brokerId: number,
+  isSuperAdmin: boolean,
+) => Promise<boolean>;
+type GcQuotaResult = { allowed: boolean; [key: string]: unknown };
+type GcQuotaDenialPayload = Record<string, unknown>;
+let gcPrecheckSmsQuotaUnits: (
+  units: number,
+  ctx: {
+    tenantId?: number;
+    source: string;
+    refType?: string;
+    refId?: string;
+    skipQuota?: boolean;
+  },
+) => Promise<GcQuotaResult>;
+let gcRecordSmsQuotaUnits: (
+  units: number,
+  ctx: {
+    tenantId?: number;
+    source: string;
+    refType?: string;
+    refId?: string;
+    skipQuota?: boolean;
+  },
+) => Promise<void>;
+let gcQuotaDenialPayload: (result: GcQuotaResult) => GcQuotaDenialPayload;
+let gcCreateAuditLog: (params: {
+  actorType: "user" | "broker";
+  actorId: number;
+  action: string;
+  entityType?: string;
+  entityId?: number;
+  changes?: unknown;
+  status?: "success" | "failure" | "warning";
+}) => Promise<void>;
+
+function initGroupConversationsModule(deps: {
+  pool: Pool;
+  mortgageTenantId: number;
+  getTwilioClient: () => twilio.Twilio | null;
+  executeThreadUpsert: ExecuteThreadUpsert;
+  assertClientOwnershipForBroker: (
+    clientId: number,
+    brokerId: number,
+    isSuperAdmin: boolean,
+  ) => Promise<boolean>;
+  precheckSmsQuotaUnits: typeof gcPrecheckSmsQuotaUnits;
+  recordSmsQuotaUnits: typeof gcRecordSmsQuotaUnits;
+  quotaDenialPayload: typeof gcQuotaDenialPayload;
+  createAuditLog: typeof gcCreateAuditLog;
+}): GroupConversationsModule {
+  gcPool = deps.pool;
+  gcTenantId = deps.mortgageTenantId;
+  gcGetTwilioClient = deps.getTwilioClient;
+  gcExecuteThreadUpsert = deps.executeThreadUpsert;
+  gcAssertClientOwnershipForBroker = deps.assertClientOwnershipForBroker;
+  gcPrecheckSmsQuotaUnits = deps.precheckSmsQuotaUnits;
+  gcRecordSmsQuotaUnits = deps.recordSmsQuotaUnits;
+  gcQuotaDenialPayload = deps.quotaDenialPayload;
+  gcCreateAuditLog = deps.createAuditLog;
+
+  const enabled = resolveGroupConversationsEnabled();
+
+  return {
+    enabled,
+    handleGetConversationsConfig,
+    handleCreateGroup,
+    handlePatchGroup,
+    handleGetGroupParticipants,
+    handleAddGroupParticipant,
+    handleRemoveGroupParticipant,
+    handleSendGroupMessage,
+    handleGetGroupsByApplication,
+    handleGetGroupsByClient,
+    handleSimulateInboundGroup,
+    processInboundGroupMms,
+    processInboundGroupIndividualReply,
+    enrichThreadRows,
+    groupVisibilitySql,
+    groupSearchSql,
+  };
+}
+
+function featureDisabled(res: any) {
+  return res.status(404).json({
+    success: false,
+    message: "Group conversations are not enabled",
+  });
+}
+
+async function auditGroup(
+  brokerId: number,
+  action: string,
+  threadRow: RowDataPacket | null,
+  changes?: unknown,
+) {
+  try {
+    await gcCreateAuditLog({
+      actorType: "broker",
+      actorId: brokerId,
+      action,
+      entityType: "conversation_thread",
+      entityId: threadRow?.id as number | undefined,
+      changes: {
+        conversation_id: threadRow?.conversation_id,
+        ...(typeof changes === "object" && changes !== null ? changes : {}),
+      },
+    });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function isEnabledRequest(): boolean {
+  return resolveGroupConversationsEnabled();
+}
+
+const handleGetConversationsConfig: RequestHandler = (_req, res) => {
+  res.json({
+    success: true,
+    group_conversations_enabled: isEnabledRequest(),
+  });
+};
+
+async function resolvePhoneParticipant(
+  phone: string,
+): Promise<ResolvedParticipant> {
+  const e164 = groupConvNormalizeE164(phone);
+  const last10 = groupConvPhoneLast10(e164);
+
+  if (last10.length === 10) {
+    const [cRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, CONCAT(first_name, ' ', last_name) AS name
+       FROM clients WHERE tenant_id = ?
+         AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+       LIMIT 1`,
+      [gcTenantId, last10],
+    );
+    if (cRows.length > 0) {
+      return {
+        participant_type: "client",
+        client_id: cRows[0].id as number,
+        broker_id: null,
+        lead_id: null,
+        phone_e164: e164,
+        display_name: (cRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
+      };
+    }
+
+    const [lRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, CONCAT(first_name, ' ', last_name) AS name
+       FROM leads WHERE tenant_id = ?
+         AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+       LIMIT 1`,
+      [gcTenantId, last10],
+    );
+    if (lRows.length > 0) {
+      return {
+        participant_type: "lead",
+        client_id: null,
+        broker_id: null,
+        lead_id: lRows[0].id as number,
+        phone_e164: e164,
+        display_name: (lRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
+      };
+    }
+
+    const [bRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, CONCAT(first_name, ' ', last_name) AS name
+       FROM brokers WHERE tenant_id = ? AND status = 'active'
+         AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+       LIMIT 1`,
+      [gcTenantId, last10],
+    );
+    if (bRows.length > 0) {
+      return {
+        participant_type: "broker",
+        client_id: null,
+        broker_id: bRows[0].id as number,
+        lead_id: null,
+        phone_e164: e164,
+        display_name: (bRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
+      };
+    }
+  }
+
+  return {
+    participant_type: "external_phone",
+    client_id: null,
+    broker_id: null,
+    lead_id: null,
+    phone_e164: e164,
+    display_name: groupConvFormatPhoneLabel(e164),
+  };
+}
+
+async function resolveParticipantInput(
+  input: GroupParticipantInput,
+): Promise<ResolvedParticipant> {
+  if (input.type === "client") {
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone
+       FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [input.client_id, gcTenantId],
+    );
+    if (!rows.length) throw new Error("Client not found");
+    const phone_e164 = await gcResolveParticipantPhoneE164(
+      "client",
+      rows[0].id as number,
+      rows[0].phone as string | null,
+    );
+    return {
+      participant_type: "client",
+      client_id: rows[0].id as number,
+      broker_id: null,
+      lead_id: null,
+      phone_e164,
+      display_name: (rows[0].name as string)?.trim() || "Client",
+    };
+  }
+  if (input.type === "broker") {
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone
+       FROM brokers WHERE id = ? AND tenant_id = ? AND status = 'active' LIMIT 1`,
+      [input.broker_id, gcTenantId],
+    );
+    if (!rows.length) throw new Error("Broker not found");
+    const phone_e164 = await gcResolveParticipantPhoneE164(
+      "broker",
+      rows[0].id as number,
+      rows[0].phone as string | null,
+    );
+    return {
+      participant_type: "broker",
+      client_id: null,
+      broker_id: rows[0].id as number,
+      lead_id: null,
+      phone_e164,
+      display_name: (rows[0].name as string)?.trim() || "Broker",
+    };
+  }
+  if (input.type === "lead") {
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone
+       FROM leads WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [input.lead_id, gcTenantId],
+    );
+    if (!rows.length) throw new Error("Lead not found");
+    const phone_e164 = await gcResolveParticipantPhoneE164(
+      "lead",
+      rows[0].id as number,
+      rows[0].phone as string | null,
+    );
+    return {
+      participant_type: "lead",
+      client_id: null,
+      broker_id: null,
+      lead_id: rows[0].id as number,
+      phone_e164,
+      display_name: (rows[0].name as string)?.trim() || "Lead",
+    };
+  }
+  const phone_e164 = gcPhoneE164IfValid(input.phone);
+  if (phone_e164) {
+    const resolved = await resolvePhoneParticipant(phone_e164);
+    if (resolved.participant_type !== "external_phone") {
+      return resolved;
+    }
+    return {
+      participant_type: "external_phone",
+      client_id: null,
+      broker_id: null,
+      lead_id: null,
+      phone_e164,
+      display_name:
+        input.display_name?.trim() ||
+        resolved.display_name ||
+        groupConvFormatPhoneLabel(input.phone),
+    };
+  }
+  return {
+    participant_type: "external_phone",
+    client_id: null,
+    broker_id: null,
+    lead_id: null,
+    phone_e164: null,
+    display_name:
+      input.display_name?.trim() || groupConvFormatPhoneLabel(input.phone),
+  };
+}
+
+async function loadActiveParticipants(
+  conversationId: string,
+): Promise<ResolvedParticipant[]> {
+  const [rows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT participant_type, client_id, broker_id, lead_id, phone_e164, display_name
+     FROM conversation_participants
+     WHERE tenant_id = ? AND conversation_id = ? AND left_at IS NULL
+     ORDER BY joined_at ASC`,
+    [gcTenantId, conversationId],
+  );
+  return rows.map((r) => ({
+    participant_type: r.participant_type as ResolvedParticipant["participant_type"],
+    client_id: r.client_id as number | null,
+    broker_id: r.broker_id as number | null,
+    lead_id: r.lead_id as number | null,
+    phone_e164: r.phone_e164 as string | null,
+    display_name: String(r.display_name || ""),
+  }));
+}
+
+function stripSmsSendingLineFromParticipants(
+  participants: ResolvedParticipant[],
+  inboxNumber: string | null | undefined,
+): ResolvedParticipant[] {
+  if (!inboxNumber) return participants;
+  const inboxLast10 = groupConvPhoneLast10(inboxNumber);
+  return participants.filter((p) => {
+    if (!p.phone_e164) return true;
+    return groupConvPhoneLast10(p.phone_e164) !== inboxLast10;
+  });
+}
+
+async function ensureCreatorInParticipants(
+  participants: ResolvedParticipant[],
+  ownerBrokerId: number,
+  channel: string,
+  inboxNumber: string | null,
+): Promise<ResolvedParticipant[]> {
+  if (
+    participants.some(
+      (p) =>
+        p.participant_type === "broker" && p.broker_id === ownerBrokerId,
+    )
+  ) {
+    return participants;
+  }
+  const [rows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, twilio_caller_id
+     FROM brokers WHERE id = ? AND tenant_id = ? AND status = 'active' LIMIT 1`,
+    [ownerBrokerId, gcTenantId],
+  );
+  if (!rows.length) return participants;
+  const phone_e164 = await gcResolveParticipantPhoneE164(
+    "broker",
+    ownerBrokerId,
+    rows[0].phone as string | null,
+  );
+  // SMS groups: the sending Twilio line is the operator inbox, not an SMS recipient.
+  if (channel === "sms" && inboxNumber) {
+    const lineLast10 = groupConvPhoneLast10(inboxNumber);
+    const creatorLast10 = phone_e164 ? groupConvPhoneLast10(phone_e164) : null;
+    const callerLast10 = gcPhoneE164IfValid(
+      rows[0].twilio_caller_id as string | null,
+    );
+    if (
+      creatorLast10 === lineLast10 ||
+      (callerLast10 && groupConvPhoneLast10(callerLast10) === lineLast10)
+    ) {
+      return participants;
+    }
+  }
+  return [
+    ...participants,
+    {
+      participant_type: "broker",
+      client_id: null,
+      broker_id: ownerBrokerId,
+      lead_id: null,
+      phone_e164,
+      display_name: (rows[0].name as string)?.trim() || "Broker",
+    },
+  ];
+}
+
+class GroupSendError extends Error {
+  status: number;
+  payload?: Record<string, unknown>;
+
+  constructor(
+    status: number,
+    message: string,
+    payload?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/** Shared outbound path for group SMS / internal notes. */
+async function sendGroupOutboundMessage(
+  thread: RowDataPacket,
+  brokerId: number,
+  body: string,
+  commType: "sms" | "internal_note",
+): Promise<number> {
+  const conversationId = thread.conversation_id as string;
+  const participants = await loadActiveParticipants(conversationId);
+  const [brokerLine] = await gcPool.query<RowDataPacket[]>(
+    `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+    [brokerId, gcTenantId],
+  );
+  const fromNumber = brokerLine[0]?.twilio_caller_id as string;
+  if (!fromNumber) {
+    throw new GroupSendError(400, "No Twilio line assigned");
+  }
+  const phones = filterGroupMmsRecipients(
+    collectPhones(participants),
+    fromNumber,
+  );
+  let externalId: string | null = null;
+  let deliveryStatus = "sent";
+  let twilioError: string | null = null;
+  let smsSendResults: Array<{
+    to: string;
+    sid: string | null;
+    status: string;
+    error: string | null;
+  }> | null = null;
+
+  if (commType === "sms") {
+    if ((thread.channel as string) !== "sms") {
+      throw new GroupSendError(400, "This group is internal-only");
+    }
+    if (phones.length < 2) {
+      throw new GroupSendError(
+        400,
+        "Need at least 2 recipients besides your sending line",
+      );
+    }
+
+    const quotaUnits = groupSmsQuotaUnits(body.trim(), phones.length);
+    const quotaCheck = await gcPrecheckSmsQuotaUnits(quotaUnits, {
+      tenantId: gcTenantId,
+      source: "group_conversation",
+      refType: "group_thread",
+      refId: conversationId,
+    });
+    if (!quotaCheck.allowed) {
+      throw new GroupSendError(402, "SMS quota exceeded", gcQuotaDenialPayload(quotaCheck));
+    }
+
+    const client = gcGetTwilioClient();
+    if (!client) {
+      throw new GroupSendError(503, "SMS service unavailable");
+    }
+
+    // 10DLC routes do not reliably deliver Group MMS to all `to` recipients — send one SMS per person.
+    const trimmedBody = body.trim().slice(0, 1600);
+    const baseUrl = getBaseUrl();
+    const isPublicUrl =
+      !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1");
+    const statusCallback = isPublicUrl
+      ? `${baseUrl}/api/webhooks/sms-status`
+      : undefined;
+
+    const sendResults: Array<{
+      to: string;
+      sid: string | null;
+      status: string;
+      error: string | null;
+    }> = [];
+
+    for (const to of phones) {
+      try {
+        const msg = await client.messages.create({
+          from: fromNumber,
+          to,
+          body: trimmedBody,
+          ...(statusCallback ? { statusCallback } : {}),
+        });
+        sendResults.push({
+          to,
+          sid: msg.sid,
+          status: msg.status ?? "sent",
+          error: null,
+        });
+        console.log(
+          `[Group SMS] sent sid=${msg.sid} to=${to} status=${msg.status}`,
+        );
+      } catch (sendErr: unknown) {
+        const errMsg =
+          sendErr instanceof Error ? sendErr.message : String(sendErr);
+        console.error(`[Group SMS] failed to=${to}:`, errMsg);
+        sendResults.push({ to, sid: null, status: "failed", error: errMsg });
+      }
+    }
+
+    const successfulSends = sendResults.filter((r) => r.sid);
+    if (successfulSends.length === 0) {
+      const firstError = sendResults.find((r) => r.error)?.error;
+      throw new GroupSendError(
+        502,
+        firstError || "Failed to send to any recipient",
+        { send_results: sendResults },
+      );
+    }
+
+    externalId = successfulSends[0].sid;
+    const allDelivered = sendResults.every(
+      (r) => r.status === "delivered" || r.status === "sent",
+    );
+    const anyFailed = sendResults.some((r) => r.status === "failed" || r.error);
+    deliveryStatus = anyFailed
+      ? successfulSends.length < phones.length
+        ? "failed"
+        : "sent"
+      : allDelivered
+        ? successfulSends[0]?.status ?? "sent"
+        : "sent";
+    if (anyFailed) {
+      twilioError =
+        sendResults
+          .filter((r) => r.error)
+          .map((r) => `${r.to}: ${r.error}`)
+          .join("; ") || "One or more recipients failed";
+    }
+
+    await gcRecordSmsQuotaUnits(quotaUnits, {
+      tenantId: gcTenantId,
+      source: "group_conversation",
+      refType: "group_thread",
+      refId: conversationId,
+    });
+    smsSendResults = sendResults;
+  }
+
+  const externalIds = smsSendResults
+    ?.map((r) => r.sid)
+    .filter((sid): sid is string => Boolean(sid));
+
+  const metadata = JSON.stringify({
+    recipients: phones,
+    is_group_mms: commType === "sms",
+    external_ids: externalIds?.length ? externalIds : undefined,
+    send_results: smsSendResults ?? undefined,
+    delivery: {
+      status: deliveryStatus,
+      recipient_count: phones.length,
+      error: twilioError,
+      send_mode: commType === "sms" ? "individual_sms" : undefined,
+    },
+  });
+
+  const [ins] = await gcPool.query<ResultSetHeader>(
+    `INSERT INTO communications
+       (tenant_id, application_id, from_broker_id, communication_type, direction,
+        body, status, conversation_id, message_type, delivery_status, external_id,
+        metadata, sent_at, created_at)
+     VALUES (?, ?, ?, ?, 'outbound', ?, 'sent', ?, 'text', ?, ?, ?, NOW(), NOW())`,
+    [
+      gcTenantId,
+      thread.application_id ?? null,
+      brokerId,
+      commType,
+      body.trim().slice(0, 5000),
+      conversationId,
+      deliveryStatus,
+      externalId,
+      metadata,
+    ],
+  );
+
+  await gcPool.query(
+    `UPDATE conversation_threads SET
+       last_message_preview = ?, last_message_type = ?, last_message_at = NOW(),
+       message_count = message_count + 1, updated_at = NOW(),
+       status = 'active', archived_at = NULL
+     WHERE tenant_id = ? AND conversation_id = ?`,
+    [body.trim().slice(0, 200), commType, gcTenantId, conversationId],
+  );
+
+  await auditGroup(brokerId, "group_message_sent", thread, {
+    communication_type: commType,
+    recipient_count: phones.length,
+  });
+
+  return ins.insertId;
+}
+
+async function insertParticipants(
+  conversationId: string,
+  participants: ResolvedParticipant[],
+  ownerBrokerId: number,
+) {
+  for (const p of participants) {
+    const role =
+      p.broker_id === ownerBrokerId && p.participant_type === "broker"
+        ? "owner"
+        : "member";
+    await gcPool.query(
+      `INSERT INTO conversation_participants
+         (tenant_id, conversation_id, participant_type, client_id, broker_id, lead_id,
+          phone_e164, display_name, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        gcTenantId,
+        conversationId,
+        p.participant_type,
+        p.client_id,
+        p.broker_id,
+        p.lead_id,
+        p.phone_e164,
+        p.display_name,
+        role,
+      ],
+    );
+  }
+}
+
+async function getThreadRow(
+  conversationId: string,
+): Promise<RowDataPacket | null> {
+  const [rows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT * FROM conversation_threads
+     WHERE tenant_id = ? AND conversation_id = ? LIMIT 1`,
+    [gcTenantId, conversationId],
+  );
+  return rows[0] ?? null;
+}
+
+async function assertGroupThreadAccess(
+  conversationId: string,
+  brokerId: number,
+  brokerRole: string,
+): Promise<RowDataPacket> {
+  const isSuperAdmin = brokerRole === "superadmin";
+  const thread = await getThreadRow(conversationId);
+  if (!thread || thread.thread_type !== "group") {
+    throw Object.assign(new Error("Group not found"), { status: 404 });
+  }
+  if (isSuperAdmin) return thread;
+
+  if (thread.broker_id === brokerId) return thread;
+
+  const [partRows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT 1 FROM conversation_participants
+     WHERE tenant_id = ? AND conversation_id = ? AND broker_id = ? AND left_at IS NULL
+     LIMIT 1`,
+    [gcTenantId, conversationId, brokerId],
+  );
+  if (partRows.length > 0) return thread;
+
+  const [ownRows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT 1 FROM conversation_participants cp
+     JOIN clients cl ON cl.id = cp.client_id AND cl.tenant_id = cp.tenant_id
+     WHERE cp.tenant_id = ? AND cp.conversation_id = ? AND cp.left_at IS NULL
+       AND (
+         cl.assigned_broker_id = ?
+         OR EXISTS (
+           SELECT 1 FROM loan_applications la
+           WHERE la.client_user_id = cl.id AND la.tenant_id = cl.tenant_id
+             AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+         )
+       )
+     LIMIT 1`,
+    [gcTenantId, conversationId, brokerId, brokerId, brokerId],
+  );
+  if (ownRows.length > 0) return thread;
+
+  throw Object.assign(new Error("Forbidden"), { status: 403 });
+}
+
+async function buildThreadDto(
+  thread: RowDataPacket,
+): Promise<GroupThreadEnrichment> {
+  const participants = await loadActiveParticipants(
+    thread.conversation_id as string,
+  );
+  const titleParticipants = participants.map((p) => ({
+    display_name: p.display_name,
+  }));
+  const displayTitle = groupConvResolveDisplayTitle(
+    thread.title as string | null,
+    titleParticipants,
+  );
+  const preview = participants.slice(0, 3).map((p) => p.display_name);
+
+  return {
+    ...(thread as unknown as GroupThreadEnrichment),
+    thread_type: "group",
+    title: thread.title ?? null,
+    display_title: displayTitle,
+    participant_count: participants.length,
+    participants_preview: preview.map((name) => ({
+      name,
+      type: "member",
+    })),
+    creation_source: thread.creation_source ?? "encore",
+    channel: thread.channel ?? "sms",
+    client_name: displayTitle,
+  };
+}
+
+function collectPhones(participants: ResolvedParticipant[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of participants) {
+    if (!p.phone_e164) continue;
+    const last10 = groupConvPhoneLast10(p.phone_e164);
+    if (last10.length !== 10 || seen.has(last10)) continue;
+    seen.add(last10);
+    out.push(p.phone_e164);
+  }
+  return out;
+}
+
+/** Exclude the sending Twilio line from outbound recipient list (it is not an SMS target). */
+function filterGroupMmsRecipients(
+  phones: string[],
+  fromNumber: string | null | undefined,
+): string[] {
+  const fromLast10 = fromNumber ? groupConvPhoneLast10(fromNumber) : null;
+  if (!fromLast10) return phones;
+  return phones.filter((p) => groupConvPhoneLast10(p) !== fromLast10);
+}
+
+function gcPhoneE164IfValid(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  const e164 = groupConvNormalizeE164(raw.trim());
+  return groupConvPhoneLast10(e164).length === 10 ? e164 : null;
+}
+
+/** Profile phone → alternate → canonical SMS thread; brokers also fall back to Twilio line. */
+async function gcResolveParticipantPhoneE164(
+  type: "client" | "broker" | "lead",
+  entityId: number,
+  directPhone: string | null | undefined,
+): Promise<string | null> {
+  const fromDirect = gcPhoneE164IfValid(directPhone);
+  if (fromDirect) return fromDirect;
+
+  if (type === "client") {
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT c.phone, c.alternate_phone,
+              ct.client_phone AS thread_phone,
+              ct.normalized_client_phone AS thread_norm
+       FROM clients c
+       LEFT JOIN conversation_threads ct
+         ON ct.client_id = c.id
+        AND ct.tenant_id = c.tenant_id
+        AND ct.conversation_id = CONCAT('conv_client_', c.id)
+       WHERE c.id = ? AND c.tenant_id = ?
+       LIMIT 1`,
+      [entityId, gcTenantId],
+    );
+    if (!rows.length) return null;
+    const row = rows[0];
+    return (
+      gcPhoneE164IfValid(row.phone as string | null) ??
+      gcPhoneE164IfValid(row.alternate_phone as string | null) ??
+      gcPhoneE164IfValid(row.thread_phone as string | null) ??
+      (row.thread_norm
+        ? gcPhoneE164IfValid(`+1${String(row.thread_norm)}`)
+        : null)
+    );
+  }
+
+  if (type === "broker") {
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT phone, twilio_caller_id
+       FROM brokers WHERE id = ? AND tenant_id = ? AND status = 'active'
+       LIMIT 1`,
+      [entityId, gcTenantId],
+    );
+    if (!rows.length) return null;
+    return (
+      gcPhoneE164IfValid(rows[0].phone as string | null) ??
+      gcPhoneE164IfValid(rows[0].twilio_caller_id as string | null)
+    );
+  }
+
+  const [rows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT phone FROM leads WHERE id = ? AND tenant_id = ? LIMIT 1`,
+    [entityId, gcTenantId],
+  );
+  if (!rows.length) return null;
+  return gcPhoneE164IfValid(rows[0].phone as string | null);
+}
+
+function groupVisibilitySql(): string {
+  return `OR (
+           ct.thread_type = 'group'
+           AND EXISTS (
+             SELECT 1 FROM conversation_participants cp_vis
+             WHERE cp_vis.tenant_id = ct.tenant_id
+               AND cp_vis.conversation_id = ct.conversation_id
+               AND cp_vis.left_at IS NULL
+               AND cp_vis.broker_id = ?
+           )
+           OR (
+             ct.thread_type = 'group'
+             AND EXISTS (
+               SELECT 1 FROM conversation_participants cp_cl
+               JOIN clients cl ON cl.id = cp_cl.client_id AND cl.tenant_id = cp_cl.tenant_id
+               WHERE cp_cl.tenant_id = ct.tenant_id
+                 AND cp_cl.conversation_id = ct.conversation_id
+                 AND cp_cl.left_at IS NULL
+                 AND (
+                   cl.assigned_broker_id = ?
+                   OR EXISTS (
+                     SELECT 1 FROM loan_applications la
+                     WHERE la.client_user_id = cl.id AND la.tenant_id = cl.tenant_id
+                       AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+                   )
+                 )
+             )
+           )
+         )`;
+}
+
+function groupSearchSql(): string {
+  return `OR (ct.thread_type = 'group' AND ct.title LIKE ?)
+          OR EXISTS (
+            SELECT 1 FROM conversation_participants cp_s
+            WHERE cp_s.tenant_id = ct.tenant_id
+              AND cp_s.conversation_id = ct.conversation_id
+              AND cp_s.left_at IS NULL
+              AND cp_s.display_name LIKE ?
+          )`;
+}
+
+async function enrichThreadRows(
+  threads: RowDataPacket[],
+): Promise<Record<string, Partial<GroupThreadEnrichment>>> {
+  const groupThreads = threads.filter((t) => t.thread_type === "group");
+  const out: Record<string, Partial<GroupThreadEnrichment>> = {};
+  if (!groupThreads.length) return out;
+
+  const ids = groupThreads.map((t) => t.conversation_id as string);
+  const placeholders = ids.map(() => "?").join(",");
+  const [partRows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT conversation_id, display_name, participant_type
+     FROM conversation_participants
+     WHERE tenant_id = ? AND conversation_id IN (${placeholders})
+       AND left_at IS NULL
+     ORDER BY joined_at ASC`,
+    [gcTenantId, ...ids],
+  );
+
+  const byConv: Record<string, RowDataPacket[]> = {};
+  for (const r of partRows) {
+    const cid = r.conversation_id as string;
+    if (!byConv[cid]) byConv[cid] = [];
+    byConv[cid].push(r);
+  }
+
+  for (const t of groupThreads) {
+    const cid = t.conversation_id as string;
+    const parts = byConv[cid] ?? [];
+    const titleParts = parts.map((p) => ({
+      display_name: String(p.display_name),
+    }));
+    const displayTitle = groupConvResolveDisplayTitle(t.title as string | null, titleParts);
+    out[cid] = {
+      thread_type: "group",
+      title: t.title ?? null,
+      display_title: displayTitle,
+      participant_count: parts.length,
+      participants_preview: parts.slice(0, 3).map((p) => ({
+        name: String(p.display_name),
+        type: String(p.participant_type),
+      })),
+      creation_source: t.creation_source ?? "encore",
+      channel: t.channel ?? "sms",
+      client_name: displayTitle,
+    };
+  }
+  return out;
+}
+
+const handleCreateGroup: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isSuperAdmin = brokerRole === "superadmin";
+    const {
+      title,
+      channel = "sms",
+      application_id,
+      participants: rawParticipants,
+      body: firstMessage,
+    } = req.body ?? {};
+
+    if (!Array.isArray(rawParticipants) || rawParticipants.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "At least 2 participants are required",
+      });
+    }
+    if (rawParticipants.length > GROUP_MMS_MAX_PARTICIPANTS) {
+      return res.status(400).json({
+        success: false,
+        message: `Maximum ${GROUP_MMS_MAX_PARTICIPANTS} participants`,
+      });
+    }
+
+    const resolved: ResolvedParticipant[] = [];
+    for (const input of rawParticipants as GroupParticipantInput[]) {
+      const p = await resolveParticipantInput(input);
+      if (p.participant_type === "client" && p.client_id) {
+        const ok = await gcAssertClientOwnershipForBroker(
+          p.client_id,
+          brokerId,
+          isSuperAdmin,
+        );
+        if (!ok) {
+          return res.status(403).json({
+            success: false,
+            message:
+              "One or more contacts are assigned to another broker.",
+          });
+        }
+      }
+      resolved.push(p);
+    }
+
+    const [brokerLineEarly] = await gcPool.query<RowDataPacket[]>(
+      `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [brokerId, gcTenantId],
+    );
+    const inboxNumberEarly =
+      (brokerLineEarly[0]?.twilio_caller_id as string) ?? null;
+    const smsParticipants = stripSmsSendingLineFromParticipants(
+      resolved,
+      inboxNumberEarly,
+    );
+
+    if (channel === "sms") {
+      const phones = filterGroupMmsRecipients(
+        collectPhones(smsParticipants),
+        inboxNumberEarly,
+      );
+      if (phones.length < 2) {
+        const missing = smsParticipants
+          .filter((p) => !p.phone_e164)
+          .map((p) => p.display_name)
+          .filter(Boolean);
+        const selfIncluded =
+          inboxNumberEarly &&
+          collectPhones(resolved).length >= 2 &&
+          phones.length < 2;
+        return res.status(400).json({
+          success: false,
+          message: selfIncluded
+            ? "SMS groups need at least 2 people besides your sending line. Remove your Twilio number from the group."
+            : missing.length > 0
+              ? `SMS groups need 2 different phone numbers. Missing for: ${missing.join(", ")}`
+              : "SMS groups require at least 2 participants with different phone numbers",
+          missing_phones: missing,
+        });
+      }
+    }
+
+    const [brokerLine] = await gcPool.query<RowDataPacket[]>(
+      `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [brokerId, gcTenantId],
+    );
+    const inboxNumber = (brokerLine[0]?.twilio_caller_id as string) ?? null;
+    const mmsPhones = filterGroupMmsRecipients(
+      collectPhones(smsParticipants),
+      inboxNumber,
+    );
+    const fingerprint =
+      channel === "sms" && mmsPhones.length >= 2
+        ? groupConvComputeParticipantFingerprint(inboxNumber, mmsPhones)
+        : groupConvComputeParticipantFingerprint(
+            inboxNumber,
+            mmsPhones.length ? mmsPhones : [`group:${brokerId}:${Date.now()}`],
+          );
+
+    const [existing] = await gcPool.query<RowDataPacket[]>(
+      `SELECT conversation_id FROM conversation_threads
+       WHERE tenant_id = ? AND participant_fingerprint = ? LIMIT 1`,
+      [gcTenantId, fingerprint],
+    );
+    if (existing.length > 0) {
+      const existingId = existing[0].conversation_id as string;
+      try {
+        await assertGroupThreadAccess(existingId, brokerId, brokerRole);
+        const thread = await getThreadRow(existingId);
+        if (thread) {
+          return res.json({
+            success: true,
+            conversation_id: thread.conversation_id,
+            thread: await buildThreadDto(thread),
+            message: "Existing group returned",
+          });
+        }
+      } catch (accessErr: unknown) {
+        const status =
+          accessErr &&
+          typeof accessErr === "object" &&
+          "status" in accessErr
+            ? Number((accessErr as { status: number }).status)
+            : 403;
+        if (status === 403 || status === 404) {
+          return res.status(409).json({
+            success: false,
+            message:
+              "A group with these participants already exists. You do not have access to it.",
+          });
+        }
+        throw accessErr;
+      }
+    }
+
+    const conversationId = newGroupConversationId();
+    const trimmedTitle = typeof title === "string" ? title.trim().slice(0, 255) : null;
+    const displayTitle = groupConvResolveDisplayTitle(trimmedTitle, resolved);
+
+    await gcPool.query(
+      `INSERT INTO conversation_threads
+         (tenant_id, conversation_id, application_id, broker_id, thread_type, title,
+          participant_fingerprint, channel, creation_source,
+          client_name, inbox_number,
+          last_message_at, last_message_preview, last_message_type,
+          message_count, unread_count, status)
+       VALUES (?, ?, ?, ?, 'group', ?, ?, ?, 'encore', ?, ?,
+               NOW(), 'Group created', 'internal_note', 0, 0, 'active')`,
+      [
+        gcTenantId,
+        conversationId,
+        application_id ?? null,
+        brokerId,
+        trimmedTitle,
+        fingerprint,
+        channel,
+        displayTitle,
+        inboxNumber,
+      ],
+    );
+
+    await insertParticipants(
+      conversationId,
+      await ensureCreatorInParticipants(
+        smsParticipants,
+        brokerId,
+        channel,
+        inboxNumber,
+      ),
+      brokerId,
+    );
+
+    await gcPool.query(
+      `INSERT INTO communications
+         (tenant_id, application_id, from_broker_id, communication_type, direction,
+          body, status, conversation_id, message_type, delivery_status, created_at)
+       VALUES (?, ?, ?, 'system_event', 'outbound', ?, 'delivered', ?, 'text', 'delivered', NOW())`,
+      [
+        gcTenantId,
+        application_id ?? null,
+        brokerId,
+        `Group "${displayTitle}" created`,
+        conversationId,
+      ],
+    );
+
+    const thread = await getThreadRow(conversationId);
+
+    if (firstMessage && typeof firstMessage === "string" && firstMessage.trim()) {
+      const commType = channel === "sms" ? "sms" : "internal_note";
+      try {
+        await sendGroupOutboundMessage(
+          thread!,
+          brokerId,
+          firstMessage.trim(),
+          commType,
+        );
+      } catch (sendErr: unknown) {
+        if (sendErr instanceof GroupSendError) {
+          return res.status(sendErr.status).json({
+            success: false,
+            conversation_id: conversationId,
+            thread: thread ? await buildThreadDto(thread) : null,
+            message: sendErr.message,
+            ...(sendErr.payload ?? {}),
+          });
+        }
+        throw sendErr;
+      }
+    }
+
+    await auditGroup(brokerId, "group_created", thread, {
+      title: trimmedTitle,
+      channel,
+      participant_count: resolved.length,
+    });
+    return res.status(201).json({
+      success: true,
+      conversation_id: conversationId,
+      thread: thread ? await buildThreadDto(thread) : null,
+    });
+  } catch (err: any) {
+    console.error("[group] create error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to create group",
+    });
+  }
+};
+
+const handlePatchGroup: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const { conversationId } = req.params;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const thread = await assertGroupThreadAccess(
+      conversationId,
+      brokerId,
+      brokerRole,
+    );
+
+    const isAdmin =
+      brokerRole === "admin" ||
+      brokerRole === "superadmin" ||
+      brokerRole === "platform_owner";
+    if (thread.broker_id !== brokerId && !isAdmin) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const { title, application_id } = req.body ?? {};
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (typeof title === "string") {
+      updates.push("title = ?");
+      params.push(title.trim().slice(0, 255) || null);
+    }
+    if (application_id !== undefined) {
+      updates.push("application_id = ?");
+      params.push(application_id);
+    }
+    if (!updates.length) {
+      return res.status(400).json({ success: false, message: "No updates" });
+    }
+    updates.push("updated_at = NOW()");
+    params.push(gcTenantId, conversationId);
+
+    await gcPool.query(
+      `UPDATE conversation_threads SET ${updates.join(", ")}
+       WHERE tenant_id = ? AND conversation_id = ?`,
+      params,
+    );
+
+    const updated = await getThreadRow(conversationId);
+    if (typeof title === "string") {
+      await auditGroup(brokerId, "group_renamed", updated, { title });
+    } else if (application_id !== undefined) {
+      await auditGroup(brokerId, "group_linked", updated, { application_id });
+    }
+    return res.json({
+      success: true,
+      thread: updated ? await buildThreadDto(updated) : null,
+    });
+  } catch (err: any) {
+    const status = err?.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      message: err?.message || "Failed to update group",
+    });
+  }
+};
+
+const handleGetGroupParticipants: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const { conversationId } = req.params;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    await assertGroupThreadAccess(conversationId, brokerId, brokerRole);
+
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id, participant_type, client_id, broker_id, lead_id, phone_e164,
+              display_name, role, joined_at, left_at
+       FROM conversation_participants
+       WHERE tenant_id = ? AND conversation_id = ? AND left_at IS NULL
+       ORDER BY joined_at ASC`,
+      [gcTenantId, conversationId],
+    );
+
+    return res.json({
+      success: true,
+      participants: rows as GroupParticipantRow[],
+    });
+  } catch (err: any) {
+    const status = err?.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      message: err?.message || "Failed to load participants",
+    });
+  }
+};
+
+const handleAddGroupParticipant: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const { conversationId } = req.params;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isSuperAdmin = brokerRole === "superadmin";
+    const thread = await assertGroupThreadAccess(
+      conversationId,
+      brokerId,
+      brokerRole,
+    );
+
+    const input = req.body?.participant as GroupParticipantInput;
+    if (!input) {
+      return res.status(400).json({ success: false, message: "participant required" });
+    }
+
+    const [countRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM conversation_participants
+       WHERE tenant_id = ? AND conversation_id = ? AND left_at IS NULL`,
+      [gcTenantId, conversationId],
+    );
+    if ((countRows[0]?.c as number) >= GROUP_MMS_MAX_PARTICIPANTS) {
+      return res.status(400).json({
+        success: false,
+        message: `Maximum ${GROUP_MMS_MAX_PARTICIPANTS} participants`,
+      });
+    }
+
+    const p = await resolveParticipantInput(input);
+    if (p.participant_type === "client" && p.client_id) {
+      const ok = await gcAssertClientOwnershipForBroker(
+        p.client_id,
+        brokerId,
+        isSuperAdmin,
+      );
+      if (!ok) {
+        return res.status(403).json({ success: false, message: "Forbidden" });
+      }
+    }
+
+    if (thread.channel === "sms") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Adding participants changes the group fingerprint. Create a new SMS group instead.",
+      });
+    }
+
+    await gcPool.query(
+      `INSERT INTO conversation_participants
+         (tenant_id, conversation_id, participant_type, client_id, broker_id, lead_id,
+          phone_e164, display_name, role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'member')`,
+      [
+        gcTenantId,
+        conversationId,
+        p.participant_type,
+        p.client_id,
+        p.broker_id,
+        p.lead_id,
+        p.phone_e164,
+        p.display_name,
+      ],
+    );
+
+    await auditGroup(brokerId, "group_participant_added", thread, {
+      participant_type: p.participant_type,
+      display_name: p.display_name,
+    });
+
+    return res.json({ success: true, message: "Participant added" });
+  } catch (err: any) {
+    const status = err?.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      message: err?.message || "Failed to add participant",
+    });
+  }
+};
+
+const handleRemoveGroupParticipant: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const { conversationId, participantId } = req.params;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    await assertGroupThreadAccess(conversationId, brokerId, brokerRole);
+
+    await gcPool.query(
+      `UPDATE conversation_participants SET left_at = NOW()
+       WHERE tenant_id = ? AND conversation_id = ? AND id = ? AND left_at IS NULL`,
+      [gcTenantId, conversationId, participantId],
+    );
+
+    return res.json({ success: true, message: "Participant removed" });
+  } catch (err: any) {
+    const status = err?.status ?? 500;
+    return res.status(status).json({
+      success: false,
+      message: err?.message || "Failed to remove participant",
+    });
+  }
+};
+
+const handleSendGroupMessage: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const { conversationId } = req.params;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const thread = await assertGroupThreadAccess(
+      conversationId,
+      brokerId,
+      brokerRole,
+    );
+
+    if (thread.status === "closed") {
+      return res.status(400).json({ success: false, message: "Thread is closed" });
+    }
+
+    const { body, communication_type } = req.body ?? {};
+    if (!body || typeof body !== "string" || !body.trim()) {
+      return res.status(400).json({ success: false, message: "body required" });
+    }
+
+    const channel = thread.channel as string;
+    const commType =
+      communication_type === "internal_note" || channel === "internal"
+        ? "internal_note"
+        : "sms";
+
+    if (commType === "sms" && channel !== "sms") {
+      return res.status(400).json({
+        success: false,
+        message: "This group is internal-only",
+      });
+    }
+
+    try {
+      const communicationId = await sendGroupOutboundMessage(
+        thread,
+        brokerId,
+        body.trim(),
+        commType,
+      );
+      return res.json({
+        success: true,
+        message: "Message sent",
+        communication_id: communicationId,
+        conversation_id: conversationId,
+      });
+    } catch (err: unknown) {
+      if (err instanceof GroupSendError) {
+        return res.status(err.status).json({
+          success: false,
+          message: err.message,
+          ...(err.payload ?? {}),
+        });
+      }
+      throw err;
+    }
+  } catch (err: any) {
+    console.error("[group] send error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Failed to send message",
+    });
+  }
+};
+
+async function processInboundGroupMms(
+  params: InboundGroupMmsParams,
+): Promise<boolean> {
+  if (!isEnabledRequest()) return false;
+
+  const otherRecipients = groupConvParseOtherRecipients(params.webhookBody);
+  if (otherRecipients.length === 0) return false;
+
+  const fromPhone = groupConvNormalizeE164(params.fromRaw);
+  const toPhone = params.toRaw ? groupConvNormalizeE164(params.toRaw) : null;
+  const allPhones = [
+    fromPhone,
+    ...otherRecipients,
+    ...(toPhone ? [toPhone] : []),
+  ].filter((p) => groupConvPhoneLast10(p).length >= 10);
+
+  const participantPhones = [
+    fromPhone,
+    ...otherRecipients,
+  ].filter((p) => groupConvPhoneLast10(p).length >= 10);
+
+  const fingerprint = groupConvComputeParticipantFingerprint(
+    toPhone,
+    participantPhones,
+  );
+
+  let conversationId: string;
+  let brokerId: number | null = null;
+
+  if (toPhone) {
+    const [ownerRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active'
+         AND twilio_caller_id = ? LIMIT 1`,
+      [params.tenantId, toPhone],
+    );
+    if (ownerRows.length > 0) brokerId = ownerRows[0].id as number;
+  }
+
+  const [existing] = await gcPool.query<RowDataPacket[]>(
+    `SELECT conversation_id, title FROM conversation_threads
+     WHERE tenant_id = ? AND participant_fingerprint = ? LIMIT 1`,
+    [params.tenantId, fingerprint],
+  );
+
+  if (existing.length > 0) {
+    conversationId = existing[0].conversation_id as string;
+  } else {
+    conversationId = newGroupConversationId();
+    const resolvedParticipants: ResolvedParticipant[] = [];
+    for (const phone of participantPhones) {
+      resolvedParticipants.push(await resolvePhoneParticipant(phone));
+    }
+    const displayTitle = groupConvBuildAutoGroupTitle(resolvedParticipants);
+
+    await gcPool.query(
+      `INSERT INTO conversation_threads
+         (tenant_id, conversation_id, broker_id, thread_type, title,
+          participant_fingerprint, channel, creation_source,
+          client_name, inbox_number,
+          last_message_at, last_message_preview, last_message_type,
+          message_count, unread_count, status)
+       VALUES (?, ?, ?, 'group', NULL, ?, 'sms', 'phone_synced', ?, ?,
+               NOW(), ?, 'sms', 0, 0, 'active')`,
+      [
+        params.tenantId,
+        conversationId,
+        brokerId,
+        fingerprint,
+        displayTitle,
+        toPhone,
+        params.body.slice(0, 200) || "(Message)",
+      ],
+    );
+
+    await insertParticipants(
+      conversationId,
+      resolvedParticipants,
+      brokerId ?? 0,
+    );
+
+    await gcPool.query(
+      `INSERT INTO communications
+         (tenant_id, from_broker_id, communication_type, direction, body, status,
+          conversation_id, message_type, delivery_status, created_at)
+       VALUES (?, NULL, 'system_event', 'outbound', ?, 'delivered', ?, 'text', 'delivered', NOW())`,
+      [
+        params.tenantId,
+        "Group detected from phone SMS",
+        conversationId,
+      ],
+    );
+  }
+
+  // Sync any new phones on existing thread
+  for (const phone of participantPhones) {
+    const last10 = groupConvPhoneLast10(phone);
+    const [exists] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id FROM conversation_participants
+       WHERE tenant_id = ? AND conversation_id = ? AND left_at IS NULL
+         AND phone_e164 IS NOT NULL
+         AND RIGHT(REGEXP_REPLACE(phone_e164, '[^0-9]', ''), 10) = ?
+       LIMIT 1`,
+      [params.tenantId, conversationId, last10],
+    );
+    if (!exists.length) {
+      const p = await resolvePhoneParticipant(phone);
+      await gcPool.query(
+        `INSERT INTO conversation_participants
+           (tenant_id, conversation_id, participant_type, client_id, broker_id, lead_id,
+            phone_e164, display_name, role)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'member')`,
+        [
+          params.tenantId,
+          conversationId,
+          p.participant_type,
+          p.client_id,
+          p.broker_id,
+          p.lead_id,
+          p.phone_e164,
+          p.display_name,
+        ],
+      );
+    }
+  }
+
+  if (params.messageSid) {
+    const [[dup]] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id FROM communications
+       WHERE tenant_id = ? AND external_id = ? AND communication_type = 'sms'
+       LIMIT 1`,
+      [params.tenantId, params.messageSid],
+    );
+    if (dup) return true;
+  }
+
+  const fromResolved = await resolvePhoneParticipant(fromPhone);
+  const metadata = JSON.stringify({
+    recipients: participantPhones,
+    is_group_mms: true,
+    from_phone: fromPhone,
+    from_display_name: fromResolved.display_name,
+    source: "phone_synced",
+  });
+
+  await gcPool.query(
+    `INSERT INTO communications (
+       tenant_id, from_user_id, to_broker_id,
+       communication_type, direction, body, media_url, media_content_type,
+       status, conversation_id, message_type, delivery_status, external_id, metadata,
+       sent_at, created_at
+     ) VALUES (?, ?, ?, 'sms', 'inbound', ?, ?, ?, 'delivered', ?, ?, 'delivered', ?, ?, NOW(), NOW())`,
+    [
+      params.tenantId,
+      fromResolved.client_id,
+      brokerId,
+      params.body.slice(0, 5000),
+      params.primaryMediaUrl,
+      params.primaryContentType,
+      conversationId,
+      params.msgType,
+      params.messageSid || null,
+      metadata,
+    ],
+  );
+
+  await gcPool.query(
+    `UPDATE conversation_threads SET
+       last_message_preview = ?, last_message_type = 'sms', last_message_at = NOW(),
+       message_count = message_count + 1, unread_count = unread_count + 1,
+       status = 'active', archived_at = NULL, updated_at = NOW()
+     WHERE tenant_id = ? AND conversation_id = ?`,
+    [
+      params.body.slice(0, 200) || "(Message)",
+      params.tenantId,
+      conversationId,
+    ],
+  );
+
+  return true;
+}
+
+async function findActiveSmsGroupForInboundReply(
+  tenantId: number,
+  fromLast10: string,
+  toPhone: string | null,
+  knownClientId: number | null | undefined,
+): Promise<{ conversationId: string; brokerId: number | null } | null> {
+  const params: unknown[] = [tenantId];
+  let inboxFilter = "";
+  if (toPhone) {
+    inboxFilter = "AND (ct.inbox_number = ? OR ct.inbox_number IS NULL)";
+    params.push(toPhone);
+  }
+  params.push(fromLast10);
+  let clientMatchSql = "";
+  if (knownClientId) {
+    clientMatchSql = "OR cp.client_id = ?";
+    params.push(knownClientId);
+  }
+
+  const [groupRows] = await gcPool.query<RowDataPacket[]>(
+    `SELECT ct.conversation_id, ct.broker_id
+     FROM conversation_threads ct
+     WHERE ct.tenant_id = ?
+       AND ct.thread_type = 'group'
+       AND ct.channel = 'sms'
+       AND ct.status IN ('active', 'closed')
+       ${inboxFilter}
+       AND EXISTS (
+         SELECT 1 FROM conversation_participants cp
+         WHERE cp.tenant_id = ct.tenant_id
+           AND cp.conversation_id = ct.conversation_id
+           AND cp.left_at IS NULL
+           AND (
+             (cp.phone_e164 IS NOT NULL
+              AND RIGHT(REGEXP_REPLACE(cp.phone_e164, '[^0-9]', ''), 10) = ?)
+             ${clientMatchSql}
+           )
+       )
+       AND EXISTS (
+         SELECT 1 FROM communications c
+         WHERE c.tenant_id = ct.tenant_id
+           AND c.conversation_id = ct.conversation_id
+           AND c.communication_type = 'sms'
+           AND c.direction = 'outbound'
+           AND c.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+       )
+     ORDER BY ct.last_message_at DESC
+     LIMIT 1`,
+    params,
+  );
+
+  if (!groupRows.length) return null;
+  return {
+    conversationId: groupRows[0].conversation_id as string,
+    brokerId: (groupRows[0].broker_id as number | null) ?? null,
+  };
+}
+
+async function insertGroupInboundSms(
+  params: InboundGroupMmsParams,
+  conversationId: string,
+  brokerId: number | null,
+  source: string,
+): Promise<boolean> {
+  if (params.messageSid) {
+    const [dupRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id FROM communications
+       WHERE tenant_id = ? AND external_id = ? AND communication_type = 'sms'
+       LIMIT 1`,
+      [params.tenantId, params.messageSid],
+    );
+    if (dupRows.length > 0) return true;
+  }
+
+  const fromPhone = groupConvNormalizeE164(params.fromRaw);
+  const fromResolved = await resolvePhoneParticipant(fromPhone);
+  const metadata = JSON.stringify({
+    is_group_mms: true,
+    source,
+    from_phone: fromPhone,
+    from_display_name: fromResolved.display_name,
+  });
+
+  await gcPool.query(
+    `INSERT INTO communications (
+       tenant_id, from_user_id, to_broker_id,
+       communication_type, direction, body, media_url, media_content_type,
+       status, conversation_id, message_type, delivery_status, external_id, metadata,
+       sent_at, created_at
+     ) VALUES (?, ?, ?, 'sms', 'inbound', ?, ?, ?, 'delivered', ?, ?, 'delivered', ?, ?, NOW(), NOW())`,
+    [
+      params.tenantId,
+      fromResolved.client_id,
+      brokerId,
+      params.body.slice(0, 5000),
+      params.primaryMediaUrl,
+      params.primaryContentType,
+      conversationId,
+      params.msgType,
+      params.messageSid || null,
+      metadata,
+    ],
+  );
+
+  await gcPool.query(
+    `UPDATE conversation_threads SET
+       last_message_preview = ?, last_message_type = 'sms', last_message_at = NOW(),
+       message_count = message_count + 1, unread_count = unread_count + 1,
+       status = 'active', archived_at = NULL, updated_at = NOW()
+     WHERE tenant_id = ? AND conversation_id = ?`,
+    [
+      params.body.slice(0, 200) || "(Message)",
+      params.tenantId,
+      conversationId,
+    ],
+  );
+
+  console.log(
+    `[Group SMS inbound] routed source=${source} conv=${conversationId} from=${fromPhone} sid=${params.messageSid || "none"}`,
+  );
+  return true;
+}
+
+/** When carriers deliver Group MMS as individual SMS, replies lack OtherRecipients — route by membership. */
+async function processInboundGroupIndividualReply(
+  params: InboundGroupMmsParams,
+): Promise<boolean> {
+  if (!isEnabledRequest()) return false;
+
+  const fromPhone = groupConvNormalizeE164(params.fromRaw);
+  const fromLast10 = groupConvPhoneLast10(fromPhone);
+  if (fromLast10.length !== 10) return false;
+
+  const toPhone = params.toRaw ? groupConvNormalizeE164(params.toRaw) : null;
+
+  let brokerId: number | null = null;
+  if (toPhone) {
+    const [ownerRows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active'
+         AND twilio_caller_id = ? LIMIT 1`,
+      [params.tenantId, toPhone],
+    );
+    if (ownerRows.length > 0) brokerId = ownerRows[0].id as number;
+  }
+
+  const match = await findActiveSmsGroupForInboundReply(
+    params.tenantId,
+    fromLast10,
+    toPhone,
+    params.knownClientId ?? null,
+  );
+  if (!match) return false;
+
+  if (!brokerId && match.brokerId) {
+    brokerId = match.brokerId;
+  }
+
+  return insertGroupInboundSms(
+    params,
+    match.conversationId,
+    brokerId,
+    params.knownClientId ? "group_individual_reply_client" : "group_individual_reply",
+  );
+}
+
+const handleGetGroupsByApplication: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const applicationId = parseInt(req.params.applicationId, 10);
+    if (Number.isNaN(applicationId)) {
+      return res.status(400).json({ success: false, message: "Invalid application id" });
+    }
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isSuperAdmin = brokerRole === "superadmin";
+    const isAdmin =
+      brokerRole === "admin" ||
+      brokerRole === "platform_owner" ||
+      isSuperAdmin;
+
+    const [appAccess] = await gcPool.query<RowDataPacket[]>(
+      `SELECT id FROM loan_applications
+       WHERE id = ? AND tenant_id = ?
+         AND (
+           ? = 1
+           OR broker_user_id = ?
+           OR partner_broker_id = ?
+         )
+       LIMIT 1`,
+      [
+        applicationId,
+        gcTenantId,
+        isAdmin ? 1 : 0,
+        brokerId,
+        brokerId,
+      ],
+    );
+    if (!appAccess.length) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT ct.*
+       FROM conversation_threads ct
+       WHERE ct.tenant_id = ? AND ct.thread_type = 'group'
+         AND ct.application_id = ?
+       ORDER BY ct.last_message_at DESC
+       LIMIT 20`,
+      [gcTenantId, applicationId],
+    );
+
+    const enrichment = await enrichThreadRows(rows);
+    const threads = rows.map((r) => ({
+      ...r,
+      ...enrichment[r.conversation_id as string],
+    }));
+
+    return res.json({ success: true, threads });
+  } catch (err: unknown) {
+    console.error("[group] by-application error:", err);
+    return res.status(500).json({ success: false, message: "Failed to load groups" });
+  }
+};
+
+const handleGetGroupsByClient: RequestHandler = async (req, res) => {
+  if (!isEnabledRequest()) return featureDisabled(res);
+  try {
+    const clientId = parseInt(req.params.clientId, 10);
+    if (Number.isNaN(clientId)) {
+      return res.status(400).json({ success: false, message: "Invalid client id" });
+    }
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isSuperAdmin = brokerRole === "superadmin";
+    const ok = await gcAssertClientOwnershipForBroker(
+      clientId,
+      brokerId,
+      isSuperAdmin,
+    );
+    if (!ok) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const [rows] = await gcPool.query<RowDataPacket[]>(
+      `SELECT DISTINCT ct.*
+       FROM conversation_threads ct
+       JOIN conversation_participants cp
+         ON cp.conversation_id = ct.conversation_id AND cp.tenant_id = ct.tenant_id
+       WHERE ct.tenant_id = ? AND ct.thread_type = 'group'
+         AND cp.client_id = ? AND cp.left_at IS NULL
+       ORDER BY ct.last_message_at DESC
+       LIMIT 20`,
+      [gcTenantId, clientId],
+    );
+
+    const enrichment = await enrichThreadRows(rows);
+    const threads = rows.map((r) => ({
+      ...r,
+      ...enrichment[r.conversation_id as string],
+    }));
+
+    return res.json({ success: true, threads });
+  } catch (err: unknown) {
+    console.error("[group] by-client error:", err);
+    return res.status(500).json({ success: false, message: "Failed to load groups" });
+  }
+};
+
+/** Dev/test only — simulates Twilio Group MMS webhook without carrier. */
+const handleSimulateInboundGroup: RequestHandler = async (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({ success: false, message: "Not available" });
+  }
+  if (!isEnabledRequest()) return featureDisabled(res);
+
+  const { from, to, body, otherRecipients } = req.body ?? {};
+  if (!from || !to) {
+    return res.status(400).json({ success: false, message: "from and to required" });
+  }
+
+  const webhookBody: Record<string, unknown> = { From: from, To: to, Body: body ?? "Test group" };
+  if (Array.isArray(otherRecipients)) {
+    otherRecipients.forEach((r: string, i: number) => {
+      webhookBody[`OtherRecipients${i}`] = r;
+    });
+  } else if (otherRecipients) {
+    webhookBody.OtherRecipients0 = otherRecipients;
+  }
+
+  const handled = await processInboundGroupMms({
+    tenantId: gcTenantId,
+    fromRaw: from,
+    toRaw: to,
+    body: body ?? "Test group message",
+    messageSid: `SM_SIM_${Date.now()}`,
+    primaryMediaUrl: null,
+    primaryContentType: null,
+    msgType: "text",
+    webhookBody,
+  });
+
+  return res.json({ success: handled, message: handled ? "Group inbound processed" : "Not a group MMS" });
+};
+
+
+async function assertClientOwnershipForBroker(
+  clientId: number,
+  brokerId: number,
+  isSuperAdmin: boolean,
+): Promise<boolean> {
+  if (isSuperAdmin) return true;
+  const [ownerCheck] = await pool.query<RowDataPacket[]>(
+    `SELECT 1 FROM clients c
+     WHERE c.id = ? AND c.tenant_id = ?
+       AND c.assigned_broker_id IS NOT NULL
+       AND c.assigned_broker_id != ?
+       AND NOT EXISTS (
+         SELECT 1 FROM loan_applications la
+         WHERE la.client_user_id = c.id
+           AND la.tenant_id = c.tenant_id
+           AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+       )
+     LIMIT 1`,
+    [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
+  );
+  return ownerCheck.length === 0;
+}
+
+let groupConversationsModule: GroupConversationsModule | null = null;
+function getGroupConversationsModule(): GroupConversationsModule {
+  if (!groupConversationsModule) {
+    groupConversationsModule = initGroupConversationsModule({
+      pool,
+      mortgageTenantId: MORTGAGE_TENANT_ID,
+      getTwilioClient: () => twilioClient,
+      executeThreadUpsert: _executeThreadUpsert,
+      assertClientOwnershipForBroker,
+      precheckSmsQuotaUnits,
+      recordSmsQuotaUnits,
+      quotaDenialPayload,
+      createAuditLog,
+    });
+  }
+  return groupConversationsModule;
 }
 
 /**
@@ -9525,7 +13107,10 @@ async function sendEmailMessage(
   body: string,
   isHTML: boolean = false,
   conversationId?: string,
-  options?: { channel?: "default" | "reminder_flow"; billing?: QuotaWireContext },
+  options?: {
+    channel?: "default" | "reminder_flow";
+    billing?: QuotaWireContext;
+  },
 ): Promise<{
   success: boolean;
   external_id?: string;
@@ -10134,10 +13719,11 @@ async function sendClientManualWelcomeEmail(
   try {
     console.log(`📧 Sending manual client welcome email to ${email}`);
     const loginUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login`;
-    await sendViaResend({
-      to: email,
-      subject: `Welcome to Encore Mortgage, ${firstName}!`,
-      html: `
+    await sendViaResend(
+      {
+        to: email,
+        subject: `Welcome to Encore Mortgage, ${firstName}!`,
+        html: `
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -10206,7 +13792,9 @@ async function sendClientManualWelcomeEmail(
         </body>
         </html>
       `,
-    }, systemEmailQuota("client_manual_welcome"));
+      },
+      systemEmailQuota("client_manual_welcome"),
+    );
     console.log("✅ Manual client welcome email sent!");
   } catch (error) {
     console.error("❌ Error sending manual client welcome email:", error);
@@ -10232,10 +13820,11 @@ async function sendBrokerManualWelcomeEmail(
         : role === "broker"
           ? "Partner Broker"
           : "Team Member";
-    await sendViaResend({
-      to: email,
-      subject: `Welcome to Encore Mortgage — Your account is ready, ${firstName}!`,
-      html: `
+    await sendViaResend(
+      {
+        to: email,
+        subject: `Welcome to Encore Mortgage — Your account is ready, ${firstName}!`,
+        html: `
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -10304,7 +13893,9 @@ async function sendBrokerManualWelcomeEmail(
         </body>
         </html>
       `,
-    }, systemEmailQuota("broker_welcome"));
+      },
+      systemEmailQuota("broker_welcome"),
+    );
     console.log("✅ Broker welcome email sent!");
   } catch (error) {
     console.error("❌ Error sending broker welcome email:", error);
@@ -10495,7 +14086,10 @@ async function sendPublicApplicationWelcomeEmail(
       `,
     };
 
-    await sendViaResend(mailOptions, systemEmailQuota("public_application_welcome"));
+    await sendViaResend(
+      mailOptions,
+      systemEmailQuota("public_application_welcome"),
+    );
     console.log("✅ Public application welcome email sent!");
   } catch (error) {
     console.error("❌ Error sending public application welcome email:", error);
@@ -10999,12 +14593,14 @@ function loanOwnershipWhereParams(brokerId: number): number[] {
 
 function rowHasLoanOwnershipAccess(
   brokerId: number,
-  row: RowDataPacket | {
-    assigned_broker_id?: number | null;
-    broker_user_id?: number | null;
-    partner_broker_id?: number | null;
-    partner_owner_broker_id?: number | null;
-  },
+  row:
+    | RowDataPacket
+    | {
+        assigned_broker_id?: number | null;
+        broker_user_id?: number | null;
+        partner_broker_id?: number | null;
+        partner_owner_broker_id?: number | null;
+      },
 ): boolean {
   const r = row as RowDataPacket;
   return (
@@ -12432,9 +16028,9 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       });
     }
 
-    const {
-      broker_user_id: bodyBrokerUserId,
-    } = req.body as { broker_user_id?: number | null };
+    const { broker_user_id: bodyBrokerUserId } = req.body as {
+      broker_user_id?: number | null;
+    };
 
     let loanBrokerUserId = brokerId;
     if (requesterRole === "platform_owner") {
@@ -14738,10 +18334,7 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     }
 
     const loan = loanRows[0];
-    if (
-      !hasGlobalLoanAccess &&
-      !rowHasLoanOwnershipAccess(brokerId, loan)
-    ) {
+    if (!hasGlobalLoanAccess && !rowHasLoanOwnershipAccess(brokerId, loan)) {
       return res.status(403).json({
         success: false,
         error: "Access denied",
@@ -15532,17 +19125,35 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
       [clientId, MORTGAGE_TENANT_ID],
     );
 
-    // Conversation threads
+    // Conversation threads (direct — client_id on thread)
     const [conversations] = await pool.query<RowDataPacket[]>(
       `SELECT ct.id, ct.conversation_id, ct.last_message_at, ct.message_count,
               ct.unread_count, ct.last_message_type, ct.status, ct.priority,
-              ct.last_message_preview
+              ct.last_message_preview, ct.thread_type
        FROM conversation_threads ct
        WHERE ct.client_id = ? AND ct.tenant_id = ?
        ORDER BY ct.last_message_at DESC
        LIMIT 20`,
       [clientId, MORTGAGE_TENANT_ID],
     );
+
+    // Group threads where client is a participant
+    const [groupThreads] = getGroupConversationsModule().enabled
+      ? await pool.query<RowDataPacket[]>(
+          `SELECT DISTINCT ct.id, ct.conversation_id, ct.title, ct.last_message_at,
+                    ct.message_count, ct.unread_count, ct.last_message_type, ct.status,
+                    ct.priority, ct.last_message_preview, ct.thread_type, ct.channel,
+                    ct.creation_source
+             FROM conversation_threads ct
+             JOIN conversation_participants cp
+               ON cp.conversation_id = ct.conversation_id AND cp.tenant_id = ct.tenant_id
+             WHERE ct.tenant_id = ? AND ct.thread_type = 'group'
+               AND cp.client_id = ? AND cp.left_at IS NULL
+             ORDER BY ct.last_message_at DESC
+             LIMIT 20`,
+          [MORTGAGE_TENANT_ID, clientId],
+        )
+      : [[] as RowDataPacket[]];
 
     // Recent communications (activity feed)
     const [communications] = await pool.query<RowDataPacket[]>(
@@ -15601,6 +19212,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
       },
       loans,
       conversations,
+      group_threads: groupThreads,
       communications,
     });
   } catch (error) {
@@ -15650,7 +19262,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
       WHERE op.id = la.partner_broker_id AND op.created_by_broker_id = ? AND op.tenant_id = la.tenant_id
     ))`;
 
-    const baseWhere = `WHERE c.tenant_id = ?${hasGlobalClientAccess ? "" : ` AND ${clientOwnershipSql}`}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR CONCAT(c.last_name, ' ', c.first_name) LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR c.normalized_phone LIKE ? OR c.normalized_phone = ?)" : ""}`;
+    const baseWhere = `WHERE c.tenant_id = ?${hasGlobalClientAccess ? "" : ` AND ${clientOwnershipSql}`}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR CONCAT(c.last_name, ' ', c.first_name) LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR (c.phone IS NOT NULL AND (c.phone LIKE ? OR c.normalized_phone LIKE ? OR c.normalized_phone = ?)) OR (c.phone IS NULL AND ct.conversation_id = CONCAT('conv_client_', c.id) AND (ct.normalized_client_phone LIKE ? OR ct.normalized_client_phone = ?)))" : ""}`;
 
     const filterParams: any[] = hasGlobalClientAccess
       ? [MORTGAGE_TENANT_ID]
@@ -15667,7 +19279,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
       // Exact normalized match uses the indexed column directly (fast, no REGEXP_REPLACE)
       const exactNorm = lastTen || digitsOnly;
       // Order: full-name concat (handles "alex go" → "Alex Gomez"), reversed concat,
-      // then individual fields, then phone
+      // then individual fields, then client phone, then SMS thread phone
       filterParams.push(
         like,
         like,
@@ -15675,6 +19287,8 @@ const handleGetClients: RequestHandler = async (req, res) => {
         like,
         like,
         like,
+        digitsLike,
+        exactNorm,
         digitsLike,
         exactNorm,
       );
@@ -15829,7 +19443,7 @@ const handleCreateClient: RequestHandler = async (req, res) => {
                 b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
          FROM clients c
          LEFT JOIN brokers b ON b.id = c.assigned_broker_id
-         WHERE c.tenant_id = ? AND c.normalized_phone = ? LIMIT 1`,
+           WHERE c.tenant_id = ? AND c.normalized_phone = ? AND c.phone IS NOT NULL LIMIT 1`,
         [MORTGAGE_TENANT_ID, normalizedPhone],
       );
       if (phoneExists) {
@@ -16168,7 +19782,7 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
                   b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
            FROM clients c
            LEFT JOIN brokers b ON b.id = c.assigned_broker_id
-           WHERE c.tenant_id = ? AND c.normalized_phone = ? AND c.id != ? LIMIT 1`,
+           WHERE c.tenant_id = ? AND c.normalized_phone = ? AND c.id != ? AND c.phone IS NOT NULL LIMIT 1`,
           [MORTGAGE_TENANT_ID, normPhone, clientId],
         );
         if (phoneExists) {
@@ -16281,9 +19895,17 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
 
     // Sync client_phone on all linked threads when phone changes
     if (phone !== undefined) {
+      const trimmed = phone?.trim() || null;
+      const normPhone = trimmed
+        ? trimmed.replace(/\D/g, "").slice(-10) || null
+        : null;
       await pool.query(
-        `UPDATE conversation_threads SET client_phone = ?, updated_at = NOW() WHERE client_id = ? AND tenant_id = ?`,
-        [phone?.trim() || null, clientId, MORTGAGE_TENANT_ID],
+        `UPDATE conversation_threads
+         SET client_phone = ?,
+             normalized_client_phone = ?,
+             updated_at = NOW()
+         WHERE client_id = ? AND tenant_id = ?`,
+        [trimmed, normPhone, clientId, MORTGAGE_TENANT_ID],
       );
     }
 
@@ -19134,7 +22756,11 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
        LIMIT 1`,
       hasGlobalDocumentAccess
         ? [documentId, MORTGAGE_TENANT_ID]
-        : [documentId, MORTGAGE_TENANT_ID, ...loanOwnershipWhereParams(brokerId)],
+        : [
+            documentId,
+            MORTGAGE_TENANT_ID,
+            ...loanOwnershipWhereParams(brokerId),
+          ],
     );
 
     if (documentRows.length === 0) {
@@ -22335,11 +25961,18 @@ async function triggerPipelineAutomation(
         );
       } else if (assignment.communication_type === "sms") {
         if (!loan.phone) continue;
-        sendResult = await sendSMSMessage(loan.phone, body, undefined, undefined, undefined, {
-          source: "pipeline",
-          refType: "loan",
-          refId: String(loan.id),
-        });
+        sendResult = await sendSMSMessage(
+          loan.phone,
+          body,
+          undefined,
+          undefined,
+          undefined,
+          {
+            source: "pipeline",
+            refType: "loan",
+            refId: String(loan.id),
+          },
+        );
       } else if (assignment.communication_type === "whatsapp") {
         if (!loan.phone) continue;
         sendResult = await sendWhatsAppMessage(loan.phone, body);
@@ -26639,6 +30272,42 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
         );
     }
 
+    // Group MMS — separate path when OtherRecipients present (skips direct 1:1)
+    const groupConv = getGroupConversationsModule();
+    if (groupConv.enabled) {
+      const groupHandled = await groupConv.processInboundGroupMms({
+        tenantId: MORTGAGE_TENANT_ID,
+        fromRaw,
+        toRaw,
+        body,
+        messageSid,
+        primaryMediaUrl,
+        primaryContentType,
+        msgType,
+        webhookBody: (req.body ?? {}) as Record<string, unknown>,
+      });
+      if (groupHandled) {
+        res.set("Content-Type", "text/xml");
+        return res.status(200).send("<Response></Response>");
+      }
+      const groupReplyHandled =
+        await groupConv.processInboundGroupIndividualReply({
+          tenantId: MORTGAGE_TENANT_ID,
+          fromRaw,
+          toRaw,
+          body,
+          messageSid,
+          primaryMediaUrl,
+          primaryContentType,
+          msgType,
+          webhookBody: (req.body ?? {}) as Record<string, unknown>,
+        });
+      if (groupReplyHandled) {
+        res.set("Content-Type", "text/xml");
+        return res.status(200).send("<Response></Response>");
+      }
+    }
+
     // ── Find the client by phone number ──────────────────────────────────────
     // Strip ALL non-digit characters from both sides so any stored format
     // ((323) 475-6240, 323-475-6240, 3234756240, +13234756240, etc.) all match.
@@ -26659,10 +30328,23 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
            OR c.phone = ?
            OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
            OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
+           OR c.normalized_phone = ?
+           OR (
+             c.alternate_phone IS NOT NULL
+             AND RIGHT(REGEXP_REPLACE(c.alternate_phone, '[^0-9]', ''), 10) = ?
+           )
          )
        ORDER BY la.created_at DESC
        LIMIT 1`,
-      [MORTGAGE_TENANT_ID, fromPhone, fromRaw, fromDigits, fromDigits10],
+      [
+        MORTGAGE_TENANT_ID,
+        fromPhone,
+        fromRaw,
+        fromDigits,
+        fromDigits10,
+        fromDigits10,
+        fromDigits10,
+      ],
     );
 
     let clientId: number | null = null;
@@ -26673,6 +30355,27 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       clientId = clientRows[0].id;
       brokerId = clientRows[0].assigned_broker_id ?? null;
       loanId = clientRows[0].loan_id ?? null;
+    }
+
+    // Route SMS replies into an active Encore group before opening a 1:1 client thread.
+    if (groupConv.enabled && clientId) {
+      const groupReplyHandled =
+        await groupConv.processInboundGroupIndividualReply({
+          tenantId: MORTGAGE_TENANT_ID,
+          fromRaw,
+          toRaw,
+          body,
+          messageSid,
+          primaryMediaUrl,
+          primaryContentType,
+          msgType,
+          webhookBody: (req.body ?? {}) as Record<string, unknown>,
+          knownClientId: clientId,
+        });
+      if (groupReplyHandled) {
+        res.set("Content-Type", "text/xml");
+        return res.status(200).send("<Response></Response>");
+      }
     }
 
     // Ownership rule: if the client sent to a Twilio number that is currently a
@@ -26809,10 +30512,14 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
     // For unknown senders (no client record), derive a stable ID from the phone
     // so all future messages from the same number land in the same thread.
     if (!conversationId) {
-      conversationId = await resolvePhoneConversationId(pool, MORTGAGE_TENANT_ID, {
-        phone: fromPhone,
-        inboxNumber: toPhone,
-      });
+      conversationId = await resolvePhoneConversationId(
+        pool,
+        MORTGAGE_TENANT_ID,
+        {
+          phone: fromPhone,
+          inboxNumber: toPhone,
+        },
+      );
     } else if (clientId) {
       // Known client — always canonical (never reuse legacy conv_phone_* thread ids).
       conversationId = `conv_client_${clientId}`;
@@ -27026,6 +30733,9 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     // leakage (a broker could initiate a thread against another broker's client
     // and then always see it). Ownership is the authoritative gate.
     if (!isSuperAdmin) {
+      const groupVis = getGroupConversationsModule().enabled
+        ? getGroupConversationsModule().groupVisibilitySql()
+        : "";
       whereConditions.push(
         `(ct.broker_id = ?
           OR (ct.client_id IS NULL AND ct.broker_id IS NULL)
@@ -27054,9 +30764,13 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
                    AND (la_own.broker_user_id = ? OR la_own.partner_broker_id = ?)
                )
              )
-         ))`,
+         )
+         ${groupVis})`,
       );
       queryParams.push(brokerId, brokerId, brokerId, brokerId);
+      if (getGroupConversationsModule().enabled) {
+        queryParams.push(brokerId, brokerId, brokerId, brokerId);
+      }
     }
 
     if (status !== "all") {
@@ -27149,6 +30863,9 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
       // Also search broker/realtor names for threads that resolve via contact_broker_id
       // or a phone-matched broker row (so "Unknown Client" threads appear when
       // searching by realtor name or partial phone).
+      const groupSearch = getGroupConversationsModule().enabled
+        ? getGroupConversationsModule().groupSearchSql()
+        : "";
       whereConditions.push(
         `(ct.client_name LIKE ?
           OR ct.client_email LIKE ?
@@ -27172,7 +30889,8 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
             SELECT 1 FROM clients csrch
             WHERE csrch.id = ct.client_id
               AND CONCAT(csrch.first_name, ' ', csrch.last_name) LIKE ?
-          ))`,
+          )
+          ${groupSearch})`,
       );
       const searchTerm = `%${search}%`;
       queryParams.push(
@@ -27183,6 +30901,9 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
         searchTerm,
         searchTerm,
       );
+      if (getGroupConversationsModule().enabled) {
+        queryParams.push(searchTerm, searchTerm);
+      }
     }
 
     const whereClause = whereConditions.join(" AND ");
@@ -27263,18 +30984,33 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     const total = countResult[0]?.total || 0;
     const totalPages = Math.ceil(total / parseInt(limit as string));
 
+    const groupEnrichment = getGroupConversationsModule().enabled
+      ? await getGroupConversationsModule().enrichThreadRows(threads)
+      : {};
+
     res.json({
       success: true,
-      threads: threads.map((thread) => ({
-        ...thread,
-        // Use the resolved name (covers broker/realtor contacts and backfills
-        // existing threads that were stored with client_name = NULL)
-        client_name: thread.resolved_client_name || thread.client_name,
-        tags: parseThreadTags(thread.tags),
-        can_view_client: !!thread.can_view_client,
-        client_assigned_broker_name: thread.client_assigned_broker_name ?? null,
-        client_assigned_broker_id: thread.client_assigned_broker_id ?? null,
-      })),
+      threads: threads.map((thread) => {
+        const convId = thread.conversation_id as string;
+        const groupExtra = groupEnrichment[convId] ?? {};
+        return {
+          ...thread,
+          ...groupExtra,
+          thread_type: groupExtra.thread_type ?? thread.thread_type ?? "direct",
+          // Use the resolved name (covers broker/realtor contacts and backfills
+          // existing threads that were stored with client_name = NULL)
+          client_name:
+            groupExtra.client_name ??
+            groupExtra.display_title ??
+            thread.resolved_client_name ??
+            thread.client_name,
+          tags: parseThreadTags(thread.tags),
+          can_view_client: !!thread.can_view_client,
+          client_assigned_broker_name:
+            thread.client_assigned_broker_name ?? null,
+          client_assigned_broker_id: thread.client_assigned_broker_id ?? null,
+        };
+      }),
       pagination: {
         page: parseInt(page as string),
         limit: parseInt(limit as string),
@@ -27302,15 +31038,16 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
     const isSuperAdmin = brokerRole === "superadmin";
+    const isAdmin = brokerRole === "admin";
 
     const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
 
     // Verify broker has access to this conversation using the same 3-path
     // ownership model as GET /threads:
     //   a) thread is directly assigned to this broker
-    //   b) shared inbox — thread has no broker assigned
-    //   c) unknown caller — thread has no resolved client (client_id IS NULL)
-    //   d) broker owns the client via assigned_broker_id or loan co-ownership
+    //   b) shared inbox — thread has no broker and no resolved client
+    //   c) broker owns the client via assigned_broker_id or loan co-ownership
+    //   d) group participant / co-owned client (when feature enabled)
     // Superadmins bypass ownership and see all threads.
     let threadCheckSql: string;
     let threadCheckParams: any[];
@@ -27319,12 +31056,25 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
        WHERE conversation_id = ? AND tenant_id = ?`;
       threadCheckParams = [conversationId, MORTGAGE_TENANT_ID];
     } else {
+      const groupVis = getGroupConversationsModule().enabled
+        ? getGroupConversationsModule().groupVisibilitySql()
+        : "";
       threadCheckSql = `SELECT id FROM conversation_threads ct
        WHERE ct.conversation_id = ? AND ct.tenant_id = ?
          AND (
            ct.broker_id = ?
-           OR ct.broker_id IS NULL
-           OR ct.client_id IS NULL
+           OR (ct.client_id IS NULL AND ct.broker_id IS NULL)
+           ${
+             isAdmin
+               ? `OR (ct.client_id IS NULL AND ct.broker_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM brokers ib
+                 WHERE ib.id = ct.broker_id
+                   AND ib.tenant_id = ct.tenant_id
+                   AND ib.status = 'active'
+               ))`
+               : ""
+           }
            OR EXISTS (
              SELECT 1 FROM clients cl
              WHERE cl.id = ct.client_id
@@ -27339,6 +31089,7 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
                  )
                )
            )
+           ${groupVis}
          )`;
       threadCheckParams = [
         conversationId,
@@ -27348,6 +31099,9 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
         brokerId,
         brokerId,
       ];
+      if (getGroupConversationsModule().enabled) {
+        threadCheckParams.push(brokerId, brokerId, brokerId, brokerId);
+      }
     }
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       threadCheckSql,
@@ -27366,12 +31120,17 @@ const handleGetConversationMessages: RequestHandler = async (req, res) => {
       `SELECT 
         c.*,
         t.name as template_name,
-        COALESCE(CONCAT(b.first_name, ' ', b.last_name), 'System') as sender_name,
+        COALESCE(
+          NULLIF(CONCAT(b.first_name, ' ', b.last_name), ' '),
+          NULLIF(CONCAT(fc.first_name, ' ', fc.last_name), ' '),
+          'System'
+        ) as sender_name,
         COALESCE(CONCAT(cl.first_name, ' ', cl.last_name), 'Client') as recipient_name
       FROM communications c
       LEFT JOIN templates t ON c.template_id = t.id
       LEFT JOIN brokers b ON c.from_broker_id = b.id
       LEFT JOIN clients cl ON c.to_user_id = cl.id
+      LEFT JOIN clients fc ON c.from_user_id = fc.id
       WHERE c.conversation_id = ? AND c.tenant_id = ?
       ORDER BY c.created_at DESC, c.id DESC
       LIMIT ${parseInt(limit as string)} OFFSET ${offset}`,
@@ -27616,6 +31375,22 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         success: false,
         message: "Invalid communication_type. Must be email, sms, or whatsapp",
       });
+    }
+
+    // Group threads must use the dedicated group send endpoint (Group MMS).
+    if (conversation_id) {
+      const [groupCheck] = await pool.query<RowDataPacket[]>(
+        `SELECT thread_type FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+        [conversation_id, MORTGAGE_TENANT_ID],
+      );
+      if (groupCheck[0]?.thread_type === "group") {
+        return res.status(400).json({
+          success: false,
+          message:
+            "This is a group conversation. Use POST /api/conversations/groups/:conversationId/send",
+        });
+      }
     }
 
     // Validate recipient info
@@ -28287,7 +32062,9 @@ const handleSendMessage: RequestHandler = async (req, res) => {
                 success: false,
                 error: denial.error,
                 quota_exceeded: Boolean(convoEmailCheck.quotaExceeded),
-                billing_action_required: Boolean(convoEmailCheck.billingBlocked),
+                billing_action_required: Boolean(
+                  convoEmailCheck.billingBlocked,
+                ),
               };
               break;
             }
@@ -28418,7 +32195,10 @@ const handleSendMessage: RequestHandler = async (req, res) => {
 
     if (!sendResult.success) {
       const billingDenied =
-        Boolean((sendResult as { billing_action_required?: boolean }).billing_action_required) ||
+        Boolean(
+          (sendResult as { billing_action_required?: boolean })
+            .billing_action_required,
+        ) ||
         Boolean((sendResult as { quota_exceeded?: boolean }).quota_exceeded);
       const statusCode = billingDenied ? 402 : 400;
       console.error(
@@ -28430,9 +32210,11 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         error: sendResult.error,
         communication_id: communicationId,
         conversation_id: finalConversationId,
-        quota_exceeded: (sendResult as { quota_exceeded?: boolean }).quota_exceeded ?? false,
+        quota_exceeded:
+          (sendResult as { quota_exceeded?: boolean }).quota_exceeded ?? false,
         billing_action_required:
-          (sendResult as { billing_action_required?: boolean }).billing_action_required ?? false,
+          (sendResult as { billing_action_required?: boolean })
+            .billing_action_required ?? false,
       });
     }
 
@@ -28765,6 +32547,7 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
     // ownership model as GET /threads. Superadmins can update any thread.
     const brokerRole = (req as any).brokerRole;
     const isSuperAdmin = brokerRole === "superadmin";
+    const isAdmin = brokerRole === "admin";
     let threadCheckSql: string;
     let threadCheckParams: any[];
     if (isSuperAdmin) {
@@ -28772,12 +32555,25 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
        WHERE conversation_id = ? AND tenant_id = ?`;
       threadCheckParams = [conversationId, MORTGAGE_TENANT_ID];
     } else {
+      const groupVis = getGroupConversationsModule().enabled
+        ? getGroupConversationsModule().groupVisibilitySql()
+        : "";
       threadCheckSql = `SELECT id FROM conversation_threads ct
        WHERE ct.conversation_id = ? AND ct.tenant_id = ?
          AND (
            ct.broker_id = ?
-           OR ct.broker_id IS NULL
-           OR ct.client_id IS NULL
+           OR (ct.client_id IS NULL AND ct.broker_id IS NULL)
+           ${
+             isAdmin
+               ? `OR (ct.client_id IS NULL AND ct.broker_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM brokers ib
+                 WHERE ib.id = ct.broker_id
+                   AND ib.tenant_id = ct.tenant_id
+                   AND ib.status = 'active'
+               ))`
+               : ""
+           }
            OR EXISTS (
              SELECT 1 FROM clients cl
              WHERE cl.id = ct.client_id
@@ -28792,6 +32588,7 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
                  )
                )
            )
+           ${groupVis}
          )`;
       threadCheckParams = [
         conversationId,
@@ -28801,6 +32598,9 @@ const handleUpdateConversation: RequestHandler = async (req, res) => {
         brokerId,
         brokerId,
       ];
+      if (getGroupConversationsModule().enabled) {
+        threadCheckParams.push(brokerId, brokerId, brokerId, brokerId);
+      }
     }
     const [threadCheck] = await pool.query<RowDataPacket[]>(
       threadCheckSql,
@@ -30433,7 +34233,10 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
     // ALWAYS notified on every voicemail.
     if (voicemailBankerEmail && !voicemailBankerEmail.startsWith("noemail_")) {
       try {
-        const companyName = await fetchTenantCompanyName(pool, MORTGAGE_TENANT_ID);
+        const companyName = await fetchTenantCompanyName(
+          pool,
+          MORTGAGE_TENANT_ID,
+        );
         const html = buildVoicemailEmailHtml({
           bankerName: voicemailBankerName || "Banker",
           callerNumber,
@@ -32957,7 +36760,14 @@ const handleAdminInit: RequestHandler = async (req, res) => {
       updated_at: r.updated_at,
     }));
 
-    return res.json({ success: true, profile, controls, rolePermissions });
+    return res.json({
+      success: true,
+      profile,
+      controls,
+      rolePermissions,
+      group_conversations_enabled: resolveGroupConversationsEnabled(),
+      bulk_csv_import_enabled: resolveBulkCsvImportEnabled(),
+    });
   } catch (error) {
     console.error("Error in admin init:", error);
     const quotaErrText =
@@ -34969,7 +38779,9 @@ function createServer() {
         html,
         true,
         undefined,
-        { billing: systemEmailQuota("billing_top_up_receipt", paymentIntentId) },
+        {
+          billing: systemEmailQuota("billing_top_up_receipt", paymentIntentId),
+        },
       );
       if (!sendResult.success) {
         console.error(
@@ -34986,7 +38798,14 @@ function createServer() {
     pool,
     MORTGAGE_TENANT_ID,
     (tid, paymentIntentId, dimension, units, packId, source) =>
-      quotaService.fulfillStripeTopUp(tid, paymentIntentId, dimension, units, packId, source),
+      quotaService.fulfillStripeTopUp(
+        tid,
+        paymentIntentId,
+        dimension,
+        units,
+        packId,
+        source,
+      ),
     handleStripeTopUpGranted,
   );
 
@@ -35674,10 +39493,15 @@ function createServer() {
         );
       }
 
-      updateValues.push(MessageSid, MORTGAGE_TENANT_ID);
+      updateValues.push(MORTGAGE_TENANT_ID, MessageSid, JSON.stringify(MessageSid));
 
       await pool.query(
-        `UPDATE communications SET ${updateFields.join(", ")} WHERE external_id = ? AND tenant_id = ?`,
+        `UPDATE communications SET ${updateFields.join(", ")}
+         WHERE tenant_id = ?
+           AND (
+             external_id = ?
+             OR JSON_CONTAINS(COALESCE(metadata, '{}'), ?, '$.external_ids')
+           )`,
         updateValues,
       );
 
@@ -35702,8 +39526,14 @@ function createServer() {
         // Notify brokers in real-time so the UI can show a failed-delivery indicator
         try {
           const [commRow] = await pool.query<RowDataPacket[]>(
-            `SELECT conversation_id FROM communications WHERE external_id = ? AND tenant_id = ? LIMIT 1`,
-            [MessageSid, MORTGAGE_TENANT_ID],
+            `SELECT conversation_id FROM communications
+             WHERE tenant_id = ?
+               AND (
+                 external_id = ?
+                 OR JSON_CONTAINS(COALESCE(metadata, '{}'), ?, '$.external_ids')
+               )
+             LIMIT 1`,
+            [MORTGAGE_TENANT_ID, MessageSid, JSON.stringify(MessageSid)],
           );
           if (commRow[0]?.conversation_id) {
             await publishToAbly("conversations:all", "sms-delivery-failed", {
@@ -35795,6 +39625,56 @@ function createServer() {
   );
 
   // Conversation routes
+  expressApp.get(
+    "/api/conversations/config",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleGetConversationsConfig,
+  );
+  expressApp.post(
+    "/api/conversations/groups",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleCreateGroup,
+  );
+  expressApp.patch(
+    "/api/conversations/groups/:conversationId",
+    verifyBrokerSession,
+    getGroupConversationsModule().handlePatchGroup,
+  );
+  expressApp.get(
+    "/api/conversations/groups/:conversationId/participants",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleGetGroupParticipants,
+  );
+  expressApp.post(
+    "/api/conversations/groups/:conversationId/participants",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleAddGroupParticipant,
+  );
+  expressApp.delete(
+    "/api/conversations/groups/:conversationId/participants/:participantId",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleRemoveGroupParticipant,
+  );
+  expressApp.post(
+    "/api/conversations/groups/:conversationId/send",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleSendGroupMessage,
+  );
+  expressApp.get(
+    "/api/conversations/groups/by-application/:applicationId",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleGetGroupsByApplication,
+  );
+  expressApp.get(
+    "/api/conversations/groups/by-client/:clientId",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleGetGroupsByClient,
+  );
+  expressApp.post(
+    "/api/conversations/groups/simulate-inbound",
+    verifyBrokerSession,
+    getGroupConversationsModule().handleSimulateInboundGroup,
+  );
   expressApp.get(
     "/api/conversations/threads",
     verifyBrokerSession,
@@ -36121,6 +40001,15 @@ function createServer() {
   // Admin init (merged bootstrap)
   expressApp.get("/api/admin/init", verifyBrokerSession, handleAdminInit);
 
+  registerBulkImportRoutes(expressApp, {
+    pool,
+    tenantId: MORTGAGE_TENANT_ID,
+    verifyBrokerSession,
+    createAuditLog,
+    sendClientManualWelcomeEmail,
+    sendBrokerManualWelcomeEmail,
+  });
+
   // Admin Section Controls routes
   expressApp.get(
     "/api/admin/section-controls",
@@ -36409,7 +40298,7 @@ function createServer() {
             contentType: "text/calendar; method=REQUEST",
           },
         ],
-      html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
+        html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
       <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
           <tr><td align="center">
@@ -36468,7 +40357,7 @@ function createServer() {
           </td></tr>
         </table>
       </body></html>`,
-    },
+      },
       systemEmailQuota("scheduler_confirmation", String(opts.meetingId)),
     );
   }
@@ -36524,7 +40413,7 @@ function createServer() {
         from: process.env.SMTP_FROM,
         to: opts.brokerEmail,
         subject: `New Meeting Scheduled — ${opts.clientName} on ${formattedDate}`,
-      html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
       <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
           <tr><td align="center">
@@ -36577,7 +40466,7 @@ function createServer() {
           </td></tr>
         </table>
       </body></html>`,
-    },
+      },
       systemEmailQuota("scheduler_broker_notify", String(opts.meetingId)),
     );
   }
@@ -36622,7 +40511,7 @@ function createServer() {
         from: process.env.SMTP_FROM,
         to: opts.email,
         subject: `Meeting Cancelled — ${formattedDate}`,
-      html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
       <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
           <tr><td align="center">
@@ -36648,7 +40537,7 @@ function createServer() {
           </td></tr>
         </table>
       </body></html>`,
-    },
+      },
       systemEmailQuota("scheduler_cancellation"),
     );
   }
@@ -37482,7 +41371,9 @@ function createServer() {
         refId: "pending",
       });
       if (!schedulerPrecheck.allowed) {
-        return res.status(402).json(schedulerQuotaDeniedResponse(schedulerPrecheck));
+        return res
+          .status(402)
+          .json(schedulerQuotaDeniedResponse(schedulerPrecheck));
       }
 
       const bookingToken = crypto.randomUUID();
@@ -37825,7 +41716,9 @@ function createServer() {
         refId: "pending",
       });
       if (!reschedulePrecheck.allowed) {
-        return res.status(402).json(schedulerQuotaDeniedResponse(reschedulePrecheck));
+        return res
+          .status(402)
+          .json(schedulerQuotaDeniedResponse(reschedulePrecheck));
       }
 
       // Create Zoom meeting for video calls
@@ -38654,7 +42547,9 @@ function createServer() {
         refId: "pending",
       });
       if (!adminSchedPrecheck.allowed) {
-        return res.status(402).json(schedulerQuotaDeniedResponse(adminSchedPrecheck));
+        return res
+          .status(402)
+          .json(schedulerQuotaDeniedResponse(adminSchedPrecheck));
       }
 
       // Create Zoom meeting for video type
@@ -40933,7 +44828,11 @@ function createServer() {
 
       let processedCount = 0;
       if (pendingDeliveryUnits > 0) {
-        await quotaService.extendBroadcastReservation(tenantId, broadcastId, 120);
+        await quotaService.extendBroadcastReservation(
+          tenantId,
+          broadcastId,
+          120,
+        );
       }
       for (const recipient of recipientRows) {
         // Cancellation check each iteration
@@ -41502,7 +45401,9 @@ function createServer() {
           smsAdds: estimatedSmsUnits,
         });
         if (dailyCap.ok === false) {
-          return res.status(429).json({ success: false, error: dailyCap.error });
+          return res
+            .status(429)
+            .json({ success: false, error: dailyCap.error });
         }
       }
 
@@ -41634,7 +45535,8 @@ function createServer() {
             [broadcastId, MORTGAGE_TENANT_ID],
           );
           return res.status(402).json({
-            ...(reserve.denial ?? quotaExceededPayload(reserve.quota.sms_segments)),
+            ...(reserve.denial ??
+              quotaExceededPayload(reserve.quota.sms_segments)),
             quota: reserve.quota,
             required_units: estimatedUnits,
           });
@@ -42299,7 +46201,8 @@ function createServer() {
         });
         if (!reserve.ok) {
           return res.status(402).json({
-            ...(reserve.denial ?? quotaExceededPayload(reserve.quota.sms_segments)),
+            ...(reserve.denial ??
+              quotaExceededPayload(reserve.quota.sms_segments)),
             quota: reserve.quota,
           });
         }
@@ -42589,7 +46492,8 @@ function createServer() {
         });
         if (!reserve.ok) {
           return res.status(402).json({
-            ...(reserve.denial ?? quotaExceededPayload(reserve.quota.sms_segments)),
+            ...(reserve.denial ??
+              quotaExceededPayload(reserve.quota.sms_segments)),
             quota: reserve.quota,
           });
         }
@@ -42637,12 +46541,10 @@ function createServer() {
           );
       }
       console.error("[Resend pending] error:", err);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          error: "Failed to re-trigger pending recipients",
-        });
+      return res.status(500).json({
+        success: false,
+        error: "Failed to re-trigger pending recipients",
+      });
     }
   };
 
@@ -44067,219 +47969,264 @@ function createServer() {
   );
 
   // GET /api/billing/config — quota flags + plan (platform_owner only)
-  expressApp.get("/api/billing/config", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole !== "platform_owner") {
-        return res.status(403).json({
-          success: false,
-          message: "Only platform owners can view billing configuration",
-        });
-      }
-
-      const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
-      const stripePublic = getStripePublicConfig();
-      const stripeBilling = await loadTenantStripeBilling(pool, MORTGAGE_TENANT_ID);
-      const stripeSubscriptionLinked = Boolean(stripeBilling.stripeSubscriptionId);
-
-      let stripeSubscriptionStatus: string | null = null;
-      let hasPaymentMethod = false;
-      const stripeClient = await loadStripe();
-
-      if (stripeClient && stripeBilling.stripeCustomerId) {
-        try {
-          const pm = await fetchSavedPaymentMethodSummary(
-            stripeClient,
-            stripeBilling.stripeCustomerId,
-            stripeBilling.stripeSubscriptionId,
-          );
-          hasPaymentMethod = Boolean(pm);
-        } catch (pmErr) {
-          console.warn("Billing config: payment method lookup failed", pmErr);
+  expressApp.get(
+    "/api/billing/config",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole !== "platform_owner") {
+          return res.status(403).json({
+            success: false,
+            message: "Only platform owners can view billing configuration",
+          });
         }
-      }
 
-      if (stripeClient && stripeBilling.stripeSubscriptionId) {
-        try {
-          const sub = await stripeClient.subscriptions.retrieve(
-            stripeBilling.stripeSubscriptionId,
-          );
-          stripeSubscriptionStatus = String(sub.status ?? "");
-          const mapped = mapStripeSubscriptionStatus(stripeSubscriptionStatus);
-          if (mapped !== stripeBilling.status) {
-            await syncStripeSubscriptionToDb(pool, MORTGAGE_TENANT_ID, sub);
+        const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
+        const stripePublic = getStripePublicConfig();
+        const stripeBilling = await loadTenantStripeBilling(
+          pool,
+          MORTGAGE_TENANT_ID,
+        );
+        const stripeSubscriptionLinked = Boolean(
+          stripeBilling.stripeSubscriptionId,
+        );
+
+        let stripeSubscriptionStatus: string | null = null;
+        let hasPaymentMethod = false;
+        const stripeClient = await loadStripe();
+
+        if (stripeClient && stripeBilling.stripeCustomerId) {
+          try {
+            const pm = await fetchSavedPaymentMethodSummary(
+              stripeClient,
+              stripeBilling.stripeCustomerId,
+              stripeBilling.stripeSubscriptionId,
+            );
+            hasPaymentMethod = Boolean(pm);
+          } catch (pmErr) {
+            console.warn("Billing config: payment method lookup failed", pmErr);
           }
-        } catch (subErr) {
-          console.warn("Billing config: Stripe subscription lookup failed", subErr);
-          stripeSubscriptionStatus = stripeBilling.status;
         }
-      }
 
-      const stripeSubscriptionActive =
-        stripeSubscriptionStatus === "active" || stripeSubscriptionStatus === "trialing";
+        if (stripeClient && stripeBilling.stripeSubscriptionId) {
+          try {
+            const sub = await stripeClient.subscriptions.retrieve(
+              stripeBilling.stripeSubscriptionId,
+            );
+            stripeSubscriptionStatus = String(sub.status ?? "");
+            const mapped = mapStripeSubscriptionStatus(
+              stripeSubscriptionStatus,
+            );
+            if (mapped !== stripeBilling.status) {
+              await syncStripeSubscriptionToDb(pool, MORTGAGE_TENANT_ID, sub);
+            }
+          } catch (subErr) {
+            console.warn(
+              "Billing config: Stripe subscription lookup failed",
+              subErr,
+            );
+            stripeSubscriptionStatus = stripeBilling.status;
+          }
+        }
 
-      return res.json({
-        success: true,
-        config: {
-          ...config,
-          stripeEnabled: stripePublic.enabled,
-          stripePublishableKey: stripePublic.publishableKey,
-          stripeTestMode: stripePublic.testMode,
-          stripeWebhookConfigured: stripePublic.webhookConfigured,
-          stripePlatformSubscriptionConfigured: stripePublic.platformSubscriptionConfigured,
-          stripeSubscriptionLinked,
-          stripeSubscriptionActive,
-          stripeSubscriptionStatus,
-          hasPaymentMethod,
-          stripeCustomerId: stripeBilling.stripeCustomerId,
-          billingInternalEconomicsEnabled: isBillingInternalEconomicsEnabled(),
-        },
-      });
-    } catch (error: any) {
-      console.error("Billing config fetch error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to load billing configuration",
-      });
-    }
-  });
+        const stripeSubscriptionActive =
+          stripeSubscriptionStatus === "active" ||
+          stripeSubscriptionStatus === "trialing";
 
-  // GET /api/billing/usage — live 30-day usage + expenditure (platform_owner only)
-  expressApp.get("/api/billing/usage", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole !== "platform_owner") {
-        return res.status(403).json({
-          success: false,
-          message: "Only platform owners can view billing usage",
-        });
-      }
-
-      const usage = await quotaService.fetchUsageSnapshot(MORTGAGE_TENANT_ID);
-      const expenditureRaw = computeActualExpenditure(usage, {
-        preferEstimatedVoiceMinutes: true,
-        zoomBrokerLicenses: 0,
-      });
-      const internalEconomics = isBillingInternalEconomicsEnabled();
-      const expenditure = internalEconomics
-        ? expenditureRaw
-        : stripInternalBillingExpenditure(expenditureRaw);
-
-      return res.json({
-        success: true,
-        usage,
-        expenditure,
-        refreshedAt: new Date().toISOString(),
-      });
-    } catch (error: any) {
-      console.error("Billing usage fetch error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to load billing usage",
-      });
-    }
-  });
-
-  // POST /api/billing/estimate — budget forecast (same logic as canvas calculator)
-  expressApp.post("/api/billing/estimate", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole !== "platform_owner") {
-        return res.status(403).json({
-          success: false,
-          message: "Only platform owners can run billing estimates",
-        });
-      }
-
-      const body = (req.body ?? {}) as Partial<BudgetForecastInputs>;
-      const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
-      const plan: BillingPlanConfig = config.plan;
-      const inputs: BudgetForecastInputs = {
-        convoSmsPerMonth: Number(body.convoSmsPerMonth ?? 0),
-        convoEmailPerMonth: Number(body.convoEmailPerMonth ?? 0),
-        voiceMinutesPerMonth: Number(body.voiceMinutesPerMonth ?? 0),
-        schedulerBookingsPerMonth: Number(body.schedulerBookingsPerMonth ?? 0),
-        blastsPerMonth: Number(body.blastsPerMonth ?? 0),
-        recipientsPerBlast: Number(body.recipientsPerBlast ?? 0),
-        smsSegmentsPerRecipient: Number(body.smsSegmentsPerRecipient ?? 2),
-        emailPerBlast: Boolean(body.emailPerBlast),
-        extraTwilioNumbers: Number(body.extraTwilioNumbers ?? 0),
-        zoomBrokerLicenses: Number(body.zoomBrokerLicenses ?? 0),
-        mortgiAiTokensPerMonth: Number(body.mortgiAiTokensPerMonth ?? 0),
-      };
-
-      const forecastRaw = computeBudgetForecast(inputs, plan);
-      const forecast = isBillingInternalEconomicsEnabled()
-        ? forecastRaw
-        : stripInternalBudgetForecast(forecastRaw);
-      return res.json({ success: true, forecast });
-    } catch (error: unknown) {
-      console.error("Billing estimate error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to compute billing estimate",
-      });
-    }
-  });
-
-  // GET /api/billing/team-notice — grace/restricted notice for brokers & admins (no billing UI)
-  expressApp.get("/api/billing/team-notice", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole === "platform_owner") {
         return res.json({
           success: true,
-          notice: {
-            show: false,
-            level: null,
-            headline: "",
-            detail: "",
-            blocksOutbound: false,
-            secondsUntilGraceEnd: null,
+          config: {
+            ...config,
+            stripeEnabled: stripePublic.enabled,
+            stripePublishableKey: stripePublic.publishableKey,
+            stripeTestMode: stripePublic.testMode,
+            stripeWebhookConfigured: stripePublic.webhookConfigured,
+            stripePlatformSubscriptionConfigured:
+              stripePublic.platformSubscriptionConfigured,
+            stripeSubscriptionLinked,
+            stripeSubscriptionActive,
+            stripeSubscriptionStatus,
+            hasPaymentMethod,
+            stripeCustomerId: stripeBilling.stripeCustomerId,
+            billingInternalEconomicsEnabled:
+              isBillingInternalEconomicsEnabled(),
           },
         });
-      }
-
-      const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
-      const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
-      const notice = await getBillingTeamNotice(pool, MORTGAGE_TENANT_ID, config, {
-        quota,
-      });
-      return res.json({ success: true, notice });
-    } catch (error: any) {
-      console.error("Billing team notice fetch error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to load billing team notice",
-      });
-    }
-  });
-
-  // GET /api/billing/access — grace / restricted / suspended ladder (platform_owner only)
-  expressApp.get("/api/billing/access", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole !== "platform_owner") {
-        return res.status(403).json({
+      } catch (error: any) {
+        console.error("Billing config fetch error:", error);
+        return res.status(500).json({
           success: false,
-          message: "Only platform owners can view billing access",
+          message: "Failed to load billing configuration",
         });
       }
+    },
+  );
 
-      const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
-      const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
-      const access = await getBillingAccessState(pool, MORTGAGE_TENANT_ID, config, {
-        quota,
-      });
-      return res.json({ success: true, access });
-    } catch (error: any) {
-      console.error("Billing access fetch error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to load billing access state",
-      });
-    }
-  });
+  // GET /api/billing/usage — live 30-day usage + expenditure (platform_owner only)
+  expressApp.get(
+    "/api/billing/usage",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole !== "platform_owner") {
+          return res.status(403).json({
+            success: false,
+            message: "Only platform owners can view billing usage",
+          });
+        }
+
+        const usage = await quotaService.fetchUsageSnapshot(MORTGAGE_TENANT_ID);
+        const expenditureRaw = computeActualExpenditure(usage, {
+          preferEstimatedVoiceMinutes: true,
+          zoomBrokerLicenses: 0,
+        });
+        const internalEconomics = isBillingInternalEconomicsEnabled();
+        const expenditure = internalEconomics
+          ? expenditureRaw
+          : stripInternalBillingExpenditure(expenditureRaw);
+
+        return res.json({
+          success: true,
+          usage,
+          expenditure,
+          refreshedAt: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        console.error("Billing usage fetch error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to load billing usage",
+        });
+      }
+    },
+  );
+
+  // POST /api/billing/estimate — budget forecast (same logic as canvas calculator)
+  expressApp.post(
+    "/api/billing/estimate",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole !== "platform_owner") {
+          return res.status(403).json({
+            success: false,
+            message: "Only platform owners can run billing estimates",
+          });
+        }
+
+        const body = (req.body ?? {}) as Partial<BudgetForecastInputs>;
+        const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
+        const plan: BillingPlanConfig = config.plan;
+        const inputs: BudgetForecastInputs = {
+          convoSmsPerMonth: Number(body.convoSmsPerMonth ?? 0),
+          convoEmailPerMonth: Number(body.convoEmailPerMonth ?? 0),
+          voiceMinutesPerMonth: Number(body.voiceMinutesPerMonth ?? 0),
+          schedulerBookingsPerMonth: Number(
+            body.schedulerBookingsPerMonth ?? 0,
+          ),
+          blastsPerMonth: Number(body.blastsPerMonth ?? 0),
+          recipientsPerBlast: Number(body.recipientsPerBlast ?? 0),
+          smsSegmentsPerRecipient: Number(body.smsSegmentsPerRecipient ?? 2),
+          emailPerBlast: Boolean(body.emailPerBlast),
+          extraTwilioNumbers: Number(body.extraTwilioNumbers ?? 0),
+          zoomBrokerLicenses: Number(body.zoomBrokerLicenses ?? 0),
+          mortgiAiTokensPerMonth: Number(body.mortgiAiTokensPerMonth ?? 0),
+        };
+
+        const forecastRaw = computeBudgetForecast(inputs, plan);
+        const forecast = isBillingInternalEconomicsEnabled()
+          ? forecastRaw
+          : stripInternalBudgetForecast(forecastRaw);
+        return res.json({ success: true, forecast });
+      } catch (error: unknown) {
+        console.error("Billing estimate error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to compute billing estimate",
+        });
+      }
+    },
+  );
+
+  // GET /api/billing/team-notice — grace/restricted notice for brokers & admins (no billing UI)
+  expressApp.get(
+    "/api/billing/team-notice",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole === "platform_owner") {
+          return res.json({
+            success: true,
+            notice: {
+              show: false,
+              level: null,
+              headline: "",
+              detail: "",
+              blocksOutbound: false,
+              secondsUntilGraceEnd: null,
+            },
+          });
+        }
+
+        const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
+        const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
+        const notice = await getBillingTeamNotice(
+          pool,
+          MORTGAGE_TENANT_ID,
+          config,
+          {
+            quota,
+          },
+        );
+        return res.json({ success: true, notice });
+      } catch (error: any) {
+        console.error("Billing team notice fetch error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to load billing team notice",
+        });
+      }
+    },
+  );
+
+  // GET /api/billing/access — grace / restricted / suspended ladder (platform_owner only)
+  expressApp.get(
+    "/api/billing/access",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole !== "platform_owner") {
+          return res.status(403).json({
+            success: false,
+            message: "Only platform owners can view billing access",
+          });
+        }
+
+        const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
+        const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
+        const access = await getBillingAccessState(
+          pool,
+          MORTGAGE_TENANT_ID,
+          config,
+          {
+            quota,
+          },
+        );
+        return res.json({ success: true, access });
+      } catch (error: any) {
+        console.error("Billing access fetch error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to load billing access state",
+        });
+      }
+    },
+  );
 
   // POST /api/billing/access/simulate — dev/test only (platform_owner)
   expressApp.post(
@@ -44302,9 +48249,14 @@ function createServer() {
           });
         }
 
-        const scenario = String((req.body as { scenario?: string }).scenario ?? "");
+        const scenario = String(
+          (req.body as { scenario?: string }).scenario ?? "",
+        );
         if (scenario === "past_due") {
-          const graceDays = await getGraceDaysForTenant(pool, MORTGAGE_TENANT_ID);
+          const graceDays = await getGraceDaysForTenant(
+            pool,
+            MORTGAGE_TENANT_ID,
+          );
           await markSubscriptionPastDue(pool, MORTGAGE_TENANT_ID, graceDays);
         } else if (scenario === "active") {
           await markSubscriptionActive(pool, MORTGAGE_TENANT_ID);
@@ -44317,9 +48269,14 @@ function createServer() {
 
         const config = await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
         const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
-        const access = await getBillingAccessState(pool, MORTGAGE_TENANT_ID, config, {
-          quota,
-        });
+        const access = await getBillingAccessState(
+          pool,
+          MORTGAGE_TENANT_ID,
+          config,
+          {
+            quota,
+          },
+        );
         return res.json({ success: true, access });
       } catch (error: any) {
         console.error("Billing access simulate error:", error);
@@ -44332,53 +48289,71 @@ function createServer() {
   );
 
   // GET /api/billing/quota — unified quota summary (platform_owner; also for broadcast UI)
-  expressApp.get("/api/billing/quota", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole !== "platform_owner") {
-        return res.status(403).json({
+  expressApp.get(
+    "/api/billing/quota",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole !== "platform_owner") {
+          return res.status(403).json({
+            success: false,
+            message: "Only platform owners can view billing quota",
+          });
+        }
+        const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
+        return res.json({ success: true, quota });
+      } catch (error: any) {
+        console.error("Billing quota fetch error:", error);
+        return res.status(500).json({
           success: false,
-          message: "Only platform owners can view billing quota",
+          message: "Failed to load billing quota",
         });
       }
-      const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
-      return res.json({ success: true, quota });
-    } catch (error: any) {
-      console.error("Billing quota fetch error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to load billing quota",
-      });
-    }
-  });
+    },
+  );
 
   // GET /api/billing/purchases — active period capacity + top-up history (platform_owner)
-  expressApp.get("/api/billing/purchases", verifyBrokerSession, async (req, res) => {
-    try {
-      const brokerRole = (req as any).brokerRole;
-      if (brokerRole !== "platform_owner") {
-        return res.status(403).json({
+  expressApp.get(
+    "/api/billing/purchases",
+    verifyBrokerSession,
+    async (req, res) => {
+      try {
+        const brokerRole = (req as any).brokerRole;
+        if (brokerRole !== "platform_owner") {
+          return res.status(403).json({
+            success: false,
+            message: "Only platform owners can view billing purchases",
+          });
+        }
+        const payload = await buildBillingPurchasesResponse(
+          pool,
+          MORTGAGE_TENANT_ID,
+        );
+        return res.json({ success: true, ...payload });
+      } catch (error: any) {
+        console.error("Billing purchases fetch error:", error);
+        return res.status(500).json({
           success: false,
-          message: "Only platform owners can view billing purchases",
+          message: "Failed to load billing purchases",
         });
       }
-      const payload = await buildBillingPurchasesResponse(pool, MORTGAGE_TENANT_ID);
-      return res.json({ success: true, ...payload });
-    } catch (error: any) {
-      console.error("Billing purchases fetch error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to load billing purchases",
-      });
-    }
-  });
+    },
+  );
 
   registerStripeBillingRoutes(
     expressApp,
     pool,
     MORTGAGE_TENANT_ID,
     (tid, paymentIntentId, dimension, units, packId, source) =>
-      quotaService.fulfillStripeTopUp(tid, paymentIntentId, dimension, units, packId, source),
+      quotaService.fulfillStripeTopUp(
+        tid,
+        paymentIntentId,
+        dimension,
+        units,
+        packId,
+        source,
+      ),
     verifyBrokerSession,
     (tid) => getUnifiedQuotaSummary(pool, tid),
     handleStripeTopUpGranted,

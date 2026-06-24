@@ -27,6 +27,8 @@ import {
   Tag,
   ChevronLeft,
   ChevronDown,
+  PanelRightClose,
+  PanelRightOpen,
   FileText,
   Hash,
   Calendar,
@@ -74,6 +76,11 @@ import PhoneNumbersPanel from "@/components/PhoneNumbersPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { BillingActionGate } from "@/components/billing/BillingActionGate";
 import NewConversationWizard from "@/components/NewConversationWizard";
+import GroupConversationWizard from "@/components/GroupConversationWizard";
+import ParticipantAvatarStack from "@/components/conversations/ParticipantAvatarStack";
+import GroupSourcePill from "@/components/conversations/GroupSourcePill";
+import GroupThreadHeader from "@/components/conversations/GroupThreadHeader";
+import SyncedFromPhoneBanner from "@/components/conversations/SyncedFromPhoneBanner";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -165,6 +172,11 @@ import {
   updateConversation,
   deleteConversation,
   patchMessageRecording,
+  fetchConversationsConfig,
+  createGroupConversation,
+  patchGroupConversation,
+  sendGroupMessage,
+  fetchGroupParticipants,
 } from "@/store/slices/conversationsSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import {
@@ -175,6 +187,10 @@ import {
 } from "@/store/slices/voiceSlice";
 import type { DeviceStatus } from "@/store/slices/voiceSlice";
 import { cn, stripHtml } from "@/lib/utils";
+import {
+  getGroupDeliveryHint,
+  getGroupInboundSenderName,
+} from "@/lib/group-message-utils";
 import type {
   ConversationThread,
   Communication,
@@ -207,6 +223,10 @@ const Conversations = () => {
     threadsFilters,
     callHistory,
     isLoadingCallHistory,
+    groupConversationsEnabled,
+    isCreatingGroup,
+    isSendingGroupMessage,
+    groupParticipants,
   } = useAppSelector((state) => state.conversations);
 
   const brokerList = useAppSelector((state) =>
@@ -230,6 +250,10 @@ const Conversations = () => {
   const [includeBroadcastThreads] = useState(false);
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [isNewConversationOpen, setIsNewConversationOpen] = useState(false);
+  const [isGroupWizardOpen, setIsGroupWizardOpen] = useState(false);
+  const [groupWizardApplicationId, setGroupWizardApplicationId] = useState<
+    number | null
+  >(null);
   const [messageText, setMessageText] = useState("");
   const [messageType, setMessageType] = useState<"sms" | "whatsapp">("sms");
   const [selectedTemplate, setSelectedTemplate] = useState("");
@@ -273,6 +297,7 @@ const Conversations = () => {
     getRecentTemplateIds(),
   );
   const composeTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const deepLinkHandledRef = useRef(false);
 
   // Stable refs so Ably callbacks always see the latest state without stale closures
   const threadsRef = useRef(threads);
@@ -433,6 +458,21 @@ const Conversations = () => {
   const startXRef = useRef(0);
   const startWidthRef = useRef(320);
 
+  const CONTACT_PANEL_STORAGE_KEY = "conversations:contactPanelOpen";
+  const [contactPanelOpen, setContactPanelOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
+    return stored === null ? false : stored === "1";
+  });
+
+  const toggleContactPanel = () => {
+    setContactPanelOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem(CONTACT_PANEL_STORAGE_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
+
   const handleResizeStart = (e: React.MouseEvent) => {
     isResizingRef.current = true;
     startXRef.current = e.clientX;
@@ -471,7 +511,22 @@ const Conversations = () => {
   const filteredThreads =
     channelFilter === "all"
       ? threads.filter((t) => t.last_message_type !== "email")
-      : threads.filter((t) => t.last_message_type === channelFilter);
+      : channelFilter === "sms"
+        ? threads.filter(
+            (t) =>
+              t.last_message_type === "sms" ||
+              (t.thread_type === "group" && t.channel === "sms"),
+          )
+        : threads.filter((t) => t.last_message_type === channelFilter);
+
+  const threadDisplayName = (thread: ConversationThread) =>
+    thread.display_title ||
+    thread.title ||
+    thread.client_name ||
+    "Unknown Client";
+
+  const isGroupThread = (thread: ConversationThread) =>
+    thread.thread_type === "group";
 
   // Show all messages regardless of channel — channel tabs only filter the thread list
   const filteredMessages = messages;
@@ -508,7 +563,37 @@ const Conversations = () => {
     dispatch(fetchConversationTemplates(undefined));
     dispatch(fetchConversationStats());
     dispatch(fetchBrokers());
+    dispatch(fetchConversationsConfig());
   }, [dispatch]);
+
+  // Deep-link from Pipeline / CRM (location.state)
+  useEffect(() => {
+    const state = location.state as {
+      openThreadId?: string;
+      openGroupWizard?: boolean;
+      applicationId?: number;
+    } | null;
+    if (!state || deepLinkHandledRef.current) return;
+
+    if (state.openGroupWizard && groupConversationsEnabled) {
+      deepLinkHandledRef.current = true;
+      setGroupWizardApplicationId(state.applicationId ?? null);
+      setIsGroupWizardOpen(true);
+      window.history.replaceState({}, document.title);
+      return;
+    }
+
+    if (state.openThreadId && threads.length > 0) {
+      const thread = threads.find(
+        (t) => t.conversation_id === state.openThreadId,
+      );
+      if (thread) {
+        deepLinkHandledRef.current = true;
+        handleSelectThread(thread);
+        window.history.replaceState({}, document.title);
+      }
+    }
+  }, [location.state, threads, groupConversationsEnabled]);
 
   // Load call history when "calls" tab is selected
   useEffect(() => {
@@ -819,6 +904,10 @@ const Conversations = () => {
     if (messageType === "whatsapp") {
       setMessageType("sms");
     }
+
+    if (isGroupThread(thread) && groupConversationsEnabled) {
+      dispatch(fetchGroupParticipants(thread.conversation_id));
+    }
   };
 
   const handleSearch = (query: string) => {
@@ -1073,7 +1162,26 @@ const Conversations = () => {
     logger.log("[SMS Trace] 3/7 — dispatching sendMessage payload:", payload);
 
     try {
-      const result = await dispatch(sendMessage(payload)).unwrap();
+      let result: { communication_id: number; conversation_id: string };
+      if (
+        currentThread &&
+        isGroupThread(currentThread) &&
+        groupConversationsEnabled
+      ) {
+        result = await dispatch(
+          sendGroupMessage({
+            conversationId: currentThread.conversation_id,
+            body: text,
+            communication_type:
+              currentThread.channel === "internal" ? "internal_note" : "sms",
+            media_url: uploadedMediaUrl,
+            media_content_type: uploadedContentType,
+            media_filename: uploadedFilename,
+          }),
+        ).unwrap();
+      } else {
+        result = await dispatch(sendMessage(payload)).unwrap();
+      }
 
       logger.log("[SMS Trace] 4/7 — sendMessage API response:", result);
 
@@ -1207,6 +1315,44 @@ const Conversations = () => {
       toast({
         title: "Error",
         description: error || "Failed to start conversation",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCreateGroup = async (payload: {
+    title?: string;
+    channel: "sms";
+    participants: import("@shared/api").GroupParticipantInput[];
+    body?: string;
+    application_id?: number;
+  }) => {
+    try {
+      const result = await dispatch(
+        createGroupConversation({
+          ...payload,
+          application_id:
+            payload.application_id ?? groupWizardApplicationId ?? undefined,
+        }),
+      ).unwrap();
+      setIsGroupWizardOpen(false);
+      setGroupWizardApplicationId(null);
+      setSelectedStatus("all");
+      if (result.thread) {
+        dispatch(setCurrentThread(result.thread));
+        await dispatch(
+          fetchConversationMessages({
+            conversationId: result.conversation_id,
+          }),
+        ).unwrap();
+        dispatch(fetchGroupParticipants(result.conversation_id));
+        setMobilePanel("chat");
+      }
+      toast({ title: "Group created", description: result.message || "Ready" });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error || "Failed to create group",
         variant: "destructive",
       });
     }
@@ -1352,7 +1498,7 @@ const Conversations = () => {
             <button
               onClick={() => dispatch(setVoiceAvailable(!isAvailable))}
               className={cn(
-                "flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-full border text-xs font-medium transition-all duration-200",
+                "flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-full border text-xs font-medium transition-all duration-200 flex-shrink-0 whitespace-nowrap",
                 isAvailable && deviceStatus === "registered"
                   ? "bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
                   : isAvailable && deviceStatus === "connecting"
@@ -1385,7 +1531,7 @@ const Conversations = () => {
                         : "bg-muted-foreground",
                 )}
               />
-              <span className="hidden sm:inline">
+              <span className="hidden md:inline">
                 {!isAvailable
                   ? "Unavailable"
                   : deviceStatus === "registered"
@@ -1402,12 +1548,12 @@ const Conversations = () => {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 gap-1.5 text-xs px-2 md:px-3"
+              className="h-8 gap-1.5 text-xs px-2 md:px-3 flex-shrink-0 whitespace-nowrap"
               onClick={() => setIsPhoneNumbersOpen(true)}
               title="Manage phone numbers"
             >
               <Settings className="h-3.5 w-3.5" />
-              <span className="hidden md:inline">Phone Numbers</span>
+              <span className="hidden lg:inline">Phone Numbers</span>
             </Button>
 
             {/* Dialpad toggle */}
@@ -1416,7 +1562,7 @@ const Conversations = () => {
               size="sm"
               disabled={isActionGateLocked}
               className={cn(
-                "h-8 gap-1.5 text-xs px-2 md:px-3",
+                "h-8 gap-1.5 text-xs px-2 md:px-3 flex-shrink-0 whitespace-nowrap",
                 isDialerOpen
                   ? "bg-primary/10 border-primary/40 text-primary"
                   : "",
@@ -1429,19 +1575,46 @@ const Conversations = () => {
               title="Open dialpad"
             >
               <PhoneCall className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Dial</span>
+              <span className="hidden lg:inline">Dial</span>
             </Button>
 
-            {/* New conversation — icon only on mobile */}
-            <Button
-              onClick={() => setIsNewConversationOpen(true)}
-              disabled={isActionGateLocked}
-              size="sm"
-              className="bg-primary hover:bg-primary/90 h-8 px-2 md:px-3 gap-1.5 text-xs"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">New</span>
-            </Button>
+            {/* New conversation — direct or group */}
+            {groupConversationsEnabled ? (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <Button
+                  disabled={isActionGateLocked}
+                  size="sm"
+                  className="bg-primary hover:bg-primary/90 h-8 px-2 md:px-3 gap-1.5 text-xs whitespace-nowrap"
+                  onClick={() => setIsNewConversationOpen(true)}
+                  title="New direct message"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  <span className="hidden lg:inline">Message</span>
+                </Button>
+                <Button
+                  disabled={isActionGateLocked}
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2 md:px-3 gap-1.5 text-xs border-primary/30 text-primary hover:bg-primary/5 whitespace-nowrap"
+                  onClick={() => setIsGroupWizardOpen(true)}
+                  title="New SMS group conversation"
+                >
+                  <Users className="h-3.5 w-3.5" />
+                  <span className="hidden lg:inline">Group</span>
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={() => setIsNewConversationOpen(true)}
+                disabled={isActionGateLocked}
+                size="sm"
+                className="bg-primary hover:bg-primary/90 h-8 px-2 md:px-3 gap-1.5 text-xs flex-shrink-0 whitespace-nowrap"
+                title="New conversation"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">New</span>
+              </Button>
+            )}
           </>
         }
       />
@@ -1787,26 +1960,41 @@ const Conversations = () => {
                             isActive
                               ? "bg-primary/10 border border-primary/30"
                               : "hover:bg-muted border border-transparent hover:border-border",
+                            isGroupThread(thread) &&
+                              thread.unread_count > 0 &&
+                              !isActive &&
+                              "border-l-2 border-l-primary/40",
                           )}
                         >
                           <div className="flex items-start gap-2.5">
-                            <Avatar className="h-9 w-9 flex-shrink-0">
-                              <AvatarFallback
-                                className={cn(
-                                  "text-xs font-semibold",
-                                  isActive
-                                    ? "bg-primary text-primary-foreground"
-                                    : "bg-secondary text-secondary-foreground",
-                                )}
-                              >
-                                {getInitials(thread.client_name)}
-                              </AvatarFallback>
-                            </Avatar>
+                            {isGroupThread(thread) ? (
+                              <ParticipantAvatarStack
+                                names={
+                                  thread.participants_preview?.map(
+                                    (p) => p.name,
+                                  ) ?? [threadDisplayName(thread)]
+                                }
+                                size="sm"
+                              />
+                            ) : (
+                              <Avatar className="h-9 w-9 flex-shrink-0">
+                                <AvatarFallback
+                                  className={cn(
+                                    "text-xs font-semibold",
+                                    isActive
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-secondary text-secondary-foreground",
+                                  )}
+                                >
+                                  {getInitials(thread.client_name)}
+                                </AvatarFallback>
+                              </Avatar>
+                            )}
                             <div className="flex-1 min-w-0">
                               {/* Row 1: name + badges / actions */}
                               <div className="flex items-center justify-between gap-1">
                                 <p className="text-sm font-semibold text-foreground truncate">
-                                  {thread.client_name || "Unknown Client"}
+                                  {threadDisplayName(thread)}
                                 </p>
 
                                 {/* ── Desktop: badges hidden on hover, action icons shown on hover ── */}
@@ -1947,6 +2135,30 @@ const Conversations = () => {
                                   </DropdownMenu>
                                 </div>
                               </div>
+                              {isGroupThread(thread) && (
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  {thread.participants_preview?.length ? (
+                                    <p className="text-[11px] text-muted-foreground truncate">
+                                      {thread.participants_preview
+                                        .map((p) => p.name)
+                                        .join(" · ")}
+                                      {(thread.participant_count ?? 0) >
+                                        (thread.participants_preview?.length ??
+                                          0)
+                                        ? ` · +${
+                                            (thread.participant_count ?? 0) -
+                                            (thread.participants_preview
+                                              ?.length ?? 0)
+                                          }`
+                                        : ""}
+                                    </p>
+                                  ) : null}
+                                  <GroupSourcePill
+                                    creationSource={thread.creation_source}
+                                    channel={thread.channel}
+                                  />
+                                </div>
+                              )}
                               {/* Row 2: channel icon + preview */}
                               <div className="flex items-center gap-1.5 mt-0.5">
                                 <span
@@ -2029,6 +2241,30 @@ const Conversations = () => {
             <>
               {/* Chat header */}
               <div className="px-4 py-3 border-b border-border bg-card flex-shrink-0">
+                {isGroupThread(currentThread) && groupConversationsEnabled ? (
+                  <div className="flex-1 min-w-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="md:hidden h-7 w-7 mb-2"
+                        onClick={() => setMobilePanel("list")}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <GroupThreadHeader
+                        thread={currentThread}
+                        participants={groupParticipants}
+                        onRename={(newTitle) => {
+                          void dispatch(
+                            patchGroupConversation({
+                              conversationId: currentThread.conversation_id,
+                              title: newTitle,
+                            }),
+                          );
+                        }}
+                      />
+                  </div>
+                ) : (
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Button
@@ -2133,7 +2369,14 @@ const Conversations = () => {
                     </DropdownMenu>
                   </div>
                 </div>
+                )}
               </div>
+
+              {isGroupThread(currentThread) &&
+                groupConversationsEnabled &&
+                currentThread.creation_source === "phone_synced" && (
+                  <SyncedFromPhoneBanner className="mx-4 mt-2 flex-shrink-0" />
+                )}
 
               {/* Active call panel — delegated to GlobalVoiceManager via useEffect */}
 
@@ -2171,6 +2414,18 @@ const Conversations = () => {
                           new Date(msgDate).toDateString() !==
                             new Date(prevDate).toDateString());
                       const isOutbound = message.direction === "outbound";
+                      const groupSenderName =
+                        currentThread &&
+                        isGroupThread(currentThread) &&
+                        groupConversationsEnabled
+                          ? getGroupInboundSenderName(message)
+                          : null;
+                      const groupDeliveryHint =
+                        currentThread &&
+                        isGroupThread(currentThread) &&
+                        groupConversationsEnabled
+                          ? getGroupDeliveryHint(message)
+                          : null;
 
                       return (
                         <React.Fragment key={message.id}>
@@ -2228,6 +2483,11 @@ const Conversations = () => {
                                 isOutbound ? "items-end" : "items-start",
                               )}
                             >
+                              {!isOutbound && groupSenderName && (
+                                <p className="text-[11px] font-medium text-muted-foreground mb-0.5 px-1">
+                                  {groupSenderName}
+                                </p>
+                              )}
                               <div
                                 className={cn(
                                   "flex items-end gap-1",
@@ -2579,6 +2839,20 @@ const Conversations = () => {
                                     })}
                                   </TooltipContent>
                                 </Tooltip>
+                              )}
+                              {groupDeliveryHint && (
+                                <p
+                                  className={cn(
+                                    "text-[10px] mt-0.5 px-1 max-w-[72%]",
+                                    isOutbound ? "text-right self-end" : "self-start",
+                                    message.delivery_status === "failed" ||
+                                      message.delivery_status === "rejected"
+                                      ? "text-destructive"
+                                      : "text-muted-foreground",
+                                  )}
+                                >
+                                  {groupDeliveryHint}
+                                </p>
                               )}
                             </div>
                           )}
@@ -2981,6 +3255,19 @@ const Conversations = () => {
                   )}
 
                   {/* Textarea + send button */}
+                  {currentThread &&
+                    isGroupThread(currentThread) &&
+                    groupConversationsEnabled && (
+                      <p className="text-xs text-muted-foreground mb-2 px-1">
+                        Messaging:{" "}
+                        <span className="font-medium text-foreground">
+                          {threadDisplayName(currentThread)}
+                        </span>
+                        {(currentThread.participant_count ?? 0) > 0
+                          ? ` (${currentThread.participant_count} people)`
+                          : ""}
+                      </p>
+                    )}
                   <BillingActionGate>
                   <div className="flex flex-col gap-2">
                     {/* MMS attachment preview (SMS only) */}
@@ -3400,13 +3687,22 @@ const Conversations = () => {
           )}
         </div>
 
-        {/* Right: Contact info panel */}
-        {currentThread && (
-          <div className="hidden lg:flex w-72 flex-shrink-0 border-l border-border bg-card flex-col">
-            <div className="p-4 border-b border-border">
+        {/* Right: Contact info panel (collapsible on lg+) */}
+        {currentThread && contactPanelOpen && (
+          <div className="hidden lg:flex w-72 flex-shrink-0 border-l border-border bg-card flex-col transition-[width] duration-200 ease-out">
+            <div className="p-4 border-b border-border flex items-center justify-between gap-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 Contact
               </p>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                onClick={toggleContactPanel}
+                title="Hide contact panel"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </Button>
             </div>
             <ScrollArea className="flex-1">
               <div className="p-4 space-y-5">
@@ -3679,6 +3975,20 @@ const Conversations = () => {
             </ScrollArea>
           </div>
         )}
+
+        {currentThread && !contactPanelOpen && (
+          <div className="hidden lg:flex w-10 flex-shrink-0 border-l border-border bg-card flex-col items-center py-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              onClick={toggleContactPanel}
+              title="Show contact panel"
+            >
+              <PanelRightOpen className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
       </div>
 
       <NewConversationWizard
@@ -3689,6 +3999,21 @@ const Conversations = () => {
         isSending={isSendingMessage}
         userRole={currentUser?.role}
         billingLocked={isActionGateLocked}
+        groupConversationsEnabled={groupConversationsEnabled}
+        onOpenGroupWizard={() => setIsGroupWizardOpen(true)}
+      />
+
+      <GroupConversationWizard
+        isOpen={isGroupWizardOpen}
+        onClose={() => {
+          setIsGroupWizardOpen(false);
+          setGroupWizardApplicationId(null);
+        }}
+        onCreate={handleCreateGroup}
+        isCreating={isCreatingGroup}
+        userRole={currentUser?.role}
+        billingLocked={isActionGateLocked}
+        applicationId={groupWizardApplicationId}
       />
 
       {/* ── Schedule Meeting dialog ── */}

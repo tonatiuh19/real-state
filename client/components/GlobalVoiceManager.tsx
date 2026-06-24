@@ -14,6 +14,7 @@ import {
   lookupContact,
 } from "@/store/slices/voiceSlice";
 import VoiceCallPanel from "@/components/VoiceCallPanel";
+import { VoiceDeviceProvider } from "@/contexts/VoiceDeviceContext";
 import { logger } from "@/lib/logger";
 
 /**
@@ -51,8 +52,6 @@ const GlobalVoiceManager: React.FC = () => {
   );
   // Tracks the Device's audio helper so inbound VoiceCallPanel can switch devices
   const [deviceAudio, setDeviceAudio] = useState<Device["audio"] | null>(null);
-  /** Single shared Device — outbound calls must reuse this, never spawn a second one. */
-  const [sharedDevice, setSharedDevice] = useState<Device | null>(null);
 
   // POST /api/voice/availability — called ONLY from registered/unregistered events.
   const reportAvailability = useCallback(
@@ -130,7 +129,6 @@ const GlobalVoiceManager: React.FC = () => {
 
       // Expose the single Device instance for inbound audio + outbound connect().
       setDeviceAudio(device.audio);
-      setSharedDevice(device);
       // changes — never before register() / unregister() completes. This prevents
       // the race where DB says available but no Device endpoint is registered yet.
       device.on("registered", () => {
@@ -267,7 +265,6 @@ const GlobalVoiceManager: React.FC = () => {
       device?.destroy();
       deviceRef.current = null;
       setDeviceAudio(null);
-      setSharedDevice(null);
       dispatch(setDeviceStatus("idle"));
       reportAvailability(false);
     };
@@ -398,7 +395,7 @@ const GlobalVoiceManager: React.FC = () => {
   if (!sessionToken) return null;
 
   return (
-    <>
+    <VoiceDeviceProvider deviceRef={deviceRef}>
       {/* Ringing notification */}
       {ringingCall && (
         <div className="fixed bottom-6 left-6 z-50 animate-in slide-in-from-bottom-4 duration-300">
@@ -474,12 +471,11 @@ const GlobalVoiceManager: React.FC = () => {
             clientName={outboundCall.clientName}
             clientId={outboundCall.clientId}
             applicationId={outboundCall.applicationId}
-            sharedDevice={sharedDevice}
             onClose={() => dispatch(endOutboundCall())}
           />
         </div>
       )}
-    </>
+    </VoiceDeviceProvider>
   );
 };
 

@@ -13,7 +13,7 @@ import {
   ImageIcon,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { fetchClients } from "@/store/slices/clientsSlice";
+import { searchClientsForPicker } from "@/store/slices/clientsSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -76,6 +76,9 @@ interface NewConversationWizardProps {
   userRole?: string;
   /** When true, outbound send is blocked by billing/quota gates */
   billingLocked?: boolean;
+  /** Show link to open the group wizard instead */
+  groupConversationsEnabled?: boolean;
+  onOpenGroupWizard?: () => void;
 }
 
 type SelectedRecipient =
@@ -123,9 +126,11 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   isSending,
   userRole,
   billingLocked = false,
+  groupConversationsEnabled = false,
+  onOpenGroupWizard,
 }) => {
   const dispatch = useAppDispatch();
-  const { clients, isLoading: clientsLoading } = useAppSelector(
+  const { pickerSearchResults, isPickerSearching } = useAppSelector(
     (s) => s.clients,
   );
   const { brokers } = useAppSelector((s) => s.brokers);
@@ -156,15 +161,31 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
   // ── Refs ──────────────────────────────────────────────────────────────────────
   const searchInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // ── Load clients (and brokers for elevated roles) ─────────────────────────
+  // ── Load brokers for elevated roles (small list) ─────────────────────────
   useEffect(() => {
-    if (isOpen) {
-      dispatch(fetchClients({}));
-      if (canSearchBrokers) dispatch(fetchBrokers({}));
+    if (isOpen && canSearchBrokers) {
+      dispatch(fetchBrokers({}));
+      setTimeout(() => searchInputRef.current?.focus(), 80);
+    } else if (isOpen) {
       setTimeout(() => searchInputRef.current?.focus(), 80);
     }
   }, [isOpen, dispatch, canSearchBrokers]);
+
+  // ── Server-side client search (all pages / platform-wide directory) ───────
+  useEffect(() => {
+    if (!isOpen || recipient) return;
+    const q = search.trim();
+    clearTimeout(searchDebounceRef.current);
+    if (q.length < 2) return;
+
+    searchDebounceRef.current = setTimeout(() => {
+      void dispatch(searchClientsForPicker(q));
+    }, 250);
+
+    return () => clearTimeout(searchDebounceRef.current);
+  }, [search, isOpen, recipient, dispatch]);
 
   // ── Reset on close ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -186,18 +207,9 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
-  const filteredClients = clients
-    .filter((c) => {
-      const q = search.toLowerCase().trim();
-      if (!q) return false;
-      return (
-        c.first_name.toLowerCase().includes(q) ||
-        c.last_name.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        (c.phone ?? "").toLowerCase().includes(q)
-      );
-    })
-    .slice(0, 8);
+  const q = search.toLowerCase().trim();
+  const clientHits =
+    q.length >= 2 ? pickerSearchResults.slice(0, 8) : [];
 
   const filteredBrokers = canSearchBrokers
     ? brokers
@@ -394,14 +406,18 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
             <div className="absolute left-0 right-0 top-full z-[60] bg-background border border-border rounded-b-2xl shadow-xl overflow-hidden">
               <ScrollArea className="max-h-60">
                 <div className="py-1">
-                  {clientsLoading ? (
+                  {isPickerSearching ? (
                     <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Searching…
                     </div>
+                  ) : q.length < 2 ? (
+                    <div className="py-6 text-center text-xs text-muted-foreground">
+                      Type at least 2 characters to search clients
+                    </div>
                   ) : (
                     <>
-                      {filteredClients.map((c) => (
+                      {clientHits.map((c) => (
                         <button
                           key={c.id}
                           className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/60 transition-colors text-left"
@@ -436,7 +452,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                       {/* Broker / realtor results — only for admin & platform_owner */}
                       {filteredBrokers.length > 0 && (
                         <>
-                          {filteredClients.length > 0 && (
+                          {clientHits.length > 0 && (
                             <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50 border-t border-border/40 mt-1">
                               Team &amp; Partners
                             </div>
@@ -486,7 +502,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                         <button
                           className={cn(
                             "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/60 transition-colors text-left",
-                            (filteredClients.length > 0 ||
+                            (clientHits.length > 0 ||
                               filteredBrokers.length > 0) &&
                               "border-t border-border/50",
                           )}
@@ -515,7 +531,7 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
                         </button>
                       )}
 
-                      {filteredClients.length === 0 &&
+                      {clientHits.length === 0 &&
                         filteredBrokers.length === 0 &&
                         !canSendToRaw && (
                           <div className="py-8 text-center text-sm text-muted-foreground">
@@ -679,11 +695,23 @@ const NewConversationWizard: React.FC<NewConversationWizardProps> = ({
 
         {/* ── Footer ────────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-border/60">
-          <div>
+          <div className="flex flex-col gap-1 min-w-0">
             {body.length > 0 && (
               <span className="text-[11px] text-muted-foreground tabular-nums">
                 {body.length} chars · {Math.ceil(body.length / 160)} SMS
               </span>
+            )}
+            {groupConversationsEnabled && onOpenGroupWizard && (
+              <button
+                type="button"
+                className="text-[11px] text-primary hover:underline text-left"
+                onClick={() => {
+                  onClose();
+                  onOpenGroupWizard();
+                }}
+              >
+                Messaging multiple people? Create a group →
+              </button>
             )}
           </div>
 

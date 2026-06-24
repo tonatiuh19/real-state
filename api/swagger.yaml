@@ -33,6 +33,8 @@ tags:
     description: Client portal authentication (passwordless OTP)
   - name: Admin Bootstrap
     description: Session init and section controls
+  - name: Bulk Import
+    description: Platform-owner CSV bulk import (clients & realtors)
   - name: Admin Profile
     description: Authenticated broker's own profile management
   - name: Dashboard
@@ -686,11 +688,204 @@ paths:
                         type: array
                         items:
                           { $ref: "#/components/schemas/AdminSectionControl" }
+                      rolePermissions:
+                        type: array
+                        items:
+                          { $ref: "#/components/schemas/RoleSectionPermission" }
+                      group_conversations_enabled:
+                        type: boolean
+                        description: >-
+                          Group conversations enabled. Off when GROUP_CONVERSATIONS_ENABLED=0,
+                          or on VERCEL_ENV=production unless GROUP_CONVERSATIONS_ALLOW_PRODUCTION=1.
+                      bulk_csv_import_enabled:
+                        type: boolean
+                        description: >-
+                          Bulk CSV import enabled. Off on VERCEL_ENV=production unless
+                          BULK_CSV_IMPORT_ENABLED=1 or BULK_CSV_IMPORT_ALLOW_PRODUCTION=1.
         "401":
           description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /admin/bulk-import/templates/clients.csv:
+    get:
+      tags: [Bulk Import]
+      summary: Download client CSV import template
+      description: Platform owner only. Requires `BULK_CSV_IMPORT_ENABLED=1`.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: CSV template file
+          content:
+            text/csv:
+              schema:
+                type: string
+        "403":
+          description: Not a platform owner
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Feature disabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /admin/bulk-import/templates/realtors.csv:
+    get:
+      tags: [Bulk Import]
+      summary: Download realtor/people CSV import template
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: CSV template file
+          content:
+            text/csv:
+              schema:
+                type: string
+        "403":
+          description: Not a platform owner
+        "404":
+          description: Feature disabled
+
+  /admin/bulk-import/validate:
+    post:
+      tags: [Bulk Import]
+      summary: Validate uploaded CSV (dry run)
+      description: |
+        Parses and validates CSV, runs DB duplicate preflight, stores a staging job.
+        No records are created until commit.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, entity]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                entity:
+                  type: string
+                  enum: [clients, realtors]
+      responses:
+        "200":
+          description: Validation preview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  job_id:
+                    type: integer
+                  entity:
+                    type: string
+                    enum: [clients, realtors]
+                  file_name:
+                    type: string
+                  row_count:
+                    type: integer
+                  will_create_count:
+                    type: integer
+                  skipped_count:
+                    type: integer
+                  error_count:
+                    type: integer
+                  preview_rows:
+                    type: array
+                    items:
+                      type: object
+                  breakdown:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  expires_at:
+                    type: string
+                    format: date-time
+        "400":
+          description: File or row validation error
+        "403":
+          description: Not a platform owner
+        "404":
+          description: Feature disabled
+
+  /admin/bulk-import/{jobId}:
+    get:
+      tags: [Bulk Import]
+      summary: Get staging import job
+      security:
+        - BrokerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Job details and preview
+        "404":
+          description: Job not found
+
+  /admin/bulk-import/{jobId}/commit:
+    post:
+      tags: [Bulk Import]
+      summary: Commit validated import job
+      description: Creates clients or brokers from staged preview rows.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                link_phone_threads:
+                  type: boolean
+                  default: true
+                send_welcome_emails:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Import results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  job_id:
+                    type: integer
+                  created_count:
+                    type: integer
+                  skipped_count:
+                    type: integer
+                  error_count:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+        "409":
+          description: Job already committed
+        "410":
+          description: Job expired
 
   # ── Admin SMS Diagnostics ─────────────────────────────────────────────────────
   /admin/sms-check:
@@ -3594,6 +3789,204 @@ paths:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
 
   # ── Conversations ──────────────────────────────────────────────────────────────
+  /conversations/config:
+    get:
+      tags: [Conversations]
+      summary: Conversations feature flags
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  group_conversations_enabled: { type: boolean }
+
+  /conversations/groups:
+    post:
+      tags: [Conversations]
+      summary: Create a group conversation (requires group feature flag; off in production unless GROUP_CONVERSATIONS_ALLOW_PRODUCTION=1)
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, participants]
+              properties:
+                title: { type: string }
+                channel: { type: string, enum: [sms, internal] }
+                application_id: { type: integer }
+                participants:
+                  type: array
+                  minItems: 2
+                  maxItems: 10
+                  items: { type: object }
+                body: { type: string }
+      responses:
+        "201":
+          description: Group created
+        "404":
+          description: Feature disabled
+
+  /conversations/groups/{conversationId}:
+    patch:
+      tags: [Conversations]
+      summary: Rename or link a group conversation
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                application_id: { type: integer, nullable: true }
+      responses:
+        "200":
+          description: Updated
+
+  /conversations/groups/{conversationId}/participants:
+    get:
+      tags: [Conversations]
+      summary: List group participants
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Participants
+    post:
+      tags: [Conversations]
+      summary: Add participant (internal groups only)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Added
+
+  /conversations/groups/{conversationId}/participants/{participantId}:
+    delete:
+      tags: [Conversations]
+      summary: Remove group participant (soft)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: participantId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Removed
+
+  /conversations/groups/{conversationId}/send:
+    post:
+      tags: [Conversations]
+      summary: Send message to group (SMS Group MMS or internal note)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+                communication_type: { type: string, enum: [sms, internal_note] }
+      responses:
+        "200":
+          description: Sent
+
+  /conversations/groups/by-application/{applicationId}:
+    get:
+      tags: [Conversations]
+      summary: List group threads linked to a loan application
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: applicationId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Group threads for loan
+
+  /conversations/groups/by-client/{clientId}:
+    get:
+      tags: [Conversations]
+      summary: List group threads where client is a participant
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Group threads for client
+
+  /conversations/groups/simulate-inbound:
+    post:
+      tags: [Conversations]
+      summary: Dev-only — simulate inbound Group MMS webhook
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                from: { type: string }
+                to: { type: string }
+                body: { type: string }
+                otherRecipients:
+                  oneOf:
+                    - { type: string }
+                    - { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: Simulated
+        "404":
+          description: Not available in production
+
   /conversations/threads:
     get:
       tags: [Conversations]
@@ -3640,6 +4033,20 @@ paths:
                               description: >
                                 broker_id of the contact's formally assigned broker.
                                 Mirrors clients.assigned_broker_id. Null when no mismatch.
+                            thread_type:
+                              type: string
+                              enum: [direct, group]
+                            display_title:
+                              type: string
+                              nullable: true
+                            participant_count:
+                              type: integer
+                            creation_source:
+                              type: string
+                              enum: [encore, phone_synced]
+                            channel:
+                              type: string
+                              enum: [sms, whatsapp, internal]
 
   /conversations/{conversationId}/messages:
     get:

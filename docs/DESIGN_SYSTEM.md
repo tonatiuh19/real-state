@@ -52,7 +52,7 @@
 | **Client Portal**           | Borrower-facing portal at `/portal`. Task list, document uploads, form submissions, e-signatures.                   |
 | **Task System**             | Configurable task templates (document collection, form fields, PDF signature zones). Broker approves each task.     |
 | **Documents**               | Centralized document library. All uploads tied to tasks, stored via CDN (disruptinglabs.com).                       |
-| **Conversations**           | Unified inbox for inbound/outbound email, SMS, and WhatsApp per client/loan thread. In-browser voice uses a **single** Twilio Device in `GlobalVoiceManager`; outbound `VoiceCallPanel` reuses it (never spawns a second Device per broker identity). |
+| **Conversations**           | Unified inbox for SMS, WhatsApp, and voice (1:1 + **SMS group threads** when enabled). Email lives in `/admin/email`. New groups are always SMS — no cost/quota copy in the wizard (billing section only). See `docs/GROUP_CONVERSATIONS_PROPOSAL.md`. Voice uses a **single** Twilio Device in `GlobalVoiceManager`. |
 | **Communication Templates** | Reusable templates per channel (email, SMS, WhatsApp). Assignable per pipeline step.                                |
 | **Reminder Flows**          | Visual flow builder (nodes + edges) for automated multi-step reminder sequences. Triggered by pipeline events.      |
 | **Scheduler**               | Public booking page for clients. Admins manage availability windows, meeting types (phone/video), Zoom integration. |
@@ -1420,6 +1420,8 @@ Replaces 20 `{{TOKEN}}` patterns in the HTML template. Notable behaviours:
 
 ## Broadcast Center — quota UX (with billing)
 
+**Compose step — merge tags:** Subject and SMS fields use native `selectionStart` to detect `{{` and show the tag picker. The email body uses ReactQuill — detection must use Quill `text-change` / `selection-change` via `bindQuillMergeTagListeners` in `client/lib/quillMergeTags.ts` (React `onChange` clears selection). Picker anchors below the Quill toolbar (`top-11`).
+
 When `billing_quota_mode` ≥ `warn`, Broadcast Center uses **unified SMS/email quota** (not a separate dollar wallet):
 
 - Show remaining **SMS segments** (and emails if blast includes email) from tenant pool.
@@ -1488,3 +1490,67 @@ Stripe webhooks `invoice.payment_failed`, `customer.subscription.updated` drive 
 - Show sessions count and COGS (~$0.70 / 1M tokens).
 - Per-user **50 messages/day** cap is an abuse guardrail — show as secondary text, not a second meter.
 - On enforce mode at 100%: block new `/api/ai/chat` with upgrade/top-up CTA (same pattern as SMS).
+
+---
+
+## Conversations layout
+
+- **Desktop (`lg+`):** thread list (drag-resize) · message area · **contact panel** (`w-72`).
+- **Contact panel collapse:** toggle in the contact panel header only (`PanelRightClose` when open). Collapsed → slim right rail (`w-10`) with expand control; message area grows to fill space.
+- **Persistence:** `localStorage` key `conversations:contactPanelOpen` (`1` = open; **default closed**).
+- **Mobile:** contact panel hidden; tap avatar/name opens `ClientDetailPanel` slide-over.
+
+---
+
+## Group Conversations (Implemented)
+
+> Full spec: `docs/GROUP_CONVERSATIONS_PROPOSAL.md`. **On in dev/preview by default; off in production** until `GROUP_CONVERSATIONS_ALLOW_PRODUCTION=1`. Master opt-out: `GROUP_CONVERSATIONS_ENABLED=0`. UI flag from `/api/admin/init` (no `VITE_*` env).
+
+### Visual differentiation
+
+| Token / pattern | Group thread | Direct thread |
+|-----------------|--------------|---------------|
+| List avatar | Stacked circles (max 3 + `+N`) | Single initials |
+| Row accent | `border-l-2 border-primary/40` when unread | None |
+| Badge | `Users` icon in `bg-secondary` | Channel dot only |
+| Source pill | `Synced from phone` (`muted` chip) or `Internal` | — |
+| Message bubble | Sender name line (`text-xs text-muted-foreground`) above inbound | No sender line |
+
+### Group name display
+
+- **Thread list:** `display_title` bold on line 1; participant preview on line 2.
+- **Header:** editable title + participant chips; loan pill when `application_id` set.
+- **Composer footer:** `Messaging: {title} ({n})` — sticky above input.
+- Auto-title when unset: `Alice Nguyen, Bob Reyes +2` — never "Unknown Client".
+
+### Components (to build)
+
+| Component | Purpose |
+|-----------|---------|
+| `GroupConversationWizard` | Multi-step create — people, name, channel |
+| `ParticipantAvatarStack` | Overlapping avatars for list + header |
+| `ParticipantChip` | Role badge + tap → client/broker panel |
+| `GroupThreadHeader` | Title, rename, participants drawer |
+| `GroupSourcePill` | `encore` vs `phone_synced` vs `internal` |
+| `SyncedFromPhoneBanner` | One-time rename CTA on phone-detected threads |
+
+### Motion
+
+- Chip add/remove: `animate-in slide-in-from-bottom-2 duration-200`
+- Participants drawer: `slide-in-from-top` / Radix `Collapsible`
+- Thread switch: existing Conversations fade — no layout shift between direct and group
+
+### CRM touchpoints
+
+- Pipeline loan card → **Create group** / **Open group**
+- Client detail → groups list
+- Suggested group from loan parties (borrower, co-borrower, realtor, LO)
+
+### Feature flag
+
+| `GROUP_CONVERSATIONS_ENABLED` | Master switch. Set `=0` to disable groups everywhere. |
+| `GROUP_CONVERSATIONS_ALLOW_PRODUCTION` | Set `=1` to enable groups on `VERCEL_ENV=production` (default off in prod). |
+
+### Bulk CSV import (proposed)
+
+Platform-owner-only bulk create for **Clients** and **Realtor Management**. **5-step import wizard** with animated review summary before commit (no DB writes until confirm). Spec: `docs/BULK_CSV_IMPORT_PROPOSAL.md`. **Off in production by default** — enable with `BULK_CSV_IMPORT_ENABLED=1` or `BULK_CSV_IMPORT_ALLOW_PRODUCTION=1`. UI flag from `/api/admin/init`.
