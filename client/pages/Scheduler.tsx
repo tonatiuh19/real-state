@@ -7,6 +7,7 @@ import {
   Clock,
   Phone,
   Video,
+  MapPin,
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
@@ -35,6 +36,11 @@ import { cn } from "@/lib/utils";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import type { MeetingType } from "@shared/api";
+import {
+  ENCORE_OFFICE_VISIT_ADDRESS,
+  ENCORE_OFFICE_VISIT_MAPS_URL,
+  meetingTypeLabel,
+} from "@shared/api";
 import { MetaHelmet } from "@/components/MetaHelmet";
 
 // ---------------------------------------------------------------------------
@@ -274,6 +280,7 @@ const SchedulerPage: React.FC = () => {
     isBooking,
     bookingSuccess,
     publicError,
+    bookingError,
   } = useAppSelector((s) => s.scheduler);
 
   const [step, setStep] = useState<Step>("calendar");
@@ -303,6 +310,10 @@ const SchedulerPage: React.FC = () => {
     }
     if (publicBroker.allow_teams) {
       setMeetingType("teams");
+      return;
+    }
+    if (publicBroker.allow_office) {
+      setMeetingType("office");
     }
   }, [publicBroker]);
 
@@ -380,7 +391,7 @@ const SchedulerPage: React.FC = () => {
     );
   }
 
-  if (publicError || !publicBroker) {
+  if (!publicBroker) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="text-center max-w-md">
@@ -537,6 +548,12 @@ const SchedulerPage: React.FC = () => {
                       <span>Video call available (Microsoft Teams)</span>
                     </div>
                   )}
+                  {publicBroker.allow_office && (
+                    <div className="flex items-start gap-2.5 text-sm text-foreground/80">
+                      <MapPin className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                      <span>In-office visit at {ENCORE_OFFICE_VISIT_ADDRESS}</span>
+                    </div>
+                  )}
                 </div>
               </motion.div>
 
@@ -593,14 +610,12 @@ const SchedulerPage: React.FC = () => {
                       <div className="flex items-center gap-2 text-foreground font-medium">
                         {meetingType === "phone" ? (
                           <Phone className="h-4 w-4 text-primary" />
+                        ) : meetingType === "office" ? (
+                          <MapPin className="h-4 w-4 text-primary" />
                         ) : (
                           <Video className="h-4 w-4 text-primary" />
                         )}
-                        {meetingType === "phone"
-                          ? "Phone call"
-                          : meetingType === "teams"
-                            ? "Teams video call"
-                            : "Zoom video call"}
+                        {meetingTypeLabel(meetingType)}
                       </div>
                     )}
                   </motion.div>
@@ -797,6 +812,14 @@ const SchedulerPage: React.FC = () => {
                           desc: "Microsoft Teams meeting",
                         });
                       }
+                      if (publicBroker.allow_office) {
+                        meetingOptions.push({
+                          type: "office",
+                          icon: MapPin,
+                          label: "Office Visit",
+                          desc: "15111 Whittier Blvd., Whittier",
+                        });
+                      }
 
                       return meetingOptions.length > 1 ? (
                         <div className="mb-6">
@@ -806,9 +829,11 @@ const SchedulerPage: React.FC = () => {
                           <div
                             className={cn(
                               "grid gap-3",
-                              meetingOptions.length === 2
-                                ? "grid-cols-2"
-                                : "grid-cols-1 md:grid-cols-3",
+                              meetingOptions.length >= 4
+                                ? "grid-cols-1 sm:grid-cols-2"
+                                : meetingOptions.length === 3
+                                  ? "grid-cols-1 md:grid-cols-3"
+                                  : "grid-cols-2",
                             )}
                           >
                             {meetingOptions.map(
@@ -895,6 +920,23 @@ const SchedulerPage: React.FC = () => {
                             <p className="text-xs text-muted-foreground">
                               A Teams link will be sent in your confirmation
                               email.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                    {!publicBroker.allow_phone &&
+                      !publicBroker.allow_video &&
+                      !publicBroker.allow_teams &&
+                      publicBroker.allow_office && (
+                        <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/8 p-4 flex items-start gap-3">
+                          <MapPin className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-semibold text-foreground text-sm">
+                              Office Visit
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {ENCORE_OFFICE_VISIT_ADDRESS}
                             </p>
                           </div>
                         </div>
@@ -989,10 +1031,10 @@ const SchedulerPage: React.FC = () => {
                         )}
                       </div>
 
-                      {publicError && (
+                      {bookingError && (
                         <div className="rounded-xl bg-red-500/10 border border-red-500/30 px-4 py-3 flex items-center gap-2 text-red-300 text-sm">
                           <AlertCircle className="h-4 w-4 shrink-0" />
-                          {publicError}
+                          {bookingError}
                         </div>
                       )}
 
@@ -1071,17 +1113,32 @@ const SchedulerPage: React.FC = () => {
                       <div className="flex items-center gap-3">
                         {bookingSuccess.meeting_type === "phone" ? (
                           <Phone className="h-4 w-4 text-primary shrink-0" />
+                        ) : bookingSuccess.meeting_type === "office" ? (
+                          <MapPin className="h-4 w-4 text-primary shrink-0" />
                         ) : (
                           <Video className="h-4 w-4 text-primary shrink-0" />
                         )}
                         <span className="text-foreground font-medium">
-                          {bookingSuccess.meeting_type === "phone"
-                            ? "Phone Call"
-                            : bookingSuccess.meeting_type === "teams"
-                              ? "Video Call (Teams)"
-                              : "Video Call (Zoom)"}
+                          {meetingTypeLabel(bookingSuccess.meeting_type)}
                         </span>
                       </div>
+                      {bookingSuccess.meeting_type === "office" && (
+                        <div className="flex items-start gap-3 pt-1">
+                          <MapPin className="h-4 w-4 text-primary shrink-0 mt-0.5 opacity-0" />
+                          <div className="text-sm text-muted-foreground">
+                            <p>{ENCORE_OFFICE_VISIT_ADDRESS}</p>
+                            <a
+                              href={ENCORE_OFFICE_VISIT_MAPS_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-primary font-medium mt-2 hover:underline"
+                            >
+                              Open in Google Maps
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          </div>
+                        </div>
+                      )}
                       <div className="flex items-center gap-3">
                         <User className="h-4 w-4 text-primary shrink-0" />
                         <span className="text-foreground font-medium">

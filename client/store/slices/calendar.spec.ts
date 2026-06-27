@@ -586,6 +586,7 @@ describe("schedulerSlice – reducers and state transitions", () => {
       allow_phone: true,
       allow_video: true,
       allow_teams: false,
+      allow_office: true,
       is_enabled: true,
     };
 
@@ -702,13 +703,13 @@ describe("schedulerSlice – reducers and state transitions", () => {
       expect(state.bookingSuccess?.meeting_id).toBe(42);
     });
 
-    it("rejected → sets publicError, isBooking=false", () => {
+    it("rejected → sets bookingError, isBooking=false", () => {
       const state = schedulerReducer(
         undefined,
         bookMeeting.rejected(null, REQ_ID, {} as any, "Time slot unavailable"),
       );
       expect(state.isBooking).toBe(false);
-      expect(state.publicError).toBe("Time slot unavailable");
+      expect(state.bookingError).toBe("Time slot unavailable");
     });
   });
 
@@ -728,6 +729,7 @@ describe("schedulerSlice – reducers and state transitions", () => {
       allow_phone: true,
       allow_video: true,
       allow_teams: false,
+      allow_office: true,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     };

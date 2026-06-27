@@ -745,6 +745,45 @@ function summarizeValidation(
   return result;
 }
 
+/** Mortgage bankers may bulk-import clients/realtors but not create other MB accounts via CSV. */
+export function applyBulkImportImporterRestrictions(
+  validation: BulkImportValidationResult,
+  importerRole: string,
+): BulkImportValidationResult {
+  if (importerRole === "platform_owner") return validation;
+  if (validation.entity !== "realtors" || !validation.normalized_realtors) {
+    return validation;
+  }
+
+  const normalized = validation.normalized_realtors.map((row) => {
+    if (row.partner_type === "mortgage_banker" || row.role === "admin") {
+      return {
+        ...row,
+        status: "error" as const,
+        message: "Mortgage bankers can only bulk-import realtor partners",
+      };
+    }
+    return row;
+  });
+
+  const preview_rows = validation.preview_rows.map((pr) => {
+    const nr = normalized.find((r) => r.row_number === pr.row_number);
+    if (!nr || nr.status !== "error") return pr;
+    return {
+      ...pr,
+      status: "error" as const,
+      message: nr.message,
+    };
+  });
+
+  return summarizeValidation(
+    "realtors",
+    normalized,
+    preview_rows,
+    validation.breakdown,
+  );
+}
+
 export function parseAndValidateBulkCsv(
   text: string,
   entity: BulkImportEntity,

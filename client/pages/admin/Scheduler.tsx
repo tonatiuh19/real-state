@@ -25,6 +25,7 @@ import {
   Copy,
   ExternalLink,
   Save,
+  MapPin,
 } from "lucide-react";
 import {
   format,
@@ -82,6 +83,14 @@ import type {
   MeetingStatus,
   MeetingType,
 } from "@shared/api";
+import { ENCORE_OFFICE_VISIT_ADDRESS } from "@shared/api";
+
+const SCHEDULER_MEETING_TYPES: MeetingType[] = [
+  "phone",
+  "video",
+  "teams",
+  "office",
+];
 import { useFormik } from "formik";
 import * as Yup from "yup";
 
@@ -587,7 +596,7 @@ function EditMeetingDialog({
               Meeting Type
             </Label>
             <div className="grid grid-cols-2 gap-2">
-              {(["phone", "video", "teams"] as MeetingType[]).map((t) => (
+              {SCHEDULER_MEETING_TYPES.map((t) => (
                 <button
                   key={t}
                   onClick={() => setMeetingType(t)}
@@ -600,10 +609,18 @@ function EditMeetingDialog({
                 >
                   {t === "phone" ? (
                     <Phone className="h-4 w-4" />
+                  ) : t === "office" ? (
+                    <MapPin className="h-4 w-4" />
                   ) : (
                     <Video className="h-4 w-4" />
                   )}
-                  {t === "phone" ? "Phone" : t === "teams" ? "Teams" : "Zoom"}
+                  {t === "phone"
+                    ? "Phone"
+                    : t === "office"
+                      ? "Office"
+                      : t === "teams"
+                        ? "Teams"
+                        : "Zoom"}
                 </button>
               ))}
             </div>
@@ -674,7 +691,9 @@ const createSchema = Yup.object({
   client_phone: Yup.string(),
   meeting_date: Yup.string().required("Date required"),
   meeting_time: Yup.string().required("Time required"),
-  meeting_type: Yup.string().oneOf(["phone", "video", "teams"]).required(),
+  meeting_type: Yup.string()
+    .oneOf(["phone", "video", "teams", "office"])
+    .required(),
   notes: Yup.string(),
 });
 
@@ -803,7 +822,7 @@ function CreateMeetingDialog({
               Method *
             </Label>
             <div className="grid grid-cols-3 gap-2">
-              {(["phone", "video", "teams"] as MeetingType[]).map((t) => (
+              {SCHEDULER_MEETING_TYPES.map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -817,10 +836,18 @@ function CreateMeetingDialog({
                 >
                   {t === "phone" ? (
                     <Phone className="h-4 w-4" />
+                  ) : t === "office" ? (
+                    <MapPin className="h-4 w-4" />
                   ) : (
                     <Video className="h-4 w-4" />
                   )}
-                  {t === "phone" ? "Phone" : t === "teams" ? "Teams" : "Zoom"}
+                  {t === "phone"
+                    ? "Phone"
+                    : t === "office"
+                      ? "Office"
+                      : t === "teams"
+                        ? "Teams"
+                        : "Zoom"}
                 </button>
               ))}
             </div>
@@ -962,6 +989,7 @@ function SettingsPanel() {
       allow_phone: settings?.allow_phone ?? true,
       allow_video: settings?.allow_video ?? true,
       allow_teams: settings?.allow_teams ?? false,
+      allow_office: settings?.allow_office ?? true,
     },
     enableReinitialize: true,
     onSubmit: async (values) => {
@@ -1270,6 +1298,23 @@ function SettingsPanel() {
               </span>
             </div>
           )}
+        <div className="flex items-center justify-between py-2 border-t border-border/30">
+          <div className="flex items-center gap-3">
+            <MapPin className="h-4 w-4 text-rose-400" />
+            <div>
+              <p className="text-foreground text-sm font-medium">Office Visit</p>
+              <p className="text-xs text-muted-foreground">
+                {ENCORE_OFFICE_VISIT_ADDRESS}
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={settingsFormik.values.allow_office}
+            onCheckedChange={(v) =>
+              settingsFormik.setFieldValue("allow_office", v)
+            }
+          />
+        </div>
       </div>
 
       {/* Availability */}

@@ -184,12 +184,14 @@ export default function SchedulerReschedule() {
     return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
   };
 
-  const meetingTypeLabel = (value: "phone" | "video" | "teams") =>
+  const meetingTypeLabel = (value: "phone" | "video" | "teams" | "office") =>
     value === "teams"
       ? "Video Call (Teams)"
       : value === "video"
         ? "Video Call (Zoom)"
-        : "Phone Call";
+        : value === "office"
+          ? "Office Visit"
+          : "Phone Call";
 
   return (
     <div className="min-h-screen bg-background">

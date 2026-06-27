@@ -96,6 +96,7 @@ export default function Brokers() {
   const isAdmin =
     currentBroker?.role === "admin" || currentBroker?.role === "platform_owner";
   const isPlatformOwner = currentBroker?.role === "platform_owner";
+  const canBulkImport = isAdmin && bulkCsvImportEnabled;
 
   const listScope = isPlatformOwner ? undefined : ("realtors" as const);
 
@@ -371,7 +372,7 @@ export default function Brokers() {
           actions={
             isAdmin ? (
               <div className="flex flex-wrap items-center gap-2">
-                {isPlatformOwner && bulkCsvImportEnabled && (
+                {canBulkImport && (
                   <Button
                     variant="outline"
                     className="gap-2"

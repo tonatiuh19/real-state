@@ -1169,11 +1169,11 @@ A full-height right-side **Sheet** (`sm:max-w-3xl`) that slides in when a loan c
 
 #### 2. Assigned Mortgage Banker _(admin only)_
 
-Dropdown to assign/reassign from active `admin`-role brokers. Includes an "unassign" option.
+**`BrokerSearchSelect`** (`client/components/BrokerSearchSelect.tsx`) with `scope="mortgage-bankers"` — server-side search (type 2+ chars) over the full admin/platform-owner directory. Includes "Unassigned". Replaces the old capped `Select` (API default limit was 30).
 
 #### 3. Assigned Partner _(admin only)_
 
-Same pattern as above but for `broker`-role users.
+Same **`BrokerSearchSelect`** without scope — searches all active brokers/realtors (up to 100 results per query). Use name or email to find anyone in the directory.
 
 #### 4. Pipeline Status _(admin only)_
 
@@ -1551,6 +1551,6 @@ Stripe webhooks `invoice.payment_failed`, `customer.subscription.updated` drive 
 | `GROUP_CONVERSATIONS_ENABLED` | Master switch. Set `=0` to disable groups everywhere. |
 | `GROUP_CONVERSATIONS_ALLOW_PRODUCTION` | Set `=1` to enable groups on `VERCEL_ENV=production` (default off in prod). |
 
-### Bulk CSV import (proposed)
+### Bulk CSV import
 
-Platform-owner-only bulk create for **Clients** and **Realtor Management**. **5-step import wizard** with animated review summary before commit (no DB writes until confirm). Spec: `docs/BULK_CSV_IMPORT_PROPOSAL.md`. **Off in production by default** — enable with `BULK_CSV_IMPORT_ENABLED=1` or `BULK_CSV_IMPORT_ALLOW_PRODUCTION=1`. UI flag from `/api/admin/init`.
+Mortgage bankers (`admin`) and **platform owners** can bulk-create **Clients** and **Realtor Management** partners. Mortgage bankers may import clients and realtor partners only — not other mortgage bankers. **5-step import wizard** with animated review summary before commit (no DB writes until confirm). Spec: `docs/BULK_CSV_IMPORT_PROPOSAL.md`. **Off in production by default** — enable with `BULK_CSV_IMPORT_ENABLED=1` or `BULK_CSV_IMPORT_ALLOW_PRODUCTION=1`. UI flag from `/api/admin/init`.

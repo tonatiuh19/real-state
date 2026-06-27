@@ -500,6 +500,10 @@ const Conversations = () => {
   const { sessionToken, user: currentUser } = useAppSelector(
     (s) => s.brokerAuth,
   );
+  const isPlatformOwnerUser = currentUser?.role === "platform_owner";
+  const isCurrentThreadOwner =
+    currentThread?.broker_id != null &&
+    currentUser?.id === currentThread.broker_id;
   const varMap = buildVarMap(currentThread, currentUser);
   const isAvailable = useAppSelector((s) => s.voice.isAvailable);
   const deviceStatus = useAppSelector((s) => s.voice.deviceStatus);
@@ -2183,8 +2187,9 @@ const Conversations = () => {
                                 <div className="flex items-center gap-1 mt-0.5">
                                   <Info className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
                                   <p className="text-[10px] text-amber-600 truncate">
-                                    Managed by{" "}
-                                    {thread.client_assigned_broker_name}
+                                    {thread.broker_id === currentUser?.id
+                                      ? `Assigned to ${thread.client_assigned_broker_name}`
+                                      : `Managed by ${thread.client_assigned_broker_name}`}
                                   </p>
                                 </div>
                               )}
@@ -2308,11 +2313,30 @@ const Conversations = () => {
                         <div className="flex items-center gap-1.5 mt-1 px-2 py-1 rounded-md bg-amber-50 border border-amber-200 w-fit max-w-full">
                           <Info className="h-3 w-3 text-amber-600 flex-shrink-0" />
                           <span className="text-[11px] text-amber-700 leading-none">
-                            Managed by{" "}
-                            <span className="font-semibold">
-                              {currentThread.client_assigned_broker_name}
-                            </span>{" "}
-                            — contacted your personal line
+                            {isCurrentThreadOwner ? (
+                              <>
+                                Assigned to{" "}
+                                <span className="font-semibold">
+                                  {currentThread.client_assigned_broker_name}
+                                </span>
+                                {" — you can continue this conversation"}
+                              </>
+                            ) : isPlatformOwnerUser ? (
+                              <>
+                                Assigned to{" "}
+                                <span className="font-semibold">
+                                  {currentThread.client_assigned_broker_name}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                Managed by{" "}
+                                <span className="font-semibold">
+                                  {currentThread.client_assigned_broker_name}
+                                </span>
+                                {" — contacted your personal line"}
+                              </>
+                            )}
                           </span>
                         </div>
                       )}
@@ -2975,15 +2999,42 @@ const Conversations = () => {
                     <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-3 py-2 mb-2.5">
                       <Info className="h-3.5 w-3.5 shrink-0 text-blue-500 dark:text-blue-400 flex-shrink-0" />
                       <p className="text-[11px] text-blue-800 dark:text-blue-300 leading-snug">
-                        <span className="font-semibold">
-                          {currentThread.client_name ?? "This contact"}
-                        </span>{" "}
-                        is managed by{" "}
-                        <span className="font-semibold">
-                          {currentThread.client_assigned_broker_name}
-                        </span>
-                        . You can reply because they contacted your personal
-                        line — your message will come from your number.
+                        {isCurrentThreadOwner ? (
+                          <>
+                            <span className="font-semibold">
+                              {currentThread.client_name ?? "This contact"}
+                            </span>{" "}
+                            is now assigned to{" "}
+                            <span className="font-semibold">
+                              {currentThread.client_assigned_broker_name}
+                            </span>
+                            . You can continue this conversation — your message
+                            will come from your number.
+                          </>
+                        ) : isPlatformOwnerUser ? (
+                          <>
+                            <span className="font-semibold">
+                              {currentThread.client_name ?? "This contact"}
+                            </span>{" "}
+                            is assigned to{" "}
+                            <span className="font-semibold">
+                              {currentThread.client_assigned_broker_name}
+                            </span>
+                            .
+                          </>
+                        ) : (
+                          <>
+                            <span className="font-semibold">
+                              {currentThread.client_name ?? "This contact"}
+                            </span>{" "}
+                            is managed by{" "}
+                            <span className="font-semibold">
+                              {currentThread.client_assigned_broker_name}
+                            </span>
+                            . You can reply because they contacted your personal
+                            line — your message will come from your number.
+                          </>
+                        )}
                       </p>
                     </div>
                   )}

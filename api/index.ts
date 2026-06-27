@@ -12,11 +12,17 @@ import {
   isBulkCsvImportEnabled,
   resolveBulkCsvImportEnabled,
   parseAndValidateBulkCsv,
+  applyBulkImportImporterRestrictions,
   type BulkImportEntity,
   type BulkImportValidationResult,
   type NormalizedClientBulkRow,
   type NormalizedRealtorBulkRow,
 } from "../shared/bulk-import.js";
+import {
+  ENCORE_OFFICE_VISIT_ADDRESS,
+  ENCORE_OFFICE_VISIT_MAPS_URL,
+  type MeetingType,
+} from "../shared/api.js";
 import axios from "axios";
 import mysql, {
   type ResultSetHeader,
@@ -5287,12 +5293,12 @@ const requireBulkImportEnabled: RequestHandler = (_req, res, next) => {
   next();
 };
 
-const requireBulkImportPlatformOwner: RequestHandler = (req, res, next) => {
+const requireBulkImportAccess: RequestHandler = (req, res, next) => {
   const brokerRole = (req as express.Request & { brokerRole?: string }).brokerRole;
-  if (brokerRole !== "platform_owner") {
+  if (brokerRole !== "platform_owner" && brokerRole !== "admin") {
     return res.status(403).json({
       success: false,
-      message: "Only platform owners can bulk import",
+      message: "Only mortgage bankers and platform owners can bulk import",
     });
   }
   next();
@@ -5636,15 +5642,15 @@ export function registerBulkImportRoutes(
   expressApp: express.Application,
   deps: BulkImportRouteDeps,
 ): void {
-  const ownerAuth = [
+  const bulkImportAuth = [
     deps.verifyBrokerSession,
     requireBulkImportEnabled,
-    requireBulkImportPlatformOwner,
+    requireBulkImportAccess,
   ];
 
   expressApp.get(
     "/api/admin/bulk-import/templates/clients.csv",
-    ...ownerAuth,
+    ...bulkImportAuth,
     (_req, res) => {
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
@@ -5657,7 +5663,7 @@ export function registerBulkImportRoutes(
 
   expressApp.get(
     "/api/admin/bulk-import/templates/realtors.csv",
-    ...ownerAuth,
+    ...bulkImportAuth,
     (_req, res) => {
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
@@ -5670,13 +5676,15 @@ export function registerBulkImportRoutes(
 
   expressApp.post(
     "/api/admin/bulk-import/validate",
-    ...ownerAuth,
+    ...bulkImportAuth,
     bulkImportUpload.single("file"),
     async (req, res) => {
       try {
         await cleanupExpiredBulkImportJobs(deps.pool, deps.tenantId);
 
         const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const brokerRole = (req as express.Request & { brokerRole?: string })
+          .brokerRole!;
         const entity = (req.body?.entity ?? "") as BulkImportEntity;
         if (entity !== "clients" && entity !== "realtors") {
           return res.status(400).json({
@@ -5708,6 +5716,8 @@ export function registerBulkImportRoutes(
           entity === "clients"
             ? await applyClientDbPreflight(deps.pool, deps.tenantId, validation)
             : await applyRealtorDbPreflight(deps.pool, deps.tenantId, validation);
+
+        validation = applyBulkImportImporterRestrictions(validation, brokerRole);
 
         const fileSha = crypto
           .createHash("sha256")
@@ -5765,7 +5775,7 @@ export function registerBulkImportRoutes(
 
   expressApp.get(
     "/api/admin/bulk-import/:jobId",
-    ...ownerAuth,
+    ...bulkImportAuth,
     async (req, res) => {
       try {
         const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
@@ -5822,10 +5832,11 @@ export function registerBulkImportRoutes(
 
   expressApp.post(
     "/api/admin/bulk-import/:jobId/commit",
-    ...ownerAuth,
+    ...bulkImportAuth,
     async (req, res) => {
       try {
         const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const brokerRole = (req as express.Request & { brokerRole?: string }).brokerRole!;
         const jobId = parseInt(req.params.jobId, 10);
         if (Number.isNaN(jobId)) {
           return res.status(400).json({ success: false, message: "Invalid job id" });
@@ -6113,6 +6124,20 @@ export function registerBulkImportRoutes(
             }
 
             try {
+              if (
+                brokerRole !== "platform_owner" &&
+                (row.role === "admin" || row.partner_type === "mortgage_banker")
+              ) {
+                errorCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "error",
+                  message: "Mortgage bankers can only bulk-import realtor partners",
+                });
+                continue;
+              }
+
               const dup = realtorEmailDups.get(row.email.toLowerCase());
               if (dup) {
                 skippedCount++;
@@ -7588,12 +7613,15 @@ async function sendViaResend(
     attachments: options.attachments?.map((a) => ({
       filename: a.filename,
       content: a.content,
-      content_type: a.contentType,
+      contentType: a.contentType,
     })),
   });
   if (error) throw new Error(error.message);
   if (quota) {
     await recordEmailQuota(quota);
+  }
+  if (data?.id) {
+    console.info(`[Resend] Sent "${options.subject}" → ${options.to} (id=${data.id})`);
   }
   return { messageId: data?.id };
 }
@@ -9203,6 +9231,9 @@ const AUTH_EMAIL_QUOTA_REFS = new Set([
   "billing_top_up_receipt",
   "billing_subscription_receipt",
   "billing_payment_failed",
+  "scheduler_confirmation",
+  "scheduler_broker_notify",
+  "scheduler_cancellation",
 ]);
 
 /** Login OTP SMS must stay available when quota/subscription gates marketing sends. */
@@ -10618,7 +10649,8 @@ let gcExecuteThreadUpsert: ExecuteThreadUpsert;
 let gcAssertClientOwnershipForBroker: (
   clientId: number,
   brokerId: number,
-  isSuperAdmin: boolean,
+  brokerRole: string,
+  conversationId?: string | null,
 ) => Promise<boolean>;
 type GcQuotaResult = { allowed: boolean; [key: string]: unknown };
 type GcQuotaDenialPayload = Record<string, unknown>;
@@ -10661,7 +10693,8 @@ function initGroupConversationsModule(deps: {
   assertClientOwnershipForBroker: (
     clientId: number,
     brokerId: number,
-    isSuperAdmin: boolean,
+    brokerRole: string,
+    conversationId?: string | null,
   ) => Promise<boolean>;
   precheckSmsQuotaUnits: typeof gcPrecheckSmsQuotaUnits;
   recordSmsQuotaUnits: typeof gcRecordSmsQuotaUnits;
@@ -11494,7 +11527,6 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isSuperAdmin = brokerRole === "superadmin";
     const {
       title,
       channel = "sms",
@@ -11523,7 +11555,7 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
         const ok = await gcAssertClientOwnershipForBroker(
           p.client_id,
           brokerId,
-          isSuperAdmin,
+          brokerRole,
         );
         if (!ok) {
           return res.status(403).json({
@@ -11820,7 +11852,6 @@ const handleAddGroupParticipant: RequestHandler = async (req, res) => {
     const { conversationId } = req.params;
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isSuperAdmin = brokerRole === "superadmin";
     const thread = await assertGroupThreadAccess(
       conversationId,
       brokerId,
@@ -11849,7 +11880,8 @@ const handleAddGroupParticipant: RequestHandler = async (req, res) => {
       const ok = await gcAssertClientOwnershipForBroker(
         p.client_id,
         brokerId,
-        isSuperAdmin,
+        brokerRole,
+        conversationId,
       );
       if (!ok) {
         return res.status(403).json({ success: false, message: "Forbidden" });
@@ -12400,11 +12432,10 @@ const handleGetGroupsByClient: RequestHandler = async (req, res) => {
     }
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
-    const isSuperAdmin = brokerRole === "superadmin";
     const ok = await gcAssertClientOwnershipForBroker(
       clientId,
       brokerId,
-      isSuperAdmin,
+      brokerRole,
     );
     if (!ok) {
       return res.status(403).json({ success: false, message: "Forbidden" });
@@ -12472,12 +12503,35 @@ const handleSimulateInboundGroup: RequestHandler = async (req, res) => {
 };
 
 
-async function assertClientOwnershipForBroker(
+/** Platform owners may message any client; others need ownership or an existing thread. */
+function hasGlobalMessagingAccess(brokerRole: string): boolean {
+  return brokerRole === "platform_owner";
+}
+
+/**
+ * Whether a broker may send to a client contact.
+ * - platform_owner: always
+ * - thread owner (conversation_threads.broker_id): may continue after reassignment
+ * - otherwise: assigned broker or loan co-ownership
+ */
+async function canBrokerMessageClient(
   clientId: number,
   brokerId: number,
-  isSuperAdmin: boolean,
+  brokerRole: string,
+  conversationId?: string | null,
 ): Promise<boolean> {
-  if (isSuperAdmin) return true;
+  if (hasGlobalMessagingAccess(brokerRole)) return true;
+
+  if (conversationId) {
+    const [threadRows] = await pool.query<RowDataPacket[]>(
+      `SELECT broker_id FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+    const threadBrokerId = threadRows[0]?.broker_id as number | null | undefined;
+    if (threadBrokerId != null && threadBrokerId === brokerId) return true;
+  }
+
   const [ownerCheck] = await pool.query<RowDataPacket[]>(
     `SELECT 1 FROM clients c
      WHERE c.id = ? AND c.tenant_id = ?
@@ -12493,6 +12547,20 @@ async function assertClientOwnershipForBroker(
     [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
   );
   return ownerCheck.length === 0;
+}
+
+async function assertClientOwnershipForBroker(
+  clientId: number,
+  brokerId: number,
+  brokerRole: string,
+  conversationId?: string | null,
+): Promise<boolean> {
+  return canBrokerMessageClient(
+    clientId,
+    brokerId,
+    brokerRole,
+    conversationId,
+  );
 }
 
 let groupConversationsModule: GroupConversationsModule | null = null;
@@ -14589,6 +14657,49 @@ const LOAN_OWNERSHIP_WHERE_SQL = `(c.assigned_broker_id = ? OR la.broker_user_id
 
 function loanOwnershipWhereParams(brokerId: number): number[] {
   return [brokerId, brokerId, brokerId, brokerId];
+}
+
+/** Non–platform-owner calendar visibility: own events + client-linked via ownership paths. */
+const CALENDAR_EVENT_BROKER_VISIBILITY_SQL = `(
+  ce.broker_id = ?
+  OR (
+    ce.linked_client_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM clients c
+      LEFT JOIN loan_applications la
+        ON la.client_user_id = c.id AND la.tenant_id = c.tenant_id
+      WHERE c.id = ce.linked_client_id
+        AND c.tenant_id = ce.tenant_id
+        AND ${LOAN_OWNERSHIP_WHERE_SQL}
+    )
+  )
+)`;
+
+async function brokerCanAccessLinkedClient(
+  broker: { id: number; tenant_id: number; role: string },
+  clientId: number,
+): Promise<boolean> {
+  if (broker.role === "platform_owner") return true;
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT 1 FROM clients c
+     LEFT JOIN loan_applications la
+       ON la.client_user_id = c.id AND la.tenant_id = c.tenant_id
+     WHERE c.id = ? AND c.tenant_id = ?
+       AND ${LOAN_OWNERSHIP_WHERE_SQL}
+     LIMIT 1`,
+    [clientId, broker.tenant_id, ...loanOwnershipWhereParams(broker.id)],
+  );
+  return rows.length > 0;
+}
+
+async function brokerCanAccessCalendarEvent(
+  broker: { id: number; tenant_id: number; role: string },
+  event: { broker_id: number | null; linked_client_id: number | null },
+): Promise<boolean> {
+  if (broker.role === "platform_owner") return true;
+  if (event.broker_id === broker.id) return true;
+  if (event.linked_client_id == null) return false;
+  return brokerCanAccessLinkedClient(broker, event.linked_client_id);
 }
 
 function rowHasLoanOwnershipAccess(
@@ -19127,7 +19238,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
 
     // Conversation threads (direct — client_id on thread)
     const [conversations] = await pool.query<RowDataPacket[]>(
-      `SELECT ct.id, ct.conversation_id, ct.last_message_at, ct.message_count,
+      `SELECT ct.id, ct.conversation_id, ct.broker_id, ct.last_message_at, ct.message_count,
               ct.unread_count, ct.last_message_type, ct.status, ct.priority,
               ct.last_message_preview, ct.thread_type
        FROM conversation_threads ct
@@ -31335,7 +31446,6 @@ const handleSendMessage: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
-    const isSuperAdmin = brokerRole === "superadmin";
     const {
       conversation_id,
       application_id,
@@ -31477,14 +31587,11 @@ const handleSendMessage: RequestHandler = async (req, res) => {
     );
 
     // ── Cross-broker ownership guard ─────────────────────────────────────────
-    // Non-superadmin brokers cannot initiate or continue messages to a client
-    // that belongs to a different broker with no shared loan co-ownership.
-    // This is the primary enforcement point. upsertConversationThread also has
-    // a secondary correction layer as defence-in-depth.
-    // Guard is bypassed entirely when messaging a broker/realtor contact
-    // (recipientBrokerId) — ownership rules only apply to client contacts.
-    if (!isSuperAdmin && !recipientBrokerId) {
-      // Prefer the client_id supplied directly; fall back to phone → email lookup.
+    // platform_owner may message any client.
+    // Mortgage bankers may continue threads they own after reassignment.
+    // New outbound to another broker's client is blocked unless loan co-ownership.
+    // Guard is bypassed when messaging a broker/realtor (recipientBrokerId).
+    if (!recipientBrokerId) {
       let guardClientId: number | null =
         typeof client_id === "number" ? client_id : null;
 
@@ -31514,23 +31621,13 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       }
 
       if (guardClientId) {
-        // Check: client belongs to a different broker AND the requesting
-        // broker has no loan_applications co-ownership path.
-        const [ownerCheck] = await pool.query<RowDataPacket[]>(
-          `SELECT 1 FROM clients c
-           WHERE c.id = ? AND c.tenant_id = ?
-             AND c.assigned_broker_id IS NOT NULL
-             AND c.assigned_broker_id != ?
-             AND NOT EXISTS (
-               SELECT 1 FROM loan_applications la
-               WHERE la.client_user_id = c.id
-                 AND la.tenant_id = c.tenant_id
-                 AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
-             )
-           LIMIT 1`,
-          [guardClientId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId],
+        const allowed = await canBrokerMessageClient(
+          guardClientId,
+          brokerId,
+          brokerRole,
+          conversation_id ?? null,
         );
-        if (ownerCheck.length > 0) {
+        if (!allowed) {
           return res.status(403).json({
             success: false,
             error:
@@ -40195,7 +40292,7 @@ function createServer() {
     meetingDate: string; // "YYYY-MM-DD"
     meetingTime: string; // "HH:MM"
     meetingEndTime: string;
-    meetingType: "phone" | "video" | "teams";
+    meetingType: MeetingType;
     videoRoomUrl: string | null;
     videoHostUrl: string | null;
     brokerPhone: string | null;
@@ -40229,6 +40326,7 @@ function createServer() {
       `${formatTime(t)}${tzAbbr ? ` ${tzAbbr}` : ""}`;
     const isVideoMeeting =
       opts.meetingType === "video" || opts.meetingType === "teams";
+    const isOfficeMeeting = opts.meetingType === "office";
     const videoProviderLabel =
       opts.meetingType === "teams" ? "Microsoft Teams" : "Zoom";
     const connectionHtml = isVideoMeeting
@@ -40251,7 +40349,18 @@ function createServer() {
               </td>
             </tr>
           </table>`
-      : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+      : isOfficeMeeting
+        ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
+            <tr>
+              <td style="background-color:#fff1f2;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:14px 18px;">
+                <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;font-weight:700;">📍 Office Visit</p>
+                <p style="margin:0 0 8px 0;color:#475569;font-size:13px;">Please visit us at:</p>
+                <p style="margin:0 0 8px 0;color:#0f172a;font-size:14px;font-weight:600;">${ENCORE_OFFICE_VISIT_ADDRESS}</p>
+                <a href="${ENCORE_OFFICE_VISIT_MAPS_URL}" style="color:#e8192c;font-size:13px;font-weight:600;">Open in Google Maps →</a>
+              </td>
+            </tr>
+          </table>`
+        : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
             <tr>
               <td style="background-color:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:0 8px 8px 0;padding:14px 18px;">
                 <p style="margin:0 0 4px 0;color:#0f172a;font-size:14px;font-weight:700;">📞 Phone Call</p>
@@ -40266,12 +40375,16 @@ function createServer() {
     const icsLocation = isVideoMeeting
       ? opts.videoRoomUrl ||
         `${videoProviderLabel} Video Call (join link pending)`
-      : "Phone Call — your mortgage banker will call you";
+      : isOfficeMeeting
+        ? ENCORE_OFFICE_VISIT_ADDRESS
+        : "Phone Call — your mortgage banker will call you";
     const icsDescription = isVideoMeeting
       ? opts.videoRoomUrl
         ? `Join the ${videoProviderLabel} meeting: ${opts.videoRoomUrl}`
         : `${videoProviderLabel} video call with ${opts.brokerName} (join link pending)`
-      : `Phone call meeting with ${opts.brokerName}${opts.brokerPhone ? ` — ${opts.brokerPhone}` : ""}`;
+      : isOfficeMeeting
+        ? `In-person office visit at ${ENCORE_OFFICE_VISIT_ADDRESS}`
+        : `Phone call meeting with ${opts.brokerName}${opts.brokerPhone ? ` — ${opts.brokerPhone}` : ""}`;
     const icsAttachment = generateIcs({
       uid: `meeting-${opts.meetingId}@encoremortgage.org`,
       summary: `Mortgage Meeting with ${opts.brokerName}`,
@@ -40290,6 +40403,7 @@ function createServer() {
       {
         from: process.env.SMTP_FROM,
         to: opts.email,
+        replyTo: opts.brokerEmail,
         subject: `Meeting Confirmed — ${formattedDate} at ${timeLabel(opts.meetingTime)}`,
         attachments: [
           {
@@ -40371,7 +40485,7 @@ function createServer() {
     meetingDate: string;
     meetingTime: string;
     meetingEndTime: string;
-    meetingType: "phone" | "video" | "teams";
+    meetingType: MeetingType;
     videoRoomUrl: string | null;
     videoHostUrl: string | null;
     notes: string | null;
@@ -40405,8 +40519,14 @@ function createServer() {
 
     const isVideoMeeting =
       opts.meetingType === "video" || opts.meetingType === "teams";
+    const isOfficeMeeting = opts.meetingType === "office";
     const videoProviderLabel =
       opts.meetingType === "teams" ? "Microsoft Teams" : "Zoom";
+    const methodLabel = isVideoMeeting
+      ? `${videoProviderLabel} Video Call`
+      : isOfficeMeeting
+        ? "Office Visit"
+        : "Phone Call";
 
     await sendViaResend(
       {
@@ -40446,11 +40566,12 @@ function createServer() {
                       </td></tr>
                       <tr><td style="padding:6px 0;">
                         <span style="color:#64748b;font-size:13px;width:140px;display:inline-block;">📡 Method</span>
-                        <strong style="color:#0f172a;font-size:14px;">${isVideoMeeting ? `${videoProviderLabel} Video Call` : "Phone Call"}</strong>
+                        <strong style="color:#0f172a;font-size:14px;">${methodLabel}</strong>
                       </td></tr>
                     </table>
                   </td></tr>
                 </table>
+                ${isOfficeMeeting ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#fff1f2;border-left:4px solid #e8192c;border-radius:0 8px 8px 0;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">📍 Office Location</p><p style="margin:0;color:#475569;font-size:13px;">${ENCORE_OFFICE_VISIT_ADDRESS}</p></td></tr></table>` : ""}
                 ${opts.videoRoomUrl ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#e8f4fd;border-left:4px solid #2D8CFF;border-radius:0 8px 8px 0;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">🎥 ${videoProviderLabel} — Client Join Link</p><a href="${opts.videoRoomUrl}" style="color:#2D8CFF;font-size:13px;">${opts.videoRoomUrl}</a>${opts.videoHostUrl ? `<p style="margin:8px 0 4px 0;color:#0f172a;font-size:13px;font-weight:700;">Host Link</p><a href="${opts.videoHostUrl}" style="color:#2D8CFF;font-size:13px;">Open host link</a>` : ""}</td></tr></table>` : ""}
                 ${opts.notes ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr><td style="background-color:#f8fafc;border-radius:8px;padding:12px 16px;"><p style="margin:0 0 4px 0;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;">Client Notes</p><p style="margin:0;color:#475569;font-size:14px;">${opts.notes}</p></td></tr></table>` : ""}
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
@@ -40540,6 +40661,22 @@ function createServer() {
       },
       systemEmailQuota("scheduler_cancellation"),
     );
+  }
+
+  /** Await scheduler emails before HTTP response — Vercel can freeze the lambda after res.json(). */
+  async function dispatchSchedulerEmails(
+    label: string,
+    tasks: Array<() => Promise<void>>,
+  ): Promise<void> {
+    const results = await Promise.allSettled(tasks.map((run) => run()));
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error(
+          `[SchedulerEmail] ${label} task ${index + 1} failed:`,
+          result.reason,
+        );
+      }
+    });
   }
 
   // ---- Zoom Server-to-Server OAuth helper ----
@@ -41088,8 +41225,8 @@ function createServer() {
       // Upsert default settings if missing
       await pool.query(
         `INSERT IGNORE INTO scheduler_settings
-           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
-         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, ?, 1, 1, 0)`,
+           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams, allow_office)
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, ?, 1, 1, 0, 1)`,
         [
           MORTGAGE_TENANT_ID,
           brokerRow.id,
@@ -41152,6 +41289,7 @@ function createServer() {
           allow_phone: !!settings.allow_phone,
           allow_video: !!settings.allow_video,
           allow_teams: !!settings.allow_teams,
+          allow_office: !!settings.allow_office,
           is_enabled: !!settings.is_enabled,
         },
         available_dates: availableDates,
@@ -41249,7 +41387,7 @@ function createServer() {
         client_phone?: string;
         meeting_date?: string;
         meeting_time?: string;
-        meeting_type?: "phone" | "video" | "teams";
+        meeting_type?: MeetingType;
         notes?: string;
       };
 
@@ -41302,9 +41440,10 @@ function createServer() {
             .json({ success: false, error: "No broker available" });
         brokerData = rows[0];
       } else {
+        const tokenField = isUUIDToken(broker_token) ? "public_token" : "slug";
         const [rows] = await pool.query<RowDataPacket[]>(
           `SELECT b.id, b.first_name, b.last_name, b.email, b.phone, b.public_token, b.timezone
-           FROM brokers b WHERE b.public_token = ? AND b.status = 'active' AND b.tenant_id = ?`,
+           FROM brokers b WHERE b.${tokenField} = ? AND b.status = 'active' AND b.tenant_id = ?`,
           [broker_token, MORTGAGE_TENANT_ID],
         );
         if (!rows[0])
@@ -41341,6 +41480,11 @@ function createServer() {
         return res
           .status(400)
           .json({ success: false, error: "Teams meetings are not available" });
+      }
+      if (meeting_type === "office" && !settings.allow_office) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Office visits are not available" });
       }
 
       // Validate slot is truly available
@@ -41471,42 +41615,44 @@ function createServer() {
 
       const brokerName = `${brokerData.first_name} ${brokerData.last_name}`;
 
-      // Send emails (non-blocking — don't fail booking if email fails)
-      sendMeetingConfirmationToClient({
-        email: client_email.trim().toLowerCase(),
-        clientName: client_name.trim(),
-        brokerName,
-        brokerEmail: brokerData.email,
-        meetingId: result.insertId,
-        meetingDate: meeting_date,
-        meetingTime: meeting_time,
-        meetingEndTime: requestedSlot.end_time,
-        meetingType: meeting_type,
-        videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-        videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
-        brokerPhone: brokerData.phone,
-        bookingToken,
-        notes: notes || null,
-        brokerTimezone: brokerData.timezone || undefined,
-        rescheduleToken: bookingToken,
-      }).catch((e) => console.error("Meeting confirmation email error:", e));
-
-      sendMeetingNotificationToBroker({
-        brokerEmail: brokerData.email,
-        brokerName,
-        clientName: client_name.trim(),
-        clientEmail: client_email.trim().toLowerCase(),
-        clientPhone: client_phone || null,
-        meetingDate: meeting_date,
-        meetingTime: meeting_time,
-        meetingEndTime: requestedSlot.end_time,
-        meetingType: meeting_type,
-        videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-        videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
-        notes: notes || null,
-        meetingId: result.insertId,
-        brokerTimezone: brokerData.timezone || undefined,
-      }).catch((e) => console.error("Broker notification email error:", e));
+      await dispatchSchedulerEmails(`book:${result.insertId}`, [
+        () =>
+          sendMeetingConfirmationToClient({
+            email: client_email.trim().toLowerCase(),
+            clientName: client_name.trim(),
+            brokerName,
+            brokerEmail: brokerData.email,
+            meetingId: result.insertId,
+            meetingDate: meeting_date,
+            meetingTime: meeting_time,
+            meetingEndTime: requestedSlot.end_time,
+            meetingType: meeting_type,
+            videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+            videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+            brokerPhone: brokerData.phone,
+            bookingToken,
+            notes: notes || null,
+            brokerTimezone: brokerData.timezone || undefined,
+            rescheduleToken: bookingToken,
+          }),
+        () =>
+          sendMeetingNotificationToBroker({
+            brokerEmail: brokerData.email,
+            brokerName,
+            clientName: client_name.trim(),
+            clientEmail: client_email.trim().toLowerCase(),
+            clientPhone: client_phone || null,
+            meetingDate: meeting_date,
+            meetingTime: meeting_time,
+            meetingEndTime: requestedSlot.end_time,
+            meetingType: meeting_type,
+            videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+            videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+            notes: notes || null,
+            meetingId: result.insertId,
+            brokerTimezone: brokerData.timezone || undefined,
+          }),
+      ]);
 
       // Auto-create client record from scheduler booking (upsert by email — ignore if already exists)
       try {
@@ -41817,44 +41963,44 @@ function createServer() {
 
       const brokerName = `${old.first_name} ${old.last_name}`;
 
-      // Send confirmation emails (non-blocking)
-      sendMeetingConfirmationToClient({
-        email: old.client_email,
-        clientName: old.client_name,
-        brokerName,
-        brokerEmail: old.broker_email,
-        meetingId: result.insertId,
-        meetingDate: new_date,
-        meetingTime: new_time,
-        meetingEndTime: requestedSlot.end_time,
-        meetingType: old.meeting_type,
-        videoRoomUrl: zoomJoinUrl,
-        videoHostUrl: zoomStartUrl,
-        brokerPhone: old.broker_phone,
-        bookingToken: newBookingToken,
-        notes: old.notes || null,
-        brokerTimezone: old.broker_timezone || undefined,
-        rescheduleToken: newBookingToken,
-      }).catch((e) => console.error("Reschedule confirmation email error:", e));
-
-      sendMeetingNotificationToBroker({
-        brokerEmail: old.broker_email,
-        brokerName,
-        clientName: old.client_name,
-        clientEmail: old.client_email,
-        clientPhone: old.client_phone || null,
-        meetingDate: new_date,
-        meetingTime: new_time,
-        meetingEndTime: requestedSlot.end_time,
-        meetingType: old.meeting_type,
-        videoRoomUrl: zoomJoinUrl,
-        videoHostUrl: zoomStartUrl,
-        notes: old.notes || null,
-        meetingId: result.insertId,
-        brokerTimezone: old.broker_timezone || undefined,
-      }).catch((e) =>
-        console.error("Reschedule broker notification email error:", e),
-      );
+      await dispatchSchedulerEmails(`reschedule:${result.insertId}`, [
+        () =>
+          sendMeetingConfirmationToClient({
+            email: old.client_email,
+            clientName: old.client_name,
+            brokerName,
+            brokerEmail: old.broker_email,
+            meetingId: result.insertId,
+            meetingDate: new_date,
+            meetingTime: new_time,
+            meetingEndTime: requestedSlot.end_time,
+            meetingType: old.meeting_type,
+            videoRoomUrl: zoomJoinUrl,
+            videoHostUrl: zoomStartUrl,
+            brokerPhone: old.broker_phone,
+            bookingToken: newBookingToken,
+            notes: old.notes || null,
+            brokerTimezone: old.broker_timezone || undefined,
+            rescheduleToken: newBookingToken,
+          }),
+        () =>
+          sendMeetingNotificationToBroker({
+            brokerEmail: old.broker_email,
+            brokerName,
+            clientName: old.client_name,
+            clientEmail: old.client_email,
+            clientPhone: old.client_phone || null,
+            meetingDate: new_date,
+            meetingTime: new_time,
+            meetingEndTime: requestedSlot.end_time,
+            meetingType: old.meeting_type,
+            videoRoomUrl: zoomJoinUrl,
+            videoHostUrl: zoomStartUrl,
+            notes: old.notes || null,
+            meetingId: result.insertId,
+            brokerTimezone: old.broker_timezone || undefined,
+          }),
+      ]);
 
       return res.json({
         success: true,
@@ -41912,16 +42058,19 @@ function createServer() {
         ? `${meeting.first_name} ${meeting.last_name}`
         : "Your Mortgage Banker";
 
-      sendMeetingCancellationEmail({
-        email: meeting.client_email,
-        clientName: meeting.client_name,
-        brokerName,
-        meetingDate: meeting.meeting_date,
-        meetingTime: meeting.meeting_time,
-        cancelledBy: "client",
-        reason: reason || null,
-        brokerTimezone: meeting.broker_timezone || undefined,
-      }).catch((e) => console.error("Cancellation email error:", e));
+      await dispatchSchedulerEmails(`cancel:${bookingToken}`, [
+        () =>
+          sendMeetingCancellationEmail({
+            email: meeting.client_email,
+            clientName: meeting.client_name,
+            brokerName,
+            meetingDate: meeting.meeting_date,
+            meetingTime: meeting.meeting_time,
+            cancelledBy: "client",
+            reason: reason || null,
+            brokerTimezone: meeting.broker_timezone || undefined,
+          }),
+      ]);
 
       return res.json({
         success: true,
@@ -41943,8 +42092,8 @@ function createServer() {
 
       await pool.query(
         `INSERT INTO scheduler_settings
-           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
-         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1, 0)
+           (tenant_id, broker_id, meeting_title, meeting_description, slot_duration_minutes, buffer_time_minutes, advance_booking_days, min_booking_hours, timezone, allow_phone, allow_video, allow_teams, allow_office)
+         VALUES (?, ?, 'Mortgage Consultation', 'Schedule a free consultation with our mortgage expert.', 30, 15, 30, 2, 'America/Chicago', 1, 1, 0, 1)
          ON DUPLICATE KEY UPDATE updated_at = updated_at`,
         [MORTGAGE_TENANT_ID, reqBrokerId],
       );
@@ -41975,6 +42124,7 @@ function createServer() {
           allow_phone: !!settings.allow_phone,
           allow_video: !!settings.allow_video,
           allow_teams: !!settings.allow_teams,
+          allow_office: !!settings.allow_office,
         },
         availability: availability.map((a) => ({
           ...a,
@@ -42004,6 +42154,7 @@ function createServer() {
         allow_phone,
         allow_video,
         allow_teams,
+        allow_office,
         availability,
       } = req.body as {
         is_enabled?: boolean;
@@ -42017,6 +42168,7 @@ function createServer() {
         allow_phone?: boolean;
         allow_video?: boolean;
         allow_teams?: boolean;
+        allow_office?: boolean;
         availability?: Array<{
           day_of_week: number;
           start_time: string;
@@ -42085,7 +42237,8 @@ function createServer() {
            timezone = COALESCE(?, timezone),
            allow_phone = COALESCE(?, allow_phone),
            allow_video = COALESCE(?, allow_video),
-           allow_teams = COALESCE(?, allow_teams)
+           allow_teams = COALESCE(?, allow_teams),
+           allow_office = COALESCE(?, allow_office)
          WHERE broker_id = ? AND tenant_id = ?`,
         [
           is_enabled !== undefined ? (is_enabled ? 1 : 0) : null,
@@ -42101,6 +42254,7 @@ function createServer() {
           allow_phone !== undefined ? (allow_phone ? 1 : 0) : null,
           allow_video !== undefined ? (allow_video ? 1 : 0) : null,
           allow_teams !== undefined ? (allow_teams ? 1 : 0) : null,
+          allow_office !== undefined ? (allow_office ? 1 : 0) : null,
           reqBrokerId,
           MORTGAGE_TENANT_ID,
         ],
@@ -42111,8 +42265,8 @@ function createServer() {
           `INSERT INTO scheduler_settings
              (tenant_id, broker_id, is_enabled, meeting_title, meeting_description,
               slot_duration_minutes, buffer_time_minutes, advance_booking_days,
-              min_booking_hours, timezone, allow_phone, allow_video, allow_teams)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              min_booking_hours, timezone, allow_phone, allow_video, allow_teams, allow_office)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             MORTGAGE_TENANT_ID,
             reqBrokerId,
@@ -42127,6 +42281,7 @@ function createServer() {
             allow_phone !== undefined ? (allow_phone ? 1 : 0) : 1,
             allow_video !== undefined ? (allow_video ? 1 : 0) : 0,
             allow_teams !== undefined ? (allow_teams ? 1 : 0) : 0,
+            allow_office !== undefined ? (allow_office ? 1 : 0) : 1,
           ],
         );
       }
@@ -42265,13 +42420,15 @@ function createServer() {
       let whereClause = `sm.tenant_id = ?`;
       const params: any[] = [MORTGAGE_TENANT_ID];
 
-      // Admins can see all, partners only see their own
-      if (broker.role !== "admin" && broker.role !== "platform_owner") {
+      // platform_owner may list all meetings or filter by broker_id; everyone else sees own only.
+      if (broker.role === "platform_owner") {
+        if (broker_id) {
+          whereClause += ` AND sm.broker_id = ?`;
+          params.push(parseInt(broker_id, 10));
+        }
+      } else {
         whereClause += ` AND sm.broker_id = ?`;
         params.push(broker.id);
-      } else if (broker_id) {
-        whereClause += ` AND sm.broker_id = ?`;
-        params.push(parseInt(broker_id));
       }
 
       if (status) {
@@ -42342,7 +42499,7 @@ function createServer() {
         broker_notes?: string;
         meeting_date?: string;
         meeting_time?: string;
-        meeting_type?: "phone" | "video" | "teams";
+        meeting_type?: MeetingType;
         cancelled_reason?: string;
         cancelled_by?: "client" | "broker";
       };
@@ -42363,11 +42520,7 @@ function createServer() {
 
       const meeting = rows[0];
 
-      if (
-        role !== "admin" &&
-        role !== "platform_owner" &&
-        meeting.broker_id !== reqBrokerId
-      ) {
+      if (role !== "platform_owner" && meeting.broker_id !== reqBrokerId) {
         return res.status(403).json({ success: false, error: "Access denied" });
       }
 
@@ -42443,16 +42596,19 @@ function createServer() {
             ? meeting.meeting_date.toISOString().split("T")[0]
             : meeting.meeting_date;
 
-        sendMeetingCancellationEmail({
-          email: meeting.client_email,
-          clientName: meeting.client_name,
-          brokerName,
-          meetingDate: meetingDateStr,
-          meetingTime: meeting.meeting_time,
-          cancelledBy: "broker",
-          reason: cancelled_reason || null,
-          brokerTimezone: meeting.broker_timezone || undefined,
-        }).catch((e) => console.error("Cancellation email error:", e));
+        await dispatchSchedulerEmails(`admin-cancel:${meetingId}`, [
+          () =>
+            sendMeetingCancellationEmail({
+              email: meeting.client_email,
+              clientName: meeting.client_name,
+              brokerName,
+              meetingDate: meetingDateStr,
+              meetingTime: meeting.meeting_time,
+              cancelledBy: "broker",
+              reason: cancelled_reason || null,
+              brokerTimezone: meeting.broker_timezone || undefined,
+            }),
+        ]);
       }
 
       return res.json({ success: true, message: "Meeting updated" });
@@ -42486,7 +42642,7 @@ function createServer() {
         client_phone?: string;
         meeting_date?: string;
         meeting_time?: string;
-        meeting_type?: "phone" | "video" | "teams";
+        meeting_type?: MeetingType;
         notes?: string;
         target_broker_id?: number;
       };
@@ -42667,47 +42823,45 @@ function createServer() {
         ? `${brokerData.first_name} ${brokerData.last_name}`
         : "Your Mortgage Banker";
 
-      // Send confirmation emails non-blocking
       if (brokerData) {
-        sendMeetingConfirmationToClient({
-          email: client_email.trim().toLowerCase(),
-          clientName: client_name.trim(),
-          brokerName,
-          brokerEmail: brokerData.email,
-          meetingId: result.insertId,
-          meetingDate: meeting_date,
-          meetingTime: meeting_time,
-          meetingEndTime: endTime.slice(0, 5),
-          meetingType: meeting_type,
-          videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-          videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
-          brokerPhone: brokerData.phone || null,
-          bookingToken,
-          notes: notes || null,
-          brokerTimezone: brokerData.timezone || undefined,
-          rescheduleToken: bookingToken,
-        }).catch((e) =>
-          console.error("Meeting confirmation email error (admin booking):", e),
-        );
-
-        sendMeetingNotificationToBroker({
-          brokerEmail: brokerData.email,
-          brokerName,
-          clientName: client_name.trim(),
-          clientEmail: client_email.trim().toLowerCase(),
-          clientPhone: client_phone || null,
-          meetingDate: meeting_date,
-          meetingTime: meeting_time,
-          meetingEndTime: endTime.slice(0, 5),
-          meetingType: meeting_type,
-          videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-          videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
-          notes: notes || null,
-          meetingId: result.insertId,
-          brokerTimezone: brokerData.timezone || undefined,
-        }).catch((e) =>
-          console.error("Broker notification email error (admin booking):", e),
-        );
+        await dispatchSchedulerEmails(`admin-book:${result.insertId}`, [
+          () =>
+            sendMeetingConfirmationToClient({
+              email: client_email.trim().toLowerCase(),
+              clientName: client_name.trim(),
+              brokerName,
+              brokerEmail: brokerData.email,
+              meetingId: result.insertId,
+              meetingDate: meeting_date,
+              meetingTime: meeting_time,
+              meetingEndTime: endTime.slice(0, 5),
+              meetingType: meeting_type,
+              videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+              videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+              brokerPhone: brokerData.phone || null,
+              bookingToken,
+              notes: notes || null,
+              brokerTimezone: brokerData.timezone || undefined,
+              rescheduleToken: bookingToken,
+            }),
+          () =>
+            sendMeetingNotificationToBroker({
+              brokerEmail: brokerData.email,
+              brokerName,
+              clientName: client_name.trim(),
+              clientEmail: client_email.trim().toLowerCase(),
+              clientPhone: client_phone || null,
+              meetingDate: meeting_date,
+              meetingTime: meeting_time,
+              meetingEndTime: endTime.slice(0, 5),
+              meetingType: meeting_type,
+              videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+              videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+              notes: notes || null,
+              meetingId: result.insertId,
+              brokerTimezone: brokerData.timezone || undefined,
+            }),
+        ]);
       }
 
       return res.json({
@@ -42779,6 +42933,7 @@ function createServer() {
                 allow_phone: !!settings.allow_phone,
                 allow_video: !!settings.allow_video,
                 allow_teams: !!settings.allow_teams,
+                allow_office: !!settings.allow_office,
               }
             : null,
           availability: availability.map((a) => ({
@@ -43187,14 +43342,11 @@ function createServer() {
       const conditions: string[] = ["ce.tenant_id = ?"];
       const params: any[] = [broker.tenant_id];
 
-      // Non-admins (partners) see:
-      // - Events they created themselves
-      // - Birthday events for clients assigned to them
-      if (broker.role !== "admin" && broker.role !== "platform_owner") {
-        conditions.push(
-          `(ce.broker_id = ? OR (ce.event_type = 'birthday' AND ce.linked_client_id IN (SELECT id FROM clients WHERE tenant_id = ? AND assigned_broker_id = ?)))`,
-        );
-        params.push(broker.id, broker.tenant_id, broker.id);
+      // platform_owner sees all tenant events; everyone else is scoped to events
+      // they created or client-linked rows for clients they own (4-path model).
+      if (broker.role !== "platform_owner") {
+        conditions.push(CALENDAR_EVENT_BROKER_VISIBILITY_SQL);
+        params.push(broker.id, ...loanOwnershipWhereParams(broker.id));
       }
 
       if (isCalendarView) {
@@ -43346,6 +43498,24 @@ function createServer() {
           .json({ success: false, error: "Invalid event_type" });
       }
 
+      const brokerWithRole = (req as any).broker as {
+        id: number;
+        tenant_id: number;
+        role: string;
+      };
+      if (linked_client_id) {
+        const canLinkClient = await brokerCanAccessLinkedClient(
+          brokerWithRole,
+          linked_client_id,
+        );
+        if (!canLinkClient) {
+          return res.status(403).json({
+            success: false,
+            error: "You do not have access to this client",
+          });
+        }
+      }
+
       const [result] = await pool.query(
         `INSERT INTO calendar_events
            (tenant_id, broker_id, event_type, title, description,
@@ -43410,11 +43580,8 @@ function createServer() {
           .json({ success: false, error: "Event not found" });
       }
 
-      if (
-        broker.role !== "admin" &&
-        broker.role !== "platform_owner" &&
-        existing.broker_id !== broker.id
-      ) {
+      const canAccess = await brokerCanAccessCalendarEvent(broker, existing);
+      if (!canAccess) {
         return res.status(403).json({ success: false, error: "Forbidden" });
       }
 
@@ -43484,11 +43651,8 @@ function createServer() {
           .json({ success: false, error: "Event not found" });
       }
 
-      if (
-        broker.role !== "admin" &&
-        broker.role !== "platform_owner" &&
-        existing.broker_id !== broker.id
-      ) {
+      const canAccess = await brokerCanAccessCalendarEvent(broker, existing);
+      if (!canAccess) {
         return res.status(403).json({ success: false, error: "Forbidden" });
       }
 

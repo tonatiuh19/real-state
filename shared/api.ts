@@ -1001,6 +1001,7 @@ export interface GetClientDetailProfileResponse {
   conversations: Array<{
     id: number;
     conversation_id: string;
+    broker_id: number | null;
     last_message_at: string | null;
     message_count: number;
     unread_count: number;
@@ -2577,7 +2578,30 @@ export interface GetContactSubmissionsResponse {
 // SCHEDULER TYPES
 // =====================================================
 
-export type MeetingType = "phone" | "video" | "teams";
+export type MeetingType = "phone" | "video" | "teams" | "office";
+
+/** Encore Mortgage Whittier office — in-person scheduler visits. */
+export const ENCORE_OFFICE_VISIT_ADDRESS =
+  "Encore Mortgage, 15111 Whittier Blvd., Suite 101-B, Whittier, CA 90603";
+
+export const ENCORE_OFFICE_VISIT_MAPS_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+  ENCORE_OFFICE_VISIT_ADDRESS,
+)}`;
+
+export function meetingTypeLabel(type: MeetingType): string {
+  switch (type) {
+    case "phone":
+      return "Phone Call";
+    case "video":
+      return "Zoom Video Call";
+    case "teams":
+      return "Microsoft Teams";
+    case "office":
+      return "Office Visit";
+    default:
+      return type;
+  }
+}
 export type MeetingStatus =
   | "pending"
   | "confirmed"
@@ -2599,6 +2623,7 @@ export interface SchedulerSettings {
   allow_phone: boolean;
   allow_video: boolean;
   allow_teams: boolean;
+  allow_office: boolean;
 }
 
 export interface SchedulerAvailability {
@@ -2667,6 +2692,7 @@ export interface PublicSchedulerBrokerInfo {
   allow_phone: boolean;
   allow_video: boolean;
   allow_teams: boolean;
+  allow_office: boolean;
   is_enabled: boolean;
 }
 
@@ -2773,6 +2799,7 @@ export interface UpdateSchedulerSettingsRequest {
   allow_phone?: boolean;
   allow_video?: boolean;
   allow_teams?: boolean;
+  allow_office?: boolean;
   availability?: Array<{
     day_of_week: number;
     start_time: string;
@@ -3615,7 +3642,7 @@ export interface BillingStripeResetSubscriptionTestResponse {
   error?: string;
 }
 
-// ─── Bulk CSV import (platform owner) ───────────────────────────────────────
+// ─── Bulk CSV import (mortgage banker + platform owner) ─────────────────────
 
 export type BulkImportEntityType = "clients" | "realtors";
 

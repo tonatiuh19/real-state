@@ -99,7 +99,7 @@ import {
   assignLoanPartner,
   exportLoanMismo,
 } from "@/store/slices/pipelineSlice";
-import { fetchBrokers } from "@/store/slices/brokersSlice";
+import { BrokerSearchSelect } from "@/components/BrokerSearchSelect";
 import { fetchTaskDocuments } from "@/store/slices/clientPortalSlice";
 import {
   deleteTaskInstance,
@@ -141,7 +141,6 @@ export function LoanOverlay({
 }: LoanOverlayProps) {
   const dispatch = useAppDispatch();
   const { sessionToken, user } = useAppSelector((state) => state.brokerAuth);
-  const { brokers } = useAppSelector((state) => state.brokers);
   const { groupConversationsEnabled, groupsByApplication, isLoadingLoanGroups } =
     useAppSelector((state) => state.conversations);
   const { tasks: taskTemplates } = useAppSelector((state) => state.tasks);
@@ -566,11 +565,10 @@ export function LoanOverlay({
     }
   };
 
-  // Fetch task templates, brokers, and pre-approval letter when component mounts
+  // Fetch task templates and pre-approval letter when overlay opens
   useEffect(() => {
     if (isOpen) {
       dispatch(fetchTasks({}));
-      dispatch(fetchBrokers({}));
     }
   }, [dispatch, isOpen]);
 
@@ -2391,7 +2389,7 @@ export function LoanOverlay({
                         </span>
                       </div>
                     )}
-                    <Select
+                    <BrokerSearchSelect
                       value={
                         selectedLoan.broker_user_id ||
                         selectedLoan.effective_broker_id
@@ -2403,27 +2401,15 @@ export function LoanOverlay({
                       }
                       onValueChange={handleAssignBroker}
                       disabled={isAssigning}
-                    >
-                      <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="Select mortgage banker..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="unassigned">Unassigned</SelectItem>
-                        {brokers
-                          .filter(
-                            (b) => b.status === "active" && b.role === "admin",
-                          )
-                          .map((broker) => (
-                            <SelectItem
-                              key={broker.id}
-                              value={String(broker.id)}
-                            >
-                              {broker.first_name} {broker.last_name} (Mortgage
-                              Banker)
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
+                      scope="mortgage-bankers"
+                      placeholder="Search mortgage bankers…"
+                      selectedDisplayName={
+                        selectedLoan.effective_broker_first_name ||
+                        selectedLoan.broker_first_name
+                          ? `${selectedLoan.effective_broker_first_name || selectedLoan.broker_first_name} ${selectedLoan.effective_broker_last_name || selectedLoan.broker_last_name} (Mortgage Banker)`
+                          : undefined
+                      }
+                    />
                   </CardContent>
                 </Card>
               )}
@@ -2463,7 +2449,7 @@ export function LoanOverlay({
                         </span>
                       </div>
                     )}
-                    <Select
+                    <BrokerSearchSelect
                       value={
                         selectedLoan.partner_broker_id
                           ? String(selectedLoan.partner_broker_id)
@@ -2471,29 +2457,13 @@ export function LoanOverlay({
                       }
                       onValueChange={handleAssignPartner}
                       disabled={isAssigningPartner}
-                    >
-                      <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="Select partner..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="unassigned">Unassigned</SelectItem>
-                        {brokers
-                          .filter((b) => b.status === "active")
-                          .map((broker) => (
-                            <SelectItem
-                              key={broker.id}
-                              value={String(broker.id)}
-                            >
-                              {broker.first_name} {broker.last_name}
-                              {broker.role === "platform_owner"
-                                ? " (Platform Owner)"
-                                : broker.role === "admin"
-                                  ? " (Mortgage Banker)"
-                                  : " (Partner)"}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
+                      placeholder="Search partners & realtors…"
+                      selectedDisplayName={
+                        selectedLoan.partner_first_name
+                          ? `${selectedLoan.partner_first_name} ${selectedLoan.partner_last_name}`
+                          : undefined
+                      }
+                    />
                   </CardContent>
                 </Card>
               )}

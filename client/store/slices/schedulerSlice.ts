@@ -65,6 +65,7 @@ interface SchedulerState {
   isBooking: boolean;
   bookingSuccess: BookMeetingResponse | null;
   publicError: string | null;
+  bookingError: string | null;
 }
 
 const initialState: SchedulerState = {
@@ -99,6 +100,7 @@ const initialState: SchedulerState = {
   isBooking: false,
   bookingSuccess: null,
   publicError: null,
+  bookingError: null,
 };
 
 // ---------------------------------------------------------------
@@ -403,6 +405,9 @@ const schedulerSlice = createSlice({
     clearPublicError(state) {
       state.publicError = null;
     },
+    clearBookingError(state) {
+      state.bookingError = null;
+    },
     clearError(state) {
       state.error = null;
     },
@@ -442,15 +447,16 @@ const schedulerSlice = createSlice({
     builder
       .addCase(bookMeeting.pending, (state) => {
         state.isBooking = true;
-        state.publicError = null;
+        state.bookingError = null;
       })
       .addCase(bookMeeting.fulfilled, (state, action) => {
         state.isBooking = false;
         state.bookingSuccess = action.payload;
+        state.bookingError = null;
       })
       .addCase(bookMeeting.rejected, (state, action) => {
         state.isBooking = false;
-        state.publicError = action.payload as string;
+        state.bookingError = action.payload as string;
       });
 
     // fetchSchedulerSettings
@@ -631,6 +637,7 @@ export const {
   setSelectedDate,
   clearBookingSuccess,
   clearPublicError,
+  clearBookingError,
   clearError,
 } = schedulerSlice.actions;
 

@@ -383,7 +383,7 @@ assert(
 // 1h: No scheduled_meetings with invalid meeting_type
 const [[badMeetingType]] = await db.query(
   `SELECT COUNT(*) AS cnt FROM scheduled_meetings
-   WHERE tenant_id = ? AND meeting_type NOT IN ('phone','video','teams')`,
+   WHERE tenant_id = ? AND meeting_type NOT IN ('phone','video','teams','office')`,
   [TENANT_ID],
 );
 assert(

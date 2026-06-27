@@ -141,6 +141,21 @@ import type {
   CreateCalendarEventRequest,
   SchedulerBlockedRange,
 } from "@shared/api";
+import { ENCORE_OFFICE_VISIT_ADDRESS, meetingTypeLabel } from "@shared/api";
+
+const SCHEDULER_MEETING_TYPES: MeetingType[] = [
+  "phone",
+  "video",
+  "teams",
+  "office",
+];
+
+function schedulerMeetingShortLabel(t: MeetingType): string {
+  if (t === "phone") return "Phone";
+  if (t === "teams") return "Video (Teams)";
+  if (t === "office") return "Office";
+  return "Video (Zoom)";
+}
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import { BrokerDatePicker } from "@/components/BrokerDatePicker";
@@ -623,6 +638,10 @@ function MeetingCard({
               {meeting.meeting_type === "phone" ? (
                 <>
                   <Phone className="h-3 w-3" /> Phone
+                </>
+              ) : meeting.meeting_type === "office" ? (
+                <>
+                  <MapPin className="h-3 w-3" /> Office
                 </>
               ) : (
                 <>
@@ -1360,7 +1379,7 @@ function EditMeetingDialog({
               Meeting Type
             </Label>
             <div className="grid grid-cols-2 gap-2">
-              {(["phone", "video", "teams"] as MeetingType[]).map((t) => {
+              {SCHEDULER_MEETING_TYPES.map((t) => {
                 return (
                   <button
                     key={t}
@@ -1374,14 +1393,12 @@ function EditMeetingDialog({
                   >
                     {t === "phone" ? (
                       <Phone className="h-4 w-4" />
+                    ) : t === "office" ? (
+                      <MapPin className="h-4 w-4" />
                     ) : (
                       <Video className="h-4 w-4" />
                     )}
-                    {t === "phone"
-                      ? "Phone"
-                      : t === "teams"
-                        ? "Video (Teams)"
-                        : "Video (Zoom)"}
+                    {schedulerMeetingShortLabel(t)}
                   </button>
                 );
               })}
@@ -1794,7 +1811,9 @@ function EventFormDialog({
 const createMeetingSchema = Yup.object({
   meeting_date: Yup.string().required("Date required"),
   meeting_time: Yup.string().required("Time required"),
-  meeting_type: Yup.string().oneOf(["phone", "video", "teams"]).required(),
+  meeting_type: Yup.string()
+    .oneOf(["phone", "video", "teams", "office"])
+    .required(),
   notes: Yup.string(),
 });
 
@@ -1974,8 +1993,8 @@ function CreateMeetingDialog({
             <Label className="text-foreground/80 text-sm mb-1.5 block">
               Method *
             </Label>
-            <div className="grid grid-cols-3 gap-2">
-              {(["phone", "video", "teams"] as MeetingType[]).map((t) => {
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {SCHEDULER_MEETING_TYPES.map((t) => {
                 return (
                   <button
                     key={t}
@@ -1990,14 +2009,12 @@ function CreateMeetingDialog({
                   >
                     {t === "phone" ? (
                       <Phone className="h-4 w-4" />
+                    ) : t === "office" ? (
+                      <MapPin className="h-4 w-4" />
                     ) : (
                       <Video className="h-4 w-4" />
                     )}
-                    {t === "phone"
-                      ? "Phone"
-                      : t === "teams"
-                        ? "Video (Teams)"
-                        : "Video (Zoom)"}
+                    {schedulerMeetingShortLabel(t)}
                   </button>
                 );
               })}
@@ -2155,6 +2172,7 @@ function SettingsPanel() {
       allow_phone: settings?.allow_phone ?? true,
       allow_video: settings?.allow_video ?? true,
       allow_teams: settings?.allow_teams ?? false,
+      allow_office: settings?.allow_office ?? true,
     },
     enableReinitialize: true,
     onSubmit: async (values) => {
@@ -2561,6 +2579,12 @@ function SettingsPanel() {
             label: "Video Call (Teams)",
             sub: "Creates a Microsoft Teams meeting automatically",
             icon: <Video className="h-4 w-4 text-indigo-400" />,
+          },
+          {
+            key: "allow_office",
+            label: "Office Visit",
+            sub: ENCORE_OFFICE_VISIT_ADDRESS,
+            icon: <MapPin className="h-4 w-4 text-rose-400" />,
           },
         ].map(({ key, label, sub, icon }, i) => {
           return (
@@ -3058,7 +3082,8 @@ const AdminCalendar: React.FC = () => {
   const { brokers: brokersList } = useAppSelector((s) => s.brokers);
 
   const isPartner = user?.role === "broker";
-  const isAdmin = user?.role === "admin" || user?.role === "platform_owner";
+  const isPlatformOwner = user?.role === "platform_owner";
+  const isAdmin = user?.role === "admin" || isPlatformOwner;
 
   const [activeTab, setActiveTab] = useState<string>("calendar");
   const [statusFilter, setStatusFilter] = useState<string>("active");
@@ -3139,7 +3164,7 @@ const AdminCalendar: React.FC = () => {
     dispatch(fetchBlockedRanges());
     dispatch(fetchO365CalendarStatus());
     dispatch(fetchClients({ page: 1, limit: 200 }));
-    if (isAdmin) dispatch(fetchBrokers({ page: 1, limit: 100 }));
+    if (isPlatformOwner) dispatch(fetchBrokers({ page: 1, limit: 100 }));
   }, [dispatch]);
 
   // Auto-sync Outlook calendar (throttled — avoids re-trigger loop on isSyncingO365 / null lastSyncedAt)
@@ -3429,8 +3454,8 @@ const AdminCalendar: React.FC = () => {
 
   const today = format(new Date(), "yyyy-MM-dd");
 
-  // Safety filter: even if backend returns broader data, non-admin users should only see their own meetings.
-  const ownershipScopedMeetings = isAdmin
+  // Safety filter: only platform_owner may see all bankers' meetings.
+  const ownershipScopedMeetings = isPlatformOwner
     ? meetings
     : meetings.filter((m) => m.broker_id === user?.id);
 
@@ -3753,7 +3778,7 @@ const AdminCalendar: React.FC = () => {
                     )}
                   </SelectContent>
                 </Select>
-                {isAdmin && brokersList.length > 0 && (
+                {isPlatformOwner && brokersList.length > 0 && (
                   <Select
                     value={brokerFilter === null ? "all" : String(brokerFilter)}
                     onValueChange={(v) =>
@@ -3879,11 +3904,13 @@ const AdminCalendar: React.FC = () => {
                                 ) : (
                                   <Video className="h-3.5 w-3.5 text-green-400" />
                                 )}
-                                {m.meeting_type === "phone"
-                                  ? "Phone"
-                                  : m.meeting_type === "teams"
-                                    ? "Teams"
-                                    : "Video"}
+                      {m.meeting_type === "phone"
+                        ? "Phone"
+                        : m.meeting_type === "office"
+                          ? "Office"
+                          : m.meeting_type === "teams"
+                            ? "Teams"
+                            : "Video"}
                               </span>
                               {(m.meeting_type === "video" ||
                                 m.meeting_type === "teams") &&

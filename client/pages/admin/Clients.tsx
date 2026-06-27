@@ -54,6 +54,8 @@ const Clients = () => {
   const location = useLocation();
   const isPartner = user?.role === "broker";
   const isPlatformOwner = user?.role === "platform_owner";
+  const isMortgageBanker = user?.role === "admin" || isPlatformOwner;
+  const canBulkImport = isMortgageBanker && bulkCsvImportEnabled;
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -365,7 +367,7 @@ const Clients = () => {
                   New Client
                 </Button>
               )}
-              {isPlatformOwner && bulkCsvImportEnabled && (
+              {canBulkImport && (
                 <Button
                   variant="outline"
                   className="gap-1.5 whitespace-nowrap"

@@ -49,7 +49,7 @@ import {
   ArrowRightLeft,
 } from "lucide-react";
 import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import PhoneLink from "@/components/PhoneLink";
 import EmailLink from "@/components/EmailLink";
 import { Button } from "@/components/ui/button";
@@ -646,16 +646,34 @@ export default function ClientDetailPanel({
   const [transferBrokerId, setTransferBrokerId] = useState<number | null>(null);
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferSearch, setTransferSearch] = useState("");
+  const transferSearchDebounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
-    if (transferDialogOpen) {
-      dispatch(
-        fetchBrokers({ limit: 500, sortBy: "first_name", sortOrder: "ASC" }),
-      );
-      setTransferBrokerId(null);
-      setTransferSearch("");
-    }
-  }, [transferDialogOpen, dispatch]);
+    if (!transferDialogOpen) return;
+    setTransferBrokerId(null);
+    setTransferSearch("");
+  }, [transferDialogOpen]);
+
+  // Server-side search — API caps at 100 rows; partners past ~100th name need search.
+  useEffect(() => {
+    if (!transferDialogOpen) return;
+    clearTimeout(transferSearchDebounceRef.current);
+    const q = transferSearch.trim();
+    transferSearchDebounceRef.current = setTimeout(
+      () => {
+        dispatch(
+          fetchBrokers({
+            limit: 100,
+            sortBy: "first_name",
+            sortOrder: "ASC",
+            search: q.length >= 2 ? q : undefined,
+          }),
+        );
+      },
+      q.length >= 2 ? 250 : 0,
+    );
+    return () => clearTimeout(transferSearchDebounceRef.current);
+  }, [transferDialogOpen, transferSearch, dispatch]);
 
   const handleTransferClient = async () => {
     if (!clientId || !transferBrokerId) return;
@@ -905,14 +923,19 @@ export default function ClientDetailPanel({
   const allConversationThreads = [...conversations, ...groupThreads];
   const communications = profile?.communications ?? [];
   const hasAssignedBroker = Boolean(client?.assigned_broker?.id);
+  const transferBrokerCandidates = allBrokers.filter(
+    (b) => b.status === "active" && b.id !== client?.assigned_broker?.id,
+  );
 
-  /* Platform owner cannot message clients they don't directly own */
   const isPlatformOwner = currentBroker?.role === "platform_owner";
-  const isClientOwner =
-    !isPlatformOwner ||
+  const ownsClientAssignment =
     !client?.assigned_broker?.id ||
     client.assigned_broker.id === currentBroker?.id;
-  const canMessage = isClientOwner;
+  const ownsClientThread = conversations.some(
+    (c) => c.broker_id != null && c.broker_id === currentBroker?.id,
+  );
+  const canMessage =
+    isPlatformOwner || ownsClientAssignment || ownsClientThread;
 
   const statusMeta = CLIENT_STATUS_META[client?.status ?? "active"];
 
@@ -986,6 +1009,14 @@ export default function ClientDetailPanel({
         className="w-full sm:w-[600px] sm:max-w-[600px] p-0 flex flex-col gap-0"
         style={{ maxWidth: "600px" }}
       >
+        <SheetTitle className="sr-only">
+          {client
+            ? `${client.first_name} ${client.last_name} — client profile`
+            : "Client profile"}
+        </SheetTitle>
+        <SheetDescription className="sr-only">
+          View and manage client details, loans, conversations, and activity.
+        </SheetDescription>
         {/* ─── header ─────────────────────────────────────────────────── */}
         <div className="flex flex-col gap-3 px-6 pt-6 pb-4 border-b bg-gradient-to-br from-card to-muted/30">
           {isLoading ? (
@@ -1848,24 +1879,21 @@ export default function ClientDetailPanel({
                     )}
                   </div>
 
-                  {/* Platform owner privacy notice */}
                   {!canMessage && (
                     <div className="mx-6 mb-3 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                       <Shield className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                       <div className="space-y-0.5">
                         <p className="text-xs font-semibold text-amber-800">
-                          Read-only — Client Privacy Protected
+                          Assigned to another broker
                         </p>
                         <p className="text-xs text-amber-700 leading-relaxed">
-                          This client's conversations belong to{" "}
+                          This client is managed by{" "}
                           <strong>
                             {client?.assigned_broker?.first_name}{" "}
                             {client?.assigned_broker?.last_name}
                           </strong>
-                          's workspace. As platform owner you can review
-                          activity for oversight, but sending messages on
-                          another team member's behalf would violate client
-                          communication privacy.
+                          . You can still reply from an existing conversation
+                          you started under Conversations.
                         </p>
                       </div>
                     </div>
@@ -2561,24 +2589,31 @@ export default function ClientDetailPanel({
           {/* Broker picker */}
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Assign to</Label>
-            <Command className="rounded-lg border shadow-sm">
+            <Command
+              className="rounded-lg border shadow-sm"
+              shouldFilter={false}
+            >
               <CommandInput
-                placeholder="Search brokers..."
+                placeholder="Search by name or email (min 2 characters)…"
                 value={transferSearch}
                 onValueChange={setTransferSearch}
               />
               <CommandList className="max-h-52">
-                <CommandEmpty className="py-6 text-center text-xs text-muted-foreground">
-                  No brokers found.
-                </CommandEmpty>
+                {transferSearch.trim().length < 2 ? (
+                  <p className="py-6 text-center text-xs text-muted-foreground px-3">
+                    Type at least 2 characters to search{" "}
+                    {transferBrokerCandidates.length > 0
+                      ? `(showing first ${transferBrokerCandidates.length} alphabetically)`
+                      : "team members"}
+                    .
+                  </p>
+                ) : (
+                  <CommandEmpty className="py-6 text-center text-xs text-muted-foreground">
+                    No brokers found.
+                  </CommandEmpty>
+                )}
                 <CommandGroup>
-                  {allBrokers
-                    .filter(
-                      (b) =>
-                        b.status === "active" &&
-                        b.id !== client?.assigned_broker?.id,
-                    )
-                    .map((broker) => {
+                  {transferBrokerCandidates.map((broker) => {
                       const roleLabel =
                         broker.role === "admin"
                           ? "Banker"

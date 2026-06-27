@@ -34,7 +34,7 @@ tags:
   - name: Admin Bootstrap
     description: Session init and section controls
   - name: Bulk Import
-    description: Platform-owner CSV bulk import (clients & realtors)
+    description: Platform-owner and mortgage-banker CSV bulk import (clients & realtors)
   - name: Admin Profile
     description: Authenticated broker's own profile management
   - name: Dashboard
@@ -362,7 +362,7 @@ components:
         meeting_end_time: { type: string, example: "14:30" }
         meeting_type:
           type: string
-          enum: [phone, video, teams]
+          enum: [phone, video, teams, office]
         status:
           type: string
           enum: [confirmed, completed, cancelled, no_show]
@@ -712,7 +712,9 @@ paths:
     get:
       tags: [Bulk Import]
       summary: Download client CSV import template
-      description: Platform owner only. Requires `BULK_CSV_IMPORT_ENABLED=1`.
+      description: |
+        Mortgage bankers (`admin`) and platform owners. Requires bulk import enabled
+        (`BULK_CSV_IMPORT_ENABLED=1` or `BULK_CSV_IMPORT_ALLOW_PRODUCTION=1` in production).
       security:
         - BrokerAuth: []
       responses:
@@ -723,7 +725,7 @@ paths:
               schema:
                 type: string
         "403":
-          description: Not a platform owner
+          description: Not a mortgage banker or platform owner
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -737,6 +739,9 @@ paths:
     get:
       tags: [Bulk Import]
       summary: Download realtor/people CSV import template
+      description: |
+        Mortgage bankers may bulk-import realtor partners only (not other mortgage bankers).
+        Platform owners may import any partner type.
       security:
         - BrokerAuth: []
       responses:
@@ -747,7 +752,7 @@ paths:
               schema:
                 type: string
         "403":
-          description: Not a platform owner
+          description: Not a mortgage banker or platform owner
         "404":
           description: Feature disabled
 
@@ -757,7 +762,8 @@ paths:
       summary: Validate uploaded CSV (dry run)
       description: |
         Parses and validates CSV, runs DB duplicate preflight, stores a staging job.
-        No records are created until commit.
+        No records are created until commit. Mortgage bankers (`admin`) and platform owners.
+        Mortgage bankers cannot bulk-create other mortgage bankers via realtor CSV.
       security:
         - BrokerAuth: []
       requestBody:
@@ -813,7 +819,7 @@ paths:
         "400":
           description: File or row validation error
         "403":
-          description: Not a platform owner
+          description: Not a mortgage banker or platform owner
         "404":
           description: Feature disabled
 
@@ -839,7 +845,10 @@ paths:
     post:
       tags: [Bulk Import]
       summary: Commit validated import job
-      description: Creates clients or brokers from staged preview rows.
+      description: |
+        Creates clients or brokers from staged preview rows. Importer owns created records
+        (`assigned_broker_id` / `created_by_broker_id`). Mortgage bankers cannot commit
+        rows that would create other mortgage bankers.
       security:
         - BrokerAuth: []
       parameters:
@@ -5067,7 +5076,7 @@ paths:
               properties:
                 broker_token:
                   type: string
-                  description: Broker's `public_token` or `"default"`
+                  description: Broker `public_token`, short URL `slug`, or `"default"`
                 client_name: { type: string }
                 client_email: { type: string, format: email }
                 client_phone: { type: string }
@@ -5078,7 +5087,7 @@ paths:
                   description: HH:MM format
                 meeting_type:
                   type: string
-                  enum: [phone, video, teams]
+                  enum: [phone, video, teams, office]
                 notes: { type: string }
       responses:
         "200":
@@ -5169,7 +5178,7 @@ paths:
                       client_name: { type: string }
                       client_email: { type: string, format: email }
                       client_phone: { type: string, nullable: true }
-                      meeting_type: { type: string, enum: [phone, video, teams] }
+                      meeting_type: { type: string, enum: [phone, video, teams, office] }
                       old_meeting_date: { type: string, format: date }
                       old_meeting_time: { type: string, example: "12:00:00" }
         "404":
@@ -5294,6 +5303,7 @@ paths:
                 allow_phone: { type: boolean }
                 allow_video: { type: boolean }
                 allow_teams: { type: boolean }
+                allow_office: { type: boolean }
                 availability:
                   type: array
                   items:
@@ -5390,7 +5400,7 @@ paths:
                 client_phone: { type: string }
                 meeting_date: { type: string, format: date }
                 meeting_time: { type: string, example: "10:00" }
-                meeting_type: { type: string, enum: [phone, video, teams] }
+                meeting_type: { type: string, enum: [phone, video, teams, office] }
                 notes: { type: string }
                 target_broker_id:
                   type: integer
@@ -5439,7 +5449,7 @@ paths:
                 broker_notes: { type: string }
                 meeting_date: { type: string, format: date }
                 meeting_time: { type: string, example: "15:00" }
-                meeting_type: { type: string, enum: [phone, video, teams] }
+                meeting_type: { type: string, enum: [phone, video, teams, office] }
                 cancelled_reason: { type: string }
                 cancelled_by: { type: string, enum: [client, broker] }
       responses:
