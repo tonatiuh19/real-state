@@ -391,10 +391,40 @@ export const uploadTaskDocument = createAsyncThunk(
         },
       });
 
-      return response.data;
+      const data = response.data;
+
+      // The PHP CDN can return HTTP 200 with a failure payload (e.g. bad mime
+      // type, oversized file, unsupported format). Treat those as errors so the
+      // caller never proceeds to mark the task complete with no stored file.
+      if (!data || data.success === false) {
+        return rejectWithValue(
+          (data && (data.error || data.message)) ||
+            "The file server rejected this document",
+        );
+      }
+
+      const hasPdf = Array.isArray(data.uploaded) && data.uploaded.length > 0;
+      const hasImage =
+        !!data.main_image ||
+        (Array.isArray(data.extra_images) && data.extra_images.length > 0);
+
+      if (fileType === "pdf" && !hasPdf) {
+        return rejectWithValue(
+          data.error || "The file server did not return an uploaded PDF",
+        );
+      }
+      if (fileType === "image" && !hasImage) {
+        return rejectWithValue(
+          data.error || "The file server did not return an uploaded image",
+        );
+      }
+
+      return data;
     } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.error || "Failed to upload document",
+        error.response?.data?.error ||
+          error.message ||
+          "Failed to upload document",
       );
     }
   },

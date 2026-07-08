@@ -1074,6 +1074,9 @@ paths:
     get:
       tags: [Brokers]
       summary: Get authenticated broker's share link
+      description: |
+        Returns `share_url` using `CLIENT_URL` (or `BASE_URL`) from server env.
+        Production fallback is `https://portal.encoremortgage.org` when env URLs are unset.
       security:
         - BrokerAuth: []
       responses:
@@ -3224,7 +3227,12 @@ paths:
   /client/tasks/{taskId}:
     patch:
       tags: [Tasks]
-      summary: Update a client task (mark in-progress, etc.)
+      summary: Update a client task (mark in-progress, submit for review, etc.)
+      description: >
+        Updates a client task status. When submitting a document task for review
+        (status "completed"/"pending_approval"), the task must already have at
+        least one uploaded document persisted in task_documents; otherwise the
+        request is rejected with 400 to prevent "submitted but empty" tasks.
       security:
         - ClientAuth: []
       parameters:
@@ -3239,13 +3247,27 @@ paths:
             schema:
               type: object
               properties:
-                status: { type: string }
+                status:
+                  type: string
+                  enum: [in_progress, completed, pending_approval]
       responses:
         "200":
           description: Updated
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: >
+            Invalid status, or the document task has no uploaded documents to
+            submit for review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /client/tasks/{taskId}/details:
     get:

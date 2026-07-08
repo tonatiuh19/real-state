@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import { MetaHelmet } from "@/components/MetaHelmet";
+import { ApplicationSubmitFlowLegend } from "@/components/ApplicationSubmitFlowLegend";
 import { applicationPageMeta } from "@/lib/seo-helpers";
 import { IS_DEV } from "@/lib/env";
 import { useToast } from "@/hooks/use-toast";
@@ -2281,6 +2282,8 @@ const ApplicationWizard = () => {
                               </div>
                             </div>
                           ))}
+
+                          <ApplicationSubmitFlowLegend variant="client" />
 
                           <div className="flex items-start gap-3 rounded-xl bg-primary/5 border border-primary/10 p-4 text-sm text-muted-foreground">
                             <FileText className="h-4 w-4 mt-0.5 text-primary shrink-0" />

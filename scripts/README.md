@@ -64,3 +64,22 @@ curl -s "https://yourdomain.com/api/cron/sync-teams-policy?secret=CRON_SECRET"
 ```
 
 This endpoint triggers the same `scripts/teams-policy-sync.sh` logic server-side.
+
+## Application Received flow backfill
+
+When Flow #3 was inactive, loans in `application_received` may have no welcome execution.
+
+```bash
+# Audit gap loans (dry run)
+npx tsx scripts/backfill-application-received-flows.ts
+
+# Status nudge backfill (sends real welcome SMS/email via cron)
+npx tsx scripts/backfill-application-received-flows.ts --execute
+
+# Edge-case smoke tests (synthetic data, rolled back)
+npm run validate:application-received-automation
+
+# Task document upload + submission guard, ownership, reopen migration (synthetic, rolled back)
+npm run validate:task-documents
+```
+

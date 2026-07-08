@@ -70,6 +70,7 @@ import { fetchClients } from "@/store/slices/clientsSlice";
 import { fetchTasks } from "@/store/slices/tasksSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import ShareLinkModal from "@/components/ShareLinkModal";
+import { ApplicationSubmitFlowLegend } from "@/components/ApplicationSubmitFlowLegend";
 import type { GetClientsResponse, TaskTemplate } from "@shared/api";
 
 interface NewLoanWizardProps {
@@ -1718,10 +1719,12 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                         <p className="text-xs text-muted-foreground mt-1">
                           This loan will be added to{" "}
                           {selectedBrokerId === user?.id ? "your" : "their"}{" "}
-                          pipeline.
+                          pipeline under Application Received.
                         </p>
                       </div>
                     </div>
+
+                    <ApplicationSubmitFlowLegend variant="broker" />
                   </div>
                 )}
 

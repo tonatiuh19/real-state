@@ -9145,12 +9145,48 @@ async function syncO365CalendarForBroker(
   return { synced_count: syncedCount };
 }
 
+// Base URL helpers — prefer explicit env vars; never emit localhost in production.
+const DEFAULT_CLIENT_PORTAL_URL = "https://portal.encoremortgage.org";
+
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/$/, "");
+}
+
+/** Public client portal origin — /apply share links, client-facing deep links. */
+function getClientPortalBaseUrl(): string {
+  const fromEnv =
+    process.env.CLIENT_URL?.trim() ||
+    process.env.BASE_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  if (fromEnv) return normalizeBaseUrl(fromEnv);
+
+  const adminUrl = process.env.ADMIN_URL?.trim();
+  if (adminUrl && !/localhost|127\.0\.0\.1/i.test(adminUrl)) {
+    return DEFAULT_CLIENT_PORTAL_URL;
+  }
+  if (process.env.NODE_ENV === "production") {
+    return DEFAULT_CLIENT_PORTAL_URL;
+  }
+  return normalizeBaseUrl(`http://localhost:${process.env.PORT || 8080}`);
+}
+
 // Base URL helper — prefers explicit BASE_URL, falls back to Vercel's auto-injected
-// VERCEL_URL (no https:// prefix), then localhost for local dev
+// VERCEL_URL (no https:// prefix), then localhost for local dev only.
 const getBaseUrl = (): string => {
-  if (process.env.BASE_URL) return process.env.BASE_URL;
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  return `http://localhost:${process.env.PORT || 8080}`;
+  const fromEnv =
+    process.env.BASE_URL?.trim() ||
+    process.env.CLIENT_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  if (fromEnv) return normalizeBaseUrl(fromEnv);
+
+  const adminUrl = process.env.ADMIN_URL?.trim();
+  if (adminUrl && !/localhost|127\.0\.0\.1/i.test(adminUrl)) {
+    return DEFAULT_CLIENT_PORTAL_URL;
+  }
+  if (process.env.NODE_ENV === "production") {
+    return DEFAULT_CLIENT_PORTAL_URL;
+  }
+  return normalizeBaseUrl(`http://localhost:${process.env.PORT || 8080}`);
 };
 
 // ─── Broker slug helpers ──────────────────────────────────────────────────────
@@ -14166,6 +14202,54 @@ async function sendPublicApplicationWelcomeEmail(
 }
 
 /**
+ * Fallback welcome email when no active application_received reminder flow
+ * is configured. Loads loan + client from DB and reuses the public wizard template.
+ */
+async function sendApplicationReceivedFallbackEmail(
+  loanId: number,
+  tenantId: number,
+): Promise<void> {
+  const [loanRows] = await pool.query<RowDataPacket[]>(
+    `SELECT la.application_number, la.loan_type, la.loan_amount, la.property_value,
+            la.property_address, la.property_city, la.property_state, la.property_zip,
+            c.first_name, c.last_name, c.email
+     FROM loan_applications la
+     INNER JOIN clients c ON la.client_user_id = c.id
+     WHERE la.id = ? AND la.tenant_id = ?`,
+    [loanId, tenantId],
+  );
+  if (!loanRows.length || !loanRows[0].email) return;
+
+  const loan = loanRows[0];
+  const propertyAddress = [
+    loan.property_address,
+    loan.property_city,
+    loan.property_state,
+    loan.property_zip,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const fmt = (n: unknown) =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(Number(n) || 0);
+
+  await sendPublicApplicationWelcomeEmail(
+    loan.email,
+    loan.first_name,
+    loan.last_name,
+    loan.application_number,
+    loan.loan_type || "purchase",
+    fmt(loan.property_value),
+    fmt(loan.loan_amount),
+    propertyAddress,
+  );
+}
+
+/**
  * Send email when task is reopened for rework
  */
 async function sendTaskReopenedEmail(
@@ -16285,7 +16369,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
         property_value, property_address, property_unit, property_city, property_state, property_zip,
         property_type, down_payment, loan_purpose, marital_status, dependent_count, years_at_address,
         status, current_step, total_steps, estimated_close_date, notes, submitted_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'app_sent',1,8,?,?,NOW())`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'application_received',1,8,?,?,NOW())`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
@@ -16358,25 +16442,25 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       [
         MORTGAGE_TENANT_ID,
         clientId,
-        "New Loan Application Created",
-        `Your loan application ${applicationNumber} has been created. Please complete the assigned tasks.`,
+        "Application Received",
+        `Your loan application ${applicationNumber} has been received. A loan officer will be in touch shortly.`,
       ],
     );
 
     await connection.commit();
 
-    // Send welcome email to client
-    try {
-      await sendClientLoanWelcomeEmail(
-        client_email,
-        client_first_name,
-        applicationNumber,
-        new Intl.NumberFormat("en-US").format(parsedLoanAmount),
-        tasksWithDates,
-      );
-    } catch (emailError) {
-      console.error("Email sending failed (non-fatal):", emailError);
-    }
+    // Start Application Received reminder flow (welcome email/SMS + nurture sequence)
+    ensureApplicationReceivedAutomation(
+      applicationId,
+      MORTGAGE_TENANT_ID,
+      "manual_create",
+      loanBrokerUserId,
+    ).catch((err) =>
+      console.error(
+        "Reminder flow trigger error (manual loan create):",
+        err,
+      ),
+    );
 
     res.json({
       success: true,
@@ -16906,11 +16990,14 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       actionUrl: `/admin/clients/${clientId}`,
     });
 
-    // Trigger reminder flows for application_received event (non-fatal)
-    triggerReminderFlows(
+    // Trigger Application Received reminder flow (non-fatal)
+    const publicFlowBrokerId =
+      resolvedBrokerUserId ?? resolvedPartnerBrokerId ?? null;
+    ensureApplicationReceivedAutomation(
       applicationId,
-      "application_received",
       MORTGAGE_TENANT_ID,
+      "public_apply",
+      publicFlowBrokerId,
     ).catch((err) =>
       console.error("Reminder flow trigger error (new application):", err),
     );
@@ -17377,7 +17464,7 @@ const handleGetMyShareLink: RequestHandler = async (req, res) => {
       ]);
     }
 
-    const baseUrl = getBaseUrl();
+    const baseUrl = getClientPortalBaseUrl();
     const shareUrl = slug
       ? `${baseUrl}/apply/${slug}`
       : `${baseUrl}/apply/${token}`;
@@ -17420,7 +17507,7 @@ const handleRegenerateShareLink: RequestHandler = async (req, res) => {
 
     const newToken = rows[0].public_token;
     const slug: string | null = rows[0].slug ?? null;
-    const baseUrl = getBaseUrl();
+    const baseUrl = getClientPortalBaseUrl();
     const shareUrl = slug
       ? `${baseUrl}/apply/${slug}`
       : `${baseUrl}/apply/${newToken}`;
@@ -17467,7 +17554,7 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
     }
 
     const broker = rows[0];
-    const baseUrl = getBaseUrl();
+    const baseUrl = getClientPortalBaseUrl();
     const shareUrl = broker.slug
       ? `${baseUrl}/apply/${broker.slug}`
       : `${baseUrl}/apply/${broker.public_token}`;
@@ -18488,9 +18575,18 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     );
 
     // Start reminder flows for this pipeline status change (non-blocking)
-    triggerReminderFlows(loanId, newStatus, MORTGAGE_TENANT_ID).catch((err) =>
-      console.error("Reminder flow trigger error:", err),
-    );
+    if (newStatus === "application_received") {
+      ensureApplicationReceivedAutomation(
+        loanId,
+        MORTGAGE_TENANT_ID,
+        "status_change",
+        brokerId,
+      ).catch((err) => console.error("Reminder flow trigger error:", err));
+    } else {
+      triggerReminderFlows(loanId, newStatus, MORTGAGE_TENANT_ID).catch(
+        (err) => console.error("Reminder flow trigger error:", err),
+      );
+    }
 
     // R4 fix: cancel any in-flight reminder flow executions for this loan when
     // it reaches a terminal status (denied, cancelled, closed, funded). Prevents
@@ -21268,7 +21364,7 @@ const handleGetBrokerShareLinkByAdmin: RequestHandler = async (req, res) => {
       ]);
     }
 
-    const baseUrl = getBaseUrl();
+    const baseUrl = getClientPortalBaseUrl();
     const shareUrl = slug
       ? `${baseUrl}/apply/${slug}`
       : `${baseUrl}/apply/${token}`;
@@ -22688,6 +22784,25 @@ const handleUploadTaskDocument: RequestHandler = async (req, res) => {
         success: false,
         error: "task_id, document_type, filename, and file_path are required",
       });
+    }
+
+    // When a client is uploading, verify the task belongs to their own loan so
+    // one client cannot attach documents to another client's task.
+    const clientId = (req as any).clientId || null;
+    if (clientId) {
+      const [ownRows] = await pool.query<RowDataPacket[]>(
+        `SELECT t.id FROM tasks t
+         INNER JOIN loan_applications la ON t.application_id = la.id
+         WHERE t.id = ? AND la.client_user_id = ? AND t.tenant_id = ?
+         LIMIT 1`,
+        [task_id, clientId, MORTGAGE_TENANT_ID],
+      );
+      if (ownRows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Task not found or not accessible",
+        });
+      }
     }
 
     const [result] = await pool.query(
@@ -24946,6 +25061,38 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
     const completedAt = actualStatus === "pending_approval" ? new Date() : null;
     const previousStatus = tasks[0].status;
 
+    // GUARD: a document task cannot be submitted for review unless the client
+    // actually persisted at least one document. This prevents the "submitted
+    // but empty" state where the broker sees nothing to approve (LA08597405).
+    if (actualStatus === "pending_approval") {
+      const templateId = tasks[0].template_id;
+      if (templateId) {
+        const [fileFieldRows] = await pool.query<any[]>(
+          `SELECT COUNT(*) AS cnt FROM task_form_fields
+           WHERE task_template_id = ?
+             AND field_type IN ('file_pdf', 'file_image', 'file_upload')`,
+          [templateId],
+        );
+        const requiresDocuments = (fileFieldRows[0]?.cnt || 0) > 0;
+
+        if (requiresDocuments) {
+          const [docRows] = await pool.query<any[]>(
+            `SELECT COUNT(*) AS cnt FROM task_documents WHERE task_id = ?`,
+            [taskId],
+          );
+          const documentCount = docRows[0]?.cnt || 0;
+
+          if (documentCount === 0) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "This task requires at least one uploaded document before it can be submitted for review. Please upload your document(s) and try again.",
+            });
+          }
+        }
+      }
+    }
+
     await pool.query(
       "UPDATE tasks SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?",
       [actualStatus, completedAt, taskId],
@@ -26154,12 +26301,13 @@ async function triggerPipelineAutomation(
  * whose loan_type_filter allows the loan's loan_type, then create
  * reminder_flow_executions for each matching flow.
  * Non-throwing — failures are logged only.
+ * Returns how many new executions were created (0 when no active flow matches).
  */
 async function triggerReminderFlows(
   loanId: number,
   newStatus: string,
   tenantId: number,
-): Promise<void> {
+): Promise<{ triggeredCount: number; flowIds: number[] }> {
   try {
     // Load loan context needed for execution context_data
     const [loanRows] = await pool.query<RowDataPacket[]>(
@@ -26175,7 +26323,7 @@ async function triggerReminderFlows(
       [loanId, tenantId],
     );
 
-    if (!loanRows.length) return;
+    if (!loanRows.length) return { triggeredCount: 0, flowIds: [] };
     const loan = loanRows[0];
     const loanType: string = loan.loan_type || "purchase";
 
@@ -26196,7 +26344,12 @@ async function triggerReminderFlows(
       [tenantId, newStatus, loanType, loan.broker_id ?? -1],
     );
 
-    if (!flows.length) return;
+    if (!flows.length) {
+      console.warn(
+        `⚠️ No active reminder flows for trigger_event=${newStatus} loan=#${loanId} (${loan.application_number})`,
+      );
+      return { triggeredCount: 0, flowIds: [] };
+    }
 
     const brokerName = loan.broker_first_name
       ? `${loan.broker_first_name} ${loan.broker_last_name}`.trim()
@@ -26216,6 +26369,9 @@ async function triggerReminderFlows(
       broker_name: brokerName,
       broker_id: loan.broker_id ?? null,
     });
+
+    const flowIds: number[] = [];
+    let triggeredCount = 0;
 
     for (const flow of flows) {
       // R2 fix: Skip if there is already an active execution for the same
@@ -26273,9 +26429,85 @@ async function triggerReminderFlows(
       console.log(
         `🔔 Reminder flow #${flow.id} triggered for loan #${loanId} (${newStatus} / ${loanType})`,
       );
+      flowIds.push(flow.id);
+      triggeredCount++;
     }
+    return { triggeredCount, flowIds };
   } catch (err) {
     console.error("❌ Reminder flow trigger failed:", err);
+    return { triggeredCount: 0, flowIds: [] };
+  }
+}
+
+type ApplicationReceivedAutomationSource =
+  | "public_apply"
+  | "manual_create"
+  | "status_change";
+
+/**
+ * Triggers the Application Received reminder flow(s). When no active flow is
+ * configured, sends a fallback welcome email and alerts admins + the assigned LO.
+ */
+async function ensureApplicationReceivedAutomation(
+  loanId: number,
+  tenantId: number,
+  source: ApplicationReceivedAutomationSource,
+  notifyBrokerId?: number | null,
+): Promise<void> {
+  const { triggeredCount } = await triggerReminderFlows(
+    loanId,
+    "application_received",
+    tenantId,
+  );
+  if (triggeredCount > 0) return;
+
+  console.warn(
+    `⚠️ application_received automation fallback for loan #${loanId} (source=${source})`,
+  );
+
+  try {
+    await sendApplicationReceivedFallbackEmail(loanId, tenantId);
+  } catch (err) {
+    console.error("❌ Fallback welcome email failed:", err);
+  }
+
+  try {
+    const [loanRows] = await pool.query<RowDataPacket[]>(
+      `SELECT la.application_number, la.broker_user_id,
+              CONCAT(c.first_name, ' ', c.last_name) AS client_name
+       FROM loan_applications la
+       INNER JOIN clients c ON la.client_user_id = c.id
+       WHERE la.id = ? AND la.tenant_id = ?`,
+      [loanId, tenantId],
+    );
+    if (!loanRows.length) return;
+
+    const loan = loanRows[0];
+    const brokerIds = new Set<number>();
+    const assignedBrokerId =
+      notifyBrokerId ?? loan.broker_user_id ?? null;
+    if (assignedBrokerId) brokerIds.add(Number(assignedBrokerId));
+
+    const [admins] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers
+       WHERE tenant_id = ? AND status = 'active'
+         AND role IN ('admin', 'superadmin', 'platform_owner')`,
+      [tenantId],
+    );
+    for (const admin of admins) brokerIds.add(admin.id);
+
+    if (brokerIds.size === 0) return;
+
+    await createBrokerNotification({
+      brokerIds: [...brokerIds],
+      title: "Welcome flow did not run",
+      message: `No active Application Received reminder flow. A fallback welcome email was attempted for ${loan.client_name} (${loan.application_number}). Reactivate the flow in Reminder Flows.`,
+      category: "loan",
+      type: "warning",
+      actionUrl: "/admin/reminder-flows",
+    });
+  } catch (err) {
+    console.error("❌ Admin alert for missing welcome flow failed:", err);
   }
 }
 

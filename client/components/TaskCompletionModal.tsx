@@ -44,6 +44,10 @@ import {
 } from "@/store/slices/clientPortalSlice";
 import PDFSigningViewer from "@/components/PDFSigningViewer";
 import { toast } from "@/hooks/use-toast";
+import {
+  validateTaskFile,
+  TASK_FILE_ACCEPT,
+} from "@/lib/task-file-validation";
 
 interface TaskCompletionModalProps {
   taskId: number | null;
@@ -138,8 +142,21 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
   });
 
   // ─── File helpers ───────────────────────────────────────────────────────────
+  // Document fields accept EITHER a PDF or a photo (JPG/PNG). Validation +
+  // routing live in a shared, unit-tested util so the rules can't drift from
+  // the PHP server (LA08597405 incident).
   const handleFileSelect = (field: any, file: File) => {
-    const fileType = field.field_type === "file_pdf" ? "pdf" : "image";
+    const result = validateTaskFile(file);
+    if (!result.ok || !result.fileType) {
+      toast({
+        title: result.errorTitle ?? "Invalid file",
+        description: result.errorMessage,
+        variant: "destructive",
+      });
+      return;
+    }
+    const fileType = result.fileType;
+
     setUploadedFiles((prev) => {
       const next = new Map(prev);
       next.set(field.id, { fieldId: field.id, file, fileType });
@@ -229,22 +246,37 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
         await dispatch(submitTaskForm({ taskId: taskId!, responses })).unwrap();
       }
 
-      // 2. Upload each file individually, tied to its field_id
+      // 2. Upload each file individually, tied to its field_id.
+      // CRITICAL: every selected file MUST land on the CDN *and* be persisted
+      // as task_documents metadata. If any file fails to persist we abort
+      // before marking the task complete, otherwise the broker would see a
+      // "submitted" task with no documents to review (see LA08597405 incident).
+      let persistedFiles = 0;
+      const failedFiles: string[] = [];
+
       for (const [, uploaded] of uploadedFiles.entries()) {
+        const label =
+          fileFields.find((f) => f.id === uploaded.fieldId)?.field_label ||
+          uploaded.file.name;
         const formData = new FormData();
         formData.append("main_folder", "encore");
         formData.append("id", String(taskId));
 
-        if (uploaded.fileType === "pdf") {
-          formData.append("pdfs[]", uploaded.file);
-          const result = await dispatch(
-            uploadTaskDocument({
-              taskId: taskId!,
-              formData,
-              fileType: "pdf",
-            }),
-          ).unwrap();
-          if (result.uploaded?.length > 0) {
+        try {
+          if (uploaded.fileType === "pdf") {
+            formData.append("pdfs[]", uploaded.file);
+            const result = await dispatch(
+              uploadTaskDocument({
+                taskId: taskId!,
+                formData,
+                fileType: "pdf",
+              }),
+            ).unwrap();
+
+            if (!result.uploaded?.length) {
+              throw new Error("The file server did not accept this document");
+            }
+
             await dispatch(
               saveTaskDocumentMetadata({
                 taskId: taskId!,
@@ -255,21 +287,26 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
                 })),
               }),
             ).unwrap();
-          }
-        } else {
-          formData.append("images[]", uploaded.file);
-          const result = await dispatch(
-            uploadTaskDocument({
-              taskId: taskId!,
-              formData,
-              fileType: "image",
-            }),
-          ).unwrap();
-          const allImages: any[] = [];
-          if (result.main_image) allImages.push(result.main_image);
-          if (result.extra_images?.length)
-            allImages.push(...result.extra_images);
-          if (allImages.length > 0) {
+            persistedFiles += result.uploaded.length;
+          } else {
+            formData.append("images[]", uploaded.file);
+            const result = await dispatch(
+              uploadTaskDocument({
+                taskId: taskId!,
+                formData,
+                fileType: "image",
+              }),
+            ).unwrap();
+
+            const allImages: any[] = [];
+            if (result.main_image) allImages.push(result.main_image);
+            if (result.extra_images?.length)
+              allImages.push(...result.extra_images);
+
+            if (allImages.length === 0) {
+              throw new Error("The file server did not accept this document");
+            }
+
             await dispatch(
               saveTaskDocumentMetadata({
                 taskId: taskId!,
@@ -280,11 +317,31 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
                 })),
               }),
             ).unwrap();
+            persistedFiles += allImages.length;
           }
+        } catch (uploadErr: any) {
+          failedFiles.push(`${label} (${String(uploadErr?.message ?? uploadErr)})`);
         }
       }
 
-      // 3. Mark task as complete
+      // Abort completion if any required document failed to persist.
+      if (failedFiles.length > 0) {
+        throw new Error(
+          `We couldn't save the following document(s): ${failedFiles.join(
+            ", ",
+          )}. Please try again. Your task was NOT submitted.`,
+        );
+      }
+
+      // Safety net: a task with file fields must have persisted at least one
+      // document before it can be submitted for broker review.
+      if (hasFiles && persistedFiles === 0) {
+        throw new Error(
+          "No documents were saved. Please re-upload your files before submitting.",
+        );
+      }
+
+      // 3. Mark task as complete (only reached when everything persisted)
       await dispatch(completeTask(taskId!)).unwrap();
       setIsDone(true);
       setTimeout(() => onClose(), 2200);
@@ -462,10 +519,9 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
   // ─── Render file upload field ───────────────────────────────────────────────
   const renderFileField = (field: any) => {
     const uploaded = uploadedFiles.get(field.id);
-    const isPdf = field.field_type === "file_pdf";
-    const accept = isPdf
-      ? ".pdf,application/pdf"
-      : "image/png,image/jpeg,image/jpg";
+    // Document fields accept a PDF or a photo. Preview reflects the actual file.
+    const uploadedIsPdf = uploaded?.fileType === "pdf";
+    const accept = TASK_FILE_ACCEPT;
     const isRequired = !!field.is_required;
     const inputId = `file-${field.id}`;
 
@@ -477,7 +533,7 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
             {isRequired && <span className="text-destructive ml-1">*</span>}
           </Label>
           <Badge variant="outline" className="text-[10px] h-4 px-1.5">
-            {isPdf ? "PDF" : "Image"}
+            PDF or Photo
           </Badge>
         </div>
 
@@ -489,7 +545,7 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
           // File selected — show preview row
           <div className="flex items-center justify-between gap-2 p-3 bg-muted/40 border rounded-lg overflow-hidden">
             <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-              {isPdf ? (
+              {uploadedIsPdf ? (
                 <FileText className="h-5 w-5 text-red-500 shrink-0" />
               ) : (
                 <Upload className="h-5 w-5 text-blue-500 shrink-0" />
@@ -517,17 +573,13 @@ export const TaskCompletionModal: React.FC<TaskCompletionModalProps> = ({
             htmlFor={inputId}
             className="flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-lg p-6 cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors group"
           >
-            {isPdf ? (
-              <FileText className="h-9 w-9 text-muted-foreground/50 group-hover:text-primary/60 transition-colors" />
-            ) : (
-              <Upload className="h-9 w-9 text-muted-foreground/50 group-hover:text-primary/60 transition-colors" />
-            )}
+            <Upload className="h-9 w-9 text-muted-foreground/50 group-hover:text-primary/60 transition-colors" />
             <div className="text-center">
               <p className="text-sm font-medium text-primary">
-                Click to upload {isPdf ? "PDF" : "image"}
+                Click to upload or take a photo
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {isPdf ? "PDF only — max 10 MB" : "PNG or JPG — max 10 MB"}
+                PDF (max 5 MB) or JPG/PNG photo (max 10 MB)
               </p>
             </div>
             <input

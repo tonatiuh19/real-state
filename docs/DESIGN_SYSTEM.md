@@ -21,7 +21,10 @@
 ### Core Workflow
 
 ```
-1. Client submits loan application via public wizard (or broker creates it manually)
+1. Client submits loan application via public wizard **or** broker creates it manually (New Loan wizard)
+        ↓
+   **Application Received** reminder flow starts on submit (welcome email/SMS + nurture).
+   If no active flow is configured, a fallback welcome email is sent and admins are alerted.
         ↓
 2. Mortgage Banker reviews, assigns loan to a broker and optionally a Realtor partner
         ↓
@@ -121,7 +124,7 @@ The entire app is deployed as a **single Vercel project**. The `vercel.json` rou
 
 - All API calls go to `https://<your-vercel-domain>/api/<endpoint>`
 - Example: `https://real-state-one-omega.vercel.app/api/admin/auth/send-code`
-- Set `BASE_URL` in `.env` to override the domain (used by `getBaseUrl()` helper in the API)
+- Set `CLIENT_URL` (public `/apply` share links) and `BASE_URL` in production `.env`. Share links use `getClientPortalBaseUrl()`; falls back to `https://portal.encoremortgage.org` when `ADMIN_URL` is set and env URLs are missing.
 
 ### Loan Application Status Enum (Full Pipeline)
 
@@ -139,7 +142,18 @@ docs_out
 loan_funded
 ```
 
-> **Note:** `draft` is the initial state when a Mortgage Banker creates a loan manually (before the app is formally sent). The **Pipeline Kanban** board displays 9 of these 11 statuses as columns — it skips `app_sent` and `prequalified` as standalone columns (those statuses still exist in the DB and trigger reminder flows, but loans at those stages appear in the `draft`/`application_received` columns on the board).
+> **Note:** `draft` is used for in-progress public wizard auto-saves. **Manual broker create** and **public submit** both land on `application_received` and start the Application Received reminder flow. The **Pipeline Kanban** displays 9 of these 11 statuses as columns — it skips `app_sent` and `prequalified` as standalone columns (those statuses still exist in the DB and trigger reminder flows, but loans at those stages appear in the `draft`/`application_received` columns on the board).
+
+### Application submit — automation legend
+
+Both submit surfaces show `ApplicationSubmitFlowLegend` on the final review step:
+
+| Surface | Component | Copy variant |
+| ------- | --------- | ------------ |
+| Public wizard (`ApplicationWizard` step 5) | `ApplicationSubmitFlowLegend` | `client` — borrower-facing |
+| New Loan wizard (`NewLoanWizard` step 5) | `ApplicationSubmitFlowLegend` | `broker` — explains client will get welcome email/SMS |
+
+Backend: `ensureApplicationReceivedAutomation()` in `api/index.ts` — triggers `triggerReminderFlows('application_received')`; on zero matches, sends fallback welcome email and notifies admins + assigned LO.
 
 ### Loan Types
 
