@@ -3716,3 +3716,78 @@ export interface BulkImportJobResponse {
     results?: BulkImportCommitResultRow[];
   };
 }
+
+// ============================================================
+// FREE ANALYSIS (credit_analyses — text-based tri-merge PDF)
+// ============================================================
+
+export type CreditAnalysisMode = "client" | "agent";
+
+/**
+ * How well we were able to read text out of the uploaded report.
+ * `ok` = usable text extracted; anything else means scores/negatives may be
+ * incomplete or absent and the UI/analysis copy should say so honestly.
+ */
+export type CreditAnalysisExtractionStatus =
+  | "ok"
+  | "empty"
+  | "parse_failed"
+  | "unsupported_type";
+
+export interface CreditAnalysisScoreSet {
+  transunion?: number | null;
+  experian?: number | null;
+  equifax?: number | null;
+}
+
+export interface CreditAnalysisNegativeItem {
+  type: string;
+  creditor?: string;
+  bureaus?: string[];
+  detail?: string;
+}
+
+/** Flat analyst payload — scalars only for email templates. */
+export type CreditAnalysisAnalystFlat = Record<string, string | number | null>;
+
+export interface CreditAnalysisResult {
+  id: number;
+  tenant_id?: number;
+  client_id: number;
+  broker_user_id?: number | null;
+  mode: CreditAnalysisMode;
+  language?: "en" | "es";
+  goal?: string | null;
+  provider_detected?: string | null;
+  scores: CreditAnalysisScoreSet | null;
+  negatives: CreditAnalysisNegativeItem[];
+  suggested_labels: string[];
+  analysis_html: string;
+  analysis_text?: string | null;
+  email_sent: boolean;
+  email_opt_in?: boolean;
+  generated_at: string;
+  extraction_status: CreditAnalysisExtractionStatus;
+  chars_extracted?: number;
+  analyst?: CreditAnalysisAnalystFlat | null;
+  report_file_name?: string | null;
+  client_name?: string | null;
+}
+
+export interface CreateCreditAnalysisResponse {
+  success: boolean;
+  analysis?: CreditAnalysisResult;
+  error?: string;
+}
+
+export interface ListCreditAnalysesResponse {
+  success: boolean;
+  analyses: CreditAnalysisResult[];
+  error?: string;
+}
+
+export interface GetCreditAnalysisResponse {
+  success: boolean;
+  analysis?: CreditAnalysisResult;
+  error?: string;
+}
