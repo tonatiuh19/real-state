@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useMemo } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Mail,
@@ -33,9 +33,16 @@ import {
   selectIsClientAuthenticated,
 } from "@/store/slices/clientAuthSlice";
 import { ResendCodeButton } from "@/components/ResendCodeButton";
+import { sanitizePortalNextPath } from "@/lib/portalDeepLink";
+
 const ClientLogin = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const postLoginPath = useMemo(
+    () => sanitizePortalNextPath(searchParams.get("next")),
+    [searchParams],
+  );
   const error = useAppSelector(selectClientAuthError);
   const shouldRedirect = useAppSelector(selectShouldRedirectToWizard);
   const isAuthenticated = useAppSelector(selectIsClientAuthenticated);
@@ -49,12 +56,12 @@ const ClientLogin = () => {
     "email" | "sms" | "call"
   >("email");
 
-  // Redirect authenticated users to portal
+  // Redirect authenticated users into portal (honor ?next=/portal/…)
   useEffect(() => {
     if (isAuthenticated) {
-      navigate("/portal");
+      navigate(postLoginPath);
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, postLoginPath]);
 
   // Handle redirect to wizard when client not found
   useEffect(() => {
@@ -107,7 +114,7 @@ const ClientLogin = () => {
       );
 
       if (verifyClientCode.fulfilled.match(result)) {
-        navigate("/portal");
+        navigate(postLoginPath);
       }
     },
   });

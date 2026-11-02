@@ -142,7 +142,7 @@ export const createLoan = createAsyncThunk(
       return data;
     } catch (error: any) {
       return rejectWithValue(
-        error.response?.data?.error || "Failed to create loan application",
+        error.response?.data ?? { error: "Failed to create loan application" },
       );
     }
   },

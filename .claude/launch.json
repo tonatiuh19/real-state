@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 8080
+    },
+    {
+      "name": "dev-no-stripe",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "STRIPE_SECRET_KEY= STRIPE_PUBLISHABLE_KEY= npm run dev"],
+      "port": 8080
+    }
+  ]
+}

@@ -274,9 +274,10 @@ function runStaticUiApiTests() {
   if (!apiIndex.includes("handleCreateBroker")) {
     fail("static: handleCreateBroker present in api");
   } else if (
-    !/handleCreateBroker[\s\S]{0,4000}req\.body[\s\S]{0,400}created_by_broker_id/.test(
+    !/handleCreateBroker[\s\S]{0,5000}created_by_broker_id[\s\S]{0,200}=\s*req\.body/.test(
       apiIndex,
-    )
+    ) &&
+    !/handleCreateBroker[\s\S]{0,5000}bodyCreatedByBrokerId/.test(apiIndex)
   ) {
     finding(
       "API-001",

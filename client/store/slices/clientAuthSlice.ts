@@ -22,7 +22,10 @@ interface ClientAuthState {
 }
 
 const initialState: ClientAuthState = {
-  sessionToken: localStorage.getItem("client_session_token"),
+  sessionToken:
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("client_session_token")
+      : null,
   client: null,
   isAuthenticated: false,
   loading: false,

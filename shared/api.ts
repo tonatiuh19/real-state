@@ -45,6 +45,8 @@ export interface CreateLoanRequest {
   notes?: string;
   /** Platform owner may assign loan to another mortgage banker; defaults to session broker */
   broker_user_id?: number | null;
+  /** When per-owner CRM flags are on, pass true to proceed after duplicate-phone warning */
+  confirm_duplicate_phone?: boolean;
   tasks: Array<{
     title: string;
     description: string;
@@ -139,6 +141,9 @@ export interface LoanDetails {
   employment_status: string | null;
   employer_name: string | null;
   years_employed: string | null;
+  employer_phone: string | null;
+  employer_address: string | null;
+  employment_start_date: string | null;
   source_category: LeadSourceCategory | null;
   tasks: LoanTask[];
 }
@@ -712,6 +717,8 @@ export interface CreateBrokerRequest {
   role?: "broker" | "admin";
   license_number?: string;
   specializations?: string[];
+  /** Platform owner: assign partner to this Mortgage Banker at create time */
+  created_by_broker_id?: number | null;
 }
 
 export interface UpdateBrokerRequest {
@@ -887,6 +894,8 @@ export interface GetClientsResponse {
     assigned_broker_first_name: string | null;
     assigned_broker_last_name: string | null;
     assigned_broker_role: string | null;
+    /** Per-owner CRM list visibility (Phase 0 column; filtered when flags on) */
+    list_visibility?: "active" | "hidden" | "archived";
     total_applications: number;
     active_applications: number;
     total_conversations: number;
@@ -1294,6 +1303,8 @@ export interface ConversationThread {
   client_assigned_broker_name?: string | null;
   /** broker_id of the client's formal assigned broker (mirrors client.assigned_broker_id). */
   client_assigned_broker_id?: number | null;
+  /** Per-owner CRM scope (Phase 2+); denormalized from clients.assigned_broker_id */
+  owner_client_scope_broker_id?: number | null;
   last_message_at: string;
   last_message_preview?: string | null;
   last_message_type: "email" | "sms" | "whatsapp" | "call" | "internal_note";
@@ -1395,6 +1406,8 @@ export interface GetConversationThreadsRequest {
   priority?: "low" | "normal" | "high" | "urgent";
   search?: string;
   include_broadcast?: boolean;
+  /** Per-owner CRM: mine | shared | all (flag-gated; ignored when flags off) */
+  inbox_scope?: "mine" | "shared" | "all";
 }
 
 export interface GetConversationThreadsResponse {
@@ -1533,6 +1546,27 @@ export interface SendGroupMessageRequest {
 export interface GetConversationsConfigResponse {
   success: boolean;
   group_conversations_enabled: boolean;
+}
+
+export interface GetCrmConfigResponse {
+  success: boolean;
+  per_owner_crm: {
+    enabled: boolean;
+    allowProduction: boolean;
+    pilotBrokerIds: number[];
+    activeForBroker: boolean;
+    /** Set when enabled=true but activeForBroker=false — explains misconfiguration */
+    inactive_reason?: "disabled" | null;
+  };
+}
+
+export interface ClaimSharedConversationResponse {
+  success: boolean;
+  client_id?: number;
+  client_name?: string;
+  conversation_id?: string;
+  error?: string;
+  existing_client_id?: number;
 }
 
 export interface GetGroupsByApplicationResponse {
@@ -1932,6 +1966,20 @@ export interface SendShareLinkEmailResponse {
   success: boolean;
   message: string;
 }
+
+// ─── Broker notification preferences (Profile self-edit) ─────────────────────
+
+export type {
+  BrokerEmailAlertEvent,
+  BrokerNotificationPrefs,
+  BrokerNotificationPrefsResponse,
+} from "./broker-notification-prefs";
+
+export {
+  BROKER_EMAIL_ALERT_EVENTS,
+  BROKER_EMAIL_ALERT_LABELS,
+  defaultBrokerNotificationPrefs,
+} from "./broker-notification-prefs";
 
 // ─── Broker Profile (self-edit) ───────────────────────────────────────────────
 
@@ -3087,6 +3135,7 @@ export interface GetMortgiUsageResponse {
 // ─── Realtor Broadcast Center ──────────────────────────────────────────────────
 
 export type RealtorBroadcastChannel = "email" | "sms" | "both";
+export type RealtorBroadcastSmsEngine = "messages" | "bulk";
 export type RealtorBroadcastStatus =
   | "draft"
   | "scheduled"
@@ -3094,6 +3143,21 @@ export type RealtorBroadcastStatus =
   | "sent"
   | "failed"
   | "cancelled";
+
+export interface RealtorBroadcastBulkStats {
+  total?: number;
+  recipients?: number;
+  attempts?: number;
+  unaddressable?: number;
+  queued?: number;
+  sent?: number;
+  scheduled?: number;
+  delivered?: number;
+  read?: number;
+  undelivered?: number;
+  failed?: number;
+  canceled?: number;
+}
 
 export interface RealtorBroadcastAudienceFilter {
   segments: string[];
@@ -3111,9 +3175,19 @@ export interface RealtorBroadcast {
   created_by: number;
   title: string;
   channel: RealtorBroadcastChannel;
+  /** SMS delivery engine — messages (legacy) or bulk (Twilio Bulk Messaging). */
+  sms_engine?: RealtorBroadcastSmsEngine;
+  twilio_operation_ids?: string[] | null;
+  bulk_stats?: RealtorBroadcastBulkStats | null;
+  /** 0–100 progress for Bulk campaigns when sending. */
+  progress_pct?: number | null;
   subject: string | null;
   body_email: string | null;
   body_sms: string | null;
+  media_url?: string | null;
+  media_content_type?: string | null;
+  media_filename?: string | null;
+  short_link_code?: string | null;
   audience_filter: RealtorBroadcastAudienceFilter;
   recipient_count: number;
   sent_count: number;
@@ -3140,6 +3214,7 @@ export interface RealtorBroadcastRecipient {
   sms_status: string | null;
   email_ext_id: string | null;
   sms_ext_id: string | null;
+  sms_bulk_message_id?: string | null;
   conversation_id: string | null;
   error_message: string | null;
   sent_at: string | null;
@@ -3204,12 +3279,62 @@ export interface CreateBroadcastRequest {
   audience_filter: RealtorBroadcastAudienceFilter;
   scheduled_at?: string; // ISO UTC
   send_now?: boolean;
+  /** Optional MMS for small SMS audiences (capped server-side). */
+  media_url?: string | null;
+  media_content_type?: string | null;
+  media_filename?: string | null;
+  /** Optional short_links.code used in the SMS body. */
+  short_link_code?: string | null;
+}
+
+export interface ShortLinkRow {
+  id: number;
+  code: string;
+  short_url: string;
+  target_url: string;
+  title: string | null;
+  asset_id?: string | null;
+  broadcast_id?: number | null;
+  click_count: number;
+  last_clicked_at: string | null;
+  created_at: string;
+}
+
+export interface CreateShortLinkResponse {
+  success: boolean;
+  short_link: ShortLinkRow & {
+    content_type?: string;
+    filename?: string | null;
+  };
+  error?: string;
+}
+
+export interface UploadShortLinkAssetResponse {
+  success: boolean;
+  short_link?: ShortLinkRow & {
+    content_type?: string;
+    filename?: string | null;
+  };
+  asset?: {
+    id: string;
+    url: string;
+    content_type: string;
+    filename: string | null;
+  };
+  error?: string;
+}
+
+export interface GetShortLinksResponse {
+  success: boolean;
+  short_links: ShortLinkRow[];
 }
 
 export interface PreviewBroadcastAudienceRequest {
   audience_filter: RealtorBroadcastAudienceFilter;
   channel: RealtorBroadcastChannel;
   body_sms?: string;
+  /** When set, estimated_sms_segments includes MMS quota floor. */
+  media_url?: string | null;
 }
 
 export interface GetBroadcastsResponse {
@@ -3287,6 +3412,8 @@ export interface BillingPlanSnapshot {
   includedMortgiAiTokens: number;
 }
 
+export type BillingPeriodAnchor = "stripe" | "calendar";
+
 export interface BillingSubscriptionSnapshot {
   planCode: string;
   status: string;
@@ -3302,6 +3429,10 @@ export interface BillingConfigPayload {
   platformFeeUsd: number;
   plan: BillingPlanSnapshot;
   subscription: BillingSubscriptionSnapshot | null;
+  /** Stripe-linked tenants use subscription anniversary; others use calendar month */
+  billingPeriodAnchor?: BillingPeriodAnchor;
+  /** ISO date when included quotas reset (Stripe current_period_end) */
+  quotaRenewsOn?: string | null;
   /** True when STRIPE_SECRET_KEY + STRIPE_PUBLISHABLE_KEY are set */
   stripeEnabled?: boolean;
   stripePublishableKey?: string | null;
@@ -3620,6 +3751,64 @@ export interface BillingStripeSubscriptionSetupResponse {
   stripe_status?: string;
   already_active?: boolean;
   error?: string;
+  /** 409: renewal unpaid — pay this invoice instead of subscribing again. */
+  overdue?: BillingOverdueInvoice;
+}
+
+/** Unpaid platform renewal invoice, read from Stripe (platform owner only). */
+export interface BillingOverdueInvoice {
+  invoice_id: string;
+  number: string | null;
+  amount_due_usd: number;
+  currency: string;
+  /** When the renewal was first attempted and failed (ISO). */
+  failed_at: string;
+  days_overdue: number;
+  attempt_count: number;
+  next_payment_attempt: string | null;
+  hosted_invoice_url: string | null;
+}
+
+export interface GetBillingOverdueResponse {
+  success: boolean;
+  overdue: BillingOverdueInvoice | null;
+  error?: string;
+}
+
+/** Card on file for paying the overdue renewal (usable or not, with why). */
+export interface BillingOverduePaymentCard {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  wallet: string | null;
+  is_default: boolean;
+  usable: boolean;
+  unusable_reason: string | null;
+}
+
+export interface GetBillingOverduePaymentOptionsResponse {
+  success: boolean;
+  overdue: BillingOverdueInvoice | null;
+  cards: BillingOverduePaymentCard[];
+  supported_brands?: string[];
+  error?: string;
+}
+
+export interface PayBillingOverdueRequest {
+  invoice_id: string;
+  payment_method_id: string;
+}
+
+export interface PayBillingOverdueResponse {
+  success: boolean;
+  paid?: boolean;
+  invoice_id?: string;
+  /** Bank verification (3-D Secure) needed — finish with Stripe.js. */
+  requires_action?: boolean;
+  client_secret?: string;
+  error?: string;
 }
 
 export interface BillingStripeConfirmSubscriptionResponse {
@@ -3715,4 +3904,273 @@ export interface BulkImportJobResponse {
     preview_rows?: BulkImportRowPreviewDto[];
     results?: BulkImportCommitResultRow[];
   };
+}
+
+// ─── Broker calculator saves (CRM-linked worksheets) ─────────────────────────
+
+export type CalculatorSaveKind =
+  | "fha"
+  | "va"
+  | "conventional"
+  | "investment"
+  | "mobile_home"
+  | "income";
+
+export interface BrokerCalculatorSave {
+  id: number;
+  tenant_id: number;
+  broker_id: number;
+  client_id: number;
+  loan_application_id: number | null;
+  kind: CalculatorSaveKind;
+  title: string;
+  summary_json: Record<string, unknown> | null;
+  payload_json: Record<string, unknown>;
+  borrower_client_ids: Array<number | null> | null;
+  created_at: string;
+  updated_at: string;
+  /** Joined display fields (list/detail) */
+  client_first_name?: string | null;
+  client_last_name?: string | null;
+  client_email?: string | null;
+  client_phone?: string | null;
+  broker_first_name?: string | null;
+  broker_last_name?: string | null;
+  application_number?: string | null;
+}
+
+export interface ListCalculatorSavesRequest {
+  page?: number;
+  limit?: number;
+  q?: string;
+  kind?: CalculatorSaveKind | "all";
+  client_id?: number;
+  loan_id?: number;
+  broker_id?: number;
+  sortBy?: string;
+  sortOrder?: "ASC" | "DESC";
+}
+
+export interface ListCalculatorSavesResponse {
+  success: boolean;
+  saves: BrokerCalculatorSave[];
+  pagination: PaginationInfo;
+}
+
+export interface CreateCalculatorSaveRequest {
+  client_id: number;
+  loan_application_id?: number | null;
+  kind: CalculatorSaveKind;
+  title: string;
+  summary_json?: Record<string, unknown> | null;
+  payload_json: Record<string, unknown>;
+  borrower_client_ids?: Array<number | null> | null;
+}
+
+export interface UpdateCalculatorSaveRequest {
+  client_id?: number;
+  loan_application_id?: number | null;
+  kind?: CalculatorSaveKind;
+  title?: string;
+  summary_json?: Record<string, unknown> | null;
+  payload_json?: Record<string, unknown>;
+  borrower_client_ids?: Array<number | null> | null;
+}
+
+export interface CalculatorSaveResponse {
+  success: boolean;
+  save: BrokerCalculatorSave;
+}
+
+export interface DeleteCalculatorSaveResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface ApplyCalculatorSaveNoteRequest {
+  /** Required when the save row has no loan_application_id */
+  loan_application_id?: number;
+}
+
+export interface ApplyCalculatorSaveNoteResponse {
+  success: boolean;
+  loan_application_id: number;
+  notes: string;
+  message?: string;
+}
+
+export interface ClientOpenLoanSummary {
+  id: number;
+  application_number: string;
+  loan_type: string;
+  loan_amount: number;
+  property_value: number | null;
+  status: string;
+  interest_rate: number | null;
+  created_at: string;
+}
+
+export interface GetClientOpenLoansResponse {
+  success: boolean;
+  loans: ClientOpenLoanSummary[];
+}
+
+// ─── Per-owner CRM (Phase 0 foundation — flags off by default) ──────────────
+
+export type {
+  ClientListVisibility,
+  CrmPersonGroup,
+  CrmPersonGroupMember,
+  CrmPersonGroupStatus,
+  CrmPersonEntityType,
+  CrmPersonGroupMemberRole,
+  CrmTransferJob,
+  CrmTransferJobStatus,
+  CrmTransferSourceEntityType,
+  CrmTransferResolution,
+  CrmPeoplePhoneGroup,
+  CrmPeoplePhoneMember,
+  CreatePersonGroupLinkRequest,
+  CreatePersonGroupLinkResponse,
+  ApprovePersonGroupRequest,
+  StartCrmTransferRequest,
+  StartCrmTransferResponse,
+  ResolveCrmTransferRequest,
+  GetCrmPeopleResponse,
+  PerOwnerCrmFeatureFlags,
+} from "./per-owner-crm";
+
+export type { ClientPhoneConflictScope } from "./per-owner-crm";
+
+// Runtime helpers live in shared/per-owner-crm.ts — import from @shared/per-owner-crm in
+// client/scripts only. Do NOT re-export them here: api/index.ts must not load this file.
+// ============================================================
+// FREE ANALYSIS (credit_analyses — text-based tri-merge PDF)
+// ============================================================
+
+export type CreditAnalysisMode = "client" | "agent";
+
+/**
+ * How well we were able to read text out of the uploaded report.
+ * `ok` = usable text extracted; anything else means scores/negatives may be
+ * incomplete or absent and the UI/analysis copy should say so honestly.
+ */
+export type CreditAnalysisExtractionStatus =
+  | "ok"
+  | "empty"
+  | "parse_failed"
+  | "unsupported_type";
+
+export interface CreditAnalysisScoreSet {
+  transunion?: number | null;
+  experian?: number | null;
+  equifax?: number | null;
+}
+
+export interface CreditAnalysisNegativeItem {
+  type: string;
+  creditor?: string;
+  bureaus?: string[];
+  detail?: string;
+}
+
+/** Flat analyst payload — scalars only for email templates. */
+export type CreditAnalysisAnalystFlat = Record<string, string | number | null>;
+
+export interface CreditAnalysisResult {
+  id: number;
+  tenant_id?: number;
+  client_id: number;
+  broker_user_id?: number | null;
+  mode: CreditAnalysisMode;
+  language?: "en" | "es";
+  goal?: string | null;
+  provider_detected?: string | null;
+  scores: CreditAnalysisScoreSet | null;
+  negatives: CreditAnalysisNegativeItem[];
+  suggested_labels: string[];
+  analysis_html: string;
+  analysis_text?: string | null;
+  email_sent: boolean;
+  email_opt_in?: boolean;
+  /** True when email_opt_in was set but the client has no email on file. */
+  email_skipped_no_address?: boolean;
+  generated_at: string;
+  extraction_status: CreditAnalysisExtractionStatus;
+  chars_extracted?: number;
+  analyst?: CreditAnalysisAnalystFlat | null;
+  report_file_name?: string | null;
+  client_name?: string | null;
+}
+
+export interface CreateCreditAnalysisResponse {
+  success: boolean;
+  analysis?: CreditAnalysisResult;
+  error?: string;
+}
+
+/** Public share-link Free Analysis (wizard-style). */
+export interface PublicFreeAnalysisResponse {
+  success: boolean;
+  analysis?: CreditAnalysisResult;
+  client_id?: number;
+  is_new_lead?: boolean;
+  draft_id?: number | null;
+  application_number?: string | null;
+  error?: string;
+}
+
+export interface ListCreditAnalysesResponse {
+  success: boolean;
+  analyses: CreditAnalysisResult[];
+  latest?: CreditAnalysisResult | null;
+  error?: string;
+}
+
+export interface GetCreditAnalysisResponse {
+  success: boolean;
+  analysis?: CreditAnalysisResult;
+  error?: string;
+}
+
+// ─── Blocked phone numbers ────────────────────────────────────────────────────
+
+/** Tenant-wide blocked caller/sender. Matching uses the last 10 digits. */
+export interface BlockedPhoneNumber {
+  id: number;
+  phone_e164: string;
+  normalized_phone: string;
+  block_calls: boolean;
+  block_sms: boolean;
+  reason: string | null;
+  blocked_by_broker_id: number | null;
+  blocked_by_name: string | null;
+  blocked_call_count: number;
+  blocked_sms_count: number;
+  last_blocked_at: string | null;
+  created_at: string;
+}
+
+export interface ListBlockedPhoneNumbersResponse {
+  success: boolean;
+  blocked_numbers: BlockedPhoneNumber[];
+  error?: string;
+}
+
+export interface CreateBlockedPhoneNumberRequest {
+  phone: string;
+  reason?: string | null;
+  block_calls?: boolean;
+  block_sms?: boolean;
+}
+
+export interface CreateBlockedPhoneNumberResponse {
+  success: boolean;
+  blocked_number?: BlockedPhoneNumber;
+  error?: string;
+}
+
+export interface DeleteBlockedPhoneNumberResponse {
+  success: boolean;
+  error?: string;
 }

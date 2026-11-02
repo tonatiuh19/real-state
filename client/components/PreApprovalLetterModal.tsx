@@ -152,7 +152,7 @@ function renderLetterHtml(
   const brokerSignatureSection = isPartnerLoan
     ? (() => {
         const partnerLicenseHtml = letter.partner_license_number
-          ? `<p style="margin:3px 0; font-size:13px; color:#555;">NMLS# ${letter.partner_license_number}</p>`
+          ? `<p style="margin:3px 0; font-size:13px; color:#555;">DRE# ${letter.partner_license_number}</p>`
           : "";
         const partnerPhotoHtml = letter.partner_photo_url
           ? `<div style="width:72px; height:72px; border-radius:50%; overflow:hidden; border:3px solid #1a3a5c; box-sizing:border-box;"><img src="${letter.partner_photo_url}" style="width:100%; height:100%; object-fit:cover; display:block;" /></div>`
@@ -171,7 +171,7 @@ function renderLetterHtml(
     <td style="vertical-align: top; padding-left: 24px; padding-right: 0; width: 88px;">${partnerPhotoHtml}</td>
     <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
       <p style="margin: 0 0 3px;"><strong>${(letter.partner_first_name ?? "") + " " + (letter.partner_last_name ?? "")}</strong></p>
-      <p style="margin: 0 0 3px; color: #444;">Partner</p>
+      <p style="margin: 0 0 3px; color: #444;">Realtor</p>
       ${partnerLicenseHtml}
       <p style="margin: 3px 0; color: #444;">${letter.partner_phone ?? ""}</p>
       <p style="margin: 0; color: #444;">${letter.partner_email ?? ""}</p>

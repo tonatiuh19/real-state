@@ -2,7 +2,9 @@
 
 > **Status:** Implemented. **On by default in dev/preview** — **off in production** until `GROUP_CONVERSATIONS_ALLOW_PRODUCTION=1`. Master opt-out with `GROUP_CONVERSATIONS_ENABLED=0`. UI reads flag from `GET /api/admin/init` (no client build env needed).  
 > **Scope:** SMS Group MMS + internal CRM team threads.  
-> **Out of scope:** Email (`/admin/email` has its own thread model).
+> **Out of scope:** Email (`/admin/email` has its own thread model).  
+> **Twilio GMMS audit (2026-07-23):** Native Group MMS is **limited / unavailable for most new accounts** (changelog Mar 15, 2022; error 50452). See [`TWILIO_GROUP_MMS_AUDIT.md`](./TWILIO_GROUP_MMS_AUDIT.md).  
+> **Twilio substitutes (same business functionality):** blast-style multi-party Conversations / Encore fan-out — see [`TWILIO_GROUP_MESSAGING_OPTIONS.md`](./TWILIO_GROUP_MESSAGING_OPTIONS.md). Encore prod-safe path = CRM group + **1 SMS per recipient**.
 
 ## Executive summary
 

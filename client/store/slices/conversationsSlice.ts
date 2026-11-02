@@ -61,6 +61,7 @@ interface ConversationsState {
     priority: string;
     search: string;
     include_broadcast: boolean;
+    inbox_scope?: "mine" | "shared" | "all";
     page: number;
     limit: number;
   };
@@ -209,6 +210,7 @@ export const fetchConversationThreads = createAsyncThunk(
       priority?: string;
       search?: string;
       include_broadcast?: boolean;
+      inbox_scope?: "mine" | "shared" | "all";
     } = {},
     { getState, rejectWithValue },
   ) => {

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   billingTopUpHref,
+  formatBillingPaymentAlertCopy,
   type BillingPaymentStatus,
 } from "@/utils/billing-payment-status";
 import { SECURE_PAYMENT_NOTE } from "@/utils/billing-ui-copy";
@@ -25,12 +26,9 @@ export function BillingPaymentAlert({
   if (!status.shouldWarn && !status.paymentRequired) return null;
 
   const blocked = status.paymentRequired;
+  const alertCopy = formatBillingPaymentAlertCopy(status);
   const Icon = blocked ? AlertCircle : AlertTriangle;
-  const dims = status.overDimensions.join(", ");
-
-  const body = blocked
-    ? `Monthly quota reached${dims ? ` (${dims})` : ""}. Add capacity to resume sends.`
-    : `Approaching monthly quota${dims ? ` on ${dims}` : ""} (${status.maxPct}% used).`;
+  const body = alertCopy.body;
 
   if (variant === "banner") {
     return (
@@ -92,7 +90,7 @@ export function BillingPaymentAlert({
           </div>
           <div>
             <p className="font-semibold text-foreground">
-              {blocked ? "Payment required" : "Quota running low"}
+              {alertCopy.title}
             </p>
             <p className="mt-0.5 text-sm text-muted-foreground">{body}</p>
             {stripeEnabled ? (
@@ -112,7 +110,7 @@ export function BillingPaymentAlert({
           >
             <Link to={billingTopUpHref(status.suggestedPackId)}>
               <CreditCard className="h-4 w-4" />
-              {blocked ? "Add capacity" : "Top up now"}
+              {blocked ? "Add capacity" : status.quotaAtCap ? "Add capacity" : "Top up now"}
             </Link>
           </Button>
         ) : (

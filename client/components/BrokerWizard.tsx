@@ -57,6 +57,8 @@ interface BrokerWizardProps {
   open: boolean;
   onClose: () => void;
   onSubmit: (values: BrokerFormValues) => Promise<void>;
+  /** When create hits an existing active realtor email, open that row for edit */
+  onEditExistingBroker?: (brokerId: number) => void;
   broker?: Broker | null;
   mode: "create" | "edit";
 }
@@ -140,6 +142,7 @@ export function BrokerWizard({
   open,
   onClose,
   onSubmit,
+  onEditExistingBroker,
   broker,
   mode,
 }: BrokerWizardProps) {
@@ -147,6 +150,7 @@ export function BrokerWizard({
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<WizardTab>("info");
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [existingBrokerId, setExistingBrokerId] = useState<number | null>(null);
 
   const { selectedBrokerProfile, profileLoading, mortgageBankers } =
     useAppSelector((state) => state.brokers);
@@ -163,6 +167,7 @@ export function BrokerWizard({
     }
     if (!open) {
       setActiveTab("info");
+      setExistingBrokerId(null);
       dispatch(clearSelectedBrokerProfile());
     }
   }, [open, mode, broker?.id, dispatch, isPlatformOwner]);
@@ -183,7 +188,7 @@ export function BrokerWizard({
           : [],
       created_by_broker_id:
         broker?.created_by_broker_id ??
-        (!isPlatformOwner && currentUser?.id ? currentUser.id : null),
+        (currentUser?.id ? currentUser.id : null),
       bio: "",
       office_address: "",
       office_city: "",
@@ -205,11 +210,22 @@ export function BrokerWizard({
       { setSubmitting, setFieldError, setFieldTouched },
     ) => {
       try {
+        setExistingBrokerId(null);
         await onSubmit(values);
         formik.resetForm();
         onClose();
       } catch (error: any) {
-        const message: string = error || "Operation failed";
+        const payload = error?.payload ?? error;
+        const message: string =
+          typeof payload === "string"
+            ? payload
+            : payload?.error || payload?.message || "Operation failed";
+        const existingId = Number(
+          payload?.existing_broker_id ?? error?.existing_broker_id,
+        );
+        if (Number.isFinite(existingId) && existingId > 0) {
+          setExistingBrokerId(existingId);
+        }
         // Highlight the conflicting field inline so the user knows exactly what to fix
         if (/phone/i.test(message)) {
           setFieldError("phone", message);
@@ -226,8 +242,11 @@ export function BrokerWizard({
   });
 
   useEffect(() => {
-    if (open && !isPlatformOwner && currentUser?.id && mode === "create") {
-      formik.setFieldValue("role", "broker");
+    if (open && currentUser?.id && mode === "create") {
+      if (!isPlatformOwner) {
+        formik.setFieldValue("role", "broker");
+      }
+      // Default Assigned MB / owner to the logged-in user (incl. platform owners)
       formik.setFieldValue("created_by_broker_id", currentUser.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -428,9 +447,29 @@ export function BrokerWizard({
                           }
                         />
                         {formik.touched.email && formik.errors.email && (
-                          <p className="text-xs text-destructive">
-                            {formik.errors.email}
-                          </p>
+                          <div className="space-y-1.5">
+                            <p className="text-xs text-destructive">
+                              {formik.errors.email}
+                            </p>
+                            {mode === "create" &&
+                              existingBrokerId != null &&
+                              onEditExistingBroker && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  onClick={() => {
+                                    const id = existingBrokerId;
+                                    formik.resetForm();
+                                    onClose();
+                                    onEditExistingBroker(id);
+                                  }}
+                                >
+                                  Edit existing realtor
+                                </Button>
+                              )}
+                          </div>
                         )}
                       </div>
 

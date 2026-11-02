@@ -32,6 +32,12 @@ import type {
   GetBillingStripePacksResponse,
   GetBillingUsageResponse,
   UnifiedQuotaSummary,
+  BillingOverdueInvoice,
+  GetBillingOverdueResponse,
+  BillingOverduePaymentCard,
+  GetBillingOverduePaymentOptionsResponse,
+  PayBillingOverdueRequest,
+  PayBillingOverdueResponse,
 } from "@shared/api";
 
 interface PaymentIntentState {
@@ -92,6 +98,14 @@ interface BillingState {
     granted: boolean;
   } | null;
   error: string | null;
+  /** Unpaid renewal from Stripe (platform owner only); null = nothing owed. */
+  overdue: BillingOverdueInvoice | null;
+  overdueLoaded: boolean;
+  isCheckingOverdue: boolean;
+  /** Cards on file for paying the overdue renewal in-app. */
+  overdueCards: BillingOverduePaymentCard[];
+  isLoadingOverdueCards: boolean;
+  isPayingOverdue: boolean;
 }
 
 const initialState: BillingState = {
@@ -130,6 +144,12 @@ const initialState: BillingState = {
   isPortalLoading: false,
   lastFulfillment: null,
   error: null,
+  overdue: null,
+  overdueLoaded: false,
+  isCheckingOverdue: false,
+  overdueCards: [],
+  isLoadingOverdueCards: false,
+  isPayingOverdue: false,
 };
 
 function authHeaders(getState: () => unknown) {
@@ -315,6 +335,78 @@ export const confirmStripePayment = createAsyncThunk(
   },
 );
 
+/** Platform owner only. `refresh` bypasses the server's 2-minute cache. */
+export const fetchBillingOverdue = createAsyncThunk(
+  "billing/fetchBillingOverdue",
+  async (refresh: boolean | void, { getState, rejectWithValue }) => {
+    try {
+      const { data } = await axios.get<GetBillingOverdueResponse>(
+        "/api/billing/overdue",
+        {
+          headers: authHeaders(getState),
+          params: refresh ? { refresh: 1 } : undefined,
+        },
+      );
+      if (!data.success) {
+        return rejectWithValue(data.error ?? "Could not check payment status");
+      }
+      return data.overdue;
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, "Could not check payment status"),
+      );
+    }
+  },
+);
+
+/** Overdue invoice + cards on file (platform owner). Always fresh from Stripe. */
+export const fetchOverduePaymentOptions = createAsyncThunk(
+  "billing/fetchOverduePaymentOptions",
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const { data } = await axios.get<GetBillingOverduePaymentOptionsResponse>(
+        "/api/billing/overdue/payment-options",
+        { headers: authHeaders(getState) },
+      );
+      if (!data.success) {
+        return rejectWithValue(data.error ?? "Could not load payment options");
+      }
+      return { overdue: data.overdue, cards: data.cards };
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, "Could not load payment options"),
+      );
+    }
+  },
+);
+
+/**
+ * Pay the overdue renewal in-app. Resolves `{ paid: true }` or
+ * `{ requiresAction, clientSecret }` (finish 3-D Secure with Stripe.js, then
+ * dispatch again). Rejects with a user-facing message on decline.
+ */
+export const payOverdueInvoice = createAsyncThunk(
+  "billing/payOverdueInvoice",
+  async (payload: PayBillingOverdueRequest, { getState, rejectWithValue }) => {
+    try {
+      const { data } = await axios.post<PayBillingOverdueResponse>(
+        "/api/billing/overdue/pay",
+        payload,
+        { headers: authHeaders(getState) },
+      );
+      if (data.requires_action && data.client_secret) {
+        return { paid: false as const, requiresAction: true as const, clientSecret: data.client_secret };
+      }
+      if (data.paid) return { paid: true as const };
+      return rejectWithValue(data.error ?? "The payment didn't go through.");
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, "The payment didn't go through."),
+      );
+    }
+  },
+);
+
 export const createStripeSubscriptionSetup = createAsyncThunk(
   "billing/createStripeSubscriptionSetup",
   async (forceNew: boolean | undefined, { getState, rejectWithValue }) => {
@@ -337,6 +429,15 @@ export const createStripeSubscriptionSetup = createAsyncThunk(
         stripeStatus: data.stripe_status ?? "incomplete",
       };
     } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const body = error.response.data as BillingStripeSubscriptionSetupResponse;
+        if (body?.overdue) {
+          return rejectWithValue({
+            message: body.error ?? "Your last renewal is unpaid.",
+            overdue: body.overdue,
+          });
+        }
+      }
       return rejectWithValue(
         extractApiErrorMessage(error, "Failed to start subscription"),
       );
@@ -684,7 +785,55 @@ const billingSlice = createSlice({
       .addCase(createStripeSubscriptionSetup.rejected, (state, action) => {
         state.isSubscriptionSetupLoading = false;
         state.subscriptionSetup = null;
-        state.error = String(action.payload ?? "Subscription setup failed");
+        const payload = action.payload as
+          | string
+          | { message: string; overdue: BillingOverdueInvoice }
+          | undefined;
+        if (payload && typeof payload === "object") {
+          // Not an error to show: the overdue card takes over the page.
+          state.overdue = payload.overdue;
+          state.overdueLoaded = true;
+          return;
+        }
+        state.error = String(payload ?? "Subscription setup failed");
+      })
+      .addCase(fetchBillingOverdue.pending, (state) => {
+        state.isCheckingOverdue = true;
+      })
+      .addCase(fetchBillingOverdue.fulfilled, (state, action) => {
+        state.isCheckingOverdue = false;
+        state.overdueLoaded = true;
+        state.overdue = action.payload;
+      })
+      .addCase(fetchOverduePaymentOptions.pending, (state) => {
+        state.isLoadingOverdueCards = true;
+      })
+      .addCase(fetchOverduePaymentOptions.fulfilled, (state, action) => {
+        state.isLoadingOverdueCards = false;
+        state.overdue = action.payload.overdue;
+        state.overdueLoaded = true;
+        state.overdueCards = action.payload.cards;
+      })
+      .addCase(fetchOverduePaymentOptions.rejected, (state) => {
+        state.isLoadingOverdueCards = false;
+      })
+      .addCase(payOverdueInvoice.pending, (state) => {
+        state.isPayingOverdue = true;
+      })
+      .addCase(payOverdueInvoice.fulfilled, (state, action) => {
+        state.isPayingOverdue = false;
+        if (action.payload.paid) {
+          state.overdue = null;
+          state.overdueCards = [];
+        }
+      })
+      .addCase(payOverdueInvoice.rejected, (state) => {
+        state.isPayingOverdue = false;
+      })
+      .addCase(fetchBillingOverdue.rejected, (state) => {
+        // Keep the last known value — a transient Stripe error must not
+        // hide (or invent) an overdue balance.
+        state.isCheckingOverdue = false;
       })
       .addCase(confirmStripeSubscription.pending, (state) => {
         state.isConfirmingSubscription = true;

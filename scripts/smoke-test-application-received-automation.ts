@@ -16,7 +16,7 @@ import {
   NUDGE_TO_STATUS,
   countActiveExecutions,
   fetchGapLoans,
-  isFlowActive,
+  runApplicationReceivedProdPreflight,
   statusNudgeAndTriggerFlow,
   triggerApplicationReceivedFlows,
 } from "./lib/application-received-flow.ts";
@@ -109,9 +109,15 @@ async function countStatusHistory(
 
 async function runTests(conn: Connection) {
   const runId = `SMKAR${Date.now()}`;
-  const flowActive = await isFlowActive(conn, APPLICATION_RECEIVED_FLOW_ID, TENANT_ID);
-  if (flowActive) pass("preflight: Flow #3 is active");
-  else fail("preflight: Flow #3 is active", "Flow #3 is OFF — enable before prod backfill");
+  const preflight = await runApplicationReceivedProdPreflight(conn, TENANT_ID);
+  for (const check of preflight.checks) {
+    if (check.pass) pass(`preflight: ${check.name}`, check.detail);
+    else fail(`preflight: ${check.name}`, check.detail);
+  }
+  if (!preflight.ok) {
+    fail("preflight: aborting smoke cases", "Fix production flow config first");
+    return;
+  }
 
   const mb = await insertSmokeBroker(conn, `${runId}@smoke-ar-flow.local`);
   const clientId = await insertSmokeClient(

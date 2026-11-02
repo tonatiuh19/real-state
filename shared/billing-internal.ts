@@ -6,15 +6,15 @@ import type {
 } from "./api";
 import type { BudgetBreakdown } from "./billing-calculator";
 
-/** Encore-internal COGS/margin — never expose to paying customers in production. */
+/** Encore-internal COGS/margin — local `npm run dev` only. */
 export function isBillingInternalEconomicsEnabled(
   env: Record<string, string | undefined> = typeof process !== "undefined"
     ? (process.env as Record<string, string | undefined>)
     : {},
 ): boolean {
-  return (
-    env.NODE_ENV === "development" || env.BILLING_INTERNAL_ECONOMICS === "true"
-  );
+  const vercelEnv = String(env.VERCEL_ENV ?? "").trim().toLowerCase();
+  if (vercelEnv === "production" || vercelEnv === "preview") return false;
+  return env.NODE_ENV === "development";
 }
 
 const EMPTY_INFRA: BillingFixedInfraBreakdown = {

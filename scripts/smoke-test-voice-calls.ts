@@ -50,7 +50,12 @@ function fail(name: string, detail?: string) {
   cases.push({ name, pass: false, detail });
 }
 
-function finding(id: string, severity: Severity, title: string, detail: string) {
+function finding(
+  id: string,
+  severity: Severity,
+  title: string,
+  detail: string,
+) {
   findings.push({ id, severity, title, detail });
 }
 
@@ -91,18 +96,28 @@ async function main() {
   console.log("\n══ Voice / Phone Routing Smoke Tests ══\n");
 
   // ── Known brokers from Daniel's report ─────────────────────────────────────
+  // The Encore main line (+15623370000) moves between broker accounts
+  // (270004 → info@ 2580002 on 2026-10-13), so resolve its CURRENT active
+  // owner by number instead of hardcoding a broker id.
+  const ENCORE_MAIN_LINE = "+15623370000";
   const [brokers] = await conn.query<RowDataPacket[]>(
     `SELECT id, first_name, last_name, email, role, twilio_caller_id, twilio_phone_sid,
             voice_available, voicemail_enabled, status
      FROM brokers
-     WHERE tenant_id = ? AND id IN (3, 270004)`,
-    [TENANT_ID],
+     WHERE tenant_id = ?
+       AND (id = 3 OR (twilio_caller_id = ? AND status = 'active'))`,
+    [TENANT_ID, ENCORE_MAIN_LINE],
   );
   const daniel = brokers.find((b) => b.id === 3);
-  const encore = brokers.find((b) => b.id === 270004);
+  const encore = brokers.find(
+    (b) => b.id !== 3 && b.twilio_caller_id === ENCORE_MAIN_LINE,
+  );
 
   if (!daniel || !encore) {
-    fail("Fixture brokers exist", "Need broker id=3 and id=270004");
+    fail(
+      "Fixture brokers exist",
+      `Need broker id=3 and an active owner of ${ENCORE_MAIN_LINE}`,
+    );
   } else {
     pass("Fixture brokers exist", `Daniel=${daniel.id}, Encore=${encore.id}`);
 
@@ -112,7 +127,7 @@ async function main() {
       fail("Daniel personal line E.164", String(daniel.twilio_caller_id));
     }
 
-    if (encore.twilio_caller_id === "+15623370000") {
+    if (encore.twilio_caller_id === ENCORE_MAIN_LINE) {
       pass("Encore personal line E.164", encore.twilio_caller_id as string);
     } else {
       fail("Encore personal line E.164", String(encore.twilio_caller_id));
@@ -172,15 +187,15 @@ async function main() {
           `Inbound threads on ${encore.twilio_caller_id} owned by Encore or shared`,
         )
       : (finding(
-            "V4",
-            "medium",
-            "Historical Encore line thread ownership",
-            `${misattrib.n} thread(s) still have stale broker_id from when +15623370000 was a shared line. Outbound calls are unaffected; run inbox backfill or wait for personal-line upsert on next inbound.`,
-          ),
-          pass(
-            "Encore personal-line threads (historical drift noted)",
-            `${misattrib.n} stale — see finding V4`,
-          ));
+          "V4",
+          "medium",
+          "Historical Encore line thread ownership",
+          `${misattrib.n} thread(s) still have stale broker_id from when +15623370000 was a shared line. Outbound calls are unaffected; run inbox backfill or wait for personal-line upsert on next inbound.`,
+        ),
+        pass(
+          "Encore personal-line threads (historical drift noted)",
+          `${misattrib.n} stale — see finding V4`,
+        ));
   }
 
   // ── Static UI audit (source files) ───────────────────────────────────────
@@ -204,7 +219,9 @@ async function main() {
     voicePanel.includes("waitForDevice") &&
     !voicePanel.includes("new Device(token")
   ) {
-    pass("Outbound uses shared Twilio Device via VoiceDeviceContext (no fallback Device)");
+    pass(
+      "Outbound uses shared Twilio Device via VoiceDeviceContext (no fallback Device)",
+    );
   } else {
     fail(
       "Shared Device pattern",
@@ -218,14 +235,19 @@ async function main() {
     );
   }
 
-  if (!conversations.includes("Delegate outbound calls to GlobalVoiceManager")) {
+  if (
+    !conversations.includes("Delegate outbound calls to GlobalVoiceManager")
+  ) {
     fail("Conversations delegates outbound via useEffect (not render)");
   } else {
     pass("Conversations delegates outbound via useEffect (not render)");
   }
 
   if (apiIndex.includes("voice_available = 1\n         ORDER BY rbr.id")) {
-    fail("handleVoiceIncoming shared routing SQL", "Invalid alias rbr.id breaks shared-line inbound");
+    fail(
+      "handleVoiceIncoming shared routing SQL",
+      "Invalid alias rbr.id breaks shared-line inbound",
+    );
     finding(
       "V3",
       "high",
@@ -236,13 +258,13 @@ async function main() {
     pass("handleVoiceIncoming shared routing SQL uses valid ORDER BY");
   }
 
-  if (
-    apiIndex.includes("req.body?.Identity") &&
-    apiIndex.includes("client:")
-  ) {
+  if (apiIndex.includes("req.body?.Identity") && apiIndex.includes("client:")) {
     pass("handleVoiceTwiml reads From and Identity for broker identity");
   } else {
-    fail("handleVoiceTwiml identity params", "Must parse From: client:broker_{id}");
+    fail(
+      "handleVoiceTwiml identity params",
+      "Must parse From: client:broker_{id}",
+    );
   }
 
   // ── Optional live API (local dev) ──────────────────────────────────────────
@@ -263,17 +285,24 @@ async function main() {
       );
       tokRes.status === 200 && tokRes.data?.token
         ? pass(`POST /api/voice/token broker ${b.id} → 200`)
-        : fail(`POST /api/voice/token broker ${b.id}`, `status ${tokRes.status}`);
+        : fail(
+            `POST /api/voice/token broker ${b.id}`,
+            `status ${tokRes.status}`,
+          );
 
       const fromBody = new URLSearchParams({
         To: "+15551234567",
         From: `client:broker_${b.id}`,
       }).toString();
-      const twimlRes = await axios.post(`${API_BASE}/api/voice/twiml`, fromBody, {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        validateStatus: () => true,
-        timeout: 15000,
-      });
+      const twimlRes = await axios.post(
+        `${API_BASE}/api/voice/twiml`,
+        fromBody,
+        {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          validateStatus: () => true,
+          timeout: 15000,
+        },
+      );
       const body = String(twimlRes.data ?? "");
       twimlRes.status === 200 &&
       twimlShouldIncludeCallerId(body, b.twilio_caller_id as string | null)
@@ -287,7 +316,10 @@ async function main() {
           );
     }
   } else {
-    pass("Live API checks skipped", "Set SMOKE_API=1 with dev server for API leg");
+    pass(
+      "Live API checks skipped",
+      "Set SMOKE_API=1 with dev server for API leg",
+    );
   }
 
   await conn.end();
@@ -297,7 +329,9 @@ async function main() {
   const failed = cases.filter((c) => !c.pass).length;
   console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
   for (const c of cases) {
-    console.log(`${c.pass ? "✅" : "❌"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
+    console.log(
+      `${c.pass ? "✅" : "❌"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`,
+    );
   }
   if (findings.length) {
     console.log("\nFindings:");

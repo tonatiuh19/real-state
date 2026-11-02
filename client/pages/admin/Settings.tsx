@@ -15,6 +15,8 @@ import {
   Eye,
   EyeOff,
   Lock,
+  Download,
+  Ban,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -43,6 +45,7 @@ import {
   updateRoleSectionPermissions,
   setPermission,
 } from "@/store/slices/roleSectionPermissionsSlice";
+import { BlockedNumbersCard } from "@/components/BlockedNumbersCard";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -254,9 +257,10 @@ const Settings = () => {
     "brokers",
   ];
 
-  // Pre-Approval Letter
+  // Pre-Approval Letter & MISMO export gates
   const [preApprovalRequireAllTasks, setPreApprovalRequireAllTasks] =
-    useState(true);
+    useState(false);
+  const [mismoRequireAllTasks, setMismoRequireAllTasks] = useState(false);
 
   // Notifications
   const [enableEmail, setEnableEmail] = useState(true);
@@ -272,8 +276,11 @@ const Settings = () => {
   useEffect(() => {
     if (settings.length > 0) {
       setPreApprovalRequireAllTasks(
-        selectSettingValue(settings, "pre_approval_require_all_tasks") !==
-          "false",
+        selectSettingValue(settings, "pre_approval_require_all_tasks") ===
+          "true",
+      );
+      setMismoRequireAllTasks(
+        selectSettingValue(settings, "mismo_require_all_tasks") === "true",
       );
       setEnableEmail(selectSettingValue(settings, "enable_email") !== "false");
       setEnableSms(selectSettingValue(settings, "enable_sms") === "true");
@@ -412,17 +419,25 @@ const Settings = () => {
               <SettingsSection
                 index={0}
                 icon={FileCheck2}
-                title="Pre-Approval Letter"
-                description="Control how pre-approval letters are generated and issued to clients"
+                title="Pre-Approval & MISMO"
+                description="Control when pre-approval letters and MISMO exports can be issued"
                 accent="bg-primary/5"
               >
                 <div className="space-y-4">
                   <ToggleRow
                     icon={FileCheck2}
-                    label="Require all tasks completed before issuing"
-                    hint="Brokers can only generate a letter once every task in the loan pipeline is approved"
+                    label="Require all tasks completed before issuing pre-approval"
+                    hint="When enabled, brokers can only generate a pre-approval letter once every task is approved"
                     checked={preApprovalRequireAllTasks}
                     onCheckedChange={setPreApprovalRequireAllTasks}
+                    disabled={!isAdmin}
+                  />
+                  <ToggleRow
+                    icon={Download}
+                    label="Require all tasks completed before MISMO export"
+                    hint="When enabled, MISMO 3.4 XML export stays locked until every task is approved"
+                    checked={mismoRequireAllTasks}
+                    onCheckedChange={setMismoRequireAllTasks}
                     disabled={!isAdmin}
                   />
 
@@ -447,6 +462,12 @@ const Settings = () => {
                         {
                           setting_key: "pre_approval_require_all_tasks",
                           setting_value: preApprovalRequireAllTasks
+                            ? "true"
+                            : "false",
+                        },
+                        {
+                          setting_key: "mismo_require_all_tasks",
+                          setting_value: mismoRequireAllTasks
                             ? "true"
                             : "false",
                         },
@@ -551,10 +572,21 @@ const Settings = () => {
                 </div>
               </SettingsSection>
 
+              {/* Blocked Numbers */}
+              <SettingsSection
+                index={3}
+                icon={Ban}
+                title="Blocked Numbers"
+                description="Stop spam and robocalls on every Encore line. Blocked numbers never ring, leave voicemail, or text you."
+                accent="bg-red-50/60"
+              >
+                <BlockedNumbersCard canEdit={isAdmin} />
+              </SettingsSection>
+
               {/* Role Section Permissions — platform_owner only */}
               {isPlatformOwner && (
                 <SettingsSection
-                  index={3}
+                  index={4}
                   icon={ShieldCheck}
                   title="Role Visibility"
                   description="Control which sidebar sections are visible for Mortgage Bankers and Partners"
@@ -588,6 +620,14 @@ const Settings = () => {
                           locked?: boolean;
                         }[] = [
                           { id: "dashboard", label: "Home / Dashboard" },
+                          {
+                            id: "loan-calculator",
+                            label: "Loan Calculator",
+                          },
+                          {
+                            id: "free-analysis",
+                            label: "Free Analysis",
+                          },
                           { id: "pipeline", label: "Pipeline" },
                           { id: "clients", label: "Clients & Leads" },
                           { id: "tasks", label: "Tasks" },

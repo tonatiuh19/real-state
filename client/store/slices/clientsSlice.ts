@@ -17,6 +17,11 @@ import type {
 export interface ClientCreateConflict {
   error: string;
   conflict: ClientConflictInfo;
+  hint?: string;
+  per_owner_crm?: {
+    enabled: boolean;
+    activeForBroker: boolean;
+  };
 }
 import { logger } from "@/lib/logger";
 

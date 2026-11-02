@@ -11,6 +11,7 @@ import {
   X,
   FolderOpen,
   Calculator,
+  FileSearch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -79,6 +80,11 @@ const ClientLayout = ({ children }: ClientLayoutProps) => {
       name: "Calculator",
       href: "/portal/calculator",
       icon: Calculator,
+    },
+    {
+      name: "Free Analysis",
+      href: "/portal/free-analysis",
+      icon: FileSearch,
     },
     {
       name: "Profile",

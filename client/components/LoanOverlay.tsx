@@ -39,9 +39,11 @@ import {
   ArrowRight,
   Save,
   MessageSquare,
+  Calculator,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 import {
   Tooltip,
   TooltipContent,
@@ -102,6 +104,10 @@ import {
 import { BrokerSearchSelect } from "@/components/BrokerSearchSelect";
 import { fetchTaskDocuments } from "@/store/slices/clientPortalSlice";
 import {
+  bulkDownloadDocuments,
+  refreshLoanDocumentChecklist,
+} from "@/store/slices/documentsSlice";
+import {
   deleteTaskInstance,
   updateTaskStatus,
   createTask,
@@ -116,6 +122,10 @@ import { PreApprovalLetterModal } from "@/components/PreApprovalLetterModal";
 import { fetchEmailTemplates } from "@/store/slices/communicationTemplatesSlice";
 import { fetchGroupsByApplication } from "@/store/slices/conversationsSlice";
 import { fetchPreApprovalLetter } from "@/store/slices/preApprovalSlice";
+import {
+  fetchSettings,
+  selectSettingValue,
+} from "@/store/slices/settingsSlice";
 import { fetchAnnualMetrics } from "@/store/slices/dashboardSlice";
 import { toast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -140,6 +150,7 @@ export function LoanOverlay({
   onCreateLoanGroup,
 }: LoanOverlayProps) {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { sessionToken, user } = useAppSelector((state) => state.brokerAuth);
   const { groupConversationsEnabled, groupsByApplication, isLoadingLoanGroups } =
     useAppSelector((state) => state.conversations);
@@ -147,8 +158,10 @@ export function LoanOverlay({
   const { emailTemplates } = useAppSelector(
     (state) => state.communicationTemplates,
   );
+  const { settings } = useAppSelector((state) => state.settings);
 
   const [isRefreshingTasks, setIsRefreshingTasks] = useState(false);
+  const [isBulkDownloadingDocs, setIsBulkDownloadingDocs] = useState(false);
   const [taskDocuments, setTaskDocuments] = useState<
     Record<
       number,
@@ -248,6 +261,11 @@ export function LoanOverlay({
       employment_status: selectedLoan?.employment_status ?? "",
       employer_name: selectedLoan?.employer_name ?? "",
       years_employed: selectedLoan?.years_employed ?? "",
+      employer_phone: selectedLoan?.employer_phone ?? "",
+      employer_address: selectedLoan?.employer_address ?? "",
+      employment_start_date: selectedLoan?.employment_start_date
+        ? String(selectedLoan.employment_start_date).slice(0, 10)
+        : "",
       marital_status: selectedLoan?.marital_status ?? "",
       dependent_count:
         selectedLoan?.dependent_count != null
@@ -565,10 +583,11 @@ export function LoanOverlay({
     }
   };
 
-  // Fetch task templates and pre-approval letter when overlay opens
+  // Fetch task templates, settings, and pre-approval letter when overlay opens
   useEffect(() => {
     if (isOpen) {
       dispatch(fetchTasks({}));
+      dispatch(fetchSettings());
     }
   }, [dispatch, isOpen]);
 
@@ -1096,14 +1115,21 @@ export function LoanOverlay({
   const progressPercentage =
     allTasksCount > 0 ? (approvedTasks / allTasksCount) * 100 : 0;
 
-  // Check if all tasks are fully completed (approved) for MISMO export
+  // Check if all tasks are fully completed (approved) when optional gates are on
   const areAllTasksCompleted = totalTasks > 0 && approvedTasks === totalTasks;
+  const requireAllTasksForMismo =
+    selectSettingValue(settings, "mismo_require_all_tasks") === "true";
+  const mismoTasksGateMet = !requireAllTasksForMismo || areAllTasksCompleted;
   const canExportMISMO =
-    sessionToken && areAllTasksCompleted && user?.role !== "broker"; // Partners cannot export MISMO
+    !!sessionToken && mismoTasksGateMet && user?.role !== "broker"; // Partners cannot export MISMO
   const isPartner = user?.role === "broker";
-  const canShowPreApproval = sessionToken && areAllTasksCompleted; // Only when all tasks are approved
+  const requireAllTasksForPreApproval =
+    selectSettingValue(settings, "pre_approval_require_all_tasks") === "true";
+  const preApprovalTasksGateMet =
+    !requireAllTasksForPreApproval || areAllTasksCompleted;
+  const canShowPreApproval = !!sessionToken && preApprovalTasksGateMet;
   const partnerAwaitingLetter =
-    isPartner && canShowPreApproval && !preApprovalLetter; // Partner: tasks done but MB hasn't set amount
+    isPartner && preApprovalTasksGateMet && !preApprovalLetter; // Partner: MB must issue first letter
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -1146,6 +1172,20 @@ export function LoanOverlay({
                     (s) => s.value === selectedLoan.status,
                   )?.label ?? selectedLoan.status.replace(/_/g, " ")}
                 </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    onClose();
+                    navigate(
+                      `/admin/loan-calculator/fha?clientId=${selectedLoan.client_user_id}&loanId=${selectedLoan.id}`,
+                    );
+                  }}
+                  className="gap-2 h-8 px-3 text-xs border-gray-200 text-gray-700 hover:bg-gray-50"
+                >
+                  <Calculator className="h-3 w-3" />
+                  Run calculator
+                </Button>
                 {canExportMISMO ? (
                   <Button
                     variant="outline"
@@ -1158,6 +1198,7 @@ export function LoanOverlay({
                     {isSubmitting ? "Generating..." : "Export MISMO"}
                   </Button>
                 ) : user?.role !== "broker" &&
+                  requireAllTasksForMismo &&
                   totalTasks > 0 &&
                   !areAllTasksCompleted ? (
                   <TooltipProvider>
@@ -1184,7 +1225,9 @@ export function LoanOverlay({
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                ) : user?.role !== "broker" && totalTasks === 0 ? (
+                ) : user?.role !== "broker" &&
+                  requireAllTasksForMismo &&
+                  totalTasks === 0 ? (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1252,7 +1295,9 @@ export function LoanOverlay({
                       ? "View Pre-Approval"
                       : "Pre-Approval Letter"}
                   </Button>
-                ) : totalTasks > 0 && !areAllTasksCompleted ? (
+                ) : requireAllTasksForPreApproval &&
+                  totalTasks > 0 &&
+                  !areAllTasksCompleted ? (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1277,7 +1322,7 @@ export function LoanOverlay({
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                ) : totalTasks === 0 ? (
+                ) : requireAllTasksForPreApproval && totalTasks === 0 ? (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1307,8 +1352,8 @@ export function LoanOverlay({
             </SheetHeader>
 
             <div className="space-y-6">
-              {/* Pre-Approval Letter Banner — shown when all tasks done and letter exists */}
-              {areAllTasksCompleted && preApprovalLetter?.is_active && (
+              {/* Pre-Approval Letter Banner — shown when an active letter exists */}
+              {preApprovalLetter?.is_active && (
                 <div
                   className="flex items-start sm:items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-red-50 to-rose-50 border border-red-200 cursor-pointer hover:border-red-300 hover:shadow-sm transition-all duration-200"
                   onClick={() => setPreApprovalLetterOpen(true)}
@@ -1822,6 +1867,54 @@ export function LoanOverlay({
                               }
                             />
                           </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">
+                              Employer Phone
+                            </label>
+                            <Input
+                              className="text-sm h-9"
+                              placeholder="e.g. (305) 555-0100"
+                              value={draftForm.employer_phone}
+                              onChange={(e) =>
+                                handleDraftFieldChange(
+                                  "employer_phone",
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1 sm:col-span-2">
+                            <label className="text-xs font-medium text-gray-600">
+                              Employer Address
+                            </label>
+                            <Input
+                              className="text-sm h-9"
+                              placeholder="Street, city, state"
+                              value={draftForm.employer_address}
+                              onChange={(e) =>
+                                handleDraftFieldChange(
+                                  "employer_address",
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">
+                              Employment Start Date
+                            </label>
+                            <Input
+                              type="date"
+                              className="text-sm h-9"
+                              value={draftForm.employment_start_date}
+                              onChange={(e) =>
+                                handleDraftFieldChange(
+                                  "employment_start_date",
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </div>
                         </div>
                       </div>
 
@@ -2303,7 +2396,10 @@ export function LoanOverlay({
                       {/* Employment */}
                       {(selectedLoan.employment_status ||
                         selectedLoan.employer_name ||
-                        selectedLoan.years_employed) && (
+                        selectedLoan.years_employed ||
+                        selectedLoan.employer_phone ||
+                        selectedLoan.employer_address ||
+                        selectedLoan.employment_start_date) && (
                         <div className="pt-3 border-t border-gray-100">
                           <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
                             <Briefcase className="h-3.5 w-3.5" />
@@ -2338,6 +2434,38 @@ export function LoanOverlay({
                                 </p>
                                 <p className="text-sm text-gray-800">
                                   {selectedLoan.years_employed}
+                                </p>
+                              </div>
+                            )}
+                            {selectedLoan.employer_phone && (
+                              <div>
+                                <p className="text-xs text-gray-400">
+                                  Employer Phone
+                                </p>
+                                <p className="text-sm text-gray-800">
+                                  {selectedLoan.employer_phone}
+                                </p>
+                              </div>
+                            )}
+                            {selectedLoan.employer_address && (
+                              <div className="sm:col-span-2">
+                                <p className="text-xs text-gray-400">
+                                  Employer Address
+                                </p>
+                                <p className="text-sm text-gray-800">
+                                  {selectedLoan.employer_address}
+                                </p>
+                              </div>
+                            )}
+                            {selectedLoan.employment_start_date && (
+                              <div>
+                                <p className="text-xs text-gray-400">
+                                  Start Date
+                                </p>
+                                <p className="text-sm text-gray-800">
+                                  {String(
+                                    selectedLoan.employment_start_date,
+                                  ).slice(0, 10)}
                                 </p>
                               </div>
                             )}
@@ -2531,18 +2659,23 @@ export function LoanOverlay({
                       </div>
                     </div>
                     <Progress value={progressPercentage} className="h-2" />
-                    {totalTasks > 0 && !areAllTasksCompleted && (
+                    {totalTasks > 0 &&
+                      !areAllTasksCompleted &&
+                      (requireAllTasksForMismo ||
+                        requireAllTasksForPreApproval) && (
                       <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                         <div className="flex items-start gap-2">
                           <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
                           <div className="text-xs">
                             <p className="text-amber-800 font-medium mb-1">
-                              MISMO Export & Preapproval Letter are locked until
-                              all tasks are approved.
+                              {requireAllTasksForMismo &&
+                              requireAllTasksForPreApproval
+                                ? "MISMO Export and pre-approval letters are locked until all tasks are approved."
+                                : requireAllTasksForMismo
+                                  ? "MISMO Export is locked until all tasks are approved. You can still issue a pre-approval letter at any time."
+                                  : "Pre-approval letters are locked until all tasks are approved. You can still export MISMO at any time."}
                             </p>
                             <p className="text-amber-700">
-                              All tasks must be approved to ensure data accuracy
-                              and compliance. There are currently
                               {totalTasks - approvedTasks} task
                               {totalTasks - approvedTasks !== 1 ? "s" : ""}{" "}
                               remaining.
@@ -2564,6 +2697,81 @@ export function LoanOverlay({
                       Tasks
                     </CardTitle>
                     <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-8 px-3"
+                        disabled={!selectedLoan || isBulkDownloadingDocs}
+                        aria-busy={isBulkDownloadingDocs}
+                        onClick={async () => {
+                          if (!selectedLoan || isBulkDownloadingDocs) return;
+                          setIsBulkDownloadingDocs(true);
+                          try {
+                            const result = await dispatch(
+                              bulkDownloadDocuments({
+                                application_id: selectedLoan.id,
+                              }),
+                            );
+                            if (bulkDownloadDocuments.rejected.match(result)) {
+                              toast({
+                                title: "Download failed",
+                                description: String(
+                                  result.payload || "Could not build zip",
+                                ),
+                                variant: "destructive",
+                              });
+                            } else {
+                              toast({
+                                title: "Download ready",
+                                description: "PDF documents zip downloaded",
+                              });
+                            }
+                          } finally {
+                            setIsBulkDownloadingDocs(false);
+                          }
+                        }}
+                      >
+                        {isBulkDownloadingDocs ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Download className="h-3 w-3 mr-1" />
+                        )}
+                        {isBulkDownloadingDocs
+                          ? "Preparing…"
+                          : "Download all docs (PDF)"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-8 px-3"
+                        onClick={async () => {
+                          if (!selectedLoan) return;
+                          const result = await dispatch(
+                            refreshLoanDocumentChecklist(selectedLoan.id),
+                          );
+                          if (refreshLoanDocumentChecklist.rejected.match(result)) {
+                            toast({
+                              title: "Refresh failed",
+                              description: String(result.payload || "Error"),
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          const payload = result.payload as {
+                            message?: string;
+                          };
+                          toast({
+                            title: "Checklist refreshed",
+                            description:
+                              payload?.message ||
+                              "Open ID, SSN, or Bank tasks for spouse / Month 1–2 slots",
+                          });
+                          await dispatch(fetchLoanDetails(selectedLoan.id));
+                        }}
+                      >
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                        Refresh checklist fields
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"

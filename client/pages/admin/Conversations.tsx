@@ -24,6 +24,8 @@ import {
   CheckCircle,
   ArchiveRestore,
   Star,
+  Ban,
+  ShieldCheck,
   Tag,
   ChevronLeft,
   ChevronDown,
@@ -82,6 +84,7 @@ import GroupSourcePill from "@/components/conversations/GroupSourcePill";
 import GroupThreadHeader from "@/components/conversations/GroupThreadHeader";
 import SyncedFromPhoneBanner from "@/components/conversations/SyncedFromPhoneBanner";
 import PhoneLink from "@/components/PhoneLink";
+import { BlockNumberDialog } from "@/components/BlockNumberDialog";
 import EmailLink from "@/components/EmailLink";
 import { adminPageMeta } from "@/lib/seo-helpers";
 import {
@@ -178,7 +181,13 @@ import {
   sendGroupMessage,
   fetchGroupParticipants,
 } from "@/store/slices/conversationsSlice";
+import { fetchCrmConfig, claimSharedConversation } from "@/store/slices/crmSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
+import {
+  fetchBlockedNumbers,
+  selectIsPhoneBlocked,
+  unblockPhoneNumber,
+} from "@/store/slices/blockedNumbersSlice";
 import {
   setVoiceAvailable,
   startOutboundCall,
@@ -206,6 +215,14 @@ const CHANNEL_TABS: { key: ChannelFilter; label: string }[] = [
   { key: "calls", label: "Calls" },
 ];
 
+const INBOX_SCOPE_TABS: {
+  key: "mine" | "shared";
+  label: string;
+}[] = [
+  { key: "mine", label: "Mine" },
+  { key: "shared", label: "Shared" },
+];
+
 const Conversations = () => {
   const dispatch = useAppDispatch();
   const location = useLocation();
@@ -228,6 +245,10 @@ const Conversations = () => {
     isSendingGroupMessage,
     groupParticipants,
   } = useAppSelector((state) => state.conversations);
+
+  const { perOwnerCrmActive, isClaiming } = useAppSelector((state) => state.crm);
+  const inboxScope =
+    (threadsFilters.inbox_scope as "mine" | "shared" | undefined) ?? "mine";
 
   const brokerList = useAppSelector((state) =>
     (state.brokers.brokers as Broker[]).filter((b) => b.status === "active"),
@@ -501,6 +522,47 @@ const Conversations = () => {
     (s) => s.brokerAuth,
   );
   const isPlatformOwnerUser = currentUser?.role === "platform_owner";
+  // Block list is tenant-wide — admin roles only (mirrors API gate).
+  const canManageBlockedNumbers =
+    currentUser?.role === "admin" ||
+    currentUser?.role === "superadmin" ||
+    currentUser?.role === "platform_owner";
+  const blockedNumbersLoaded = useAppSelector((s) => s.blockedNumbers.loaded);
+  const blockedNumbersItems = useAppSelector((s) => s.blockedNumbers.items);
+  const isCurrentThreadBlocked = useAppSelector((s) =>
+    selectIsPhoneBlocked(s, currentThread?.client_phone),
+  );
+  const [isBlockDialogOpen, setIsBlockDialogOpen] = useState(false);
+
+  useEffect(() => {
+    if (canManageBlockedNumbers && !blockedNumbersLoaded) {
+      dispatch(fetchBlockedNumbers());
+    }
+  }, [dispatch, canManageBlockedNumbers, blockedNumbersLoaded]);
+
+  const handleUnblockCurrentThread = async () => {
+    const last10 = (currentThread?.client_phone ?? "")
+      .replace(/\D/g, "")
+      .slice(-10);
+    const entry = blockedNumbersItems.find(
+      (b) => b.normalized_phone === last10,
+    );
+    if (!entry) return;
+    try {
+      await dispatch(unblockPhoneNumber(entry.id)).unwrap();
+      toast({
+        title: "Number unblocked",
+        description: "Calls and texts from this number will reach you again.",
+      });
+    } catch (err) {
+      logger.error("Unblock from conversation failed:", err);
+      toast({
+        title: "Couldn't unblock number",
+        description: String(err),
+        variant: "destructive",
+      });
+    }
+  };
   const isCurrentThreadOwner =
     currentThread?.broker_id != null &&
     currentUser?.id === currentThread.broker_id;
@@ -568,6 +630,7 @@ const Conversations = () => {
     dispatch(fetchConversationStats());
     dispatch(fetchBrokers());
     dispatch(fetchConversationsConfig());
+    dispatch(fetchCrmConfig());
   }, [dispatch]);
 
   // Deep-link from Pipeline / CRM (location.state)
@@ -931,6 +994,10 @@ const Conversations = () => {
     e: React.MouseEvent,
   ) => {
     e.stopPropagation();
+    closeThread(thread);
+  };
+
+  const closeThread = (thread: ConversationThread) => {
     dispatch(removeThread(thread.conversation_id));
     if (currentThread?.conversation_id === thread.conversation_id) {
       setMobilePanel("list");
@@ -976,6 +1043,43 @@ const Conversations = () => {
       dispatch(fetchConversationThreads(resetFilters));
     });
     toast({ title: "Conversation reopened" });
+  };
+
+  const handleClaimSharedThread = async (
+    thread: ConversationThread,
+    e?: React.MouseEvent,
+  ) => {
+    e?.stopPropagation();
+    try {
+      const result = await dispatch(
+        claimSharedConversation({
+          conversationId: thread.conversation_id,
+        }),
+      ).unwrap();
+      toast({
+        title: "Conversation claimed",
+        description: result.client_name || "Contact linked to your CRM",
+      });
+      dispatch(
+        fetchConversationThreads({
+          ...threadsFilters,
+          inbox_scope: "mine",
+        }),
+      );
+      dispatch(setThreadsFilters({ ...threadsFilters, inbox_scope: "mine" }));
+    } catch (err: unknown) {
+      const errObj =
+        err && typeof err === "object" ? (err as Record<string, unknown>) : null;
+      const msg =
+        typeof errObj?.message === "string"
+          ? errObj.message
+          : typeof err === "string"
+            ? err
+            : typeof errObj?.error === "string"
+              ? errObj.error
+              : "Could not claim this conversation";
+      toast({ title: "Claim failed", description: msg, variant: "destructive" });
+    }
   };
 
   const handleDeleteThread = async (
@@ -1711,6 +1815,30 @@ const Conversations = () => {
                 )}
               </div>
 
+              {perOwnerCrmActive && channelFilter !== "calls" && (
+                <div className="flex rounded-lg bg-muted/80 p-0.5 gap-0.5 mb-2">
+                  {INBOX_SCOPE_TABS.map(({ key, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        const next = { ...threadsFilters, inbox_scope: key, page: 1 };
+                        dispatch(setThreadsFilters(next));
+                        dispatch(fetchConversationThreads(next));
+                      }}
+                      className={cn(
+                        "flex-1 text-xs font-medium py-1.5 px-2 rounded-md transition-all",
+                        inboxScope === key
+                          ? "bg-card text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Channel tabs — scrollable on mobile */}
               <div className="flex rounded-lg bg-muted p-0.5 gap-0.5 overflow-x-auto scrollbar-hide">
                 {CHANNEL_TABS.map(({ key, label }) => {
@@ -2108,6 +2236,23 @@ const Conversations = () => {
                                       align="end"
                                       className="w-44"
                                     >
+                                      {perOwnerCrmActive &&
+                                        inboxScope === "shared" &&
+                                        !thread.client_id &&
+                                        !thread.broker_id && (
+                                          <DropdownMenuItem
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setThreadMenuOpenId(null);
+                                              void handleClaimSharedThread(thread, e);
+                                            }}
+                                            disabled={isClaiming}
+                                            className="gap-2 text-sm text-emerald-700 focus:text-emerald-700"
+                                          >
+                                            <UserPlus className="h-4 w-4" />
+                                            Claim
+                                          </DropdownMenuItem>
+                                        )}
                                       {selectedStatus === "closed" ? (
                                         <DropdownMenuItem
                                           onClick={(e) => {
@@ -2182,7 +2327,17 @@ const Conversations = () => {
                                   ) || "No messages yet"}
                                 </p>
                               </div>
-                              {/* Row 3: ownership pill — shown when this client formally belongs to a different broker */}
+                              {/* Row 3: ownership / shared queue badges */}
+                              {perOwnerCrmActive &&
+                                !thread.client_id &&
+                                !thread.broker_id && (
+                                  <Badge
+                                    variant="outline"
+                                    className="mt-1 text-[10px] h-5 border-amber-300 text-amber-700"
+                                  >
+                                    Shared · Unclaimed
+                                  </Badge>
+                                )}
                               {thread.client_assigned_broker_name && (
                                 <div className="flex items-center gap-1 mt-0.5">
                                   <Info className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
@@ -2298,6 +2453,15 @@ const Conversations = () => {
                             className="text-xs text-muted-foreground whitespace-nowrap"
                           />
                         )}
+                        {isCurrentThreadBlocked && (
+                          <Badge
+                            variant="outline"
+                            className="h-5 gap-1 border-red-200 bg-red-50 px-1.5 text-[10px] text-red-700"
+                          >
+                            <Ban className="h-3 w-3" />
+                            Blocked
+                          </Badge>
+                        )}
                         {currentThread.client_email &&
                           !currentThread.client_email.includes(
                             "@noemail.placeholder",
@@ -2389,6 +2553,31 @@ const Conversations = () => {
                           <Tag className="h-4 w-4 mr-2" />
                           Add Tags
                         </DropdownMenuItem>
+                        {canManageBlockedNumbers &&
+                          currentThread.client_phone && (
+                            <>
+                              <DropdownMenuSeparator />
+                              {isCurrentThreadBlocked ? (
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    void handleUnblockCurrentThread()
+                                  }
+                                  className="text-emerald-700 focus:text-emerald-700"
+                                >
+                                  <ShieldCheck className="h-4 w-4 mr-2" />
+                                  Unblock number
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem
+                                  onClick={() => setIsBlockDialogOpen(true)}
+                                  className="text-red-600 focus:text-red-600"
+                                >
+                                  <Ban className="h-4 w-4 mr-2" />
+                                  Block number
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -4854,6 +5043,20 @@ const Conversations = () => {
         defaultBody={messageText}
         defaultSubject={messageSubject}
       />
+
+      {/* Block the current thread's number (admin roles) */}
+      {canManageBlockedNumbers && currentThread?.client_phone && (
+        <BlockNumberDialog
+          open={isBlockDialogOpen}
+          onOpenChange={setIsBlockDialogOpen}
+          phone={currentThread.client_phone}
+          contactName={currentThread.client_name}
+          offerCloseConversation={currentThread.status !== "closed"}
+          onBlocked={(_blocked, { closeConversation }) => {
+            if (closeConversation && currentThread) closeThread(currentThread);
+          }}
+        />
+      )}
     </div>
   );
 };

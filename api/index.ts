@@ -4,25 +4,7 @@ import express, { type RequestHandler } from "express";
 import { create } from "xmlbuilder2";
 import cors from "cors";
 import multer from "multer";
-import {
-  BULK_IMPORT_JOB_TTL_MS,
-  BULK_IMPORT_MAX_FILE_BYTES,
-  buildClientTemplateCsv,
-  buildRealtorTemplateCsv,
-  isBulkCsvImportEnabled,
-  resolveBulkCsvImportEnabled,
-  parseAndValidateBulkCsv,
-  applyBulkImportImporterRestrictions,
-  type BulkImportEntity,
-  type BulkImportValidationResult,
-  type NormalizedClientBulkRow,
-  type NormalizedRealtorBulkRow,
-} from "../shared/bulk-import.js";
-import {
-  ENCORE_OFFICE_VISIT_ADDRESS,
-  ENCORE_OFFICE_VISIT_MAPS_URL,
-  type MeetingType,
-} from "../shared/api.js";
+
 import axios from "axios";
 import mysql, {
   type ResultSetHeader,
@@ -32,6 +14,7 @@ import jwt from "jsonwebtoken";
 import { Resend } from "resend";
 import twilio from "twilio";
 import crypto from "crypto";
+import { deflateSync, inflateSync } from "zlib";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -41,6 +24,1259 @@ import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import Groq from "groq-sdk";
 import type { Pool, PoolConnection } from "mysql2/promise";
+
+// =====================================================
+// O365 sync helpers (inlined from shared/o365-sync.ts for Vercel)
+// =====================================================
+/** Office 365 mailbox sync tuning — shared between API and tests. */
+
+export const SYNC_INITIAL_LOOKBACK_DAYS = 30;
+export const SYNC_OVERLAP_MINUTES = 30;
+export const SYNC_EXTERNAL_ID_BATCH_SIZE = 200;
+
+/**
+ * ISO-8601 lower bound for Graph `receivedDateTime ge` filter.
+ * First sync: 30-day lookback. Subsequent: last_sync_at minus overlap buffer.
+ */
+export function resolveO365SyncSinceIso(
+  lastSyncAt: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!lastSyncAt) {
+    const since = new Date(
+      now.getTime() - SYNC_INITIAL_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+    );
+    return since.toISOString();
+  }
+  const parsed = new Date(lastSyncAt);
+  const anchor = Number.isNaN(parsed.getTime()) ? now : parsed;
+  const since = new Date(anchor.getTime() - SYNC_OVERLAP_MINUTES * 60 * 1000);
+  return since.toISOString();
+}
+
+export function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return items.length ? [items] : [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+// =====================================================
+// Broadcast bulk helpers (inlined from shared/broadcast-bulk.ts for Vercel)
+// =====================================================
+/**
+ * Twilio Bulk Messaging helpers for Realtor Broadcasts.
+ * Pure functions for client, tests, and smoke scripts.
+ * Runtime copies / imports must stay compatible with api/index.ts.
+ */
+
+export type BroadcastSmsEngineMode = "messages" | "bulk";
+
+export const BROADCAST_BULK_DEFAULT_CHUNK_SIZE = 9000;
+export const BROADCAST_BULK_MAX_RECIPIENTS_PER_REQUEST = 10000;
+
+export interface BulkOperationStats {
+  total?: number;
+  recipients?: number;
+  attempts?: number;
+  unaddressable?: number;
+  queued?: number;
+  sent?: number;
+  scheduled?: number;
+  delivered?: number;
+  read?: number;
+  undelivered?: number;
+  failed?: number;
+  canceled?: number;
+}
+
+export interface BroadcastBulkProgress {
+  sentCount: number;
+  failedCount: number;
+  pendingCount: number;
+  progressPct: number;
+  operationStatus: string | null;
+}
+
+/** Normalize dialable phone to digits-only E.164-ish form for matching. */
+export function normalizeBroadcastPhone(
+  phone: string | null | undefined,
+): string {
+  if (!phone) return "";
+  const digits = String(phone).replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return `1${digits}`;
+  return digits;
+}
+
+export function phonesMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const na = normalizeBroadcastPhone(a);
+  const nb = normalizeBroadcastPhone(b);
+  return Boolean(na && nb && na === nb);
+}
+
+export function chunkBroadcastRecipients<T>(
+  items: T[],
+  chunkSize: number = BROADCAST_BULK_DEFAULT_CHUNK_SIZE,
+): T[][] {
+  const size = Math.max(
+    1,
+    Math.min(chunkSize, BROADCAST_BULK_MAX_RECIPIENTS_PER_REQUEST),
+  );
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+export function parseBroadcastSmsEngine(
+  value: string | null | undefined,
+): BroadcastSmsEngineMode {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase() === "bulk"
+    ? "bulk"
+    : "messages";
+}
+
+/**
+ * Internal ops gate — not exposed in Settings UI.
+ * Off unless BROADCAST_BULK_MESSAGING_ENABLED is truthy (1/true/yes/on)
+ * or BROADCAST_SMS_ENGINE=bulk.
+ */
+export function resolveBroadcastSmsEngineFromEnv(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): BroadcastSmsEngineMode {
+  const explicit = String(env.BROADCAST_SMS_ENGINE ?? "")
+    .trim()
+    .toLowerCase();
+  if (explicit === "bulk" || explicit === "messages") {
+    return explicit;
+  }
+  const enabled = String(env.BROADCAST_BULK_MESSAGING_ENABLED ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    enabled === "1" ||
+    enabled === "true" ||
+    enabled === "yes" ||
+    enabled === "on"
+  ) {
+    return "bulk";
+  }
+  return "messages";
+}
+
+/** Whether Bulk engine should run for this campaign (SMS channel + flag + optional min size). */
+export function shouldUseBulkSmsEngine(params: {
+  engineSetting: string | null | undefined;
+  channel: string;
+  smsRecipientCount: number;
+  minRecipients?: number;
+  hasMedia?: boolean;
+}): boolean {
+  if (params.hasMedia) return false;
+  if (parseBroadcastSmsEngine(params.engineSetting) !== "bulk") return false;
+  if (params.channel !== "sms" && params.channel !== "both") return false;
+  const min = Math.max(1, Number(params.minRecipients ?? 1));
+  return params.smsRecipientCount >= min;
+}
+
+export function mapBulkOperationStatsToProgress(
+  stats: BulkOperationStats | null | undefined,
+  recipientCount: number,
+  operationStatus?: string | null,
+): BroadcastBulkProgress {
+  const sent =
+    Number(stats?.sent ?? 0) +
+    Number(stats?.delivered ?? 0) +
+    Number(stats?.read ?? 0);
+  const failed =
+    Number(stats?.failed ?? 0) +
+    Number(stats?.undelivered ?? 0) +
+    Number(stats?.unaddressable ?? 0) +
+    Number(stats?.canceled ?? 0);
+  const total = Math.max(
+    recipientCount,
+    Number(stats?.recipients ?? 0),
+    sent + failed,
+  );
+  const pendingCount = Math.max(0, total - sent - failed);
+  const progressPct =
+    total > 0 ? Math.min(100, Math.round(((sent + failed) / total) * 100)) : 0;
+  return {
+    sentCount: sent,
+    failedCount: failed,
+    pendingCount,
+    progressPct,
+    operationStatus: operationStatus ?? null,
+  };
+}
+
+export function isBulkOperationTerminal(
+  status: string | null | undefined,
+): boolean {
+  const s = String(status ?? "").toUpperCase();
+  return (
+    s === "COMPLETED" || s === "FAILED" || s === "CANCELED" || s === "CANCELLED"
+  );
+}
+
+export function parseOperationIdsJson(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x)).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.map((x) => String(x)).filter(Boolean)
+        : [];
+    } catch {
+      return raw.trim() ? [raw.trim()] : [];
+    }
+  }
+  return [];
+}
+
+export function broadcastBulkBillingLabel(
+  engine: BroadcastSmsEngineMode | string | null,
+): string {
+  return parseBroadcastSmsEngine(engine) === "bulk"
+    ? "Broadcast (Bulk)"
+    : "Broadcast";
+}
+
+// =====================================================
+// Bulk CSV import helpers (inlined from shared/bulk-import.ts for Vercel)
+// =====================================================
+/**
+ * Bulk CSV import — shared validation, parsing, templates.
+ * Used by API, client preview helpers, and smoke tests.
+ */
+
+export type BulkImportEntity = "clients" | "realtors";
+
+export type BulkImportRowStatus = "will_create" | "skipped" | "error";
+
+export type BulkImportTableFilter = "all" | "ready" | "skipped" | "error";
+
+export const BULK_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const BULK_IMPORT_MAX_CLIENT_ROWS = 500;
+export const BULK_IMPORT_MAX_REALTOR_ROWS = 200;
+export const BULK_IMPORT_JOB_TTL_MS = 60 * 60 * 1000;
+export const BULK_IMPORT_ACK_THRESHOLD = 100;
+
+export const BULK_LEAD_SOURCES = [
+  "current_client_referral",
+  "past_client",
+  "past_client_referral",
+  "personal_friend",
+  "realtor",
+  "advertisement",
+  "business_partner",
+  "builder",
+  "other",
+] as const;
+
+export type BulkLeadSource = (typeof BULK_LEAD_SOURCES)[number];
+
+export const BULK_PARTNER_TYPES = ["realtor", "mortgage_banker"] as const;
+
+export type BulkPartnerType = (typeof BULK_PARTNER_TYPES)[number];
+
+export const BULK_CITIZENSHIP_STATUSES = [
+  "us_citizen",
+  "permanent_resident",
+  "non_resident",
+  "other",
+] as const;
+
+export const BULK_SPECIALIZATIONS = [
+  "Conventional Loans",
+  "FHA Loans",
+  "VA Loans",
+  "USDA Loans",
+  "Jumbo Loans",
+  "Refinancing",
+  "First-Time Home Buyers",
+  "Investment Properties",
+  "Commercial Loans",
+  "Reverse Mortgages",
+] as const;
+
+export const BULK_FORBIDDEN_COLUMNS = new Set([
+  "password",
+  "password_hash",
+  "ssn",
+  "social_security",
+  "twilio_caller_id",
+  "twilio_phone_sid",
+]);
+
+export const CLIENT_CSV_HEADERS = [
+  "first_name",
+  "last_name",
+  "middle_name",
+  "email",
+  "phone",
+  "alternate_phone",
+  "date_of_birth",
+  "address_street",
+  "address_unit",
+  "address_city",
+  "address_state",
+  "address_zip",
+  "citizenship_status",
+  "lead_source",
+  "external_ref",
+] as const;
+
+export const REALTOR_CSV_HEADERS = [
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "partner_type",
+  "license_number",
+  "specializations",
+  "office_address",
+  "office_city",
+  "office_state",
+  "office_zip",
+  "bio",
+  "external_ref",
+] as const;
+
+export interface BulkImportRowPreview {
+  row_number: number;
+  status: BulkImportRowStatus;
+  message?: string;
+  external_ref?: string | null;
+  display_name: string;
+  email?: string | null;
+  phone?: string | null;
+  badge?: string | null;
+  conflict_entity_id?: number | null;
+}
+
+export interface NormalizedClientBulkRow {
+  row_number: number;
+  external_ref: string | null;
+  first_name: string;
+  last_name: string;
+  middle_name: string | null;
+  email: string | null;
+  phone: string | null;
+  normalized_phone: string | null;
+  alternate_phone: string | null;
+  date_of_birth: string | null;
+  address_street: string | null;
+  address_unit: string | null;
+  address_city: string | null;
+  address_state: string | null;
+  address_zip: string | null;
+  citizenship_status: string | null;
+  lead_source: string;
+  status: BulkImportRowStatus;
+  message?: string;
+  conflict_client_id?: number | null;
+}
+
+export interface NormalizedRealtorBulkRow {
+  row_number: number;
+  external_ref: string | null;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string | null;
+  partner_type: BulkPartnerType;
+  role: "broker" | "admin";
+  license_number: string | null;
+  specializations: string[] | null;
+  office_address: string | null;
+  office_city: string | null;
+  office_state: string | null;
+  office_zip: string | null;
+  bio: string | null;
+  status: BulkImportRowStatus;
+  message?: string;
+  conflict_broker_id?: number | null;
+}
+
+export interface BulkImportParseResult {
+  success: boolean;
+  file_error?: string;
+  file_error_code?: string;
+  headers?: string[];
+  rows?: string[][];
+}
+
+export interface BulkImportValidationResult {
+  success: boolean;
+  file_error?: string;
+  file_error_code?: string;
+  entity: BulkImportEntity;
+  row_count: number;
+  will_create_count: number;
+  skipped_count: number;
+  error_count: number;
+  preview_rows: BulkImportRowPreview[];
+  breakdown: Record<string, number>;
+  normalized_clients?: NormalizedClientBulkRow[];
+  normalized_realtors?: NormalizedRealtorBulkRow[];
+}
+
+export function isTruthyBulkEnvFlag(value: string | undefined): boolean {
+  const v = (value ?? "").toLowerCase().trim();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+function isFalsyBulkEnvFlag(value: string | undefined): boolean {
+  const v = (value ?? "").toLowerCase().trim();
+  return v === "0" || v === "false" || v === "no" || v === "off";
+}
+
+/**
+ * Runtime bulk-import gate (mirrors group conversations pattern).
+ * - Off when BULK_CSV_IMPORT_ENABLED=0
+ * - Off in production unless BULK_CSV_IMPORT_ENABLED=1 or BULK_CSV_IMPORT_ALLOW_PRODUCTION=1
+ * - On in dev/preview when unset
+ */
+export function resolveBulkCsvImportEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env.BULK_CSV_IMPORT_ENABLED;
+  if (isFalsyBulkEnvFlag(raw)) return false;
+
+  const runtime = (env.VERCEL_ENV ?? env.NODE_ENV ?? "").toLowerCase();
+
+  if (runtime === "production") {
+    if (isTruthyBulkEnvFlag(raw)) return true;
+    return isTruthyBulkEnvFlag(env.BULK_CSV_IMPORT_ALLOW_PRODUCTION);
+  }
+
+  if (raw === undefined || raw.trim() === "") return true;
+  return isTruthyBulkEnvFlag(raw);
+}
+
+/** @param envValue explicit override for unit tests */
+export function isBulkCsvImportEnabled(envValue?: string): boolean {
+  if (envValue !== undefined) {
+    if (isFalsyBulkEnvFlag(envValue)) return false;
+    if (envValue.trim() === "") return resolveBulkCsvImportEnabled();
+    return isTruthyBulkEnvFlag(envValue);
+  }
+  return resolveBulkCsvImportEnabled();
+}
+
+export function sanitizeCsvCell(raw: string): string {
+  let v = raw.trim();
+  if (/^[=+\-@]/.test(v)) {
+    v = v.replace(/^[=+\-@]+/, "").trim();
+  }
+  return v;
+}
+
+export function normalizeBulkImportPhoneLast10(
+  raw: string | null | undefined,
+): string | null {
+  if (!raw?.trim()) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
+}
+
+export function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+export function isValidDateIso(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return false;
+  if (d > new Date()) return false;
+  return true;
+}
+
+export function normalizeUsState(raw: string | null): string | null {
+  if (!raw?.trim()) return null;
+  const t = raw.trim().toUpperCase();
+  if (t.length === 2) return t;
+  return null;
+}
+
+/** RFC 4180-ish CSV parser */
+export function parseCsv(text: string): BulkImportParseResult {
+  const stripped = text.replace(/^\uFEFF/, "");
+  if (!stripped.trim()) {
+    return {
+      success: false,
+      file_error: "File is empty",
+      file_error_code: "EMPTY_FILE",
+    };
+  }
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < stripped.length; i++) {
+    const c = stripped[i];
+    const next = stripped[i + 1];
+
+    if (inQuotes) {
+      if (c === '"' && next === '"') {
+        field += '"';
+        i++;
+      } else if (c === '"') {
+        inQuotes = false;
+      } else {
+        field += c;
+      }
+      continue;
+    }
+
+    if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(sanitizeCsvCell(field));
+      field = "";
+    } else if (c === "\n" || (c === "\r" && next === "\n")) {
+      row.push(sanitizeCsvCell(field));
+      field = "";
+      if (row.some((cell) => cell.length > 0)) rows.push(row);
+      row = [];
+      if (c === "\r") i++;
+    } else if (c !== "\r") {
+      field += c;
+    }
+  }
+
+  row.push(sanitizeCsvCell(field));
+  if (row.some((cell) => cell.length > 0)) rows.push(row);
+
+  if (inQuotes) {
+    return {
+      success: false,
+      file_error: "Unclosed quote in CSV",
+      file_error_code: "INVALID_CSV",
+    };
+  }
+
+  if (!rows.length) {
+    return {
+      success: false,
+      file_error: "File is empty",
+      file_error_code: "EMPTY_FILE",
+    };
+  }
+
+  let startIdx = 0;
+  if (rows[0][0]?.startsWith("#")) startIdx = 1;
+  if (startIdx >= rows.length) {
+    return {
+      success: false,
+      file_error: "No header row found",
+      file_error_code: "MISSING_HEADER",
+    };
+  }
+
+  const headers = rows[startIdx].map((h) => h.trim().toLowerCase());
+  const dataRows = rows
+    .slice(startIdx + 1)
+    .filter((r) => r.some((c) => c.length > 0));
+
+  if (!dataRows.length) {
+    return {
+      success: false,
+      file_error: "No data rows in file",
+      file_error_code: "NO_DATA_ROWS",
+    };
+  }
+
+  const headerSet = new Set(headers);
+  if (headerSet.size !== headers.length) {
+    return {
+      success: false,
+      file_error: "Duplicate column names in header",
+      file_error_code: "DUPLICATE_HEADER",
+    };
+  }
+
+  for (const h of headers) {
+    if (BULK_FORBIDDEN_COLUMNS.has(h)) {
+      return {
+        success: false,
+        file_error: `Forbidden column: ${h}`,
+        file_error_code: "FORBIDDEN_COLUMN",
+      };
+    }
+  }
+
+  const expected = headers.includes("lead_source")
+    ? CLIENT_CSV_HEADERS
+    : REALTOR_CSV_HEADERS;
+  const expectedSet = new Set(expected as readonly string[]);
+
+  for (const h of headers) {
+    if (!expectedSet.has(h)) {
+      return {
+        success: false,
+        file_error: `Unknown column: ${h}`,
+        file_error_code: "UNKNOWN_COLUMN",
+      };
+    }
+  }
+
+  const required = headers.includes("lead_source")
+    ? (["first_name", "last_name", "lead_source"] as const)
+    : (["first_name", "last_name", "email", "partner_type"] as const);
+
+  for (const col of required) {
+    if (!headerSet.has(col)) {
+      return {
+        success: false,
+        file_error: `Missing required column: ${col}`,
+        file_error_code: "MISSING_COLUMN",
+      };
+    }
+  }
+
+  const parsedRows: string[][] = [];
+  for (let i = 0; i < dataRows.length; i++) {
+    const raw = dataRows[i];
+    if (raw.length !== headers.length) {
+      return {
+        success: false,
+        file_error: `Row ${i + startIdx + 2} has ${raw.length} columns, expected ${headers.length}`,
+        file_error_code: "COLUMN_COUNT_MISMATCH",
+      };
+    }
+    const obj: string[] = [];
+    for (let c = 0; c < headers.length; c++) {
+      obj.push(raw[c] ?? "");
+    }
+    parsedRows.push(obj);
+  }
+
+  return { success: true, headers, rows: parsedRows };
+}
+
+function rowToRecord(
+  headers: string[],
+  cells: string[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((h, i) => {
+    out[h] = cells[i] ?? "";
+  });
+  return out;
+}
+
+export function validateClientRows(
+  headers: string[],
+  dataRows: string[][],
+): BulkImportValidationResult {
+  const normalized: NormalizedClientBulkRow[] = [];
+  const preview_rows: BulkImportRowPreview[] = [];
+  const breakdown: Record<string, number> = {};
+  const emailsInFile = new Map<string, number>();
+  const phonesInFile = new Map<string, number>();
+
+  if (dataRows.length > BULK_IMPORT_MAX_CLIENT_ROWS) {
+    return {
+      success: false,
+      file_error: `Maximum ${BULK_IMPORT_MAX_CLIENT_ROWS} rows allowed`,
+      file_error_code: "ROW_LIMIT_EXCEEDED",
+      entity: "clients",
+      row_count: 0,
+      will_create_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      preview_rows: [],
+      breakdown: {},
+    };
+  }
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const rowNumber = i + 2;
+    const rec = rowToRecord(headers, dataRows[i]);
+    const external_ref = rec.external_ref?.trim() || null;
+
+    let status: BulkImportRowStatus = "will_create";
+    let message: string | undefined;
+
+    const first_name = rec.first_name?.trim() ?? "";
+    const last_name = rec.last_name?.trim() ?? "";
+    const lead_source = rec.lead_source?.trim().toLowerCase() ?? "";
+
+    if (!first_name) {
+      status = "error";
+      message = "first_name is required";
+    } else if (!last_name) {
+      status = "error";
+      message = "last_name is required";
+    } else if (!lead_source) {
+      status = "error";
+      message = "lead_source is required";
+    } else if (lead_source === "public_wizard") {
+      status = "error";
+      message = "public_wizard is not allowed in bulk import";
+    } else if (!BULK_LEAD_SOURCES.includes(lead_source as BulkLeadSource)) {
+      status = "error";
+      message = `Invalid lead_source. Use: ${BULK_LEAD_SOURCES.join(", ")}`;
+    }
+
+    let email: string | null = rec.email?.trim().toLowerCase() || null;
+    if (status === "will_create" && email && !isValidEmail(email)) {
+      status = "error";
+      message = "Invalid email format";
+    }
+
+    const phoneNorm = normalizeBulkImportPhoneLast10(rec.phone);
+    const altNorm = normalizeBulkImportPhoneLast10(rec.alternate_phone);
+    if (status === "will_create" && rec.phone?.trim() && !phoneNorm) {
+      status = "error";
+      message = "Invalid phone number";
+    }
+    if (
+      status === "will_create" &&
+      phoneNorm &&
+      altNorm &&
+      phoneNorm === altNorm
+    ) {
+      status = "error";
+      message = "alternate_phone must differ from phone";
+    }
+
+    const dob = rec.date_of_birth?.trim() || null;
+    if (status === "will_create" && dob && !isValidDateIso(dob)) {
+      status = "error";
+      message = "date_of_birth must be YYYY-MM-DD and not in the future";
+    }
+
+    const citizenship = rec.citizenship_status?.trim().toLowerCase() || null;
+    if (
+      status === "will_create" &&
+      citizenship &&
+      !BULK_CITIZENSHIP_STATUSES.includes(
+        citizenship as (typeof BULK_CITIZENSHIP_STATUSES)[number],
+      )
+    ) {
+      status = "error";
+      message = `Invalid citizenship_status`;
+    }
+
+    const state = normalizeUsState(rec.address_state);
+    if (status === "will_create" && rec.address_state?.trim() && !state) {
+      status = "error";
+      message = "address_state must be 2-letter US code";
+    }
+
+    if (status === "will_create" && email) {
+      const prev = emailsInFile.get(email);
+      if (prev !== undefined) {
+        status = "error";
+        message = `Duplicate email in file (row ${prev})`;
+      } else emailsInFile.set(email, rowNumber);
+    }
+
+    if (status === "will_create" && phoneNorm) {
+      const prev = phonesInFile.get(phoneNorm);
+      if (prev !== undefined) {
+        status = "error";
+        message = `Duplicate phone in file (row ${prev})`;
+      } else phonesInFile.set(phoneNorm, rowNumber);
+    }
+
+    const row: NormalizedClientBulkRow = {
+      row_number: rowNumber,
+      external_ref,
+      first_name,
+      last_name,
+      middle_name: rec.middle_name?.trim() || null,
+      email,
+      phone: rec.phone?.trim() || null,
+      normalized_phone: phoneNorm,
+      alternate_phone: rec.alternate_phone?.trim() || null,
+      date_of_birth: dob,
+      address_street: rec.address_street?.trim() || null,
+      address_unit: rec.address_unit?.trim() || null,
+      address_city: rec.address_city?.trim() || null,
+      address_state: state,
+      address_zip: rec.address_zip?.trim() || null,
+      citizenship_status: citizenship,
+      lead_source,
+      status,
+      message,
+    };
+
+    normalized.push(row);
+    preview_rows.push({
+      row_number: rowNumber,
+      status,
+      message,
+      external_ref,
+      display_name: `${first_name} ${last_name}`.trim(),
+      email,
+      phone: rec.phone?.trim() || null,
+      badge: lead_source || null,
+    });
+
+    if (status === "will_create") {
+      breakdown[lead_source] = (breakdown[lead_source] ?? 0) + 1;
+    }
+  }
+
+  return summarizeValidation("clients", normalized, preview_rows, breakdown);
+}
+
+export function validateRealtorRows(
+  headers: string[],
+  dataRows: string[][],
+): BulkImportValidationResult {
+  const normalized: NormalizedRealtorBulkRow[] = [];
+  const preview_rows: BulkImportRowPreview[] = [];
+  const breakdown: Record<string, number> = {};
+  const emailsInFile = new Map<string, number>();
+  const phonesInFile = new Map<string, number>();
+
+  if (dataRows.length > BULK_IMPORT_MAX_REALTOR_ROWS) {
+    return {
+      success: false,
+      file_error: `Maximum ${BULK_IMPORT_MAX_REALTOR_ROWS} rows allowed`,
+      file_error_code: "ROW_LIMIT_EXCEEDED",
+      entity: "realtors",
+      row_count: 0,
+      will_create_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      preview_rows: [],
+      breakdown: {},
+    };
+  }
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const rowNumber = i + 2;
+    const rec = rowToRecord(headers, dataRows[i]);
+    const external_ref = rec.external_ref?.trim() || null;
+
+    let status: BulkImportRowStatus = "will_create";
+    let message: string | undefined;
+
+    const first_name = rec.first_name?.trim() ?? "";
+    const last_name = rec.last_name?.trim() ?? "";
+    const email = rec.email?.trim().toLowerCase() ?? "";
+    const partner_type = rec.partner_type
+      ?.trim()
+      .toLowerCase() as BulkPartnerType;
+
+    if (!first_name || first_name.length < 2) {
+      status = "error";
+      message = "first_name is required (min 2 characters)";
+    } else if (!last_name || last_name.length < 2) {
+      status = "error";
+      message = "last_name is required (min 2 characters)";
+    } else if (!email) {
+      status = "error";
+      message = "email is required";
+    } else if (!isValidEmail(email)) {
+      status = "error";
+      message = "Invalid email format";
+    } else if (!partner_type) {
+      status = "error";
+      message = "partner_type is required";
+    } else if (!BULK_PARTNER_TYPES.includes(partner_type)) {
+      status = "error";
+      message = `partner_type must be: ${BULK_PARTNER_TYPES.join(" | ")}`;
+    }
+
+    const phoneNorm = normalizeBulkImportPhoneLast10(rec.phone);
+    if (status === "will_create" && rec.phone?.trim() && !phoneNorm) {
+      status = "error";
+      message = "Invalid phone number";
+    }
+
+    let specializations: string[] | null = null;
+    if (status === "will_create" && rec.specializations?.trim()) {
+      const parts = rec.specializations
+        .split("|")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const invalid = parts.filter(
+        (p) =>
+          !BULK_SPECIALIZATIONS.includes(
+            p as (typeof BULK_SPECIALIZATIONS)[number],
+          ),
+      );
+      if (invalid.length) {
+        status = "error";
+        message = `Invalid specialization(s): ${invalid.join(", ")}`;
+      } else {
+        specializations = parts;
+      }
+    }
+
+    const bio = rec.bio?.trim() || null;
+    if (status === "will_create" && bio && bio.length > 500) {
+      status = "error";
+      message = "bio max 500 characters";
+    }
+
+    const office_state = normalizeUsState(rec.office_state);
+    if (status === "will_create" && rec.office_state?.trim() && !office_state) {
+      status = "error";
+      message = "office_state must be 2-letter US code";
+    }
+
+    if (status === "will_create") {
+      const prevEmail = emailsInFile.get(email);
+      if (prevEmail !== undefined) {
+        status = "error";
+        message = `Duplicate email in file (row ${prevEmail})`;
+      } else emailsInFile.set(email, rowNumber);
+    }
+
+    if (status === "will_create" && phoneNorm) {
+      const prevPhone = phonesInFile.get(phoneNorm);
+      if (prevPhone !== undefined) {
+        status = "error";
+        message = `Duplicate phone in file (row ${prevPhone})`;
+      } else phonesInFile.set(phoneNorm, rowNumber);
+    }
+
+    const role: "broker" | "admin" =
+      partner_type === "mortgage_banker" ? "admin" : "broker";
+
+    const row: NormalizedRealtorBulkRow = {
+      row_number: rowNumber,
+      external_ref,
+      first_name,
+      last_name,
+      email,
+      phone: rec.phone?.trim() || null,
+      partner_type: partner_type || "realtor",
+      role,
+      license_number: rec.license_number?.trim() || null,
+      specializations,
+      office_address: rec.office_address?.trim() || null,
+      office_city: rec.office_city?.trim() || null,
+      office_state: office_state,
+      office_zip: rec.office_zip?.trim() || null,
+      bio,
+      status,
+      message,
+    };
+
+    normalized.push(row);
+    preview_rows.push({
+      row_number: rowNumber,
+      status,
+      message,
+      external_ref,
+      display_name: `${first_name} ${last_name}`.trim(),
+      email,
+      phone: rec.phone?.trim() || null,
+      badge: partner_type || null,
+    });
+
+    if (status === "will_create" && partner_type) {
+      breakdown[partner_type] = (breakdown[partner_type] ?? 0) + 1;
+    }
+  }
+
+  return summarizeValidation("realtors", normalized, preview_rows, breakdown);
+}
+
+function summarizeValidation(
+  entity: BulkImportEntity,
+  normalized: NormalizedClientBulkRow[] | NormalizedRealtorBulkRow[],
+  preview_rows: BulkImportRowPreview[],
+  breakdown: Record<string, number>,
+): BulkImportValidationResult {
+  const will_create_count = preview_rows.filter(
+    (r) => r.status === "will_create",
+  ).length;
+  const skipped_count = preview_rows.filter(
+    (r) => r.status === "skipped",
+  ).length;
+  const error_count = preview_rows.filter((r) => r.status === "error").length;
+
+  const result: BulkImportValidationResult = {
+    success: true,
+    entity,
+    row_count: preview_rows.length,
+    will_create_count,
+    skipped_count,
+    error_count,
+    preview_rows,
+    breakdown,
+  };
+
+  if (entity === "clients") {
+    result.normalized_clients = normalized as NormalizedClientBulkRow[];
+  } else {
+    result.normalized_realtors = normalized as NormalizedRealtorBulkRow[];
+  }
+
+  return result;
+}
+
+/** Mortgage bankers may bulk-import clients/realtors but not create other MB accounts via CSV. */
+export function applyBulkImportImporterRestrictions(
+  validation: BulkImportValidationResult,
+  importerRole: string,
+): BulkImportValidationResult {
+  if (importerRole === "platform_owner") return validation;
+  if (validation.entity !== "realtors" || !validation.normalized_realtors) {
+    return validation;
+  }
+
+  const normalized = validation.normalized_realtors.map((row) => {
+    if (row.partner_type === "mortgage_banker" || row.role === "admin") {
+      return {
+        ...row,
+        status: "error" as const,
+        message: "Mortgage bankers can only bulk-import realtor partners",
+      };
+    }
+    return row;
+  });
+
+  const preview_rows = validation.preview_rows.map((pr) => {
+    const nr = normalized.find((r) => r.row_number === pr.row_number);
+    if (!nr || nr.status !== "error") return pr;
+    return {
+      ...pr,
+      status: "error" as const,
+      message: nr.message,
+    };
+  });
+
+  return summarizeValidation(
+    "realtors",
+    normalized,
+    preview_rows,
+    validation.breakdown,
+  );
+}
+
+export function parseAndValidateBulkCsv(
+  text: string,
+  entity: BulkImportEntity,
+): BulkImportValidationResult {
+  const parsed = parseCsv(text);
+  if (!parsed.success || !parsed.headers || !parsed.rows) {
+    return {
+      success: false,
+      file_error: parsed.file_error,
+      file_error_code: parsed.file_error_code,
+      entity,
+      row_count: 0,
+      will_create_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      preview_rows: [],
+      breakdown: {},
+    };
+  }
+
+  const isClientFile = parsed.headers.includes("lead_source");
+  if (entity === "clients" && !isClientFile) {
+    return {
+      success: false,
+      file_error:
+        "File does not look like a client import (missing lead_source column)",
+      file_error_code: "WRONG_TEMPLATE",
+      entity,
+      row_count: 0,
+      will_create_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      preview_rows: [],
+      breakdown: {},
+    };
+  }
+  if (entity === "realtors" && isClientFile) {
+    return {
+      success: false,
+      file_error: "File does not look like a realtor import (wrong columns)",
+      file_error_code: "WRONG_TEMPLATE",
+      entity,
+      row_count: 0,
+      will_create_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      preview_rows: [],
+      breakdown: {},
+    };
+  }
+
+  return entity === "clients"
+    ? validateClientRows(parsed.headers, parsed.rows)
+    : validateRealtorRows(parsed.headers, parsed.rows);
+}
+
+export function buildClientTemplateCsv(): string {
+  return [
+    CLIENT_CSV_HEADERS.join(","),
+    "Maria,Flores,,maria.flores@example.com,(562) 555-0100,,1985-03-15,123 Main St,,Whittier,CA,90601,us_citizen,past_client,CRM-1001",
+    "John,Reyes,,,(909) 555-0199,,,,,,,,,realtor,CRM-1002",
+  ].join("\n");
+}
+
+export function buildRealtorTemplateCsv(): string {
+  return [
+    REALTOR_CSV_HEADERS.join(","),
+    'Jane,Agent,jane.agent@example.com,(714) 555-0200,realtor,DRE1234567,"FHA Loans|First-Time Home Buyers",100 Main St,Whittier,CA,90603,Top LA agent,REALTOR-501',
+    "Alex,Banker,alex.banker@example.com,(562) 555-0300,mortgage_banker,NMLS987654,,15111 Whittier Blvd,Whittier,CA,90603,Senior LO,MB-102",
+  ].join("\n");
+}
+
+export function filterPreviewRows(
+  rows: BulkImportRowPreview[],
+  filter: BulkImportTableFilter,
+  search: string,
+): BulkImportRowPreview[] {
+  let out = rows;
+  if (filter === "ready") out = out.filter((r) => r.status === "will_create");
+  else if (filter === "skipped")
+    out = out.filter((r) => r.status === "skipped");
+  else if (filter === "error") out = out.filter((r) => r.status === "error");
+
+  const q = search.trim().toLowerCase();
+  if (!q) return out;
+
+  return out.filter((r) => {
+    const hay = [
+      r.display_name,
+      r.email,
+      r.phone,
+      r.external_ref,
+      r.badge,
+      r.message,
+      String(r.row_number),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function csvEscapeCell(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+export function buildPreviewReportCsv(rows: BulkImportRowPreview[]): string {
+  const headers = [
+    "row_number",
+    "status",
+    "display_name",
+    "email",
+    "phone",
+    "badge",
+    "message",
+    "external_ref",
+    "conflict_entity_id",
+  ];
+  const lines = [
+    headers.join(","),
+    ...rows
+      .filter((r) => r.status !== "will_create")
+      .map((r) =>
+        [
+          r.row_number,
+          r.status,
+          r.display_name,
+          r.email ?? "",
+          r.phone ?? "",
+          r.badge ?? "",
+          r.message ?? "",
+          r.external_ref ?? "",
+          r.conflict_entity_id ?? "",
+        ]
+          .map(csvEscapeCell)
+          .join(","),
+      ),
+  ];
+  return lines.join("\n");
+}
+
+export interface BulkImportResultCsvRow {
+  row_number: number;
+  external_ref?: string | null;
+  status: string;
+  entity_id?: number | null;
+  owner_broker_id?: number | null;
+  message?: string;
+}
+
+export function buildCommitResultsCsv(rows: BulkImportResultCsvRow[]): string {
+  const headers = [
+    "row_number",
+    "external_ref",
+    "status",
+    "entity_id",
+    "owner_broker_id",
+    "message",
+  ];
+  const lines = [
+    headers.join(","),
+    ...rows.map((r) =>
+      [
+        r.row_number,
+        r.external_ref ?? "",
+        r.status,
+        r.entity_id ?? "",
+        r.owner_broker_id ?? "",
+        r.message ?? "",
+      ]
+        .map(csvEscapeCell)
+        .join(","),
+    ),
+  ];
+  return lines.join("\n");
+}
+
+export function downloadTextFile(
+  filename: string,
+  content: string,
+  mime = "text/csv;charset=utf-8",
+): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/** Inlined from shared/api.ts — do not import shared/api.js (pulls per-owner-crm at runtime). */
+type MeetingType = "phone" | "video" | "teams" | "office";
+
+const ENCORE_OFFICE_VISIT_ADDRESS =
+  "Encore Mortgage, 15111 Whittier Blvd., Suite 101-B, Whittier, CA 90603";
+
+const ENCORE_OFFICE_VISIT_MAPS_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+  ENCORE_OFFICE_VISIT_ADDRESS,
+)}`;
+
 // =====================================================
 // Billing & quota (inlined for Vercel serverless — no local imports)
 // =====================================================
@@ -998,15 +2234,17 @@ function computeActualExpenditure(
   };
 }
 
-/** Encore-internal COGS/margin — never expose to paying customers in production. */
+/** Encore-internal COGS/margin — local `npm run dev` only. */
 function isBillingInternalEconomicsEnabled(
   env: Record<string, string | undefined> = typeof process !== "undefined"
     ? (process.env as Record<string, string | undefined>)
     : {},
 ): boolean {
-  return (
-    env.NODE_ENV === "development" || env.BILLING_INTERNAL_ECONOMICS === "true"
-  );
+  const vercelEnv = String(env.VERCEL_ENV ?? "")
+    .trim()
+    .toLowerCase();
+  if (vercelEnv === "production" || vercelEnv === "preview") return false;
+  return env.NODE_ENV === "development";
 }
 
 const EMPTY_INFRA = {
@@ -1648,7 +2886,6 @@ export type ReserveResult = {
 };
 
 const VOICE_MIN_PER_CALL_EST = 2.4;
-const SINCE_EXPR = "DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY)";
 const COGS_SMS_PER_SEGMENT = BILLING_PLAN_DEFAULTS.cogsSmsPerSegmentUsd;
 const COGS_EMAIL_PER_SEND = BILLING_PLAN_DEFAULTS.cogsEmailPerSendUsd;
 const COGS_WHATSAPP_PER_MESSAGE =
@@ -1685,8 +2922,22 @@ const BILLING_SETTING_KEYS = [
   "billing_enforce_broadcast_daily",
 ] as const;
 
+/** UCS-2-aware segment count (inlined from shared/short-links.ts). */
 export function smsSegmentsFromBody(body: string): number {
-  return Math.ceil(Math.max((body || "").length, 1) / 160);
+  const text = String(body ?? "");
+  const hasNonGsm = /[^\x00-\x7F]/.test(text);
+  const perSeg = hasNonGsm ? 67 : 160;
+  const charCount = text.length;
+  return charCount === 0 ? 1 : Math.ceil(charCount / perSeg);
+}
+
+/** MMS min segment-equivalents (~$0.022 / $0.012). Inlined from shared/short-links. */
+const BROADCAST_MMS_QUOTA_MIN_SEGMENTS = 2;
+
+export function broadcastSmsQuotaUnits(body: string, hasMedia = false): number {
+  const base = smsSegmentsFromBody(body);
+  if (!hasMedia) return base;
+  return Math.max(base, BROADCAST_MMS_QUOTA_MIN_SEGMENTS);
 }
 
 /** Safe parse for conversation_threads.tags (JSON column — mysql2 may return array or string). */
@@ -1741,8 +2992,12 @@ export function estimateBroadcastUnits(params: {
   smsBody?: string;
   emailRecipientCount: number;
   smsRecipientCount: number;
+  hasMedia?: boolean;
 }): { sms_segments: number; email_sends: number } {
-  const segmentsPerSms = smsSegmentsFromBody(params.smsBody || "");
+  const segmentsPerSms = broadcastSmsQuotaUnits(
+    params.smsBody || "",
+    !!params.hasMedia,
+  );
   const sms_segments =
     params.channel === "sms" || params.channel === "both"
       ? params.smsRecipientCount * segmentsPerSms
@@ -1954,6 +3209,471 @@ export async function getBillingConfig(
   };
 }
 
+// =====================================================
+// Per-owner CRM (inlined for Vercel serverless — shared/per-owner-crm.ts is source for client/tests)
+// =====================================================
+
+type ClientListVisibility = "active" | "hidden" | "archived";
+
+type CrmTransferResolution =
+  | "keep_target_name"
+  | "replace_with_source"
+  | "merge_fields"
+  | "duplicate_import_name"
+  | "rename_on_import";
+
+interface PerOwnerCrmFeatureFlags {
+  enabled: boolean;
+  allowProduction: boolean;
+  pilotBrokerIds: number[];
+  activeForBroker: boolean;
+}
+
+type ClientPhoneConflictScope = "tenant" | "per_owner";
+
+type ConversationInboxScope = "mine" | "shared" | "all";
+
+const PER_OWNER_CRM_ENV_KEYS = {
+  enabled: "PER_OWNER_CRM_ENABLED",
+} as const;
+
+function parseBoolSetting(
+  value: string | undefined | null,
+  fallback = false,
+): boolean {
+  if (value == null || String(value).trim() === "") return fallback;
+  const v = String(value).toLowerCase().trim();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+interface PerOwnerCrmSettingsInput {
+  enabled?: string | boolean | null;
+  brokerId?: number | null;
+}
+
+function settingToBool(
+  value: string | boolean | null | undefined,
+  fallback = false,
+): boolean {
+  if (typeof value === "boolean") return value;
+  return parseBoolSetting(value == null ? undefined : String(value), fallback);
+}
+
+function resolvePerOwnerCrmActive(
+  input: PerOwnerCrmSettingsInput = {},
+): PerOwnerCrmFeatureFlags {
+  const enabled = settingToBool(input.enabled, false);
+  return {
+    enabled,
+    allowProduction: enabled,
+    pilotBrokerIds: [],
+    activeForBroker: enabled,
+  };
+}
+
+function resolvePerOwnerCrmFromEnv(
+  overrides: {
+    enabled?: string;
+    brokerId?: number | null;
+  } = {},
+): PerOwnerCrmFeatureFlags {
+  const env =
+    typeof process !== "undefined" ? process.env : ({} as NodeJS.ProcessEnv);
+
+  return resolvePerOwnerCrmActive({
+    enabled: overrides.enabled ?? env[PER_OWNER_CRM_ENV_KEYS.enabled],
+    brokerId: overrides.brokerId ?? null,
+  });
+}
+
+function clientListVisibilityFilter(
+  flags: PerOwnerCrmFeatureFlags,
+): ClientListVisibility[] {
+  return flags.activeForBroker ? ["active"] : ["active", "hidden", "archived"];
+}
+
+function resolveClientPhoneConflictScope(
+  flags: PerOwnerCrmFeatureFlags,
+  assignedBrokerId: number | null | undefined,
+): ClientPhoneConflictScope {
+  if (flags.activeForBroker && assignedBrokerId != null) return "per_owner";
+  return "tenant";
+}
+
+type ClientEmailConflictScope = "tenant" | "per_owner";
+
+function resolveClientEmailConflictScope(
+  flags: PerOwnerCrmFeatureFlags,
+  assignedBrokerId: number | null | undefined,
+): ClientEmailConflictScope {
+  if (flags.activeForBroker && assignedBrokerId != null) return "per_owner";
+  return "tenant";
+}
+
+type RealtorConflictScope = "tenant" | "per_owner";
+
+function resolveRealtorConflictScope(
+  flags: PerOwnerCrmFeatureFlags,
+  opts: {
+    role: string | null | undefined;
+    createdByBrokerId: number | null | undefined;
+  },
+): RealtorConflictScope {
+  const role = (opts.role || "broker").toLowerCase();
+  const isPartner = role === "broker" && opts.createdByBrokerId != null;
+  if (flags.activeForBroker && isPartner) return "per_owner";
+  return "tenant";
+}
+
+function perOwnerClientListWhere(
+  clientAlias = "c",
+  visibility: ClientListVisibility[] = ["active"],
+): string {
+  const vis = visibility.map((v) => `'${v}'`).join(",");
+  return `${clientAlias}.assigned_broker_id = ? AND ${clientAlias}.list_visibility IN (${vis})`;
+}
+
+function perOwnerThreadSharedQueueWhere(threadAlias = "ct"): string {
+  return `(${threadAlias}.client_id IS NULL AND ${threadAlias}.broker_id IS NULL)`;
+}
+
+function perOwnerThreadMineWhere(threadAlias = "ct"): string {
+  const shared = perOwnerThreadSharedQueueWhere(threadAlias);
+  return `(NOT ${shared} AND (
+    ${threadAlias}.owner_client_scope_broker_id = ?
+    OR (${threadAlias}.broker_id = ? AND (
+      ${threadAlias}.owner_client_scope_broker_id IS NULL
+      OR ${threadAlias}.owner_client_scope_broker_id = ?
+    ))
+  ))`;
+}
+
+function defaultConversationInboxScope(
+  flags: PerOwnerCrmFeatureFlags,
+): ConversationInboxScope {
+  return flags.activeForBroker ? "mine" : "all";
+}
+
+function normalizePhoneLast10(phone: string | null | undefined): string {
+  if (!phone) return "";
+  return phone.replace(/\D/g, "").slice(-10);
+}
+
+/** Per-owner CRM feature flags — env vars only (PER_OWNER_CRM_*). */
+export async function getPerOwnerCrmFlags(
+  _pool: Pool,
+  _tenantId: number,
+  brokerId?: number | null,
+): Promise<PerOwnerCrmFeatureFlags> {
+  return resolvePerOwnerCrmFromEnv({
+    brokerId: brokerId ?? null,
+  });
+}
+
+/** Find conflicting client for a phone — tenant-wide unless per-owner CRM flag is on. */
+async function findClientPhoneConflict(
+  pool: Pool,
+  tenantId: number,
+  normalizedPhone: string,
+  opts: { brokerId: number | null; excludeClientId?: number },
+): Promise<RowDataPacket | null> {
+  const flags = await getPerOwnerCrmFlags(pool, tenantId, opts.brokerId);
+  const scope = resolveClientPhoneConflictScope(flags, opts.brokerId);
+  const exclude = opts.excludeClientId != null;
+  let sql = `SELECT c.id, c.first_name, c.last_name,
+                    b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
+             FROM clients c
+             LEFT JOIN brokers b ON b.id = c.assigned_broker_id
+             WHERE `;
+  const params: (string | number)[] = [];
+  if (scope === "per_owner") {
+    sql += `c.tenant_id = ? AND c.normalized_phone = ? AND c.phone IS NOT NULL AND c.assigned_broker_id = ?`;
+    params.push(tenantId, normalizedPhone, opts.brokerId!);
+  } else {
+    sql += `c.tenant_id = ? AND c.normalized_phone = ? AND c.phone IS NOT NULL`;
+    params.push(tenantId, normalizedPhone);
+  }
+  if (exclude) {
+    sql += ` AND c.id != ?`;
+    params.push(opts.excludeClientId!);
+  }
+  sql += ` LIMIT 1`;
+  const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+  return rows[0] ?? null;
+}
+
+function phoneConflictResponse(conflict: RowDataPacket) {
+  return {
+    client_id: conflict.id as number,
+    client_name: `${conflict.first_name} ${conflict.last_name}`.trim(),
+    broker_id: conflict.broker_id as number | null,
+    broker_name: conflict.broker_id
+      ? `${conflict.broker_first} ${conflict.broker_last}`.trim()
+      : null,
+    conflict_field: "phone" as const,
+  };
+}
+
+function buildClientPhoneConflictPayload(
+  conflict: RowDataPacket,
+  crmFlags: PerOwnerCrmFeatureFlags,
+  requestingBrokerId: number,
+) {
+  const conflictBrokerId = conflict.broker_id as number | null;
+  const crossOwner =
+    conflictBrokerId != null && conflictBrokerId !== requestingBrokerId;
+  let hint: string | undefined;
+  if (crossOwner && crmFlags.enabled && !crmFlags.activeForBroker) {
+    hint =
+      "Per-owner CRM is configured but not active. Set PER_OWNER_CRM_ENABLED=1 on Vercel and redeploy.";
+  }
+  return {
+    success: false as const,
+    error:
+      crmFlags.activeForBroker && !crossOwner
+        ? "You already have a client with this phone number on your list"
+        : "This phone number is already linked to another client",
+    conflict: phoneConflictResponse(conflict),
+    per_owner_crm: crmFlags,
+    hint,
+  };
+}
+
+/** Find conflicting client for an email — tenant-wide unless per-owner CRM flag is on. */
+async function findClientEmailConflict(
+  pool: Pool,
+  tenantId: number,
+  email: string,
+  opts: { brokerId: number | null; excludeClientId?: number },
+): Promise<RowDataPacket | null> {
+  const flags = await getPerOwnerCrmFlags(pool, tenantId, opts.brokerId);
+  const scope = resolveClientEmailConflictScope(flags, opts.brokerId);
+  const exclude = opts.excludeClientId != null;
+  let sql = `SELECT c.id, c.first_name, c.last_name,
+                    b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
+             FROM clients c
+             LEFT JOIN brokers b ON b.id = c.assigned_broker_id
+             WHERE `;
+  const params: (string | number)[] = [];
+  if (scope === "per_owner") {
+    sql += `c.tenant_id = ? AND c.email = ? AND c.assigned_broker_id = ?`;
+    params.push(tenantId, email, opts.brokerId!);
+  } else {
+    sql += `c.tenant_id = ? AND c.email = ?`;
+    params.push(tenantId, email);
+  }
+  if (exclude) {
+    sql += ` AND c.id != ?`;
+    params.push(opts.excludeClientId!);
+  }
+  sql += ` LIMIT 1`;
+  const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+  return rows[0] ?? null;
+}
+
+function buildClientEmailConflictPayload(
+  conflict: RowDataPacket,
+  crmFlags: PerOwnerCrmFeatureFlags,
+  requestingBrokerId: number,
+) {
+  const conflictBrokerId = conflict.broker_id as number | null;
+  const crossOwner =
+    conflictBrokerId != null && conflictBrokerId !== requestingBrokerId;
+  return {
+    success: false as const,
+    error:
+      crmFlags.activeForBroker && !crossOwner
+        ? "You already have a client with this email on your list"
+        : "A client with this email already exists",
+    conflict: {
+      client_id: conflict.id as number,
+      client_name: `${conflict.first_name} ${conflict.last_name}`.trim(),
+      broker_id: conflictBrokerId,
+      broker_name: conflict.broker_id
+        ? `${conflict.broker_first} ${conflict.broker_last}`.trim()
+        : null,
+      conflict_field: "email" as const,
+    },
+    per_owner_crm: crmFlags,
+  };
+}
+
+/**
+ * Resolve a client by email safely after per-owner CRM (same email can exist
+ * under multiple owners). Never pick an arbitrary LIMIT 1 when ambiguous.
+ *
+ * - With ownerBrokerId: prefer that owner's row (then unassigned).
+ * - Without owner: single match OK; multiple matches → ambiguous (caller must
+ *   refuse login / leave unlinked).
+ */
+async function resolveClientByEmailSafe(
+  db: Pool | any,
+  tenantId: number,
+  email: string,
+  opts: {
+    ownerBrokerId?: number | null;
+    activeOnly?: boolean;
+  } = {},
+): Promise<{
+  client: RowDataPacket | null;
+  ambiguous: boolean;
+  matchCount: number;
+}> {
+  const normalized = String(email || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return { client: null, ambiguous: false, matchCount: 0 };
+  }
+  const activeClause = opts.activeOnly ? ` AND status = 'active'` : "";
+  const ownerId = opts.ownerBrokerId ?? null;
+
+  if (ownerId != null) {
+    const [rows] = await db.query(
+      `SELECT * FROM clients
+       WHERE tenant_id = ? AND LOWER(email) = ?${activeClause}
+         AND (assigned_broker_id = ? OR assigned_broker_id IS NULL)
+       ORDER BY CASE WHEN assigned_broker_id = ? THEN 0 ELSE 1 END, id ASC
+       LIMIT 1`,
+      [tenantId, normalized, ownerId, ownerId],
+    );
+    const list = rows as RowDataPacket[];
+    return {
+      client: list[0] ?? null,
+      ambiguous: false,
+      matchCount: list.length,
+    };
+  }
+
+  const [rows] = await db.query(
+    `SELECT * FROM clients
+     WHERE tenant_id = ? AND LOWER(email) = ?${activeClause}
+     ORDER BY id ASC
+     LIMIT 5`,
+    [tenantId, normalized],
+  );
+  const list = rows as RowDataPacket[];
+  if (list.length === 0) {
+    return { client: null, ambiguous: false, matchCount: 0 };
+  }
+  if (list.length === 1) {
+    return { client: list[0], ambiguous: false, matchCount: 1 };
+  }
+  return { client: null, ambiguous: true, matchCount: list.length };
+}
+
+/** Partner realtor email conflict — scoped to owning MB when per-owner CRM is on. */
+async function findBrokerEmailConflict(
+  pool: Pool,
+  tenantId: number,
+  email: string,
+  opts: {
+    role: string;
+    createdByBrokerId: number | null;
+    excludeBrokerId?: number;
+  },
+): Promise<RowDataPacket | null> {
+  const flags = await getPerOwnerCrmFlags(
+    pool,
+    tenantId,
+    opts.createdByBrokerId,
+  );
+  const scope = resolveRealtorConflictScope(flags, {
+    role: opts.role,
+    createdByBrokerId: opts.createdByBrokerId,
+  });
+  const params: (string | number)[] = [tenantId, email];
+  let sql = `SELECT id, email, first_name, last_name, role, created_by_broker_id, status
+             FROM brokers
+             WHERE tenant_id = ? AND LOWER(email) = ? AND status = 'active'`;
+  if (scope === "per_owner") {
+    sql += ` AND created_by_broker_id = ? AND role = 'broker'`;
+    params.push(opts.createdByBrokerId!);
+  }
+  if (opts.excludeBrokerId != null) {
+    sql += ` AND id != ?`;
+    params.push(opts.excludeBrokerId);
+  }
+  sql += ` LIMIT 1`;
+  const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+  return rows[0] ?? null;
+}
+
+/** Inactive partner with same email under this owner — free to reactivate. */
+async function findInactiveBrokerEmailForReactivate(
+  pool: Pool,
+  tenantId: number,
+  email: string,
+  opts: { createdByBrokerId: number | null; role: string },
+): Promise<RowDataPacket | null> {
+  if (opts.createdByBrokerId == null || opts.role !== "broker") return null;
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, email, first_name, last_name, status, created_by_broker_id
+     FROM brokers
+     WHERE tenant_id = ? AND LOWER(email) = ? AND status IN ('inactive','suspended')
+       AND created_by_broker_id = ? AND role = 'broker'
+     LIMIT 1`,
+    [tenantId, email, opts.createdByBrokerId],
+  );
+  return rows[0] ?? null;
+}
+
+/** Soft-deactivate identity so UNIQUE(email/phone) allows re-create under same owner. */
+async function freeInactiveBrokerIdentity(
+  pool: Pool,
+  tenantId: number,
+  brokerId: number,
+): Promise<void> {
+  const freedEmail = `deleted+${brokerId}+${Date.now()}@inactive.local`;
+  await pool.query(
+    `UPDATE brokers
+     SET status = 'inactive',
+         email = ?,
+         phone = NULL,
+         normalized_phone = NULL,
+         updated_at = NOW()
+     WHERE id = ? AND tenant_id = ?`,
+    [freedEmail, brokerId, tenantId],
+  );
+}
+
+/** Partner realtor phone conflict — blank phone never conflicts. */
+async function findBrokerPhoneConflict(
+  pool: Pool,
+  tenantId: number,
+  normalizedPhone: string,
+  opts: {
+    role: string;
+    createdByBrokerId: number | null;
+    excludeBrokerId?: number;
+  },
+): Promise<RowDataPacket | null> {
+  if (!normalizedPhone) return null;
+  const flags = await getPerOwnerCrmFlags(
+    pool,
+    tenantId,
+    opts.createdByBrokerId,
+  );
+  const scope = resolveRealtorConflictScope(flags, {
+    role: opts.role,
+    createdByBrokerId: opts.createdByBrokerId,
+  });
+  const params: (string | number)[] = [tenantId, normalizedPhone];
+  let sql = `SELECT id, phone, normalized_phone, role, created_by_broker_id, status FROM brokers
+             WHERE tenant_id = ? AND normalized_phone = ? AND status = 'active'`;
+  if (scope === "per_owner") {
+    sql += ` AND created_by_broker_id = ? AND role = 'broker'`;
+    params.push(opts.createdByBrokerId!);
+  }
+  if (opts.excludeBrokerId != null) {
+    sql += ` AND id != ?`;
+    params.push(opts.excludeBrokerId);
+  }
+  sql += ` LIMIT 1`;
+  const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+  return rows[0] ?? null;
+}
+
 function currentCalendarMonthStart(): string {
   return new Date().toISOString().slice(0, 7) + "-01";
 }
@@ -1983,28 +3703,129 @@ function currentPeriodStart(config: BillingConfig): string {
   );
 }
 
-/** Advance subscription billing period when calendar month rolls over. */
+// --- Billing period anchor (inlined from shared/billing-period.ts) ---
+
+type BillingPeriodAnchor = "stripe" | "calendar";
+
+const STRIPE_ANCHOR_BLOCKED_STATUSES = new Set([
+  "inactive",
+  "canceled",
+  "incomplete_expired",
+]);
+
+function calendarMonthEnd(monthStart: string): string {
+  const match = /^(\d{4})-(\d{2})-01$/.exec(monthStart);
+  if (!match) return monthStart;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${match[1]}-${match[2]}-${String(lastDay).padStart(2, "0")}`;
+}
+
+function resolveBillingPeriodAnchor(params: {
+  stripeSubscriptionId: string | null | undefined;
+  subscriptionStatus: string | null | undefined;
+}): BillingPeriodAnchor {
+  const subId = String(params.stripeSubscriptionId ?? "").trim();
+  if (!subId) return "calendar";
+  const status = String(params.subscriptionStatus ?? "inactive")
+    .trim()
+    .toLowerCase();
+  if (STRIPE_ANCHOR_BLOCKED_STATUSES.has(status)) return "calendar";
+  return "stripe";
+}
+
+function shouldAdvanceCalendarBillingPeriod(params: {
+  anchor: BillingPeriodAnchor;
+  storedPeriodStart: string | null;
+  calendarMonthStart: string;
+}): boolean {
+  if (params.anchor === "stripe") return false;
+  const stored = params.storedPeriodStart ?? params.calendarMonthStart;
+  return params.calendarMonthStart > stored;
+}
+
+function isBillingPeriodTransition(
+  previousStart: string | null | undefined,
+  nextStart: string | null | undefined,
+): boolean {
+  if (!nextStart) return false;
+  if (!previousStart) return true;
+  return previousStart !== nextStart;
+}
+
+function shouldSyncStripeSubscriptionPeriod(params: {
+  dbPeriodStart: string | null;
+  dbStatus: string | null;
+  stripePeriodStart: string | null;
+  stripeStatus: string;
+}): boolean {
+  const mappedDb = String(params.dbStatus ?? "").toLowerCase();
+  const mappedStripe = String(params.stripeStatus ?? "").toLowerCase();
+  if (mappedDb !== mappedStripe) return true;
+  if (!params.stripePeriodStart) return false;
+  return params.dbPeriodStart !== params.stripePeriodStart;
+}
+
+function resolveUsageSnapshotPeriod(params: {
+  subscriptionPeriodStart: string | null;
+  subscriptionPeriodEnd: string | null;
+  calendarMonthStart?: string;
+}): {
+  periodStart: string;
+  periodEnd: string;
+  sinceUtc: string;
+} {
+  const monthStart = params.calendarMonthStart ?? currentCalendarMonthStart();
+  const periodStart = params.subscriptionPeriodStart ?? monthStart;
+  const periodEnd =
+    params.subscriptionPeriodEnd ?? calendarMonthEnd(periodStart);
+  return {
+    periodStart,
+    periodEnd,
+    sinceUtc: `${periodStart} 00:00:00`,
+  };
+}
+
+/**
+ * Advance billing period on calendar-month rollover for tenants without a
+ * linked Stripe subscription. Stripe-linked tenants use current_period_* from webhooks.
+ */
 async function maybeAdvanceBillingPeriod(
   pool: Pool,
   tenantId: number,
 ): Promise<void> {
   const monthStart = currentCalendarMonthStart();
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT period_start FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
+    `SELECT period_start, stripe_subscription_id, status
+     FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
     [tenantId],
   );
   if (!rows[0]) return;
+
+  const anchor = resolveBillingPeriodAnchor({
+    stripeSubscriptionId: rows[0].stripe_subscription_id as string | null,
+    subscriptionStatus: String(rows[0].status ?? ""),
+  });
   const subStart =
     toSqlDate(rows[0].period_start) ?? currentCalendarMonthStart();
-  if (monthStart <= subStart) return;
+  if (
+    !shouldAdvanceCalendarBillingPeriod({
+      anchor,
+      storedPeriodStart: subStart,
+      calendarMonthStart: monthStart,
+    })
+  ) {
+    return;
+  }
 
   await pool.query(
     `UPDATE tenant_subscription
      SET period_start = ?,
-         period_end = LAST_DAY(?),
+         period_end = ?,
          updated_at = UTC_TIMESTAMP()
      WHERE tenant_id = ?`,
-    [monthStart, monthStart, tenantId],
+    [monthStart, calendarMonthEnd(monthStart), tenantId],
   );
 }
 
@@ -2306,23 +4127,23 @@ export async function fetchTenantUsageSnapshot(
   pool: Pool,
   tenantId: number,
 ): Promise<UsageSnapshot> {
-  const [periodRows] = await pool.query<RowDataPacket[]>(
-    `SELECT DATE_FORMAT(${SINCE_EXPR}, '%Y-%m-%d') AS period_start,
-            DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d') AS period_end`,
-  );
-  const period = periodRows[0];
+  const config = await getBillingConfig(pool, tenantId);
+  const { periodStart, periodEnd, sinceUtc } = resolveUsageSnapshotPeriod({
+    subscriptionPeriodStart: config.subscription?.periodStart ?? null,
+    subscriptionPeriodEnd: config.subscription?.periodEnd ?? null,
+  });
 
   const convoSmsSegments = await scalar(
     pool,
     `SELECT COALESCE(SUM(CEIL(GREATEST(CHAR_LENGTH(COALESCE(c.body,'')), 1) / 160.0)), 0) AS v
      FROM communications c
      WHERE c.tenant_id = ? AND c.communication_type = 'sms' AND c.direction = 'outbound'
-       AND COALESCE(c.sent_at, c.created_at) >= ${SINCE_EXPR}
+       AND COALESCE(c.sent_at, c.created_at) >= ?
        AND NOT EXISTS (
          SELECT 1 FROM realtor_broadcast_recipients r
          WHERE r.tenant_id = ? AND r.sms_ext_id IS NOT NULL AND r.sms_ext_id = c.external_id
        )`,
-    [tenantId, tenantId],
+    [tenantId, sinceUtc, tenantId],
   );
 
   const broadcastSmsSegments = await scalar(
@@ -2331,31 +4152,31 @@ export async function fetchTenantUsageSnapshot(
      FROM realtor_broadcast_recipients r
      JOIN realtor_broadcasts rb ON rb.id = r.broadcast_id
      WHERE r.tenant_id = ? AND r.sms_status IN ('sent', 'delivered')
-       AND r.sent_at >= ${SINCE_EXPR}`,
-    [tenantId],
+       AND r.sent_at >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const totalEmailSends = await scalar(
     pool,
     `SELECT COUNT(*) AS v FROM communications
      WHERE tenant_id = ? AND communication_type = 'email' AND direction = 'outbound'
-       AND COALESCE(sent_at, created_at) >= ${SINCE_EXPR}`,
-    [tenantId],
+       AND COALESCE(sent_at, created_at) >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const broadcastEmailSends = await scalar(
     pool,
     `SELECT COUNT(*) AS v FROM realtor_broadcast_recipients
-     WHERE tenant_id = ? AND email_status = 'sent' AND sent_at >= ${SINCE_EXPR}`,
-    [tenantId],
+     WHERE tenant_id = ? AND email_status = 'sent' AND sent_at >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const callsLogged = await scalar(
     pool,
     `SELECT COUNT(*) AS v FROM communications
      WHERE tenant_id = ? AND communication_type = 'call'
-       AND COALESCE(sent_at, created_at) >= ${SINCE_EXPR}`,
-    [tenantId],
+       AND COALESCE(sent_at, created_at) >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const voiceMinutesRecorded = Math.round(
@@ -2364,44 +4185,44 @@ export async function fetchTenantUsageSnapshot(
       `SELECT ROUND(COALESCE(SUM(recording_duration), 0) / 60, 2) AS v
        FROM communications
        WHERE tenant_id = ? AND communication_type = 'call'
-         AND COALESCE(sent_at, created_at) >= ${SINCE_EXPR}`,
-      [tenantId],
+         AND COALESCE(sent_at, created_at) >= ?`,
+      [tenantId, sinceUtc],
     ),
   );
 
   const schedulerBookings = await scalar(
     pool,
     `SELECT COUNT(*) AS v FROM scheduled_meetings
-     WHERE tenant_id = ? AND created_at >= ${SINCE_EXPR}`,
-    [tenantId],
+     WHERE tenant_id = ? AND created_at >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const mortgiAiTokens = await scalar(
     pool,
     `SELECT COALESCE(SUM(tokens_used), 0) AS v FROM ai_chat_sessions
-     WHERE tenant_id = ? AND updated_at >= ${SINCE_EXPR}`,
-    [tenantId],
+     WHERE tenant_id = ? AND updated_at >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const mortgiSessions = await scalar(
     pool,
     `SELECT COUNT(*) AS v FROM ai_chat_sessions
-     WHERE tenant_id = ? AND created_at >= ${SINCE_EXPR}`,
-    [tenantId],
+     WHERE tenant_id = ? AND created_at >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const mortgiUserMessages = await scalar(
     pool,
     `SELECT COALESCE(SUM(FLOOR(JSON_LENGTH(messages) / 2)), 0) AS v
-     FROM ai_chat_sessions WHERE tenant_id = ? AND updated_at >= ${SINCE_EXPR}`,
-    [tenantId],
+     FROM ai_chat_sessions WHERE tenant_id = ? AND updated_at >= ?`,
+    [tenantId, sinceUtc],
   );
 
   const totalSmsSegments = convoSmsSegments + broadcastSmsSegments;
 
   return {
-    periodStart: String(period.period_start),
-    periodEnd: String(period.period_end),
+    periodStart,
+    periodEnd,
     tenantId,
     totalSmsSegments,
     broadcastSmsSegments,
@@ -3740,7 +5561,7 @@ type StripePaymentMethodCard = {
   exp_year?: number | null;
 };
 
-type StripeClient = {
+export type StripeClient = {
   customers: {
     create: (params: Record<string, unknown>) => Promise<{ id: string }>;
     retrieve: (
@@ -3796,6 +5617,10 @@ type StripeClient = {
   };
   paymentMethods: {
     retrieve: (id: string) => Promise<Record<string, unknown>>;
+    list: (params: Record<string, unknown>) => Promise<{
+      data: Array<Record<string, unknown>>;
+      has_more: boolean;
+    }>;
   };
   subscriptions: {
     create: (
@@ -3825,6 +5650,20 @@ type StripeClient = {
       type: string;
       data: { object: Record<string, unknown> };
     };
+  };
+  invoices: {
+    list: (params: Record<string, unknown>) => Promise<{
+      data: Array<Record<string, unknown>>;
+      has_more: boolean;
+    }>;
+    retrieve: (
+      id: string,
+      params?: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
+    pay: (
+      id: string,
+      params?: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
   };
 };
 
@@ -4622,6 +6461,12 @@ async function syncStripeSubscriptionToDb(
   const periodStart = stripePeriodToSqlDate(subscription.current_period_start);
   const periodEnd = stripePeriodToSqlDate(subscription.current_period_end);
 
+  const [prevRows] = await pool.query<RowDataPacket[]>(
+    `SELECT period_start FROM tenant_subscription WHERE tenant_id = ? LIMIT 1`,
+    [tenantId],
+  );
+  const previousPeriodStart = toSqlDate(prevRows[0]?.period_start);
+
   await pool.query(
     `UPDATE tenant_subscription
      SET stripe_subscription_id = COALESCE(?, stripe_subscription_id),
@@ -4638,6 +6483,19 @@ async function syncStripeSubscriptionToDb(
   } else if (mapped === "past_due") {
     const graceDays = await getGraceDays(pool, tenantId);
     await markSubscriptionPastDue(pool, tenantId, graceDays);
+  }
+
+  const periodChanged = isBillingPeriodTransition(
+    previousPeriodStart,
+    periodStart,
+  );
+  if (
+    periodChanged &&
+    periodStart &&
+    (mapped === "active" || mapped === "trialing" || mapped === "past_due")
+  ) {
+    const config = await getBillingConfig(pool, tenantId);
+    await ensurePeriodGrants(pool, tenantId, config);
   }
 }
 
@@ -4765,19 +6623,481 @@ async function applyDefaultPaymentMethod(
   stripe: StripeClient,
   tenantId: number,
   paymentMethodId: string,
-): Promise<void> {
+): Promise<{ applied: boolean; brand: string | null }> {
   const billing = await loadTenantStripeBilling(pool, tenantId);
-  if (!billing.stripeCustomerId) return;
+  if (!billing.stripeCustomerId) return { applied: false, brand: null };
+
+  // Never make a card the default if this account can't charge it (Amex on
+  // a Mexico-registered account) — renewals would fail forever.
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+  const brand =
+    ((pm.card as { brand?: string } | undefined)?.brand ?? null) || null;
+  if (pm.type === "card" && !isSupportedCardBrand(brand)) {
+    console.warn(
+      `[billing] Not setting unsupported card brand as default: ${brand} (${paymentMethodId})`,
+    );
+    return { applied: false, brand };
+  }
 
   await stripe.customers.update(billing.stripeCustomerId, {
     invoice_settings: { default_payment_method: paymentMethodId },
   });
 
-  if (billing.stripeSubscriptionId) {
-    await stripe.subscriptions.update(billing.stripeSubscriptionId, {
-      default_payment_method: paymentMethodId,
-    });
+  // A subscription-level default_payment_method overrides the customer's, so
+  // set it on every live subscription in Stripe. Our row's
+  // stripe_subscription_id can point at an abandoned checkout attempt — using
+  // it left renewals charging a dead card after "Update card".
+  const subs = await stripe.subscriptions.list({
+    customer: billing.stripeCustomerId,
+    status: "all",
+    limit: 20,
+  });
+  for (const sub of subs.data) {
+    if (
+      ["active", "trialing", "past_due", "unpaid"].includes(
+        String(sub.status ?? ""),
+      )
+    ) {
+      await stripe.subscriptions.update(String(sub.id), {
+        default_payment_method: paymentMethodId,
+      });
+    }
   }
+  return { applied: true, brand };
+}
+
+/**
+ * Card brands this Stripe account can actually charge. The platform account
+ * is registered in Mexico, where Amex is rejected with "Your card is not
+ * supported. Please use a Visa, MasterCard, or Carnet card". Override with
+ * STRIPE_SUPPORTED_CARD_BRANDS (comma-separated) if the account changes.
+ */
+export function supportedCardBrands(): string[] {
+  const raw = process.env.STRIPE_SUPPORTED_CARD_BRANDS?.trim();
+  return (raw ? raw.split(",") : ["visa", "mastercard", "carnet"])
+    .map((b) => b.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function isSupportedCardBrand(
+  brand: string | null | undefined,
+): boolean {
+  return supportedCardBrands().includes(String(brand ?? "").toLowerCase());
+}
+
+// ── Overdue platform invoice (source of truth: Stripe) ──────────────────────
+// Drives the platform-owner "payment overdue" badge/interstitial and blocks
+// creating a new subscription while a renewal is unpaid. Deliberately reads
+// Stripe instead of tenant_subscription.status, which can be overwritten by
+// abandoned checkout attempts.
+
+export type OverdueInvoiceInfo = {
+  invoice_id: string;
+  number: string | null;
+  amount_due_usd: number;
+  currency: string;
+  failed_at: string;
+  days_overdue: number;
+  attempt_count: number;
+  next_payment_attempt: string | null;
+  hosted_invoice_url: string | null;
+};
+
+const OVERDUE_INVOICE_CACHE_TTL_MS = 2 * 60 * 1000;
+const overdueInvoiceCache = new Map<
+  number,
+  { at: number; value: OverdueInvoiceInfo | null }
+>();
+
+export function invalidateOverdueInvoiceCache(tenantId?: number): void {
+  if (tenantId == null) overdueInvoiceCache.clear();
+  else overdueInvoiceCache.delete(tenantId);
+}
+
+/**
+ * Oldest open, already-attempted renewal invoice with a balance. Ignores the
+ * first invoice of a never-paid checkout attempt (billing_reason
+ * "subscription_create"). Throws on Stripe errors (callers decide; errors
+ * are never cached).
+ */
+export async function findOverdueStripeInvoice(
+  pool: Pool,
+  stripe: StripeClient,
+  tenantId: number,
+  opts: { fresh?: boolean } = {},
+): Promise<OverdueInvoiceInfo | null> {
+  const cached = overdueInvoiceCache.get(tenantId);
+  if (
+    !opts.fresh &&
+    cached &&
+    Date.now() - cached.at < OVERDUE_INVOICE_CACHE_TTL_MS
+  ) {
+    return cached.value;
+  }
+
+  const { stripeCustomerId } = await loadTenantStripeBilling(pool, tenantId);
+  if (!stripeCustomerId) {
+    overdueInvoiceCache.set(tenantId, { at: Date.now(), value: null });
+    return null;
+  }
+
+  const page = await stripe.invoices.list({
+    customer: stripeCustomerId,
+    status: "open",
+    limit: 20,
+  });
+  const candidates = page.data
+    .filter(
+      (inv) =>
+        Number(inv.amount_remaining ?? 0) > 0 &&
+        Number(inv.attempt_count ?? 0) >= 1 &&
+        String(inv.billing_reason ?? "") !== "subscription_create",
+    )
+    .sort((a, b) => Number(a.created ?? 0) - Number(b.created ?? 0));
+
+  const inv = candidates[0];
+  let value: OverdueInvoiceInfo | null = null;
+  if (inv) {
+    const transitions = (inv.status_transitions ?? {}) as {
+      finalized_at?: number | null;
+    };
+    const failedSec = Number(transitions.finalized_at ?? inv.created ?? 0);
+    const nextAttempt = inv.next_payment_attempt
+      ? Number(inv.next_payment_attempt)
+      : null;
+    value = {
+      invoice_id: String(inv.id),
+      number: (inv.number as string | null) ?? null,
+      amount_due_usd: Number(inv.amount_remaining ?? 0) / 100,
+      currency: String(inv.currency ?? "usd"),
+      failed_at: new Date(failedSec * 1000).toISOString(),
+      days_overdue: Math.max(
+        0,
+        Math.floor((Date.now() - failedSec * 1000) / 86400000),
+      ),
+      attempt_count: Number(inv.attempt_count ?? 0),
+      next_payment_attempt: nextAttempt
+        ? new Date(nextAttempt * 1000).toISOString()
+        : null,
+      hosted_invoice_url: (inv.hosted_invoice_url as string | null) ?? null,
+    };
+  }
+  overdueInvoiceCache.set(tenantId, { at: Date.now(), value });
+  return value;
+}
+
+// ── Pay the overdue renewal inside the app ──────────────────────────────────
+
+export type OverduePaymentCard = {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  wallet: string | null;
+  is_default: boolean;
+  usable: boolean;
+  unusable_reason: string | null;
+};
+
+/** Issuer advice/reasons that mean "this card will never work — stop trying". */
+const DEAD_CARD_REASONS = new Set([
+  "invalid_account",
+  "lost_card",
+  "stolen_card",
+  "pickup_card",
+  "restricted_card",
+  "card_not_supported",
+]);
+
+const brandLabel = (brand: string) =>
+  brand === "amex"
+    ? "American Express"
+    : brand.charAt(0).toUpperCase() + brand.slice(1);
+
+/**
+ * Cards on file for the overdue-payment picker, each marked usable or not
+ * (unsupported brand, expired, or hard-declined on the overdue invoice).
+ * Usable cards first, then the customer's default.
+ */
+export async function listOverduePaymentCards(
+  pool: Pool,
+  stripe: StripeClient,
+  tenantId: number,
+  overdue: OverdueInvoiceInfo | null,
+): Promise<OverduePaymentCard[]> {
+  const { stripeCustomerId } = await loadTenantStripeBilling(pool, tenantId);
+  if (!stripeCustomerId) return [];
+
+  const [customer, pms] = await Promise.all([
+    stripe.customers.retrieve(stripeCustomerId),
+    stripe.paymentMethods.list({
+      customer: stripeCustomerId,
+      type: "card",
+      limit: 20,
+    }),
+  ]);
+  const defaultPm = String(
+    ((customer.invoice_settings ?? {}) as { default_payment_method?: unknown })
+      .default_payment_method ?? "",
+  );
+
+  // Card the bank hard-declined on the overdue invoice (e.g. closed account).
+  const deadPms = new Set<string>();
+  if (overdue) {
+    try {
+      const inv = await stripe.invoices.retrieve(overdue.invoice_id, {
+        expand: ["payment_intent.latest_charge"],
+      });
+      const pi = inv.payment_intent as Record<string, unknown> | null;
+      const charge = (pi?.latest_charge ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      const outcome = (charge?.outcome ?? {}) as {
+        advice_code?: string | null;
+        reason?: string | null;
+      };
+      if (
+        charge?.payment_method &&
+        (outcome.advice_code === "do_not_try_again" ||
+          DEAD_CARD_REASONS.has(String(outcome.reason ?? "")))
+      ) {
+        deadPms.add(String(charge.payment_method));
+      }
+    } catch (err) {
+      console.warn("[billing] Could not read last decline (non-fatal):", err);
+    }
+  }
+
+  const now = new Date();
+  const ym = now.getUTCFullYear() * 12 + now.getUTCMonth() + 1;
+  const cards = pms.data.map((pm): OverduePaymentCard => {
+    const card = (pm.card ?? {}) as {
+      brand?: string;
+      last4?: string;
+      exp_month?: number;
+      exp_year?: number;
+      wallet?: { type?: string } | null;
+    };
+    const brand = String(card.brand ?? "card");
+    const expMonth = Number(card.exp_month ?? 0);
+    const expYear = Number(card.exp_year ?? 0);
+    let reason: string | null = null;
+    if (!isSupportedCardBrand(brand)) {
+      reason = `${brandLabel(brand)} isn't accepted — use Visa or Mastercard`;
+    } else if (expYear * 12 + expMonth < ym) {
+      reason = "Expired";
+    } else if (deadPms.has(String(pm.id))) {
+      reason = "Declined by the bank — use another card";
+    }
+    return {
+      id: String(pm.id),
+      brand,
+      last4: String(card.last4 ?? ""),
+      exp_month: expMonth,
+      exp_year: expYear,
+      wallet: card.wallet?.type ?? null,
+      is_default: String(pm.id) === defaultPm,
+      usable: reason == null,
+      unusable_reason: reason,
+    };
+  });
+  return cards.sort(
+    (a, b) =>
+      Number(b.usable) - Number(a.usable) ||
+      Number(b.is_default) - Number(a.is_default),
+  );
+}
+
+export type PayOverdueResult =
+  | { status: "paid"; invoice_id: string }
+  | { status: "requires_action"; client_secret: string }
+  | { status: "declined"; message: string }
+  | { status: "invalid"; message: string };
+
+async function finalizeOverduePayment(
+  pool: Pool,
+  stripe: StripeClient,
+  tenantId: number,
+  invoice: Record<string, unknown>,
+  paymentMethodId: string,
+): Promise<void> {
+  // The money has moved — nothing below may turn this into an error for the
+  // owner. Failures are logged; the invoice.payment_succeeded webhook also
+  // re-syncs the subscription.
+  invalidateOverdueInvoiceCache(tenantId);
+  try {
+    // Future renewals must use the card that just worked.
+    await applyDefaultPaymentMethod(pool, stripe, tenantId, paymentMethodId);
+  } catch (err) {
+    console.error("[billing] post-payment default card update failed:", err);
+  }
+  try {
+    const subRef = invoice.subscription;
+    const subId =
+      typeof subRef === "string"
+        ? subRef
+        : String((subRef as { id?: string } | null)?.id ?? "");
+    if (subId) {
+      const sub = await stripe.subscriptions.retrieve(subId);
+      await syncStripeSubscriptionToDb(pool, tenantId, sub);
+    }
+  } catch (err) {
+    console.error("[billing] post-payment subscription sync failed:", err);
+  }
+}
+
+/**
+ * Charge the overdue renewal invoice with a card on file, on-session (the
+ * owner is present, so 3-D Secure can be completed in the app).
+ */
+export async function payOverdueInvoice(
+  pool: Pool,
+  stripe: StripeClient,
+  tenantId: number,
+  params: { invoiceId: string; paymentMethodId: string },
+): Promise<PayOverdueResult> {
+  const { invoiceId, paymentMethodId } = params;
+  if (!invoiceId || !paymentMethodId) {
+    return { status: "invalid", message: "Choose a card to pay with." };
+  }
+  const { stripeCustomerId } = await loadTenantStripeBilling(pool, tenantId);
+  if (!stripeCustomerId) {
+    return { status: "invalid", message: "No billing account on file." };
+  }
+
+  const invoice = await stripe.invoices.retrieve(invoiceId);
+  if (String(invoice.customer ?? "") !== stripeCustomerId) {
+    return { status: "invalid", message: "This invoice isn't yours." };
+  }
+  if (invoice.status === "paid") {
+    // e.g. second click, or returning after 3-D Secure.
+    await finalizeOverduePayment(
+      pool,
+      stripe,
+      tenantId,
+      invoice,
+      paymentMethodId,
+    );
+    return { status: "paid", invoice_id: invoiceId };
+  }
+  if (invoice.status !== "open") {
+    return {
+      status: "invalid",
+      message: "This invoice can no longer be paid.",
+    };
+  }
+
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+  if (String(pm.customer ?? "") !== stripeCustomerId) {
+    return { status: "invalid", message: "That card isn't on your account." };
+  }
+  const brand = (pm.card as { brand?: string } | undefined)?.brand ?? null;
+  if (pm.type === "card" && !isSupportedCardBrand(brand)) {
+    return {
+      status: "declined",
+      message: `${brandLabel(String(brand))} cards aren't accepted. Please use a Visa or Mastercard.`,
+    };
+  }
+
+  try {
+    const paid = await stripe.invoices.pay(invoiceId, {
+      payment_method: paymentMethodId,
+      off_session: false,
+    });
+    if (paid.status === "paid") {
+      await finalizeOverduePayment(
+        pool,
+        stripe,
+        tenantId,
+        paid,
+        paymentMethodId,
+      );
+      return { status: "paid", invoice_id: invoiceId };
+    }
+  } catch (err) {
+    const e = err as {
+      code?: string;
+      type?: string;
+      message?: string;
+      raw?: { code?: string; message?: string };
+    };
+    const code = e.code ?? e.raw?.code ?? "";
+    // Bank asks for verification → hand the PaymentIntent to Stripe.js.
+    if (
+      code === "invoice_payment_intent_requires_action" ||
+      code === "authentication_required"
+    ) {
+      const withPi = await stripe.invoices.retrieve(invoiceId, {
+        expand: ["payment_intent"],
+      });
+      const pi = withPi.payment_intent as Record<string, unknown> | null;
+      if (pi?.client_secret && pi.status === "requires_action") {
+        return {
+          status: "requires_action",
+          client_secret: String(pi.client_secret),
+        };
+      }
+    }
+    // Concurrent click already paid it.
+    const latest = await stripe.invoices.retrieve(invoiceId);
+    if (latest.status === "paid") {
+      await finalizeOverduePayment(
+        pool,
+        stripe,
+        tenantId,
+        latest,
+        paymentMethodId,
+      );
+      return { status: "paid", invoice_id: invoiceId };
+    }
+    if (e.type === "StripeCardError" || code === "card_declined") {
+      return {
+        status: "declined",
+        message: e.message ?? "The card was declined. Try another card.",
+      };
+    }
+    throw err;
+  }
+
+  // invoices.pay returned without paying (shouldn't happen on-session).
+  const after = await stripe.invoices.retrieve(invoiceId, {
+    expand: ["payment_intent"],
+  });
+  const pi = after.payment_intent as Record<string, unknown> | null;
+  if (pi?.status === "requires_action" && pi.client_secret) {
+    return {
+      status: "requires_action",
+      client_secret: String(pi.client_secret),
+    };
+  }
+  return {
+    status: "declined",
+    message: "The payment didn't go through. Try another card.",
+  };
+}
+
+/**
+ * Before opening a platform subscription: a customer that already has a live
+ * one in Stripe must never get a second. Active/trialing wins over unpaid.
+ */
+export function resolveLiveSubscriptionGuard(
+  subscriptions: Array<Record<string, unknown>>,
+):
+  | { action: "create" }
+  | { action: "already_active"; subscription: Record<string, unknown> }
+  | { action: "blocked_unpaid"; subscription: Record<string, unknown> } {
+  const status = (s: Record<string, unknown>) => String(s.status ?? "");
+  const active = subscriptions.find((s) =>
+    ["active", "trialing"].includes(status(s)),
+  );
+  if (active) return { action: "already_active", subscription: active };
+  const unpaid = subscriptions.find((s) =>
+    ["past_due", "unpaid"].includes(status(s)),
+  );
+  if (unpaid) return { action: "blocked_unpaid", subscription: unpaid };
+  return { action: "create" };
 }
 
 async function loadStripe(): Promise<StripeClient | null> {
@@ -4842,7 +7162,7 @@ function serializeTopUpQuote(quote: TopUpQuote, includeEconomics: boolean) {
   };
 }
 
-async function getOrCreateStripeCustomer(
+export async function getOrCreateStripeCustomer(
   pool: Pool,
   stripe: StripeClient,
   tenantId: number,
@@ -4859,6 +7179,18 @@ async function getOrCreateStripeCustomer(
       await stripe.customers.retrieve(existing);
       return existing;
     } catch (retrieveErr) {
+      // Only a genuinely missing customer may be replaced. Network errors,
+      // outages and live/test key mismatches ("a similar object exists in
+      // live mode") must NOT wipe the stored IDs — that would open a second
+      // customer + subscription and risk double billing.
+      const err = retrieveErr as { code?: string; message?: string };
+      const message = String(err?.message ?? "");
+      if (
+        err?.code !== "resource_missing" ||
+        /exists in (live|test) mode/i.test(message)
+      ) {
+        throw retrieveErr;
+      }
       console.warn(
         "[billing] Stale stripe_customer_id — recreating customer:",
         existing,
@@ -5093,6 +7425,9 @@ async function processStripeWebhookEvent(
   fulfill: StripeFulfillFn,
   onTopUpGranted?: TopUpGrantedHandler,
 ): Promise<void> {
+  // Any invoice change (paid, voided, failed retry) can flip the overdue badge.
+  if (event.type.startsWith("invoice.")) invalidateOverdueInvoiceCache();
+
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
     const metadata = (session.metadata ?? {}) as Record<string, string>;
@@ -5294,7 +7629,8 @@ const requireBulkImportEnabled: RequestHandler = (_req, res, next) => {
 };
 
 const requireBulkImportAccess: RequestHandler = (req, res, next) => {
-  const brokerRole = (req as express.Request & { brokerRole?: string }).brokerRole;
+  const brokerRole = (req as express.Request & { brokerRole?: string })
+    .brokerRole;
   if (brokerRole !== "platform_owner" && brokerRole !== "admin") {
     return res.status(403).json({
       success: false,
@@ -5304,7 +7640,10 @@ const requireBulkImportAccess: RequestHandler = (req, res, next) => {
   next();
 };
 
-async function cleanupExpiredBulkImportJobs(pool: Pool, tenantId: number): Promise<void> {
+async function cleanupExpiredBulkImportJobs(
+  pool: Pool,
+  tenantId: number,
+): Promise<void> {
   try {
     await pool.query(
       `UPDATE bulk_import_jobs SET status = 'expired'
@@ -5330,15 +7669,23 @@ async function loadClientEmailConflicts(
   pool: Pool,
   tenantId: number,
   emails: string[],
+  scope: ClientEmailConflictScope = "tenant",
+  ownerBrokerId?: number | null,
 ): Promise<Map<string, RowDataPacket>> {
   const map = new Map<string, RowDataPacket>();
   for (let i = 0; i < emails.length; i += BULK_PREFLIGHT_IN_CHUNK) {
     const chunk = emails.slice(i, i + BULK_PREFLIGHT_IN_CHUNK);
     if (!chunk.length) continue;
+    const ownerClause =
+      scope === "per_owner" && ownerBrokerId != null
+        ? " AND assigned_broker_id = ?"
+        : "";
+    const params: (string | number)[] = [tenantId, ...chunk];
+    if (ownerClause) params.push(ownerBrokerId!);
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT id, first_name, last_name, email FROM clients
-       WHERE tenant_id = ? AND email IN (${chunk.map(() => "?").join(",")})`,
-      [tenantId, ...chunk],
+       WHERE tenant_id = ? AND email IN (${chunk.map(() => "?").join(",")})${ownerClause}`,
+      params,
     );
     for (const row of rows) {
       map.set(String(row.email).toLowerCase(), row);
@@ -5351,16 +7698,24 @@ async function loadClientPhoneConflicts(
   pool: Pool,
   tenantId: number,
   phones: string[],
+  scope: ClientPhoneConflictScope = "tenant",
+  ownerBrokerId?: number | null,
 ): Promise<Map<string, RowDataPacket>> {
   const map = new Map<string, RowDataPacket>();
   for (let i = 0; i < phones.length; i += BULK_PREFLIGHT_IN_CHUNK) {
     const chunk = phones.slice(i, i + BULK_PREFLIGHT_IN_CHUNK);
     if (!chunk.length) continue;
+    const ownerClause =
+      scope === "per_owner" && ownerBrokerId != null
+        ? " AND assigned_broker_id = ?"
+        : "";
+    const params: (string | number)[] = [tenantId, ...chunk];
+    if (ownerClause) params.push(ownerBrokerId!);
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT id, first_name, last_name, normalized_phone FROM clients
        WHERE tenant_id = ? AND normalized_phone IN (${chunk.map(() => "?").join(",")})
-         AND phone IS NOT NULL`,
-      [tenantId, ...chunk],
+         AND phone IS NOT NULL${ownerClause}`,
+      params,
     );
     for (const row of rows) {
       map.set(String(row.normalized_phone), row);
@@ -5373,15 +7728,22 @@ async function loadBrokerEmailConflicts(
   pool: Pool,
   tenantId: number,
   emails: string[],
+  ownerBrokerId?: number | null,
 ): Promise<Map<string, RowDataPacket>> {
   const map = new Map<string, RowDataPacket>();
   for (let i = 0; i < emails.length; i += BULK_PREFLIGHT_IN_CHUNK) {
     const chunk = emails.slice(i, i + BULK_PREFLIGHT_IN_CHUNK);
     if (!chunk.length) continue;
+    const ownerClause =
+      ownerBrokerId != null
+        ? " AND created_by_broker_id = ? AND role = 'broker'"
+        : "";
+    const params: (string | number)[] = [tenantId, ...chunk];
+    if (ownerClause) params.push(ownerBrokerId!);
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT id, email FROM brokers
-       WHERE tenant_id = ? AND email IN (${chunk.map(() => "?").join(",")})`,
-      [tenantId, ...chunk],
+       WHERE tenant_id = ? AND email IN (${chunk.map(() => "?").join(",")})${ownerClause}`,
+      params,
     );
     for (const row of rows) {
       map.set(String(row.email).toLowerCase(), row);
@@ -5394,18 +7756,31 @@ async function loadBrokerPhoneConflicts(
   pool: Pool,
   tenantId: number,
   last10List: string[],
+  ownerBrokerId?: number | null,
 ): Promise<Map<string, RowDataPacket>> {
   const map = new Map<string, RowDataPacket>();
   for (let i = 0; i < last10List.length; i += 20) {
     const chunk = last10List.slice(i, i + 20);
     if (!chunk.length) continue;
-    const conditions = chunk.map(() => `REGEXP_REPLACE(phone, '[^0-9]', '') LIKE ?`).join(" OR ");
+    const ownerClause =
+      ownerBrokerId != null
+        ? " AND created_by_broker_id = ? AND role = 'broker'"
+        : "";
+    const params: (string | number)[] = [tenantId, ...chunk];
+    if (ownerClause) params.push(ownerBrokerId!);
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, phone FROM brokers WHERE tenant_id = ? AND (${conditions})`,
-      [tenantId, ...chunk.map((d) => `%${d}`)],
+      `SELECT id, phone, normalized_phone FROM brokers
+       WHERE tenant_id = ? AND normalized_phone IN (${chunk.map(() => "?").join(",")})${ownerClause}`,
+      params,
     );
     for (const row of rows) {
-      const digits = String(row.phone ?? "").replace(/\D/g, "").slice(-10);
+      const digits =
+        String(row.normalized_phone ?? "")
+          .replace(/\D/g, "")
+          .slice(-10) ||
+        String(row.phone ?? "")
+          .replace(/\D/g, "")
+          .slice(-10);
       if (digits) map.set(digits, row);
     }
   }
@@ -5416,8 +7791,23 @@ async function applyClientDbPreflight(
   pool: Pool,
   tenantId: number,
   validation: BulkImportValidationResult,
+  importerBrokerId?: number | null,
 ): Promise<BulkImportValidationResult> {
   if (!validation.normalized_clients) return validation;
+
+  const flags = await getPerOwnerCrmFlags(
+    pool,
+    tenantId,
+    importerBrokerId ?? null,
+  );
+  const phoneScope = resolveClientPhoneConflictScope(
+    flags,
+    importerBrokerId ?? null,
+  );
+  const emailScope = resolveClientEmailConflictScope(
+    flags,
+    importerBrokerId ?? null,
+  );
 
   const rows = validation.normalized_clients;
   const ready = rows.filter((r) => r.status === "will_create");
@@ -5435,8 +7825,20 @@ async function applyClientDbPreflight(
   ];
 
   const [emailMap, phoneMap] = await Promise.all([
-    loadClientEmailConflicts(pool, tenantId, emails),
-    loadClientPhoneConflicts(pool, tenantId, phones),
+    loadClientEmailConflicts(
+      pool,
+      tenantId,
+      emails,
+      emailScope,
+      importerBrokerId,
+    ),
+    loadClientPhoneConflicts(
+      pool,
+      tenantId,
+      phones,
+      phoneScope,
+      importerBrokerId,
+    ),
   ]);
 
   for (const row of rows) {
@@ -5469,14 +7871,21 @@ async function applyRealtorDbPreflight(
   pool: Pool,
   tenantId: number,
   validation: BulkImportValidationResult,
+  importerBrokerId?: number | null,
 ): Promise<BulkImportValidationResult> {
   if (!validation.normalized_realtors) return validation;
 
+  const flags = await getPerOwnerCrmFlags(
+    pool,
+    tenantId,
+    importerBrokerId ?? null,
+  );
+  const ownerScope =
+    flags.activeForBroker && importerBrokerId != null ? importerBrokerId : null;
+
   const rows = validation.normalized_realtors;
   const ready = rows.filter((r) => r.status === "will_create");
-  const emails = [
-    ...new Set(ready.map((r) => r.email).filter(Boolean)),
-  ];
+  const emails = [...new Set(ready.map((r) => r.email).filter(Boolean))];
   const phoneLast10 = [
     ...new Set(
       ready
@@ -5486,8 +7895,8 @@ async function applyRealtorDbPreflight(
   ];
 
   const [emailMap, phoneMap] = await Promise.all([
-    loadBrokerEmailConflicts(pool, tenantId, emails),
-    loadBrokerPhoneConflicts(pool, tenantId, phoneLast10),
+    loadBrokerEmailConflicts(pool, tenantId, emails, ownerScope),
+    loadBrokerPhoneConflicts(pool, tenantId, phoneLast10, ownerScope),
   ]);
 
   for (const row of rows) {
@@ -5538,8 +7947,12 @@ function rebuildClientValidation(
     }
   }
 
-  const will_create_count = preview_rows.filter((r) => r.status === "will_create").length;
-  const skipped_count = preview_rows.filter((r) => r.status === "skipped").length;
+  const will_create_count = preview_rows.filter(
+    (r) => r.status === "will_create",
+  ).length;
+  const skipped_count = preview_rows.filter(
+    (r) => r.status === "skipped",
+  ).length;
   const error_count = preview_rows.filter((r) => r.status === "error").length;
 
   return {
@@ -5576,8 +7989,12 @@ function rebuildRealtorValidation(
     }
   }
 
-  const will_create_count = preview_rows.filter((r) => r.status === "will_create").length;
-  const skipped_count = preview_rows.filter((r) => r.status === "skipped").length;
+  const will_create_count = preview_rows.filter(
+    (r) => r.status === "will_create",
+  ).length;
+  const skipped_count = preview_rows.filter(
+    (r) => r.status === "skipped",
+  ).length;
   const error_count = preview_rows.filter((r) => r.status === "error").length;
 
   return {
@@ -5682,7 +8099,8 @@ export function registerBulkImportRoutes(
       try {
         await cleanupExpiredBulkImportJobs(deps.pool, deps.tenantId);
 
-        const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const brokerId = (req as express.Request & { brokerId?: number })
+          .brokerId!;
         const brokerRole = (req as express.Request & { brokerRole?: string })
           .brokerRole!;
         const entity = (req.body?.entity ?? "") as BulkImportEntity;
@@ -5714,10 +8132,23 @@ export function registerBulkImportRoutes(
 
         validation =
           entity === "clients"
-            ? await applyClientDbPreflight(deps.pool, deps.tenantId, validation)
-            : await applyRealtorDbPreflight(deps.pool, deps.tenantId, validation);
+            ? await applyClientDbPreflight(
+                deps.pool,
+                deps.tenantId,
+                validation,
+                brokerId,
+              )
+            : await applyRealtorDbPreflight(
+                deps.pool,
+                deps.tenantId,
+                validation,
+                brokerId,
+              );
 
-        validation = applyBulkImportImporterRestrictions(validation, brokerRole);
+        validation = applyBulkImportImporterRestrictions(
+          validation,
+          brokerRole,
+        );
 
         const fileSha = crypto
           .createHash("sha256")
@@ -5778,10 +8209,13 @@ export function registerBulkImportRoutes(
     ...bulkImportAuth,
     async (req, res) => {
       try {
-        const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
+        const brokerId = (req as express.Request & { brokerId?: number })
+          .brokerId!;
         const jobId = parseInt(req.params.jobId, 10);
         if (Number.isNaN(jobId)) {
-          return res.status(400).json({ success: false, message: "Invalid job id" });
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid job id" });
         }
 
         const [rows] = await deps.pool.query<RowDataPacket[]>(
@@ -5791,7 +8225,9 @@ export function registerBulkImportRoutes(
           [jobId, deps.tenantId, brokerId],
         );
         if (!rows.length) {
-          return res.status(404).json({ success: false, message: "Job not found" });
+          return res
+            .status(404)
+            .json({ success: false, message: "Job not found" });
         }
 
         const job = rows[0];
@@ -5825,7 +8261,9 @@ export function registerBulkImportRoutes(
         });
       } catch (err) {
         console.error("[bulk-import] get job error:", err);
-        return res.status(500).json({ success: false, message: "Failed to load job" });
+        return res
+          .status(500)
+          .json({ success: false, message: "Failed to load job" });
       }
     },
   );
@@ -5835,11 +8273,15 @@ export function registerBulkImportRoutes(
     ...bulkImportAuth,
     async (req, res) => {
       try {
-        const brokerId = (req as express.Request & { brokerId?: number }).brokerId!;
-        const brokerRole = (req as express.Request & { brokerRole?: string }).brokerRole!;
+        const brokerId = (req as express.Request & { brokerId?: number })
+          .brokerId!;
+        const brokerRole = (req as express.Request & { brokerRole?: string })
+          .brokerRole!;
         const jobId = parseInt(req.params.jobId, 10);
         if (Number.isNaN(jobId)) {
-          return res.status(400).json({ success: false, message: "Invalid job id" });
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid job id" });
         }
 
         const linkPhoneThreads = req.body?.link_phone_threads !== false;
@@ -5852,7 +8294,9 @@ export function registerBulkImportRoutes(
           [jobId, deps.tenantId, brokerId],
         );
         if (!jobRows.length) {
-          return res.status(404).json({ success: false, message: "Job not found" });
+          return res
+            .status(404)
+            .json({ success: false, message: "Job not found" });
         }
 
         const job = jobRows[0];
@@ -5902,86 +8346,258 @@ export function registerBulkImportRoutes(
               `UPDATE bulk_import_jobs SET status = 'failed' WHERE id = ? AND status = 'processing'`,
               [jobId],
             );
-            return res.status(400).json({ success: false, message: "Invalid job data" });
+            return res
+              .status(400)
+              .json({ success: false, message: "Invalid job data" });
           }
 
           const entity = job.entity as BulkImportEntity;
-        const results: Array<{
-          row_number: number;
-          external_ref?: string | null;
-          status: "created" | "skipped" | "error";
-          entity_id?: number | null;
-          owner_broker_id?: number | null;
-          message?: string;
-        }> = [];
+          const results: Array<{
+            row_number: number;
+            external_ref?: string | null;
+            status: "created" | "skipped" | "error";
+            entity_id?: number | null;
+            owner_broker_id?: number | null;
+            message?: string;
+          }> = [];
 
-        let createdCount = 0;
-        let skippedCount = 0;
-        let errorCount = 0;
+          let createdCount = 0;
+          let skippedCount = 0;
+          let errorCount = 0;
 
-        const [[importer]] = await deps.pool.query<RowDataPacket[]>(
-          `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
-          [brokerId, deps.tenantId],
-        );
-        const brokerFullName = importer
-          ? `${importer.first_name} ${importer.last_name}`.trim()
-          : "Your Loan Officer";
+          const [[importer]] = await deps.pool.query<RowDataPacket[]>(
+            `SELECT first_name, last_name FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+            [brokerId, deps.tenantId],
+          );
+          const brokerFullName = importer
+            ? `${importer.first_name} ${importer.last_name}`.trim()
+            : "Your Loan Officer";
 
-        if (entity === "clients" && preview.normalized_clients) {
-          const rows = preview.normalized_clients as NormalizedClientBulkRow[];
-          const willCreate = rows.filter((r) => r.status === "will_create");
-          const [clientEmailDups, clientPhoneDups] = await Promise.all([
-            loadClientEmailConflicts(
+          if (entity === "clients" && preview.normalized_clients) {
+            const rows =
+              preview.normalized_clients as NormalizedClientBulkRow[];
+            const willCreate = rows.filter((r) => r.status === "will_create");
+            const crmFlags = await getPerOwnerCrmFlags(
               deps.pool,
               deps.tenantId,
-              [
+              brokerId,
+            );
+            const phoneScope = resolveClientPhoneConflictScope(
+              crmFlags,
+              brokerId,
+            );
+            const [clientEmailDups, clientPhoneDups] = await Promise.all([
+              loadClientEmailConflicts(deps.pool, deps.tenantId, [
                 ...new Set(
                   willCreate
                     .map((r) => r.email)
                     .filter((e): e is string => Boolean(e)),
                 ),
-              ],
-            ),
-            loadClientPhoneConflicts(
+              ]),
+              loadClientPhoneConflicts(
+                deps.pool,
+                deps.tenantId,
+                [
+                  ...new Set(
+                    willCreate
+                      .map((r) => r.normalized_phone)
+                      .filter((p): p is string => Boolean(p)),
+                  ),
+                ],
+                phoneScope,
+                brokerId,
+              ),
+            ]);
+
+            for (const row of rows) {
+              if (row.status === "error") {
+                errorCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "error",
+                  message: row.message,
+                });
+                continue;
+              }
+              if (row.status === "skipped") {
+                skippedCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "skipped",
+                  entity_id: row.conflict_client_id ?? null,
+                  message: row.message,
+                });
+                continue;
+              }
+
+              try {
+                const trimmedEmail = row.email;
+                if (trimmedEmail) {
+                  const dup = clientEmailDups.get(trimmedEmail.toLowerCase());
+                  if (dup) {
+                    skippedCount++;
+                    results.push({
+                      row_number: row.row_number,
+                      external_ref: row.external_ref,
+                      status: "skipped",
+                      entity_id: dup.id as number,
+                      message: "Email already exists",
+                    });
+                    continue;
+                  }
+                }
+
+                if (row.normalized_phone) {
+                  const dupPhone = clientPhoneDups.get(row.normalized_phone);
+                  if (dupPhone) {
+                    skippedCount++;
+                    results.push({
+                      row_number: row.row_number,
+                      external_ref: row.external_ref,
+                      status: "skipped",
+                      entity_id: dupPhone.id as number,
+                      message: "Phone already exists",
+                    });
+                    continue;
+                  }
+                }
+
+                const finalEmail =
+                  trimmedEmail ??
+                  `noemail_job${jobId}_r${row.row_number}_${crypto.randomBytes(4).toString("hex")}@noemail.placeholder`;
+
+                const [ins] = await deps.pool.query<ResultSetHeader>(
+                  `INSERT INTO clients
+                   (tenant_id, first_name, middle_name, last_name, email, phone, normalized_phone,
+                    alternate_phone, date_of_birth, address_street, address_unit, address_city,
+                    address_state, address_zip, citizenship_status, status, assigned_broker_id,
+                    income_type, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'W-2', ?)`,
+                  [
+                    deps.tenantId,
+                    row.first_name,
+                    row.middle_name,
+                    row.last_name,
+                    finalEmail,
+                    row.phone,
+                    row.normalized_phone,
+                    row.alternate_phone,
+                    row.date_of_birth,
+                    row.address_street,
+                    row.address_unit,
+                    row.address_city,
+                    row.address_state,
+                    row.address_zip,
+                    row.citizenship_status,
+                    brokerId,
+                    row.lead_source,
+                  ],
+                );
+
+                const newId = ins.insertId;
+                createdCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "created",
+                  entity_id: newId,
+                  owner_broker_id: brokerId,
+                });
+
+                const clientFullName =
+                  `${row.first_name} ${row.last_name}`.trim();
+                if (linkPhoneThreads) {
+                  await linkClientPhoneThreads(
+                    deps.pool,
+                    deps.tenantId,
+                    newId,
+                    brokerId,
+                    row.phone,
+                    trimmedEmail,
+                    clientFullName,
+                  );
+                }
+
+                if (
+                  sendWelcomeEmails &&
+                  deps.sendClientManualWelcomeEmail &&
+                  trimmedEmail &&
+                  !finalEmail.startsWith("noemail_")
+                ) {
+                  deps
+                    .sendClientManualWelcomeEmail(
+                      trimmedEmail,
+                      row.first_name,
+                      row.last_name,
+                      brokerFullName,
+                    )
+                    .catch(() => undefined);
+                }
+              } catch (rowErr) {
+                errorCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "error",
+                  message:
+                    rowErr instanceof Error ? rowErr.message : "Insert failed",
+                });
+              }
+            }
+          } else if (entity === "realtors" && preview.normalized_realtors) {
+            const rows =
+              preview.normalized_realtors as NormalizedRealtorBulkRow[];
+            const willCreate = rows.filter((r) => r.status === "will_create");
+            const realtorEmailDups = await loadBrokerEmailConflicts(
               deps.pool,
               deps.tenantId,
-              [
-                ...new Set(
-                  willCreate
-                    .map((r) => r.normalized_phone)
-                    .filter((p): p is string => Boolean(p)),
-                ),
-              ],
-            ),
-          ]);
+              [...new Set(willCreate.map((r) => r.email))],
+              brokerId,
+            );
 
-          for (const row of rows) {
-            if (row.status === "error") {
-              errorCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "error",
-                message: row.message,
-              });
-              continue;
-            }
-            if (row.status === "skipped") {
-              skippedCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "skipped",
-                entity_id: row.conflict_client_id ?? null,
-                message: row.message,
-              });
-              continue;
-            }
+            for (const row of rows) {
+              if (row.status === "error") {
+                errorCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "error",
+                  message: row.message,
+                });
+                continue;
+              }
+              if (row.status === "skipped") {
+                skippedCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "skipped",
+                  entity_id: row.conflict_broker_id ?? null,
+                  message: row.message,
+                });
+                continue;
+              }
 
-            try {
-              const trimmedEmail = row.email;
-              if (trimmedEmail) {
-                const dup = clientEmailDups.get(trimmedEmail.toLowerCase());
+              try {
+                if (
+                  brokerRole !== "platform_owner" &&
+                  (row.role === "admin" ||
+                    row.partner_type === "mortgage_banker")
+                ) {
+                  errorCount++;
+                  results.push({
+                    row_number: row.row_number,
+                    external_ref: row.external_ref,
+                    status: "error",
+                    message:
+                      "Mortgage bankers can only bulk-import realtor partners",
+                  });
+                  continue;
+                }
+
+                const dup = realtorEmailDups.get(row.email.toLowerCase());
                 if (dup) {
                   skippedCount++;
                   results.push({
@@ -5993,237 +8609,87 @@ export function registerBulkImportRoutes(
                   });
                   continue;
                 }
-              }
 
-              if (row.normalized_phone) {
-                const dupPhone = clientPhoneDups.get(row.normalized_phone);
-                if (dupPhone) {
-                  skippedCount++;
-                  results.push({
-                    row_number: row.row_number,
-                    external_ref: row.external_ref,
-                    status: "skipped",
-                    entity_id: dupPhone.id as number,
-                    message: "Phone already exists",
-                  });
-                  continue;
-                }
-              }
+                const normPhone = row.phone
+                  ? String(row.phone).replace(/\D/g, "").slice(-10) || null
+                  : null;
 
-              const finalEmail =
-                trimmedEmail ??
-                `noemail_job${jobId}_r${row.row_number}_${crypto.randomBytes(4).toString("hex")}@noemail.placeholder`;
-
-              const [ins] = await deps.pool.query<ResultSetHeader>(
-                `INSERT INTO clients
-                   (tenant_id, first_name, middle_name, last_name, email, phone, normalized_phone,
-                    alternate_phone, date_of_birth, address_street, address_unit, address_city,
-                    address_state, address_zip, citizenship_status, status, assigned_broker_id,
-                    income_type, source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'W-2', ?)`,
-                [
-                  deps.tenantId,
-                  row.first_name,
-                  row.middle_name,
-                  row.last_name,
-                  finalEmail,
-                  row.phone,
-                  row.normalized_phone,
-                  row.alternate_phone,
-                  row.date_of_birth,
-                  row.address_street,
-                  row.address_unit,
-                  row.address_city,
-                  row.address_state,
-                  row.address_zip,
-                  row.citizenship_status,
-                  brokerId,
-                  row.lead_source,
-                ],
-              );
-
-              const newId = ins.insertId;
-              createdCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "created",
-                entity_id: newId,
-                owner_broker_id: brokerId,
-              });
-
-              const clientFullName = `${row.first_name} ${row.last_name}`.trim();
-              if (linkPhoneThreads) {
-                await linkClientPhoneThreads(
-                  deps.pool,
-                  deps.tenantId,
-                  newId,
-                  brokerId,
-                  row.phone,
-                  trimmedEmail,
-                  clientFullName,
-                );
-              }
-
-              if (
-                sendWelcomeEmails &&
-                deps.sendClientManualWelcomeEmail &&
-                trimmedEmail &&
-                !finalEmail.startsWith("noemail_")
-              ) {
-                deps
-                  .sendClientManualWelcomeEmail(
-                    trimmedEmail,
+                const [ins] = await deps.pool.query<ResultSetHeader>(
+                  `INSERT INTO brokers
+                   (tenant_id, email, first_name, last_name, phone, normalized_phone, role, license_number,
+                    specializations, status, email_verified, created_by_broker_id, public_token)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, UUID())`,
+                  [
+                    deps.tenantId,
+                    row.email,
                     row.first_name,
                     row.last_name,
-                    brokerFullName,
-                  )
-                  .catch(() => undefined);
-              }
-            } catch (rowErr) {
-              errorCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "error",
-                message:
-                  rowErr instanceof Error ? rowErr.message : "Insert failed",
-              });
-            }
-          }
-        } else if (entity === "realtors" && preview.normalized_realtors) {
-          const rows = preview.normalized_realtors as NormalizedRealtorBulkRow[];
-          const willCreate = rows.filter((r) => r.status === "will_create");
-          const realtorEmailDups = await loadBrokerEmailConflicts(
-            deps.pool,
-            deps.tenantId,
-            [...new Set(willCreate.map((r) => r.email))],
-          );
+                    row.phone,
+                    normPhone,
+                    row.role,
+                    row.license_number,
+                    row.specializations
+                      ? JSON.stringify(row.specializations)
+                      : null,
+                    brokerId,
+                  ],
+                );
 
-          for (const row of rows) {
-            if (row.status === "error") {
-              errorCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "error",
-                message: row.message,
-              });
-              continue;
-            }
-            if (row.status === "skipped") {
-              skippedCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "skipped",
-                entity_id: row.conflict_broker_id ?? null,
-                message: row.message,
-              });
-              continue;
-            }
+                const newBrokerId = ins.insertId;
 
-            try {
-              if (
-                brokerRole !== "platform_owner" &&
-                (row.role === "admin" || row.partner_type === "mortgage_banker")
-              ) {
+                const hasProfile =
+                  row.office_address ||
+                  row.office_city ||
+                  row.office_state ||
+                  row.office_zip ||
+                  row.bio;
+                if (hasProfile) {
+                  await deps.pool.query(
+                    `INSERT INTO broker_profiles
+                     (broker_id, bio, office_address, office_city, office_state, office_zip)
+                   VALUES (?, ?, ?, ?, ?, ?)`,
+                    [
+                      newBrokerId,
+                      row.bio,
+                      row.office_address,
+                      row.office_city,
+                      row.office_state,
+                      row.office_zip,
+                    ],
+                  );
+                }
+
+                createdCount++;
+                results.push({
+                  row_number: row.row_number,
+                  external_ref: row.external_ref,
+                  status: "created",
+                  entity_id: newBrokerId,
+                  owner_broker_id: brokerId,
+                });
+
+                if (sendWelcomeEmails && deps.sendBrokerManualWelcomeEmail) {
+                  deps
+                    .sendBrokerManualWelcomeEmail(
+                      row.email,
+                      row.first_name,
+                      row.last_name,
+                      row.role,
+                    )
+                    .catch(() => undefined);
+                }
+              } catch (rowErr) {
                 errorCount++;
                 results.push({
                   row_number: row.row_number,
                   external_ref: row.external_ref,
                   status: "error",
-                  message: "Mortgage bankers can only bulk-import realtor partners",
+                  message:
+                    rowErr instanceof Error ? rowErr.message : "Insert failed",
                 });
-                continue;
               }
-
-              const dup = realtorEmailDups.get(row.email.toLowerCase());
-              if (dup) {
-                skippedCount++;
-                results.push({
-                  row_number: row.row_number,
-                  external_ref: row.external_ref,
-                  status: "skipped",
-                  entity_id: dup.id as number,
-                  message: "Email already exists",
-                });
-                continue;
-              }
-
-              const [ins] = await deps.pool.query<ResultSetHeader>(
-                `INSERT INTO brokers
-                   (tenant_id, email, first_name, last_name, phone, role, license_number,
-                    specializations, status, email_verified, created_by_broker_id, public_token)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, UUID())`,
-                [
-                  deps.tenantId,
-                  row.email,
-                  row.first_name,
-                  row.last_name,
-                  row.phone,
-                  row.role,
-                  row.license_number,
-                  row.specializations ? JSON.stringify(row.specializations) : null,
-                  brokerId,
-                ],
-              );
-
-              const newBrokerId = ins.insertId;
-
-              const hasProfile =
-                row.office_address ||
-                row.office_city ||
-                row.office_state ||
-                row.office_zip ||
-                row.bio;
-              if (hasProfile) {
-                await deps.pool.query(
-                  `INSERT INTO broker_profiles
-                     (broker_id, bio, office_address, office_city, office_state, office_zip)
-                   VALUES (?, ?, ?, ?, ?, ?)`,
-                  [
-                    newBrokerId,
-                    row.bio,
-                    row.office_address,
-                    row.office_city,
-                    row.office_state,
-                    row.office_zip,
-                  ],
-                );
-              }
-
-              createdCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "created",
-                entity_id: newBrokerId,
-                owner_broker_id: brokerId,
-              });
-
-              if (sendWelcomeEmails && deps.sendBrokerManualWelcomeEmail) {
-                deps
-                  .sendBrokerManualWelcomeEmail(
-                    row.email,
-                    row.first_name,
-                    row.last_name,
-                    row.role,
-                  )
-                  .catch(() => undefined);
-              }
-            } catch (rowErr) {
-              errorCount++;
-              results.push({
-                row_number: row.row_number,
-                external_ref: row.external_ref,
-                status: "error",
-                message:
-                  rowErr instanceof Error ? rowErr.message : "Insert failed",
-              });
             }
           }
-        }
 
           const resultJson = { results };
           await deps.pool.query(
@@ -6254,7 +8720,9 @@ export function registerBulkImportRoutes(
             actorType: "broker",
             actorId: brokerId,
             action:
-              entity === "clients" ? "bulk_import_clients" : "bulk_import_realtors",
+              entity === "clients"
+                ? "bulk_import_clients"
+                : "bulk_import_realtors",
             entityType: "bulk_import_job",
             entityId: jobId,
             changes: {
@@ -6339,6 +8807,119 @@ export function registerStripeBillingRoutes(
       error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
     });
   };
+
+  /**
+   * GET /api/billing/overdue — platform owner only.
+   * Unpaid renewal invoice from Stripe (null when nothing is owed).
+   * `?refresh=1` bypasses the 2-minute cache (after paying).
+   */
+  app.get("/api/billing/overdue", ...billingOwnerAuth, async (req, res) => {
+    try {
+      const stripe = await loadStripe();
+      if (!stripe) return res.json({ success: true, overdue: null });
+      const fresh = req.query.refresh === "1" || req.query.refresh === "true";
+      const overdue = await findOverdueStripeInvoice(pool, stripe, tenantId, {
+        fresh,
+      });
+      return res.json({ success: true, overdue });
+    } catch (error) {
+      logBillingPaymentError("overdue-invoice", error);
+      return res
+        .status(502)
+        .json({ success: false, error: "Could not check payment status" });
+    }
+  });
+
+  /**
+   * GET /api/billing/overdue/payment-options — platform owner only.
+   * The overdue invoice plus cards on file, each marked usable or not.
+   */
+  app.get(
+    "/api/billing/overdue/payment-options",
+    ...billingOwnerAuth,
+    async (_req, res) => {
+      try {
+        const stripe = await loadStripe();
+        if (!stripe) {
+          return res.json({ success: true, overdue: null, cards: [] });
+        }
+        const overdue = await findOverdueStripeInvoice(pool, stripe, tenantId, {
+          fresh: true,
+        });
+        const cards = overdue
+          ? await listOverduePaymentCards(pool, stripe, tenantId, overdue)
+          : [];
+        return res.json({
+          success: true,
+          overdue,
+          cards,
+          supported_brands: supportedCardBrands(),
+        });
+      } catch (error) {
+        logBillingPaymentError("overdue-payment-options", error);
+        return res
+          .status(502)
+          .json({ success: false, error: "Could not load payment options" });
+      }
+    },
+  );
+
+  /**
+   * POST /api/billing/overdue/pay — platform owner only.
+   * Pays the overdue renewal invoice in-app with a card on file.
+   * 200 { paid } | 200 { requires_action, client_secret } | 402 declined | 400 invalid
+   */
+  app.post(
+    "/api/billing/overdue/pay",
+    ...billingOwnerAuth,
+    async (req, res) => {
+      try {
+        const stripe = await loadStripe();
+        if (!stripe) {
+          return res.status(503).json({
+            success: false,
+            error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
+          });
+        }
+        const body = (req.body ?? {}) as {
+          invoice_id?: string;
+          payment_method_id?: string;
+        };
+        const result = await payOverdueInvoice(pool, stripe, tenantId, {
+          invoiceId: String(body.invoice_id ?? ""),
+          paymentMethodId: String(body.payment_method_id ?? ""),
+        });
+        console.log(
+          `[billing] overdue pay invoice=${body.invoice_id} pm=${body.payment_method_id} → ${result.status}`,
+        );
+        switch (result.status) {
+          case "paid":
+            return res.json({
+              success: true,
+              paid: true,
+              invoice_id: result.invoice_id,
+            });
+          case "requires_action":
+            return res.json({
+              success: true,
+              paid: false,
+              requires_action: true,
+              client_secret: result.client_secret,
+            });
+          case "declined":
+            return res
+              .status(402)
+              .json({ success: false, error: result.message });
+          default:
+            return res
+              .status(400)
+              .json({ success: false, error: result.message });
+        }
+      } catch (error) {
+        return respondPaymentUnavailable(res, "overdue-pay", error);
+      }
+    },
+  );
 
   app.get("/api/billing/stripe/config", ...billingOwnerAuth, (_req, res) => {
     const cfg = getStripePublicConfig();
@@ -7127,7 +9708,19 @@ export function registerStripeBillingRoutes(
           });
         }
 
-        await applyDefaultPaymentMethod(pool, stripe, tenantId, pmId);
+        const applied = await applyDefaultPaymentMethod(
+          pool,
+          stripe,
+          tenantId,
+          pmId,
+        );
+        if (!applied.applied && applied.brand) {
+          return res.status(422).json({
+            success: false,
+            error: `${applied.brand.toUpperCase()} cards aren't accepted. Please use a Visa or Mastercard.`,
+            unsupported_brand: applied.brand,
+          });
+        }
 
         const billing = await loadTenantStripeBilling(pool, tenantId);
         const paymentMethod = billing.stripeCustomerId
@@ -7197,6 +9790,24 @@ export function registerStripeBillingRoutes(
           return res.status(500).json({
             success: false,
             error: BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
+          });
+        }
+
+        // Never open a second subscription while a renewal is unpaid: that
+        // created a throwaway $350 subscription on every Billing page visit
+        // and risked charging twice. The owner pays the open invoice instead.
+        const overdueInvoice = await findOverdueStripeInvoice(
+          pool,
+          stripe,
+          tenantId,
+          { fresh: true },
+        );
+        if (overdueInvoice) {
+          return res.status(409).json({
+            success: false,
+            error:
+              "Your last renewal is unpaid. Pay the overdue invoice instead of starting a new subscription.",
+            overdue: overdueInvoice,
           });
         }
 
@@ -7289,6 +9900,36 @@ export function registerStripeBillingRoutes(
               });
             }
           }
+        }
+
+        // Source of truth is Stripe, not our row: if the customer already has
+        // a live subscription (the row may point at an abandoned attempt),
+        // re-point the row to it and never open a second one.
+        const liveSubs = await stripe.subscriptions.list({
+          customer: customerId,
+          status: "all",
+          limit: 20,
+        });
+        const liveGuard = resolveLiveSubscriptionGuard(liveSubs.data);
+        if (liveGuard.action !== "create") {
+          await syncStripeSubscriptionToDb(
+            pool,
+            tenantId,
+            liveGuard.subscription,
+          );
+          if (liveGuard.action === "already_active") {
+            return res.json({
+              success: true,
+              already_active: true,
+              subscription_id: String(liveGuard.subscription.id ?? ""),
+              stripe_status: String(liveGuard.subscription.status ?? ""),
+            });
+          }
+          return res.status(409).json({
+            success: false,
+            error:
+              "Your subscription has an unpaid renewal. Pay the overdue invoice instead of starting a new subscription.",
+          });
         }
 
         const subscription = await stripe.subscriptions.create({
@@ -7621,7 +10262,9 @@ async function sendViaResend(
     await recordEmailQuota(quota);
   }
   if (data?.id) {
-    console.info(`[Resend] Sent "${options.subject}" → ${options.to} (id=${data.id})`);
+    console.info(
+      `[Resend] Sent "${options.subject}" → ${options.to} (id=${data.id})`,
+    );
   }
   return { messageId: data?.id };
 }
@@ -7641,6 +10284,7 @@ type ConversationMailboxRow = RowDataPacket & {
   oauth_refresh_token: string | null;
   oauth_expires_at: string | null;
   oauth_redirect_uri: string | null;
+  last_sync_at?: string | null;
 };
 
 const OFFICE365_SCOPES = [
@@ -8475,6 +11119,56 @@ const SYNC_SKIP_FOLDER_NAMES = new Set([
   "outbox",
 ]);
 
+/** Batch-load external_ids already in communications (indexed lookup). */
+async function loadExistingExternalIdSet(
+  pool: Pool,
+  tenantId: number,
+  graphIds: string[],
+): Promise<Set<string>> {
+  const synced = new Set<string>();
+  const unique = [...new Set(graphIds.filter(Boolean))];
+  if (unique.length === 0) return synced;
+
+  for (const chunk of chunkArray(unique, SYNC_EXTERNAL_ID_BATCH_SIZE)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT external_id FROM communications
+       WHERE tenant_id = ? AND external_id IN (${placeholders})`,
+      [tenantId, ...chunk],
+    );
+    for (const row of rows) {
+      const id = row.external_id as string | null;
+      if (id) synced.add(id);
+    }
+  }
+  return synced;
+}
+
+/** One query per mailbox sync — maps Graph conversationId → CRM conversation_id. */
+async function loadGraphConversationIdMap(
+  pool: Pool,
+  tenantId: number,
+  mailboxId: number,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT conversation_id,
+            JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.graph_conversation_id')) AS graph_conv_id
+     FROM communications
+     WHERE tenant_id = ? AND mailbox_id = ? AND communication_type = 'email'
+       AND JSON_EXTRACT(metadata, '$.graph_conversation_id') IS NOT NULL`,
+    [tenantId, mailboxId],
+  );
+  for (const row of rows) {
+    const graphConvId = row.graph_conv_id as string | null;
+    const conversationId = row.conversation_id as string | null;
+    if (graphConvId && conversationId && !map.has(graphConvId)) {
+      map.set(graphConvId, conversationId);
+    }
+  }
+  return map;
+}
+
 /** Lists all mail folders (top-level + one level of children) for a mailbox. */
 async function fetchMailboxFolderTree(mailbox: ConversationMailboxRow) {
   const SELECT =
@@ -8580,13 +11274,26 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
     `[syncO365] ▶ Starting sync — mailbox #${mailbox.id} <${mailbox.mailbox_email}>`,
   );
 
+  const syncSinceIso = resolveO365SyncSinceIso(mailbox.last_sync_at);
+  console.log(
+    `[syncO365] incremental since ${syncSinceIso} (last_sync_at=${mailbox.last_sync_at ?? "never"})`,
+  );
+
+  const graphConversationMap = await loadGraphConversationIdMap(
+    pool,
+    MORTGAGE_TENANT_ID,
+    mailbox.id,
+  );
+  console.log(
+    `[syncO365] loaded ${graphConversationMap.size} graph conversation cross-ref(s)`,
+  );
+
   // ── Backfill: recover mailbox_id from metadata.mailbox_email ──────────────
-  // Older synced rows may not have mailbox_id set because the column was added
-  // after the initial sync. Use metadata.mailbox_email → mailbox join since
-  // metadata.mailbox_id may also be absent in very old rows.
-  try {
-    const [bfComm] = (await pool.query(
-      `UPDATE communications c
+  // Run once per mailbox (first sync only) — JOIN on metadata is expensive.
+  if (!mailbox.last_sync_at) {
+    try {
+      const [bfComm] = (await pool.query(
+        `UPDATE communications c
        JOIN conversation_email_mailboxes m
          ON m.tenant_id = c.tenant_id
         AND JSON_UNQUOTE(JSON_EXTRACT(c.metadata, '$.mailbox_email')) = m.mailbox_email
@@ -8595,14 +11302,14 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
          AND c.communication_type = 'email'
          AND c.external_id IS NOT NULL
          AND c.mailbox_id IS NULL`,
-      [MORTGAGE_TENANT_ID],
-    )) as [ResultSetHeader, any];
-    console.log(
-      `[syncO365] backfill communications.mailbox_id: ${bfComm.affectedRows} rows updated`,
-    );
+        [MORTGAGE_TENANT_ID],
+      )) as [ResultSetHeader, any];
+      console.log(
+        `[syncO365] backfill communications.mailbox_id: ${bfComm.affectedRows} rows updated`,
+      );
 
-    const [bfThreads] = (await pool.query(
-      `UPDATE conversation_threads ct
+      const [bfThreads] = (await pool.query(
+        `UPDATE conversation_threads ct
        JOIN (
          SELECT DISTINCT conversation_id, mailbox_id
          FROM communications
@@ -8610,16 +11317,17 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
        ) c ON c.conversation_id = ct.conversation_id
        SET ct.mailbox_id = c.mailbox_id
        WHERE ct.mailbox_id IS NULL AND ct.tenant_id = ?`,
-      [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
-    )) as [ResultSetHeader, any];
-    console.log(
-      `[syncO365] backfill conversation_threads.mailbox_id: ${bfThreads.affectedRows} rows updated`,
-    );
-  } catch (backfillErr) {
-    console.warn(
-      "[syncO365] mailbox_id backfill failed (non-fatal):",
-      backfillErr,
-    );
+        [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID],
+      )) as [ResultSetHeader, any];
+      console.log(
+        `[syncO365] backfill conversation_threads.mailbox_id: ${bfThreads.affectedRows} rows updated`,
+      );
+    } catch (backfillErr) {
+      console.warn(
+        "[syncO365] mailbox_id backfill failed (non-fatal):",
+        backfillErr,
+      );
+    }
   }
 
   // ── Folders to sync ────────────────────────────────────────────────────────
@@ -8670,6 +11378,7 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
                 $top: SYNC_MESSAGES_PER_PAGE,
                 $orderby: "receivedDateTime desc",
                 $select: messageSelect,
+                $filter: `receivedDateTime ge ${syncSinceIso}`,
               },
             },
           );
@@ -8694,11 +11403,22 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
     }
     // Process oldest-first so threads are built in chronological order
     messages.reverse();
+    const graphIds = messages.map((m) => String(m?.id || "")).filter(Boolean);
+    const syncedExternalIds = await loadExistingExternalIdSet(
+      pool,
+      MORTGAGE_TENANT_ID,
+      graphIds,
+    );
+    const toProcess = messages.filter((m) => {
+      const id = String(m?.id || "");
+      return id && !syncedExternalIds.has(id);
+    });
+    const skippedAlreadySynced = messages.length - toProcess.length;
     console.log(
-      `[syncO365] "${graphFolder}": processing ${messages.length} messages (oldest first)`,
+      `[syncO365] "${graphFolder}": processing ${toProcess.length} new message(s) (${skippedAlreadySynced} already synced, ${messages.length} from Graph)`,
     );
 
-    for (const msg of messages) {
+    for (const msg of toProcess) {
       try {
         const graphId = String(msg?.id || "");
         if (!graphId) {
@@ -8716,18 +11436,6 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
               : "inbound"
             : folderDirection;
 
-        // Skip already-synced messages
-        const [existing] = await pool.query<RowDataPacket[]>(
-          `SELECT id FROM communications WHERE tenant_id = ? AND external_id = ? LIMIT 1`,
-          [MORTGAGE_TENANT_ID, graphId],
-        );
-        if (existing.length > 0) {
-          console.log(
-            `[syncO365] "${graphFolder}": skip ${graphId.slice(0, 20)}… (already comm #${existing[0].id})`,
-          );
-          continue;
-        }
-
         const subject = String(msg?.subject || "(no subject)");
 
         // For inbound: sender is the external party.
@@ -8735,6 +11443,20 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         const fromEmail: string =
           msg?.from?.emailAddress?.address?.toLowerCase?.() || "";
         const fromName: string = msg?.from?.emailAddress?.name || "";
+
+        // Skip CRM transactional alerts that landed in the broker's Inbox.
+        // Without this, inbound-email prefs create a Resend → O365 sync → Resend loop.
+        if (
+          direction === "inbound" &&
+          isCrmSystemNotificationFromAddressInline(fromEmail)
+        ) {
+          console.log(
+            `[syncO365] skip CRM system notification from=${fromEmail} subj="${subject.slice(0, 60)}"`,
+          );
+          syncedExternalIds.add(graphId);
+          processed++;
+          continue;
+        }
 
         const firstToEmail: string | null =
           Array.isArray(msg?.toRecipients) && msg.toRecipients.length > 0
@@ -8782,18 +11504,12 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
           // This ensures external replies (which lack X-Conversation-Id) land in
           // the same thread as the outbound email we sent via handleEmailSend.
           if (msg?.conversationId) {
-            const [crossRef] = await pool.query<RowDataPacket[]>(
-              `SELECT conversation_id FROM communications
-               WHERE tenant_id = ?
-                 AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.graph_conversation_id')) = ?
-               LIMIT 1`,
-              [MORTGAGE_TENANT_ID, msg.conversationId],
-            );
-            if (crossRef.length > 0) {
+            const crossRefConv = graphConversationMap.get(msg.conversationId);
+            if (crossRefConv) {
               console.log(
-                `[syncO365] cross-ref: graph_conv=${msg.conversationId} → reusing conv=${crossRef[0].conversation_id} (was: ${conversationId})`,
+                `[syncO365] cross-ref: graph_conv=${msg.conversationId} → reusing conv=${crossRefConv} (was: ${conversationId})`,
               );
-              conversationId = crossRef[0].conversation_id as string;
+              conversationId = crossRefConv;
             }
           }
         }
@@ -8825,16 +11541,22 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
             `[syncO365] "${graphFolder}": existing thread for conv=${conversationId} → broker=${brokerId} client=${clientId}`,
           );
         } else if (lookupEmail) {
-          const [clientRows] = await pool.query<RowDataPacket[]>(
-            `SELECT id, assigned_broker_id FROM clients
-             WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
-            [MORTGAGE_TENANT_ID, lookupEmail],
+          const ownerHint =
+            mailbox.assigned_broker_id != null
+              ? Number(mailbox.assigned_broker_id)
+              : null;
+          const emailHit = await resolveClientByEmailSafe(
+            pool,
+            MORTGAGE_TENANT_ID,
+            lookupEmail,
+            { ownerBrokerId: ownerHint },
           );
-          if (clientRows.length > 0) {
-            clientId = clientRows[0].id ?? null;
-            brokerId = clientRows[0].assigned_broker_id ?? null;
+          if (emailHit.client) {
+            clientId = emailHit.client.id ?? null;
+            brokerId =
+              (emailHit.client.assigned_broker_id as number | null) ?? null;
             console.log(
-              `[syncO365] "${graphFolder}": resolved client #${clientId} from email <${lookupEmail}>`,
+              `[syncO365] "${graphFolder}": resolved client #${clientId} from email <${lookupEmail}> (owner-scoped)`,
             );
           } else {
             const [leadRows] = await pool.query<RowDataPacket[]>(
@@ -8900,6 +11622,10 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
             console.log(
               `[syncO365] "${graphFolder}": dedup — stamped external_id on existing comm #${existingId}, skipping INSERT`,
             );
+            syncedExternalIds.add(graphId);
+            if (msg?.conversationId && conversationId) {
+              graphConversationMap.set(msg.conversationId, conversationId);
+            }
             processed++;
             continue;
           }
@@ -8960,6 +11686,11 @@ async function syncOffice365Mailbox(mailbox: ConversationMailboxRow): Promise<{
         console.log(
           `[syncO365] "${graphFolder}": inserted comm #${insertResult.insertId} → calling upsertEmailThread`,
         );
+
+        syncedExternalIds.add(graphId);
+        if (msg?.conversationId && conversationId) {
+          graphConversationMap.set(msg.conversationId, conversationId);
+        }
 
         // ── Upsert email conversation thread ─────────────────────────────
         // Pass bodyPreview (Graph's plain-text summary) for the thread snippet
@@ -9358,6 +12089,40 @@ async function recordSmsQuota(
   });
 }
 
+async function precheckSmsQuotaWithMedia(
+  body: string,
+  ctx: QuotaWireContext,
+  hasMedia: boolean,
+): Promise<QuotaResult> {
+  if (ctx.skipQuota || (ctx.refType && AUTH_SMS_QUOTA_REFS.has(ctx.refType))) {
+    return { allowed: true, mode: "off", recorded: false };
+  }
+  return quotaService.precheck(quotaTenantId(ctx), {
+    dimension: "sms_segments",
+    units: broadcastSmsQuotaUnits(body, hasMedia),
+    source: ctx.source,
+    refType: ctx.refType,
+    refId: ctx.refId,
+  });
+}
+
+async function recordSmsQuotaWithMedia(
+  body: string,
+  ctx: QuotaWireContext,
+  hasMedia: boolean,
+): Promise<void> {
+  if (ctx.skipQuota || (ctx.refType && AUTH_SMS_QUOTA_REFS.has(ctx.refType))) {
+    return;
+  }
+  await quotaService.recordConsumption(quotaTenantId(ctx), {
+    dimension: "sms_segments",
+    units: broadcastSmsQuotaUnits(body, hasMedia),
+    source: ctx.source,
+    refType: ctx.refType,
+    refId: ctx.refId,
+  });
+}
+
 /** WhatsApp draws from the SMS segment pool (1 message ≈ segment count from body). */
 async function precheckWhatsappQuota(
   body: string,
@@ -9373,19 +12138,19 @@ async function recordWhatsappQuota(
   return recordSmsQuota(body, ctx);
 }
 
-/** MMS draws from SMS segment pool; COGS uses per-message MMS rate in cost tracking. */
+/** MMS draws from SMS segment pool with min segment floor; COGS uses per-message MMS rate. */
 async function precheckMmsQuota(
   body: string,
   ctx: QuotaWireContext,
 ): Promise<QuotaResult> {
-  return precheckSmsQuota(body, ctx);
+  return precheckSmsQuotaWithMedia(body, ctx, true);
 }
 
 async function recordMmsQuota(
   body: string,
   ctx: QuotaWireContext,
 ): Promise<void> {
-  return recordSmsQuota(body, ctx);
+  return recordSmsQuotaWithMedia(body, ctx, true);
 }
 
 /** @deprecated Use precheckSmsQuota + recordSmsQuota */
@@ -9564,6 +12329,7 @@ async function reserveBroadcastQuota(params: {
   smsBody: string;
   estimatedEmailUnits: number;
   estimatedSmsUnits: number;
+  hasMedia?: boolean;
 }): Promise<{
   ok: boolean;
   quotaExceeded?: boolean;
@@ -9576,6 +12342,7 @@ async function reserveBroadcastQuota(params: {
     smsBody: params.smsBody,
     emailRecipientCount: params.estimatedEmailUnits,
     smsRecipientCount: params.estimatedSmsUnits,
+    hasMedia: !!params.hasMedia,
   });
   const quota = await getUnifiedQuotaSummary(pool, params.tenantId);
   if (units.sms_segments <= 0 && units.email_sends <= 0) {
@@ -9593,6 +12360,9 @@ async function reserveBroadcastQuota(params: {
     quota: await getUnifiedQuotaSummary(pool, params.tenantId),
   };
 }
+
+/** Wall-clock budget per serverless send invocation (Vercel Pro ≈60s). */
+const BROADCAST_SEND_MAX_MS = 50_000;
 
 function getBroadcastSendLockName(broadcastId: number): string {
   return `realtor_broadcast_send_${broadcastId}`;
@@ -9628,6 +12398,15 @@ async function releaseStuckBroadcastProcessing(
        AND updated_at < NOW() - INTERVAL 15 MINUTE`,
     [broadcastId, tenantId],
   );
+  // Do not reset SMS rows owned by an in-flight Twilio Bulk Operation.
+  const [engineRows] = await pool.query<RowDataPacket[]>(
+    `SELECT sms_engine FROM realtor_broadcasts
+     WHERE id = ? AND tenant_id = ? LIMIT 1`,
+    [broadcastId, tenantId],
+  );
+  if (parseBroadcastSmsEngine(engineRows[0]?.sms_engine) === "bulk") {
+    return;
+  }
   await pool.query(
     `UPDATE realtor_broadcast_recipients
      SET sms_status = 'pending', updated_at = NOW()
@@ -9759,7 +12538,7 @@ async function syncClientPhoneFromSmsChannel(
   if (!last10) return;
 
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT phone, normalized_phone, alternate_phone
+    `SELECT phone, normalized_phone, alternate_phone, assigned_broker_id
      FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
     [clientId, tenantId],
   );
@@ -9768,12 +12547,12 @@ async function syncClientPhoneFromSmsChannel(
   const existing = rows[0];
   if (existing.normalized_phone === last10) return;
 
-  const [[conflict]] = await pool.query<RowDataPacket[]>(
-    `SELECT id FROM clients
-     WHERE tenant_id = ? AND normalized_phone = ? AND id != ? AND phone IS NOT NULL
-     LIMIT 1`,
-    [tenantId, last10, clientId],
-  );
+  const assignedBrokerId =
+    (existing.assigned_broker_id as number | null | undefined) ?? null;
+  const conflict = await findClientPhoneConflict(pool, tenantId, last10, {
+    brokerId: assignedBrokerId,
+    excludeClientId: clientId,
+  });
   if (conflict) {
     console.warn(
       `[syncClientPhoneFromSmsChannel] skip client=${clientId} — ${last10} owned by client=${conflict.id}`,
@@ -9818,13 +12597,75 @@ async function stampCanonicalThreadPhone(
   await syncClientPhoneFromSmsChannel(pool, tenantId, clientId, channelPhone);
 }
 
+/** Resolve broker who owns a personal Twilio line (twilio_caller_id). */
+async function resolveInboxLineOwnerBrokerId(
+  pool: Pool,
+  tenantId: number,
+  inboxNumber: string | null | undefined,
+): Promise<number | null> {
+  const trimmed = inboxNumber?.trim();
+  if (!trimmed) return null;
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers
+       WHERE tenant_id = ? AND status = 'active' AND twilio_caller_id = ?
+       LIMIT 1`,
+      [tenantId, trimmed],
+    );
+    return rows.length > 0 ? (rows[0].id as number) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve client id from phone. Legacy: tenant-wide LIMIT 1.
+ * Per-owner CRM (flag-gated): scoped to line owner / requesting broker only —
+ * never returns another owner's row.
+ */
 async function resolveClientIdByPhone(
   pool: Pool,
   tenantId: number,
   phone: string | null | undefined,
+  opts: { brokerId?: number | null; inboxNumber?: string | null } = {},
 ): Promise<number | null> {
   const last10 = phoneLast10(phone);
   if (!last10) return null;
+
+  let scopeBrokerId = opts.brokerId ?? null;
+  if (scopeBrokerId == null && opts.inboxNumber) {
+    scopeBrokerId = await resolveInboxLineOwnerBrokerId(
+      pool,
+      tenantId,
+      opts.inboxNumber,
+    );
+  }
+
+  const flags = await getPerOwnerCrmFlags(pool, tenantId, scopeBrokerId);
+
+  if (flags.activeForBroker) {
+    if (scopeBrokerId == null) {
+      // Shared company line with no personal owner — do not bind another owner's CRM row
+      return null;
+    }
+    const [scopedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM clients
+       WHERE tenant_id = ? AND assigned_broker_id = ?
+         AND list_visibility = 'active' AND phone IS NOT NULL
+         AND (
+           normalized_phone = ?
+           OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+           OR (
+             alternate_phone IS NOT NULL
+             AND RIGHT(REGEXP_REPLACE(alternate_phone, '[^0-9]', ''), 10) = ?
+           )
+         )
+       LIMIT 1`,
+      [tenantId, scopeBrokerId, last10, last10, last10],
+    );
+    return scopedRows.length > 0 ? (scopedRows[0].id as number) : null;
+  }
+
   const fromPhone = String(phone).replace(/[^\d+]/g, "");
   const fromDigits = fromPhone.replace(/\D/g, "");
   const fromDigits10 =
@@ -9862,11 +12703,24 @@ async function resolvePhoneConversationId(
     phone?: string | null;
     clientId?: number | null;
     inboxNumber?: string | null;
+    brokerId?: number | null;
   },
 ): Promise<string> {
+  let scopeBrokerId = params.brokerId ?? null;
+  if (scopeBrokerId == null && params.inboxNumber) {
+    scopeBrokerId = await resolveInboxLineOwnerBrokerId(
+      pool,
+      tenantId,
+      params.inboxNumber,
+    );
+  }
+
   let clientId = params.clientId ?? null;
   if (!clientId && params.phone) {
-    clientId = await resolveClientIdByPhone(pool, tenantId, params.phone);
+    clientId = await resolveClientIdByPhone(pool, tenantId, params.phone, {
+      brokerId: scopeBrokerId,
+      inboxNumber: params.inboxNumber,
+    });
   }
 
   if (clientId) {
@@ -9875,27 +12729,74 @@ async function resolvePhoneConversationId(
 
   const last10 = phoneLast10(params.phone);
   if (last10) {
-    const [existing] = await pool.query<RowDataPacket[]>(
-      `SELECT conversation_id FROM conversation_threads
-       WHERE tenant_id = ?
-         AND normalized_client_phone = ?
-       ORDER BY
-         CASE WHEN client_id IS NOT NULL
-           AND EXISTS (
-             SELECT 1 FROM clients cl
-             WHERE cl.id = conversation_threads.client_id
-               AND cl.tenant_id = conversation_threads.tenant_id
-               AND cl.phone IS NOT NULL
-               AND RIGHT(REGEXP_REPLACE(cl.phone, '[^0-9]', ''), 10) = ?
-           ) THEN 0 ELSE 1 END,
-         last_message_at DESC
-       LIMIT 1`,
-      [tenantId, last10, last10],
-    );
+    const flags = await getPerOwnerCrmFlags(pool, tenantId, scopeBrokerId);
+    let existing: RowDataPacket[] = [];
+
+    if (flags.activeForBroker && scopeBrokerId != null) {
+      const [scopedThreads] = await pool.query<RowDataPacket[]>(
+        `SELECT conversation_id FROM conversation_threads
+         WHERE tenant_id = ?
+           AND normalized_client_phone = ?
+           AND (
+             owner_client_scope_broker_id = ?
+             OR broker_id = ?
+           )
+         ORDER BY last_message_at DESC
+         LIMIT 1`,
+        [tenantId, last10, scopeBrokerId, scopeBrokerId],
+      );
+      existing = scopedThreads;
+    } else if (!flags.activeForBroker) {
+      const [legacyThreads] = await pool.query<RowDataPacket[]>(
+        `SELECT conversation_id FROM conversation_threads
+         WHERE tenant_id = ?
+           AND normalized_client_phone = ?
+         ORDER BY
+           CASE WHEN client_id IS NOT NULL
+             AND EXISTS (
+               SELECT 1 FROM clients cl
+               WHERE cl.id = conversation_threads.client_id
+                 AND cl.tenant_id = conversation_threads.tenant_id
+                 AND cl.phone IS NOT NULL
+                 AND RIGHT(REGEXP_REPLACE(cl.phone, '[^0-9]', ''), 10) = ?
+             ) THEN 0 ELSE 1 END,
+           last_message_at DESC
+         LIMIT 1`,
+        [tenantId, last10, last10],
+      );
+      existing = legacyThreads;
+    }
+
     if (existing.length > 0) {
       return existing[0].conversation_id as string;
     }
-    return `conv_unknown_${last10}`;
+
+    // Per-owner CRM: `conv_unknown_{last10}` is tenant-wide. If another owner
+    // already holds that thread (same phone reached their line first), reusing
+    // it would merge this line's messages into their thread and the personal-
+    // line ownership update would then take it away from them. Give this owner
+    // their own deterministic id instead.
+    const sharedUnknownId = `conv_unknown_${last10}`;
+    if (flags.activeForBroker && scopeBrokerId != null) {
+      const [holderRows] = await pool.query<RowDataPacket[]>(
+        `SELECT broker_id, owner_client_scope_broker_id
+         FROM conversation_threads
+         WHERE tenant_id = ? AND conversation_id = ?
+         LIMIT 1`,
+        [tenantId, sharedUnknownId],
+      );
+      const holder = holderRows[0];
+      const heldByOtherOwner =
+        holder != null &&
+        ((holder.broker_id != null &&
+          Number(holder.broker_id) !== scopeBrokerId) ||
+          (holder.owner_client_scope_broker_id != null &&
+            Number(holder.owner_client_scope_broker_id) !== scopeBrokerId));
+      if (heldByOtherOwner) {
+        return `${sharedUnknownId}_b${scopeBrokerId}`;
+      }
+    }
+    return sharedUnknownId;
   }
 
   return `conv_unknown_${Date.now()}`;
@@ -9981,17 +12882,35 @@ async function _executeThreadUpsert(core: {
     }
   }
 
+  let ownerClientScopeBrokerId: number | null = null;
+  if (finalClientId != null) {
+    try {
+      const [scopeRows] = await pool.query<RowDataPacket[]>(
+        `SELECT assigned_broker_id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [finalClientId, tenantId],
+      );
+      if (scopeRows[0]?.assigned_broker_id != null) {
+        ownerClientScopeBrokerId = scopeRows[0].assigned_broker_id as number;
+      }
+    } catch {
+      /* non-fatal */
+    }
+  } else if (effectiveBrokerId != null) {
+    ownerClientScopeBrokerId = effectiveBrokerId;
+  }
+
   // Always INSERT — broker_id is now nullable so shared-inbox threads (broker_id=NULL)
   // are also persisted and visible to all brokers.
   await pool.query(
     `INSERT INTO conversation_threads
        (tenant_id, conversation_id, application_id, lead_id, client_id, broker_id,
         contact_broker_id,
+        owner_client_scope_broker_id,
         client_name, client_phone, client_email, inbox_number, mailbox_id,
         normalized_client_phone,
         last_message_at, last_message_preview, last_message_type,
         message_count, unread_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1, ?)
      ON DUPLICATE KEY UPDATE
        -- Always update preview/type/timestamp for the new message.
        -- (Out-of-order delivery is rare; the previous IF(NOW()>last_message_at)
@@ -10010,6 +12929,7 @@ async function _executeThreadUpsert(core: {
        -- any existing broker_id.
        broker_id            = IF(? IS NOT NULL, ?, COALESCE(broker_id, ?)),
        contact_broker_id    = COALESCE(contact_broker_id, ?),
+       owner_client_scope_broker_id = COALESCE(?, owner_client_scope_broker_id),
        client_name          = COALESCE(client_name, ?),
        client_phone               = COALESCE(client_phone, ?),
        normalized_client_phone    = COALESCE(normalized_client_phone, ?),
@@ -10054,6 +12974,7 @@ async function _executeThreadUpsert(core: {
       finalClientId,
       effectiveBrokerId,
       finalContactBrokerId,
+      ownerClientScopeBrokerId,
       clientName,
       clientPhone,
       clientEmail,
@@ -10073,6 +12994,7 @@ async function _executeThreadUpsert(core: {
       effectiveBrokerId,
       effectiveBrokerId,
       finalContactBrokerId,
+      ownerClientScopeBrokerId,
       clientName,
       clientPhone,
       normalizedClientPhone,
@@ -10091,84 +13013,140 @@ async function _executeThreadUpsert(core: {
   // Notify broker(s) of inbound activity so the bell lights up in real time.
   if (direction === "inbound") {
     try {
-      const channelLabel =
-        communicationType === "sms"
-          ? "SMS"
-          : communicationType === "email"
-            ? "email"
-            : communicationType === "whatsapp"
-              ? "WhatsApp"
-              : communicationType === "voice"
-                ? "voice"
-                : "message";
-      const who = clientName || clientPhone || clientEmail || "a contact";
-      // Use the same preview that was written to conversation_threads.last_message_preview
-      // so the notification bell always shows the identical text as the thread list.
-      const snippet =
-        (preview ?? "").slice(0, 120).trim() ||
-        (senderDisplayName ? `Email from ${senderDisplayName}` : "");
-      const category = communicationType === "voice" ? "call" : "message";
-      // Strict ownership rules for who gets the bell notification:
-      //   A. If the inbound activity arrived on a broker's PERSONAL Twilio
-      //      number (twilio_caller_id), notify ONLY that broker. Personal
-      //      lines are private — owners shouldn't see other brokers' calls.
-      //   B. Otherwise (shared inbox), notify the relationship owners:
-      //      loan primary broker + partner broker + client/lead assigned
-      //      broker. Falls back to all admins only when truly unknown.
-      let inboxOwnerId: number | null = null;
+      // Never notify on CRM transactional emails (Resend no-reply). These can
+      // land in a connected O365 Inbox and would otherwise loop forever.
       if (
-        inboxNumber &&
-        (communicationType === "sms" ||
-          communicationType === "voice" ||
-          communicationType === "whatsapp")
+        communicationType === "email" &&
+        isCrmSystemNotificationFromAddressInline(clientEmail)
       ) {
-        try {
-          const [inboxRows] = await pool.query<RowDataPacket[]>(
-            `SELECT id FROM brokers
+        console.log(
+          `[thread-upsert] skip notify for CRM system email from=${clientEmail} conv=${convId}`,
+        );
+      } else {
+        const channelLabel =
+          communicationType === "sms"
+            ? "SMS"
+            : communicationType === "email"
+              ? "email"
+              : communicationType === "whatsapp"
+                ? "WhatsApp"
+                : communicationType === "voice"
+                  ? "voice"
+                  : "message";
+        const who = clientName || clientPhone || clientEmail || "a contact";
+        // Use the same preview that was written to conversation_threads.last_message_preview
+        // so the notification bell always shows the identical text as the thread list.
+        const snippet =
+          (preview ?? "").slice(0, 120).trim() ||
+          (senderDisplayName ? `Email from ${senderDisplayName}` : "");
+        const category = communicationType === "voice" ? "call" : "message";
+        // Strict ownership rules for who gets the bell notification:
+        //   A. If the inbound activity arrived on a broker's PERSONAL Twilio
+        //      number (twilio_caller_id), notify ONLY that broker. Personal
+        //      lines are private — owners shouldn't see other brokers' calls.
+        //   B. Otherwise (shared inbox), notify the relationship owners:
+        //      loan primary broker + partner broker + client/lead assigned
+        //      broker. Falls back to all admins only when truly unknown.
+        let inboxOwnerId: number | null = null;
+        if (
+          inboxNumber &&
+          (communicationType === "sms" ||
+            communicationType === "voice" ||
+            communicationType === "whatsapp")
+        ) {
+          try {
+            const [inboxRows] = await pool.query<RowDataPacket[]>(
+              `SELECT id FROM brokers
               WHERE tenant_id = ? AND status = 'active' AND twilio_caller_id = ?
               LIMIT 1`,
-            [tenantId, inboxNumber],
-          );
-          const candidate = inboxRows[0]?.id;
-          if (typeof candidate === "number") {
-            inboxOwnerId = candidate;
+              [tenantId, inboxNumber],
+            );
+            const candidate = inboxRows[0]?.id;
+            if (typeof candidate === "number") {
+              inboxOwnerId = candidate;
+            }
+          } catch (inboxErr) {
+            console.error(
+              "Inbox-number owner lookup failed (non-fatal):",
+              inboxErr,
+            );
           }
-        } catch (inboxErr) {
-          console.error(
-            "Inbox-number owner lookup failed (non-fatal):",
-            inboxErr,
+        }
+
+        let ownerIds: number[];
+        if (inboxOwnerId != null) {
+          // Personal line — only the inbox owner is notified.
+          ownerIds = [inboxOwnerId];
+        } else {
+          // Shared inbox — notify the relationship owners.
+          ownerIds = await getApplicationOwnerBrokerIds(applicationId);
+          if (
+            resolvedBrokerId != null &&
+            !ownerIds.includes(resolvedBrokerId)
+          ) {
+            ownerIds.push(resolvedBrokerId);
+          }
+        }
+        await createBrokerNotification({
+          brokerIds: ownerIds.length ? ownerIds : null,
+          notifyAllAdminsOnEmpty: ownerIds.length === 0,
+          title: `New ${channelLabel} from ${who}`,
+          message: snippet || `New inbound ${channelLabel}`,
+          category: category as any,
+          type: "info",
+          actionUrl:
+            communicationType === "email"
+              ? `/admin/email?conversation=${encodeURIComponent(convId)}`
+              : `/admin/conversations?conversation=${encodeURIComponent(convId)}`,
+        });
+
+        // Optional email alert (Profile prefs). Bell already fired above.
+        // Shared inbox with no owners → skip email (avoid fanout spam to all admins).
+        const emailEvent: BrokerEmailAlertEventInline | null =
+          communicationType === "email"
+            ? "inbound_email"
+            : communicationType === "sms" || communicationType === "whatsapp"
+              ? "inbound_sms"
+              : null;
+        if (emailEvent && ownerIds.length > 0) {
+          const adminBase = getAdminBaseUrl();
+          const actionPath =
+            communicationType === "email"
+              ? `/admin/email?conversation=${encodeURIComponent(convId)}`
+              : `/admin/conversations?conversation=${encodeURIComponent(convId)}`;
+          const safeSnippet = (snippet || `New inbound ${channelLabel}`).slice(
+            0,
+            280,
+          );
+          const html = `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;padding:24px;">
+          <table width="600" style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;">
+            <tr><td style="padding:20px 24px;border-bottom:3px solid #e8192c;"><strong style="color:#0f172a;">New ${channelLabel}</strong></td></tr>
+            <tr><td style="padding:24px;">
+              <p style="margin:0 0 8px;color:#0f172a;font-size:15px;"><strong>From:</strong> ${who}</p>
+              <p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:1.5;">${safeSnippet}</p>
+              <a href="${adminBase}${actionPath}" style="display:inline-block;background:#e8192c;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700;font-size:14px;">Open in Encore</a>
+            </td></tr>
+          </table></body></html>`;
+          await Promise.all(
+            ownerIds.map((brokerId) =>
+              deliverBrokerEmailAlert({
+                brokerId,
+                event: emailEvent,
+                subject: `New ${channelLabel} from ${who}`,
+                html,
+                quotaRefType: `broker_inbound_${emailEvent}`,
+                quotaRefId: convId,
+              }),
+            ),
           );
         }
-      }
 
-      let ownerIds: number[];
-      if (inboxOwnerId != null) {
-        // Personal line — only the inbox owner is notified.
-        ownerIds = [inboxOwnerId];
-      } else {
-        // Shared inbox — notify all relationship owners.
-        ownerIds = await getApplicationOwnerBrokerIds(applicationId);
-        if (resolvedBrokerId != null && !ownerIds.includes(resolvedBrokerId)) {
-          ownerIds.push(resolvedBrokerId);
-        }
-      }
-      await createBrokerNotification({
-        brokerIds: ownerIds.length ? ownerIds : null,
-        notifyAllAdminsOnEmpty: ownerIds.length === 0,
-        title: `New ${channelLabel} from ${who}`,
-        message: snippet || `New inbound ${channelLabel}`,
-        category: category as any,
-        type: "info",
-        actionUrl:
-          communicationType === "email"
-            ? `/admin/email?conversation=${encodeURIComponent(convId)}`
-            : `/admin/conversations?conversation=${encodeURIComponent(convId)}`,
-      });
-      // Non-blocking: cron/sync must not wait on Ably fallback retries.
-      void publishToAbly("conversations:all", "thread-updated", {
-        conversationId: convId,
-        communicationType,
-      });
+        // Non-blocking: cron/sync must not wait on Ably fallback retries.
+        void publishToAbly("conversations:all", "thread-updated", {
+          conversationId: convId,
+          communicationType,
+        });
+      } // end else (non-system email)
     } catch (notifyErr) {
       console.error("Broker notification (inbound thread) failed:", notifyErr);
     }
@@ -10324,54 +13302,84 @@ async function upsertConversationThread(params: {
       }
       finalClientId = resolvedClientId;
     } else if (clientPhone) {
-      // No client ID yet — try to resolve name from phone so threads never
-      // show "Unknown Client" for contacts already in the system.
+      // No client ID yet — resolve within owner scope when per-owner CRM is active.
       const lastTen = clientPhone.replace(/\D/g, "").slice(-10);
       if (lastTen.length === 10) {
-        const [cRows] = await pool.query<RowDataPacket[]>(
-          `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, email, assigned_broker_id
-           FROM clients
-           WHERE tenant_id = ?
-             AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
-           LIMIT 1`,
-          [tenantId, lastTen],
+        let lineOwnerId = resolvedBrokerId;
+        if (
+          inboxNumber &&
+          (communicationType === "sms" ||
+            communicationType === "call" ||
+            communicationType === "whatsapp")
+        ) {
+          const ownerFromLine = await resolveInboxLineOwnerBrokerId(
+            pool,
+            tenantId,
+            inboxNumber,
+          );
+          if (ownerFromLine != null) lineOwnerId = ownerFromLine;
+        }
+
+        const scopedClientId = await resolveClientIdByPhone(
+          pool,
+          tenantId,
+          clientPhone,
+          { brokerId: lineOwnerId, inboxNumber },
         );
-        if (cRows.length > 0) {
-          finalClientId = cRows[0].id as number;
-          clientName = cRows[0].name?.trim() || null;
-          clientEmail = cRows[0].email ?? null;
-          if (resolvedBrokerId == null && cRows[0].assigned_broker_id != null) {
-            resolvedBrokerId = cRows[0].assigned_broker_id as number;
-          }
-          // Defence-in-depth: outbound to a phone that resolves to a client
-          // owned by a different broker — redirect the thread's broker_id to
-          // the correct owner if no loan co-ownership path exists.
-          if (
-            direction === "outbound" &&
-            resolvedBrokerId !== null &&
-            cRows[0].assigned_broker_id !== null &&
-            resolvedBrokerId !== (cRows[0].assigned_broker_id as number)
-          ) {
-            const [laOwnerCheck] = await pool.query<RowDataPacket[]>(
-              `SELECT 1 FROM loan_applications la
-               WHERE la.client_user_id = ? AND la.tenant_id = ?
-                 AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
-               LIMIT 1`,
-              [cRows[0].id, tenantId, resolvedBrokerId, resolvedBrokerId],
-            );
-            if (laOwnerCheck.length === 0) {
+        if (scopedClientId != null) {
+          const [cRows] = await pool.query<RowDataPacket[]>(
+            `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, email, assigned_broker_id
+             FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+            [scopedClientId, tenantId],
+          );
+          if (cRows.length > 0) {
+            finalClientId = cRows[0].id as number;
+            clientName = cRows[0].name?.trim() || null;
+            clientEmail = cRows[0].email ?? null;
+            if (
+              resolvedBrokerId == null &&
+              cRows[0].assigned_broker_id != null
+            ) {
               resolvedBrokerId = cRows[0].assigned_broker_id as number;
+            }
+            if (
+              direction === "outbound" &&
+              resolvedBrokerId !== null &&
+              cRows[0].assigned_broker_id !== null &&
+              resolvedBrokerId !== (cRows[0].assigned_broker_id as number)
+            ) {
+              const [laOwnerCheck] = await pool.query<RowDataPacket[]>(
+                `SELECT 1 FROM loan_applications la
+                 WHERE la.client_user_id = ? AND la.tenant_id = ?
+                   AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+                 LIMIT 1`,
+                [cRows[0].id, tenantId, resolvedBrokerId, resolvedBrokerId],
+              );
+              if (laOwnerCheck.length === 0) {
+                resolvedBrokerId = cRows[0].assigned_broker_id as number;
+              }
             }
           }
         } else {
-          // Fallback: leads table
-          const [lRows] = await pool.query<RowDataPacket[]>(
-            `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
+          // Fallback: leads table (owner-scoped when CRM active)
+          const crmFlags = await getPerOwnerCrmFlags(
+            pool,
+            tenantId,
+            lineOwnerId,
+          );
+          let leadSql = `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
              FROM leads
              WHERE tenant_id = ?
-               AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
-             LIMIT 1`,
-            [tenantId, lastTen],
+               AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?`;
+          const leadParams: (string | number)[] = [tenantId, lastTen];
+          if (crmFlags.activeForBroker && lineOwnerId != null) {
+            leadSql += ` AND assigned_broker_id = ?`;
+            leadParams.push(lineOwnerId);
+          }
+          leadSql += ` LIMIT 1`;
+          const [lRows] = await pool.query<RowDataPacket[]>(
+            leadSql,
+            leadParams,
           );
           if (lRows.length > 0) {
             resolvedLeadId = lRows[0].id;
@@ -10383,8 +13391,6 @@ async function upsertConversationThread(params: {
               resolvedBrokerId = lRows[0].assigned_broker_id as number;
             }
           } else {
-            // Fallback: brokers/realtors table — so threads from partner
-            // realtors never show "Unknown Client".
             const [brRows] = await pool.query<RowDataPacket[]>(
               `SELECT id, CONCAT(first_name, ' ', last_name) AS name
                FROM brokers
@@ -10572,11 +13578,7 @@ function groupSmsQuotaUnits(body: string, recipientCount: number): number {
   return segments * Math.max(recipientCount, 1);
 }
 
-type GroupParticipantType =
-  | "client"
-  | "broker"
-  | "lead"
-  | "external_phone";
+type GroupParticipantType = "client" | "broker" | "lead" | "external_phone";
 
 interface GroupParticipantRow {
   id?: number;
@@ -10812,27 +13814,60 @@ const handleGetConversationsConfig: RequestHandler = (_req, res) => {
 
 async function resolvePhoneParticipant(
   phone: string,
+  scopeBrokerId?: number | null,
 ): Promise<ResolvedParticipant> {
   const e164 = groupConvNormalizeE164(phone);
   const last10 = groupConvPhoneLast10(e164);
 
   if (last10.length === 10) {
-    const [cRows] = await gcPool.query<RowDataPacket[]>(
-      `SELECT id, CONCAT(first_name, ' ', last_name) AS name
-       FROM clients WHERE tenant_id = ?
-         AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
-       LIMIT 1`,
-      [gcTenantId, last10],
+    const scopedId = await resolveClientIdByPhone(gcPool, gcTenantId, phone, {
+      brokerId: scopeBrokerId ?? null,
+    });
+    if (scopedId) {
+      const [cRows] = await gcPool.query<RowDataPacket[]>(
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS name
+         FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [scopedId, gcTenantId],
+      );
+      if (cRows.length > 0) {
+        return {
+          participant_type: "client",
+          client_id: cRows[0].id as number,
+          broker_id: null,
+          lead_id: null,
+          phone_e164: e164,
+          display_name:
+            (cRows[0].name as string)?.trim() ||
+            groupConvFormatPhoneLabel(e164),
+        };
+      }
+    }
+
+    const crmFlags = await getPerOwnerCrmFlags(
+      gcPool,
+      gcTenantId,
+      scopeBrokerId ?? null,
     );
-    if (cRows.length > 0) {
-      return {
-        participant_type: "client",
-        client_id: cRows[0].id as number,
-        broker_id: null,
-        lead_id: null,
-        phone_e164: e164,
-        display_name: (cRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
-      };
+    if (!crmFlags.activeForBroker) {
+      const [cRows] = await gcPool.query<RowDataPacket[]>(
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS name
+         FROM clients WHERE tenant_id = ?
+           AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
+         LIMIT 1`,
+        [gcTenantId, last10],
+      );
+      if (cRows.length > 0) {
+        return {
+          participant_type: "client",
+          client_id: cRows[0].id as number,
+          broker_id: null,
+          lead_id: null,
+          phone_e164: e164,
+          display_name:
+            (cRows[0].name as string)?.trim() ||
+            groupConvFormatPhoneLabel(e164),
+        };
+      }
     }
 
     const [lRows] = await gcPool.query<RowDataPacket[]>(
@@ -10849,7 +13884,8 @@ async function resolvePhoneParticipant(
         broker_id: null,
         lead_id: lRows[0].id as number,
         phone_e164: e164,
-        display_name: (lRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
+        display_name:
+          (lRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
       };
     }
 
@@ -10867,7 +13903,8 @@ async function resolvePhoneParticipant(
         broker_id: bRows[0].id as number,
         lead_id: null,
         phone_e164: e164,
-        display_name: (bRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
+        display_name:
+          (bRows[0].name as string)?.trim() || groupConvFormatPhoneLabel(e164),
       };
     }
   }
@@ -10884,6 +13921,7 @@ async function resolvePhoneParticipant(
 
 async function resolveParticipantInput(
   input: GroupParticipantInput,
+  scopeBrokerId?: number | null,
 ): Promise<ResolvedParticipant> {
   if (input.type === "client") {
     const [rows] = await gcPool.query<RowDataPacket[]>(
@@ -10950,7 +13988,7 @@ async function resolveParticipantInput(
   }
   const phone_e164 = gcPhoneE164IfValid(input.phone);
   if (phone_e164) {
-    const resolved = await resolvePhoneParticipant(phone_e164);
+    const resolved = await resolvePhoneParticipant(phone_e164, scopeBrokerId);
     if (resolved.participant_type !== "external_phone") {
       return resolved;
     }
@@ -10988,7 +14026,8 @@ async function loadActiveParticipants(
     [gcTenantId, conversationId],
   );
   return rows.map((r) => ({
-    participant_type: r.participant_type as ResolvedParticipant["participant_type"],
+    participant_type:
+      r.participant_type as ResolvedParticipant["participant_type"],
     client_id: r.client_id as number | null,
     broker_id: r.broker_id as number | null,
     lead_id: r.lead_id as number | null,
@@ -11017,8 +14056,7 @@ async function ensureCreatorInParticipants(
 ): Promise<ResolvedParticipant[]> {
   if (
     participants.some(
-      (p) =>
-        p.participant_type === "broker" && p.broker_id === ownerBrokerId,
+      (p) => p.participant_type === "broker" && p.broker_id === ownerBrokerId,
     )
   ) {
     return participants;
@@ -11126,7 +14164,11 @@ async function sendGroupOutboundMessage(
       refId: conversationId,
     });
     if (!quotaCheck.allowed) {
-      throw new GroupSendError(402, "SMS quota exceeded", gcQuotaDenialPayload(quotaCheck));
+      throw new GroupSendError(
+        402,
+        "SMS quota exceeded",
+        gcQuotaDenialPayload(quotaCheck),
+      );
     }
 
     const client = gcGetTwilioClient();
@@ -11195,7 +14237,7 @@ async function sendGroupOutboundMessage(
         ? "failed"
         : "sent"
       : allDelivered
-        ? successfulSends[0]?.status ?? "sent"
+        ? (successfulSends[0]?.status ?? "sent")
         : "sent";
     if (anyFailed) {
       twilioError =
@@ -11540,7 +14582,10 @@ async function enrichThreadRows(
     const titleParts = parts.map((p) => ({
       display_name: String(p.display_name),
     }));
-    const displayTitle = groupConvResolveDisplayTitle(t.title as string | null, titleParts);
+    const displayTitle = groupConvResolveDisplayTitle(
+      t.title as string | null,
+      titleParts,
+    );
     out[cid] = {
       thread_type: "group",
       title: t.title ?? null,
@@ -11586,7 +14631,7 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
 
     const resolved: ResolvedParticipant[] = [];
     for (const input of rawParticipants as GroupParticipantInput[]) {
-      const p = await resolveParticipantInput(input);
+      const p = await resolveParticipantInput(input, brokerId);
       if (p.participant_type === "client" && p.client_id) {
         const ok = await gcAssertClientOwnershipForBroker(
           p.client_id,
@@ -11596,8 +14641,7 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
         if (!ok) {
           return res.status(403).json({
             success: false,
-            message:
-              "One or more contacts are assigned to another broker.",
+            message: "One or more contacts are assigned to another broker.",
           });
         }
       }
@@ -11678,9 +14722,7 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
         }
       } catch (accessErr: unknown) {
         const status =
-          accessErr &&
-          typeof accessErr === "object" &&
-          "status" in accessErr
+          accessErr && typeof accessErr === "object" && "status" in accessErr
             ? Number((accessErr as { status: number }).status)
             : 403;
         if (status === 403 || status === 404) {
@@ -11695,7 +14737,8 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
     }
 
     const conversationId = newGroupConversationId();
-    const trimmedTitle = typeof title === "string" ? title.trim().slice(0, 255) : null;
+    const trimmedTitle =
+      typeof title === "string" ? title.trim().slice(0, 255) : null;
     const displayTitle = groupConvResolveDisplayTitle(trimmedTitle, resolved);
 
     await gcPool.query(
@@ -11747,7 +14790,11 @@ const handleCreateGroup: RequestHandler = async (req, res) => {
 
     const thread = await getThreadRow(conversationId);
 
-    if (firstMessage && typeof firstMessage === "string" && firstMessage.trim()) {
+    if (
+      firstMessage &&
+      typeof firstMessage === "string" &&
+      firstMessage.trim()
+    ) {
       const commType = channel === "sms" ? "sms" : "internal_note";
       try {
         await sendGroupOutboundMessage(
@@ -11896,7 +14943,9 @@ const handleAddGroupParticipant: RequestHandler = async (req, res) => {
 
     const input = req.body?.participant as GroupParticipantInput;
     if (!input) {
-      return res.status(400).json({ success: false, message: "participant required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "participant required" });
     }
 
     const [countRows] = await gcPool.query<RowDataPacket[]>(
@@ -11911,7 +14960,7 @@ const handleAddGroupParticipant: RequestHandler = async (req, res) => {
       });
     }
 
-    const p = await resolveParticipantInput(input);
+    const p = await resolveParticipantInput(input, brokerId);
     if (p.participant_type === "client" && p.client_id) {
       const ok = await gcAssertClientOwnershipForBroker(
         p.client_id,
@@ -12001,7 +15050,9 @@ const handleSendGroupMessage: RequestHandler = async (req, res) => {
     );
 
     if (thread.status === "closed") {
-      return res.status(400).json({ success: false, message: "Thread is closed" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Thread is closed" });
     }
 
     const { body, communication_type } = req.body ?? {};
@@ -12070,10 +15121,9 @@ async function processInboundGroupMms(
     ...(toPhone ? [toPhone] : []),
   ].filter((p) => groupConvPhoneLast10(p).length >= 10);
 
-  const participantPhones = [
-    fromPhone,
-    ...otherRecipients,
-  ].filter((p) => groupConvPhoneLast10(p).length >= 10);
+  const participantPhones = [fromPhone, ...otherRecipients].filter(
+    (p) => groupConvPhoneLast10(p).length >= 10,
+  );
 
   const fingerprint = groupConvComputeParticipantFingerprint(
     toPhone,
@@ -12104,7 +15154,7 @@ async function processInboundGroupMms(
     conversationId = newGroupConversationId();
     const resolvedParticipants: ResolvedParticipant[] = [];
     for (const phone of participantPhones) {
-      resolvedParticipants.push(await resolvePhoneParticipant(phone));
+      resolvedParticipants.push(await resolvePhoneParticipant(phone, brokerId));
     }
     const displayTitle = groupConvBuildAutoGroupTitle(resolvedParticipants);
 
@@ -12139,11 +15189,7 @@ async function processInboundGroupMms(
          (tenant_id, from_broker_id, communication_type, direction, body, status,
           conversation_id, message_type, delivery_status, created_at)
        VALUES (?, NULL, 'system_event', 'outbound', ?, 'delivered', ?, 'text', 'delivered', NOW())`,
-      [
-        params.tenantId,
-        "Group detected from phone SMS",
-        conversationId,
-      ],
+      [params.tenantId, "Group detected from phone SMS", conversationId],
     );
   }
 
@@ -12159,7 +15205,7 @@ async function processInboundGroupMms(
       [params.tenantId, conversationId, last10],
     );
     if (!exists.length) {
-      const p = await resolvePhoneParticipant(phone);
+      const p = await resolvePhoneParticipant(phone, brokerId);
       await gcPool.query(
         `INSERT INTO conversation_participants
            (tenant_id, conversation_id, participant_type, client_id, broker_id, lead_id,
@@ -12189,7 +15235,7 @@ async function processInboundGroupMms(
     if (dup) return true;
   }
 
-  const fromResolved = await resolvePhoneParticipant(fromPhone);
+  const fromResolved = await resolvePhoneParticipant(fromPhone, brokerId);
   const metadata = JSON.stringify({
     recipients: participantPhones,
     is_group_mms: true,
@@ -12225,11 +15271,7 @@ async function processInboundGroupMms(
        message_count = message_count + 1, unread_count = unread_count + 1,
        status = 'active', archived_at = NULL, updated_at = NOW()
      WHERE tenant_id = ? AND conversation_id = ?`,
-    [
-      params.body.slice(0, 200) || "(Message)",
-      params.tenantId,
-      conversationId,
-    ],
+    [params.body.slice(0, 200) || "(Message)", params.tenantId, conversationId],
   );
 
   return true;
@@ -12310,7 +15352,7 @@ async function insertGroupInboundSms(
   }
 
   const fromPhone = groupConvNormalizeE164(params.fromRaw);
-  const fromResolved = await resolvePhoneParticipant(fromPhone);
+  const fromResolved = await resolvePhoneParticipant(fromPhone, brokerId);
   const metadata = JSON.stringify({
     is_group_mms: true,
     source,
@@ -12345,11 +15387,7 @@ async function insertGroupInboundSms(
        message_count = message_count + 1, unread_count = unread_count + 1,
        status = 'active', archived_at = NULL, updated_at = NOW()
      WHERE tenant_id = ? AND conversation_id = ?`,
-    [
-      params.body.slice(0, 200) || "(Message)",
-      params.tenantId,
-      conversationId,
-    ],
+    [params.body.slice(0, 200) || "(Message)", params.tenantId, conversationId],
   );
 
   console.log(
@@ -12396,7 +15434,9 @@ async function processInboundGroupIndividualReply(
     params,
     match.conversationId,
     brokerId,
-    params.knownClientId ? "group_individual_reply_client" : "group_individual_reply",
+    params.knownClientId
+      ? "group_individual_reply_client"
+      : "group_individual_reply",
   );
 }
 
@@ -12405,15 +15445,15 @@ const handleGetGroupsByApplication: RequestHandler = async (req, res) => {
   try {
     const applicationId = parseInt(req.params.applicationId, 10);
     if (Number.isNaN(applicationId)) {
-      return res.status(400).json({ success: false, message: "Invalid application id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid application id" });
     }
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
     const isSuperAdmin = brokerRole === "superadmin";
     const isAdmin =
-      brokerRole === "admin" ||
-      brokerRole === "platform_owner" ||
-      isSuperAdmin;
+      brokerRole === "admin" || brokerRole === "platform_owner" || isSuperAdmin;
 
     const [appAccess] = await gcPool.query<RowDataPacket[]>(
       `SELECT id FROM loan_applications
@@ -12424,13 +15464,7 @@ const handleGetGroupsByApplication: RequestHandler = async (req, res) => {
            OR partner_broker_id = ?
          )
        LIMIT 1`,
-      [
-        applicationId,
-        gcTenantId,
-        isAdmin ? 1 : 0,
-        brokerId,
-        brokerId,
-      ],
+      [applicationId, gcTenantId, isAdmin ? 1 : 0, brokerId, brokerId],
     );
     if (!appAccess.length) {
       return res.status(403).json({ success: false, message: "Forbidden" });
@@ -12455,7 +15489,9 @@ const handleGetGroupsByApplication: RequestHandler = async (req, res) => {
     return res.json({ success: true, threads });
   } catch (err: unknown) {
     console.error("[group] by-application error:", err);
-    return res.status(500).json({ success: false, message: "Failed to load groups" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to load groups" });
   }
 };
 
@@ -12464,7 +15500,9 @@ const handleGetGroupsByClient: RequestHandler = async (req, res) => {
   try {
     const clientId = parseInt(req.params.clientId, 10);
     if (Number.isNaN(clientId)) {
-      return res.status(400).json({ success: false, message: "Invalid client id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid client id" });
     }
     const brokerId = (req as any).brokerId as number;
     const brokerRole = (req as any).brokerRole as string;
@@ -12498,7 +15536,9 @@ const handleGetGroupsByClient: RequestHandler = async (req, res) => {
     return res.json({ success: true, threads });
   } catch (err: unknown) {
     console.error("[group] by-client error:", err);
-    return res.status(500).json({ success: false, message: "Failed to load groups" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to load groups" });
   }
 };
 
@@ -12511,10 +15551,16 @@ const handleSimulateInboundGroup: RequestHandler = async (req, res) => {
 
   const { from, to, body, otherRecipients } = req.body ?? {};
   if (!from || !to) {
-    return res.status(400).json({ success: false, message: "from and to required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "from and to required" });
   }
 
-  const webhookBody: Record<string, unknown> = { From: from, To: to, Body: body ?? "Test group" };
+  const webhookBody: Record<string, unknown> = {
+    From: from,
+    To: to,
+    Body: body ?? "Test group",
+  };
   if (Array.isArray(otherRecipients)) {
     otherRecipients.forEach((r: string, i: number) => {
       webhookBody[`OtherRecipients${i}`] = r;
@@ -12535,9 +15581,11 @@ const handleSimulateInboundGroup: RequestHandler = async (req, res) => {
     webhookBody,
   });
 
-  return res.json({ success: handled, message: handled ? "Group inbound processed" : "Not a group MMS" });
+  return res.json({
+    success: handled,
+    message: handled ? "Group inbound processed" : "Not a group MMS",
+  });
 };
-
 
 /** Platform owners may message any client; others need ownership or an existing thread. */
 function hasGlobalMessagingAccess(brokerRole: string): boolean {
@@ -12558,13 +15606,56 @@ async function canBrokerMessageClient(
 ): Promise<boolean> {
   if (hasGlobalMessagingAccess(brokerRole)) return true;
 
+  const flags = await getPerOwnerCrmFlags(pool, MORTGAGE_TENANT_ID, brokerId);
+  if (flags.activeForBroker) {
+    const [[clientRow]] = await pool.query<RowDataPacket[]>(
+      `SELECT assigned_broker_id, list_visibility FROM clients
+       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+    if (
+      clientRow &&
+      Number(clientRow.assigned_broker_id) === brokerId &&
+      clientRow.list_visibility === "active"
+    ) {
+      return true;
+    }
+
+    if (conversationId) {
+      const [[thread]] = await pool.query<RowDataPacket[]>(
+        `SELECT broker_id, owner_client_scope_broker_id, client_id
+         FROM conversation_threads
+         WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
+        [conversationId, MORTGAGE_TENANT_ID],
+      );
+      if (thread) {
+        if (thread.client_id == null && thread.broker_id == null) {
+          return false;
+        }
+        if (
+          thread.owner_client_scope_broker_id != null &&
+          Number(thread.owner_client_scope_broker_id) === brokerId
+        ) {
+          return true;
+        }
+        if (thread.broker_id != null && Number(thread.broker_id) === brokerId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   if (conversationId) {
     const [threadRows] = await pool.query<RowDataPacket[]>(
       `SELECT broker_id FROM conversation_threads
        WHERE conversation_id = ? AND tenant_id = ? LIMIT 1`,
       [conversationId, MORTGAGE_TENANT_ID],
     );
-    const threadBrokerId = threadRows[0]?.broker_id as number | null | undefined;
+    const threadBrokerId = threadRows[0]?.broker_id as
+      | number
+      | null
+      | undefined;
     if (threadBrokerId != null && threadBrokerId === brokerId) return true;
   }
 
@@ -12591,12 +15682,7 @@ async function assertClientOwnershipForBroker(
   brokerRole: string,
   conversationId?: string | null,
 ): Promise<boolean> {
-  return canBrokerMessageClient(
-    clientId,
-    brokerId,
-    brokerRole,
-    conversationId,
-  );
+  return canBrokerMessageClient(clientId, brokerId, brokerRole, conversationId);
 }
 
 let groupConversationsModule: GroupConversationsModule | null = null;
@@ -12695,24 +15781,29 @@ async function upsertEmailThread(params: {
       }
       finalClientId = resolvedClientId;
     } else if (clientEmail) {
-      // Email-based contact resolution: clients → leads → brokers.
+      // Email-based contact resolution (owner-scoped when broker known; never arbitrary LIMIT 1)
       const emailLower = clientEmail.toLowerCase();
-      const [cEmailRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
-         FROM clients WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
-        [tenantId, emailLower],
+      const emailHit = await resolveClientByEmailSafe(
+        pool,
+        tenantId,
+        emailLower,
+        {
+          ownerBrokerId: resolvedBrokerId,
+        },
       );
-      if (cEmailRows.length > 0) {
-        finalClientId = cEmailRows[0].id as number;
-        clientName = cEmailRows[0].name?.trim() || null;
-        clientPhone = cEmailRows[0].phone ?? null;
+      if (emailHit.client) {
+        finalClientId = emailHit.client.id as number;
+        clientName =
+          `${emailHit.client.first_name || ""} ${emailHit.client.last_name || ""}`.trim() ||
+          null;
+        clientPhone = (emailHit.client.phone as string | null) ?? null;
         if (
           resolvedBrokerId == null &&
-          cEmailRows[0].assigned_broker_id != null
+          emailHit.client.assigned_broker_id != null
         ) {
-          resolvedBrokerId = cEmailRows[0].assigned_broker_id as number;
+          resolvedBrokerId = emailHit.client.assigned_broker_id as number;
         }
-      } else {
+      } else if (!emailHit.ambiguous) {
         const [lEmailRows] = await pool.query<RowDataPacket[]>(
           `SELECT id, CONCAT(first_name, ' ', last_name) AS name, phone, assigned_broker_id
            FROM leads WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
@@ -12729,7 +15820,6 @@ async function upsertEmailThread(params: {
             resolvedBrokerId = lEmailRows[0].assigned_broker_id as number;
           }
         } else {
-          // Check brokers table — mortgage bankers emailing each other.
           const [brEmailRows] = await pool.query<RowDataPacket[]>(
             `SELECT CONCAT(first_name, ' ', last_name) AS name
              FROM brokers WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
@@ -12740,6 +15830,7 @@ async function upsertEmailThread(params: {
           }
         }
       }
+      // If ambiguous without owner scope: leave unlinked (finalClientId stays null)
     }
 
     // Final fallback: sender's display name from the email provider
@@ -13820,6 +16911,10 @@ async function sendClientManualWelcomeEmail(
   lastName: string,
   brokerName: string,
 ): Promise<void> {
+  if (process.env.VITEST === "true") {
+    console.log(`[VITEST] skip client welcome email → ${email}`);
+    return;
+  }
   try {
     console.log(`📧 Sending manual client welcome email to ${email}`);
     const loginUrl = `${process.env.CLIENT_URL || "https://portal.encoremortgage.org"}/client-login`;
@@ -13915,6 +17010,10 @@ async function sendBrokerManualWelcomeEmail(
   lastName: string,
   role: string,
 ): Promise<void> {
+  if (process.env.VITEST === "true") {
+    console.log(`[VITEST] skip broker welcome email → ${email}`);
+    return;
+  }
   try {
     console.log(`📧 Sending broker welcome email to ${email}`);
     const loginUrl = `${getAdminBaseUrl()}/broker-login`;
@@ -14004,6 +17103,383 @@ async function sendBrokerManualWelcomeEmail(
   } catch (error) {
     console.error("❌ Error sending broker welcome email:", error);
     // Non-throwing — don't fail the create operation if email fails
+  }
+}
+
+// ── broker notification prefs + alerts (inlined for Vercel serverless) ───────
+// Source of truth: shared/broker-notification-prefs.ts (+ broker-new-application-notify.ts)
+type BrokerEmailAlertEventInline =
+  | "new_application"
+  | "voicemail"
+  | "inbound_sms"
+  | "inbound_email"
+  | "scheduler_booking"
+  | "reminder_flow_broker";
+
+type BrokerNotificationPrefsInline = {
+  email_new_application: boolean;
+  email_voicemail: boolean;
+  email_inbound_sms: boolean;
+  email_inbound_email: boolean;
+  email_scheduler_booking: boolean;
+  email_reminder_flow_broker: boolean;
+  secondary_email: string | null;
+};
+
+function uniqueFiniteBrokerIdsInline(
+  ids: Array<number | null | undefined>,
+): number[] {
+  return [
+    ...new Set(
+      ids.filter(
+        (id): id is number => typeof id === "number" && Number.isFinite(id),
+      ),
+    ),
+  ];
+}
+
+function isSendableBrokerEmailInline(
+  email: string | null | undefined,
+): boolean {
+  const trimmed = String(email || "").trim();
+  if (!trimmed || !trimmed.includes("@")) return false;
+  if (trimmed.toLowerCase().startsWith("noemail_")) return false;
+  return true;
+}
+
+/** @deprecated alias — prefer isSendableBrokerEmailInline */
+function shouldEmailBrokerAddressInline(
+  email: string | null | undefined,
+): boolean {
+  return isSendableBrokerEmailInline(email);
+}
+
+function normalizeSecondaryEmailInline(
+  raw: string | null | undefined,
+): string | null {
+  const trimmed = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (!trimmed) return null;
+  if (!isSendableBrokerEmailInline(trimmed)) return null;
+  return trimmed;
+}
+
+function coalesceBoolInline(value: unknown, fallback: boolean): boolean {
+  if (value === true || value === 1 || value === "1") return true;
+  if (value === false || value === 0 || value === "0") return false;
+  return fallback;
+}
+
+function defaultBrokerNotificationPrefsInline(): BrokerNotificationPrefsInline {
+  return {
+    email_new_application: true,
+    email_voicemail: true,
+    email_inbound_sms: true,
+    // OFF by default — prevents O365 sync ↔ CRM alert email feedback loops.
+    email_inbound_email: false,
+    email_scheduler_booking: true,
+    email_reminder_flow_broker: true,
+    secondary_email: null,
+  };
+}
+
+function mergeBrokerNotificationPrefsInline(
+  row: Partial<Record<string, unknown>> | null | undefined,
+): BrokerNotificationPrefsInline {
+  const d = defaultBrokerNotificationPrefsInline();
+  if (!row) return d;
+  return {
+    email_new_application: coalesceBoolInline(
+      row.email_new_application,
+      d.email_new_application,
+    ),
+    email_voicemail: coalesceBoolInline(row.email_voicemail, d.email_voicemail),
+    email_inbound_sms: coalesceBoolInline(
+      row.email_inbound_sms,
+      d.email_inbound_sms,
+    ),
+    email_inbound_email: coalesceBoolInline(
+      row.email_inbound_email,
+      d.email_inbound_email,
+    ),
+    email_scheduler_booking: coalesceBoolInline(
+      row.email_scheduler_booking,
+      d.email_scheduler_booking,
+    ),
+    email_reminder_flow_broker: coalesceBoolInline(
+      row.email_reminder_flow_broker,
+      d.email_reminder_flow_broker,
+    ),
+    secondary_email: normalizeSecondaryEmailInline(
+      typeof row.secondary_email === "string" ? row.secondary_email : null,
+    ),
+  };
+}
+
+function isBrokerEmailAlertEnabledInline(
+  prefs: BrokerNotificationPrefsInline,
+  event: BrokerEmailAlertEventInline,
+): boolean {
+  const map: Record<
+    BrokerEmailAlertEventInline,
+    keyof BrokerNotificationPrefsInline
+  > = {
+    new_application: "email_new_application",
+    voicemail: "email_voicemail",
+    inbound_sms: "email_inbound_sms",
+    inbound_email: "email_inbound_email",
+    scheduler_booking: "email_scheduler_booking",
+    reminder_flow_broker: "email_reminder_flow_broker",
+  };
+  return Boolean(prefs[map[event]]);
+}
+
+function collectBrokerAlertRecipientsInline(
+  accountEmail: string | null | undefined,
+  secondaryEmail: string | null | undefined,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [accountEmail, secondaryEmail]) {
+    const e = String(candidate || "").trim();
+    if (!isSendableBrokerEmailInline(e)) continue;
+    const key = e.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
+/** Source of truth: shared/broker-notification-prefs.ts isCrmSystemNotification* */
+function extractEmailAddressInline(raw: string | null | undefined): string {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const angle = s.match(/<([^>]+)>/);
+  return (angle?.[1] || s).trim().toLowerCase();
+}
+
+function isCrmSystemNotificationFromAddressInline(
+  fromEmail: string | null | undefined,
+): boolean {
+  const addr = extractEmailAddressInline(fromEmail);
+  if (!addr) return false;
+  if (
+    addr === "no-reply@encoremortgage.org" ||
+    addr === "noreply@encoremortgage.org"
+  ) {
+    return true;
+  }
+  if (addr.startsWith("no-reply@") || addr.startsWith("noreply@")) {
+    return true;
+  }
+  const smtpFrom = extractEmailAddressInline(
+    process.env.SMTP_FROM || RESEND_FROM,
+  );
+  if (smtpFrom && addr === smtpFrom) return true;
+  return false;
+}
+
+async function loadBrokerNotificationPrefsInline(
+  brokerId: number,
+): Promise<BrokerNotificationPrefsInline> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT email_new_application, email_voicemail, email_inbound_sms,
+            email_inbound_email, email_scheduler_booking, email_reminder_flow_broker,
+            secondary_email
+     FROM broker_notification_preferences
+     WHERE broker_id = ? AND tenant_id = ?
+     LIMIT 1`,
+    [brokerId, MORTGAGE_TENANT_ID],
+  );
+  return mergeBrokerNotificationPrefsInline(rows[0] ?? null);
+}
+
+/**
+ * Respects Profile notification prefs. Never throws.
+ * Missing prefs row = all email alerts ON. Bell/in-app is unchanged by callers.
+ */
+async function deliverBrokerEmailAlert(opts: {
+  brokerId: number;
+  event: BrokerEmailAlertEventInline;
+  subject: string;
+  html: string;
+  quotaRefType: string;
+  quotaRefId?: string;
+}): Promise<void> {
+  try {
+    const prefs = await loadBrokerNotificationPrefsInline(opts.brokerId);
+    // Inline of shared/resolveBrokerEmailAlertDelivery
+    if (!isBrokerEmailAlertEnabledInline(prefs, opts.event)) {
+      console.log(
+        `⏭ Broker email alert skipped (prefs off): event=${opts.event} broker=#${opts.brokerId}`,
+      );
+      return;
+    }
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [opts.brokerId, MORTGAGE_TENANT_ID],
+    );
+    const accountEmail = (brokerRows[0]?.email as string | undefined) ?? null;
+    const recipients = collectBrokerAlertRecipientsInline(
+      accountEmail,
+      prefs.secondary_email,
+    );
+    if (!recipients.length) {
+      console.log(
+        `⏭ Broker email alert skipped (no sendable email): event=${opts.event} broker=#${opts.brokerId}`,
+      );
+      return;
+    }
+    for (const to of recipients) {
+      const result = await sendEmailMessage(
+        to,
+        opts.subject,
+        opts.html,
+        true,
+        undefined,
+        {
+          billing: systemEmailQuota(opts.quotaRefType, opts.quotaRefId),
+        },
+      );
+      if (result.success) {
+        console.log(
+          `✅ Broker email alert sent: event=${opts.event} to=${to} broker=#${opts.brokerId}`,
+        );
+      } else {
+        console.error(
+          `❌ Broker email alert failed: event=${opts.event} to=${to} broker=#${opts.brokerId} err=${result.error || "unknown"}`,
+        );
+      }
+    }
+  } catch (err) {
+    console.error(
+      `deliverBrokerEmailAlert failed (non-fatal) event=${opts.event} broker=#${opts.brokerId}:`,
+      err,
+    );
+  }
+}
+
+function publicApplyLoanTypeLabelInline(loanType?: string | null): string {
+  if (loanType === "refinance") return "Refinance";
+  if (loanType === "purchase") return "Purchase";
+  return loanType || "Loan";
+}
+
+/**
+ * Email mortgage banker / partner when a client submits via their public share link.
+ * In-app bell already fires via createBrokerNotification; this fills the email gap.
+ */
+async function sendBrokerNewPublicApplicationEmail(params: {
+  brokerIds: number[];
+  clientFirstName: string;
+  clientLastName: string;
+  clientEmail: string;
+  clientPhone?: string | null;
+  applicationNumber: string;
+  applicationId: number;
+  clientId: number;
+  loanType?: string | null;
+}): Promise<void> {
+  const uniqueIds = uniqueFiniteBrokerIdsInline(params.brokerIds);
+  if (!uniqueIds.length) return;
+
+  try {
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, first_name, last_name, email, role
+       FROM brokers
+       WHERE tenant_id = ? AND status = 'active' AND id IN (${uniqueIds
+         .map(() => "?")
+         .join(",")})`,
+      [MORTGAGE_TENANT_ID, ...uniqueIds],
+    );
+    if (!brokerRows.length) return;
+
+    const companyName = await fetchTenantCompanyName(pool, MORTGAGE_TENANT_ID);
+    const actionUrl = `${getAdminBaseUrl()}/admin/clients/${params.clientId}`;
+    const clientName =
+      `${params.clientFirstName} ${params.clientLastName}`.trim() || "a client";
+    const loanLabel = publicApplyLoanTypeLabelInline(params.loanType);
+    const phoneLine = params.clientPhone
+      ? `<p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Phone:</strong> ${params.clientPhone}</p>`
+      : "";
+
+    for (const broker of brokerRows) {
+      const bankerName =
+        `${broker.first_name || ""} ${broker.last_name || ""}`.trim() ||
+        "there";
+      const roleLabel =
+        broker.role === "broker" ? "Partner" : "Mortgage Banker";
+      const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+        <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
+                <tr>
+                  <td style="background-color:#ffffff;padding:24px 32px;border-radius:16px 16px 0 0;border-bottom:3px solid #e8192c;text-align:center;">
+                    <img src="https://disruptinglabs.com/data/encore/assets/images/logo.png" alt="Encore Mortgage" style="height:52px;width:auto;display:inline-block;" />
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color:#ffffff;padding:40px 32px 32px;">
+                    <h2 style="margin:0 0 8px 0;color:#0f172a;font-size:22px;font-weight:700;">New application submitted</h2>
+                    <p style="margin:0 0 24px 0;color:#475569;font-size:15px;line-height:1.6;">
+                      Hi ${bankerName}, a client just completed your share-link application form.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                      <tr>
+                        <td style="background-color:#fff0f2;border:1px solid #fecdd3;border-radius:12px;padding:18px;">
+                          <p style="margin:0 0 10px 0;color:#e8192c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;">Application details</p>
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Client:</strong> ${clientName}</p>
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Email:</strong> ${params.clientEmail}</p>
+                          ${phoneLine}
+                          <p style="margin:0 0 6px 0;color:#0f172a;font-size:14px;"><strong>Application #:</strong> ${params.applicationNumber}</p>
+                          <p style="margin:0;color:#0f172a;font-size:14px;"><strong>Type:</strong> ${loanLabel}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center">
+                          <a href="${actionUrl}" style="display:inline-block;background-color:#e8192c;color:#ffffff;text-decoration:none;padding:14px 44px;border-radius:8px;font-weight:700;font-size:15px;">Open in Encore</a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:16px 0 0 0;color:#94a3b8;font-size:12px;text-align:center;">
+                      Sent to you as the assigned ${roleLabel} for this share link.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color:#0f172a;padding:20px 32px;border-radius:0 0 16px 16px;text-align:center;">
+                    <p style="margin:0 0 4px 0;color:#ffffff;font-size:13px;font-weight:600;">${companyName}</p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">New application alert</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>`;
+
+      await deliverBrokerEmailAlert({
+        brokerId: Number(broker.id),
+        event: "new_application",
+        subject: `New application from ${clientName} — ${params.applicationNumber}`,
+        html,
+        quotaRefType: "broker_new_public_application",
+        quotaRefId: String(params.applicationId),
+      });
+    }
+  } catch (err) {
+    console.error(
+      "sendBrokerNewPublicApplicationEmail failed (non-fatal):",
+      err,
+    );
   }
 }
 
@@ -14208,7 +17684,7 @@ async function sendPublicApplicationWelcomeEmail(
 async function sendApplicationReceivedFallbackEmail(
   loanId: number,
   tenantId: number,
-): Promise<void> {
+): Promise<boolean> {
   const [loanRows] = await pool.query<RowDataPacket[]>(
     `SELECT la.application_number, la.loan_type, la.loan_amount, la.property_value,
             la.property_address, la.property_city, la.property_state, la.property_zip,
@@ -14218,7 +17694,7 @@ async function sendApplicationReceivedFallbackEmail(
      WHERE la.id = ? AND la.tenant_id = ?`,
     [loanId, tenantId],
   );
-  if (!loanRows.length || !loanRows[0].email) return;
+  if (!loanRows.length || !loanRows[0].email) return false;
 
   const loan = loanRows[0];
   const propertyAddress = [
@@ -14247,6 +17723,7 @@ async function sendApplicationReceivedFallbackEmail(
     fmt(loan.loan_amount),
     propertyAddress,
   );
+  return true;
 }
 
 /**
@@ -15500,13 +18977,22 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
     // Normalize email
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Check if client exists
-    const [clients] = await pool.query<any[]>(
-      "SELECT * FROM clients WHERE email = ? AND status = 'active' AND tenant_id = ?",
-      [normalizedEmail, MORTGAGE_TENANT_ID],
+    // Check if client exists (refuse ambiguous multi-owner email matches)
+    const emailResolve = await resolveClientByEmailSafe(
+      pool,
+      MORTGAGE_TENANT_ID,
+      normalizedEmail,
+      { activeOnly: true },
     );
-
-    if (clients.length === 0) {
+    if (emailResolve.ambiguous) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Multiple accounts share this email. Please use the secure link from your loan officer, or contact your mortgage banker.",
+        error: "ambiguous_email",
+      });
+    }
+    if (!emailResolve.client) {
       return res.status(404).json({
         success: false,
         message: "client_not_found",
@@ -15514,7 +19000,7 @@ const handleClientSendCode: RequestHandler = async (req, res) => {
       });
     }
 
-    const client = clients[0];
+    const client = emailResolve.client;
 
     // If SMS or call requested, ensure client has a phone number on file
     if (delivery_method === "sms" || delivery_method === "call") {
@@ -15630,20 +19116,29 @@ const handleClientVerifyCode: RequestHandler = async (req, res) => {
     }
     const codeNum = parseInt(codeStr, 10);
 
-    // Check if client exists
-    const [clients] = await pool.query<any[]>(
-      "SELECT * FROM clients WHERE email = ? AND status = 'active' AND tenant_id = ?",
-      [normalizedEmail, MORTGAGE_TENANT_ID],
+    // Check if client exists (refuse ambiguous multi-owner email matches)
+    const emailResolve = await resolveClientByEmailSafe(
+      pool,
+      MORTGAGE_TENANT_ID,
+      normalizedEmail,
+      { activeOnly: true },
     );
-
-    if (clients.length === 0) {
+    if (emailResolve.ambiguous) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Multiple accounts share this email. Please use the secure link from your loan officer.",
+        error: "ambiguous_email",
+      });
+    }
+    if (!emailResolve.client) {
       return res.status(404).json({
         success: false,
         message: "Client not found",
       });
     }
 
-    const client = clients[0];
+    const client = emailResolve.client;
 
     // Check if code is valid
     const [sessions] = await pool.query<any[]>(
@@ -16287,11 +19782,74 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
     const parsedDependentCount = toSqlOptionalInt(dependent_count);
     const parsedYearsAtAddress = toSqlOptionalFloat(years_at_address);
 
-    // Check if client exists
-    let [existingClients] = await connection.query<any[]>(
-      "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
-      [client_email, MORTGAGE_TENANT_ID],
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      loanBrokerUserId,
     );
+    const confirmDuplicatePhone = Boolean(
+      (req.body as { confirm_duplicate_phone?: boolean })
+        .confirm_duplicate_phone,
+    );
+    const clientPhoneNorm = client_phone
+      ? normalizePhoneLast10(String(client_phone))
+      : "";
+    if (
+      crmFlags.activeForBroker &&
+      clientPhoneNorm.length === 10 &&
+      !confirmDuplicatePhone
+    ) {
+      const [otherOwnerRows] = await connection.query<RowDataPacket[]>(
+        `SELECT c.id, c.first_name, c.last_name, c.assigned_broker_id,
+                b.first_name AS broker_first, b.last_name AS broker_last
+         FROM clients c
+         LEFT JOIN brokers b ON b.id = c.assigned_broker_id
+         WHERE c.tenant_id = ? AND c.normalized_phone = ? AND c.phone IS NOT NULL
+           AND (c.assigned_broker_id IS NULL OR c.assigned_broker_id != ?)
+         LIMIT 10`,
+        [MORTGAGE_TENANT_ID, clientPhoneNorm, loanBrokerUserId],
+      );
+      if (otherOwnerRows.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({
+          success: false,
+          error: "duplicate_phone_other_owners",
+          message:
+            "Other mortgage bankers have client rows with this phone. Review and confirm to proceed, or request a link.",
+          duplicate_suggestions: otherOwnerRows.map((r) => ({
+            client_id: r.id,
+            client_name: `${r.first_name} ${r.last_name}`.trim(),
+            assigned_broker_id: r.assigned_broker_id,
+            assigned_broker_name: r.assigned_broker_id
+              ? `${r.broker_first} ${r.broker_last}`.trim()
+              : null,
+          })),
+        });
+      }
+    }
+
+    // Check if client exists (never arbitrary LIMIT 1 when email is shared)
+    const existingResolve = await resolveClientByEmailSafe(
+      connection,
+      MORTGAGE_TENANT_ID,
+      client_email,
+      {
+        ownerBrokerId: crmFlags.activeForBroker ? loanBrokerUserId : null,
+      },
+    );
+    if (existingResolve.ambiguous) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        error: "ambiguous_client_email",
+        message:
+          "Multiple client records share this email. Open an existing loan for the correct owner, or contact support.",
+        match_count: existingResolve.matchCount,
+      });
+    }
+    let existingClients = existingResolve.client
+      ? [{ id: existingResolve.client.id }]
+      : [];
 
     let clientId: number;
 
@@ -16305,17 +19863,26 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       const canUseExistingClient =
         requesterRole === "platform_owner" ||
         currentAssigned == null ||
-        Number(currentAssigned) === brokerId;
+        Number(currentAssigned) === brokerId ||
+        Number(currentAssigned) === loanBrokerUserId;
       if (!canUseExistingClient) {
-        await connection.rollback();
-        return res.status(403).json({
-          success: false,
-          error:
-            "This client is assigned to another broker. You cannot create a loan for them.",
-        });
+        // Per-owner CRM: fall through and create a new client row for this owner
+        if (!crmFlags.activeForBroker) {
+          await connection.rollback();
+          return res.status(403).json({
+            success: false,
+            error:
+              "This client is assigned to another broker. You cannot create a loan for them.",
+          });
+        }
+        existingClients = [];
       }
+    }
+
+    if (existingClients.length > 0) {
+      clientId = existingClients[0].id;
       await connection.query(
-        `UPDATE clients SET first_name=?, middle_name=?, last_name=?, phone=?,
+        `UPDATE clients SET first_name=?, middle_name=?, last_name=?, phone=?, normalized_phone=?,
           address_street=?, address_unit=?, address_city=?, address_state=?, address_zip=?,
           assigned_broker_id=? WHERE id=? AND tenant_id=?`,
         [
@@ -16323,6 +19890,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
           client_middle_name || null,
           client_last_name,
           client_phone,
+          clientPhoneNorm.length === 10 ? clientPhoneNorm : null,
           client_address_street || null,
           client_address_unit || null,
           client_address_city || null,
@@ -16337,10 +19905,10 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       // Create new client
       const [clientResult] = await connection.query<any>(
         `INSERT INTO clients
-          (tenant_id, email, first_name, middle_name, last_name, phone,
+          (tenant_id, email, first_name, middle_name, last_name, phone, normalized_phone,
            address_street, address_unit, address_city, address_state, address_zip,
            status, email_verified, assigned_broker_id, source)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',0,?,'broker_created')`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active',0,?,'broker_created')`,
         [
           MORTGAGE_TENANT_ID,
           client_email,
@@ -16348,6 +19916,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
           client_middle_name || null,
           client_last_name,
           client_phone,
+          clientPhoneNorm.length === 10 ? clientPhoneNorm : null,
           client_address_street || null,
           client_address_unit || null,
           client_address_city || null,
@@ -16456,10 +20025,7 @@ const handleCreateLoan: RequestHandler = async (req, res) => {
       "manual_create",
       loanBrokerUserId,
     ).catch((err) =>
-      console.error(
-        "Reminder flow trigger error (manual loan create):",
-        err,
-      ),
+      console.error("Reminder flow trigger error (manual loan create):", err),
     );
 
     res.json({
@@ -16529,6 +20095,9 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       employment_status,
       employer_name,
       years_employed,
+      employer_phone,
+      employer_address,
+      employment_start_date,
       marital_status,
       dependent_count,
       years_at_address,
@@ -16552,10 +20121,37 @@ const handlePublicApply: RequestHandler = async (req, res) => {
     const dp = parseFloat(down_payment) || 0;
     const loan_amount = propVal > dp ? propVal - dp : propVal || 100000;
 
-    // Upsert client (keyed by email + tenant)
-    const [existingClients] = await connection.query<any[]>(
-      "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
-      [email.toLowerCase().trim(), MORTGAGE_TENANT_ID],
+    // Resolve broker from share link FIRST so client upsert is owner-scoped
+    let resolvedBrokerUserId: number | null = null;
+    let resolvedPartnerBrokerId: number | null = null;
+    if (broker_token) {
+      const tokenField = isUUIDToken(broker_token) ? "public_token" : "slug";
+      const [brokerRows] = await connection.query<any[]>(
+        `SELECT id, role, created_by_broker_id FROM brokers WHERE ${tokenField} = ? AND status = 'active'`,
+        [broker_token],
+      );
+      if (brokerRows.length > 0) {
+        const { id: bkId, role: bkRole, created_by_broker_id } = brokerRows[0];
+        if (bkRole === "admin") {
+          resolvedBrokerUserId = bkId;
+        } else {
+          resolvedPartnerBrokerId = bkId;
+          if (created_by_broker_id) {
+            resolvedBrokerUserId = created_by_broker_id;
+          }
+        }
+      }
+    }
+    const clientOwnerBrokerId =
+      resolvedBrokerUserId ?? resolvedPartnerBrokerId ?? null;
+
+    // Upsert client scoped to share-link owner (per-owner CRM safe)
+    const normalizedWizardEmail = email.toLowerCase().trim();
+    const existingResolve = await resolveClientByEmailSafe(
+      connection,
+      MORTGAGE_TENANT_ID,
+      normalizedWizardEmail,
+      { ownerBrokerId: clientOwnerBrokerId },
     );
 
     let clientId: number;
@@ -16575,8 +20171,8 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         ? citizenship_status
         : null;
 
-    if (existingClients.length > 0) {
-      clientId = existingClients[0].id;
+    if (existingResolve.client) {
+      clientId = existingResolve.client.id as number;
       await connection.query(
         `UPDATE clients SET first_name=?, middle_name=?, last_name=?, phone=?,
           address_street=?, address_unit=?, address_city=?, address_state=?, address_zip=?,
@@ -16600,7 +20196,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           annual_income || null,
           credit_score_range ? toSqlOptionalInt(credit_score_range) : null,
           resolvedCitizenshipStatus,
-          null, // placeholder; will be replaced after broker resolves
+          clientOwnerBrokerId,
           clientId,
           MORTGAGE_TENANT_ID,
         ],
@@ -16615,7 +20211,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',0,'public_wizard')`,
         [
           MORTGAGE_TENANT_ID,
-          email.toLowerCase().trim(),
+          normalizedWizardEmail,
           first_name,
           middle_name || null,
           last_name,
@@ -16630,7 +20226,7 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           annual_income || null,
           credit_score_range ? toSqlOptionalInt(credit_score_range) : null,
           resolvedCitizenshipStatus,
-          null, // placeholder; will be filled after broker resolves
+          clientOwnerBrokerId,
         ],
       );
       clientId = clientResult.insertId;
@@ -16656,37 +20252,11 @@ const handlePublicApply: RequestHandler = async (req, res) => {
         ? property_type
         : null;
 
-    // Resolve broker from share link token (if provided).
-    // Admin brokers (Mortgage Bankers) are assigned as broker_user_id.
-    // Partner brokers (role='broker') are assigned as partner_broker_id.
-    let resolvedBrokerUserId: number | null = null;
-    let resolvedPartnerBrokerId: number | null = null;
-    if (broker_token) {
-      const tokenField = isUUIDToken(broker_token) ? "public_token" : "slug";
-      const [brokerRows] = await connection.query<any[]>(
-        `SELECT id, role, created_by_broker_id FROM brokers WHERE ${tokenField} = ? AND status = 'active'`,
-        [broker_token],
-      );
-      if (brokerRows.length > 0) {
-        const { id: bkId, role: bkRole, created_by_broker_id } = brokerRows[0];
-        if (bkRole === "admin") {
-          resolvedBrokerUserId = bkId;
-        } else {
-          // Partner broker — assign them as partner and their parent MB as the mortgage banker
-          resolvedPartnerBrokerId = bkId;
-          if (created_by_broker_id) {
-            resolvedBrokerUserId = created_by_broker_id;
-          }
-        }
-      }
-    }
-
-    // Assign broker/partner to this client
-    const clientBrokerId = resolvedBrokerUserId ?? resolvedPartnerBrokerId;
-    if (clientBrokerId) {
+    // Assign broker/partner to this client (already set on insert when possible)
+    if (clientOwnerBrokerId) {
       await connection.query(
         `UPDATE clients SET assigned_broker_id = COALESCE(assigned_broker_id, ?) WHERE id = ? AND tenant_id = ?`,
-        [clientBrokerId, clientId, MORTGAGE_TENANT_ID],
+        [clientOwnerBrokerId, clientId, MORTGAGE_TENANT_ID],
       );
     }
 
@@ -16736,6 +20306,9 @@ const handlePublicApply: RequestHandler = async (req, res) => {
             employment_status = COALESCE(?, employment_status),
             employer_name = COALESCE(NULLIF(?, ''), employer_name),
             years_employed = COALESCE(NULLIF(?, ''), years_employed),
+            employer_phone = COALESCE(NULLIF(?, ''), employer_phone),
+            employer_address = COALESCE(NULLIF(?, ''), employer_address),
+            employment_start_date = COALESCE(?, employment_start_date),
             broker_token = COALESCE(broker_token, ?),
             status = 'application_received',
             current_step = 1,
@@ -16759,6 +20332,9 @@ const handlePublicApply: RequestHandler = async (req, res) => {
             resolvedEmploymentStatus,
             employer_name || null,
             years_employed || null,
+            employer_phone || null,
+            employer_address || null,
+            employment_start_date || null,
             broker_token || null,
             applicationId,
             MORTGAGE_TENANT_ID,
@@ -16776,10 +20352,11 @@ const handlePublicApply: RequestHandler = async (req, res) => {
            loan_type, loan_amount, property_value, property_address, property_unit,
            property_city, property_state, property_zip, property_type,
            down_payment, loan_purpose, employment_status, employer_name,
-           years_employed, marital_status, dependent_count, years_at_address,
+           years_employed, employer_phone, employer_address, employment_start_date,
+           marital_status, dependent_count, years_at_address,
            status, current_step, total_steps,
            priority, broker_token, citizenship_status, submitted_at)
-         VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,NOW())`,
+         VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'application_received',1,8,'medium',?,?,NOW())`,
         [
           MORTGAGE_TENANT_ID,
           applicationNumber,
@@ -16800,6 +20377,9 @@ const handlePublicApply: RequestHandler = async (req, res) => {
           resolvedEmploymentStatus,
           employer_name || null,
           years_employed || null,
+          employer_phone || null,
+          employer_address || null,
+          employment_start_date || null,
           marital_status || null,
           toSqlOptionalInt(dependent_count),
           toSqlOptionalFloat(years_at_address),
@@ -16990,6 +20570,23 @@ const handlePublicApply: RequestHandler = async (req, res) => {
       actionUrl: `/admin/clients/${clientId}`,
     });
 
+    // Email assigned banker/partner (share-link submit). Bell alone was not enough —
+    // partners expect inbox alerts like voicemail. Await so Vercel does not freeze
+    // the isolate before Resend completes; never fails the apply response.
+    if (uniqueFiniteBrokerIdsInline(targetBrokerIds).length > 0) {
+      await sendBrokerNewPublicApplicationEmail({
+        brokerIds: targetBrokerIds,
+        clientFirstName: first_name,
+        clientLastName: last_name,
+        clientEmail: String(email).toLowerCase().trim(),
+        clientPhone: phone || null,
+        applicationNumber,
+        applicationId,
+        clientId,
+        loanType: resolvedLoanType || loan_type || null,
+      });
+    }
+
     // Trigger Application Received reminder flow (non-fatal)
     const publicFlowBrokerId =
       resolvedBrokerUserId ?? resolvedPartnerBrokerId ?? null;
@@ -17057,6 +20654,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
       employment_status,
       employer_name,
       years_employed,
+      employer_phone,
+      employer_address,
+      employment_start_date,
       broker_token,
       wizard_step,
     } = req.body;
@@ -17071,59 +20671,7 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
 
     const normalizedEmail = String(email).toLowerCase().trim();
 
-    // Upsert client
-    const [existingClients] = await connection.query<any[]>(
-      "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
-      [normalizedEmail, MORTGAGE_TENANT_ID],
-    );
-
-    let clientId: number;
-    if (existingClients.length > 0) {
-      clientId = existingClients[0].id;
-      await connection.query(
-        `UPDATE clients SET first_name = ?, last_name = ?,
-          phone = COALESCE(?, phone),
-          address_street = COALESCE(NULLIF(?, ''), address_street),
-          address_city   = COALESCE(NULLIF(?, ''), address_city),
-          address_state  = COALESCE(NULLIF(?, ''), address_state),
-          address_zip    = COALESCE(NULLIF(?, ''), address_zip),
-          updated_at = NOW()
-         WHERE id = ? AND tenant_id = ?`,
-        [
-          first_name,
-          last_name,
-          phone || null,
-          address_street || null,
-          address_city || null,
-          address_state || null,
-          address_zip || null,
-          clientId,
-          MORTGAGE_TENANT_ID,
-        ],
-      );
-    } else {
-      const [clientResult] = await connection.query<any>(
-        `INSERT INTO clients
-          (tenant_id, email, first_name, last_name, phone,
-           address_street, address_city, address_state, address_zip,
-           status, email_verified, source, password_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 'public_wizard', NULL)`,
-        [
-          MORTGAGE_TENANT_ID,
-          normalizedEmail,
-          first_name,
-          last_name,
-          phone || null,
-          address_street || null,
-          address_city || null,
-          address_state || null,
-          address_zip || null,
-        ],
-      );
-      clientId = clientResult.insertId;
-    }
-
-    // Resolve broker from share link token
+    // Resolve broker from share link FIRST for owner-scoped client upsert
     let resolvedBrokerUserId: number | null = null;
     let resolvedPartnerBrokerId: number | null = null;
     if (broker_token) {
@@ -17141,6 +20689,64 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
           if (created_by_broker_id) resolvedBrokerUserId = created_by_broker_id;
         }
       }
+    }
+    const draftOwnerBrokerId =
+      resolvedBrokerUserId ?? resolvedPartnerBrokerId ?? null;
+
+    const existingResolve = await resolveClientByEmailSafe(
+      connection,
+      MORTGAGE_TENANT_ID,
+      normalizedEmail,
+      { ownerBrokerId: draftOwnerBrokerId },
+    );
+
+    let clientId: number;
+    if (existingResolve.client) {
+      clientId = existingResolve.client.id as number;
+      await connection.query(
+        `UPDATE clients SET first_name = ?, last_name = ?,
+          phone = COALESCE(?, phone),
+          address_street = COALESCE(NULLIF(?, ''), address_street),
+          address_city   = COALESCE(NULLIF(?, ''), address_city),
+          address_state  = COALESCE(NULLIF(?, ''), address_state),
+          address_zip    = COALESCE(NULLIF(?, ''), address_zip),
+          assigned_broker_id = COALESCE(assigned_broker_id, ?),
+          updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          first_name,
+          last_name,
+          phone || null,
+          address_street || null,
+          address_city || null,
+          address_state || null,
+          address_zip || null,
+          draftOwnerBrokerId,
+          clientId,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+    } else {
+      const [clientResult] = await connection.query<any>(
+        `INSERT INTO clients
+          (tenant_id, email, first_name, last_name, phone,
+           address_street, address_city, address_state, address_zip,
+           assigned_broker_id, status, email_verified, source, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 'public_wizard', NULL)`,
+        [
+          MORTGAGE_TENANT_ID,
+          normalizedEmail,
+          first_name,
+          last_name,
+          phone || null,
+          address_street || null,
+          address_city || null,
+          address_state || null,
+          address_zip || null,
+          draftOwnerBrokerId,
+        ],
+      );
+      clientId = clientResult.insertId;
     }
 
     const resolvedLoanType =
@@ -17213,6 +20819,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
             employment_status = COALESCE(?, employment_status),
             employer_name = COALESCE(NULLIF(?, ''), employer_name),
             years_employed = COALESCE(NULLIF(?, ''), years_employed),
+            employer_phone = COALESCE(NULLIF(?, ''), employer_phone),
+            employer_address = COALESCE(NULLIF(?, ''), employer_address),
+            employment_start_date = COALESCE(?, employment_start_date),
             current_step = ?,
             updated_at = NOW()
            WHERE id = ? AND tenant_id = ?`,
@@ -17234,6 +20843,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
             resolvedEmploymentStatusDraft,
             employer_name || null,
             years_employed || null,
+            employer_phone || null,
+            employer_address || null,
+            employment_start_date || null,
             wizard_step || 1,
             applicationId,
             MORTGAGE_TENANT_ID,
@@ -17257,8 +20869,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
          loan_type, loan_amount, property_value, property_address, property_city,
          property_state, property_zip, property_type, down_payment, loan_purpose,
          employment_status, employer_name, years_employed,
+         employer_phone, employer_address, employment_start_date,
          status, current_step, total_steps, priority, broker_token, citizenship_status)
-       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft',?,8,'medium',?,?)`,
+       VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft',?,8,'medium',?,?)`,
       [
         MORTGAGE_TENANT_ID,
         applicationNumber,
@@ -17278,6 +20891,9 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
         resolvedEmploymentStatusDraft,
         employer_name || null,
         years_employed || null,
+        employer_phone || null,
+        employer_address || null,
+        employment_start_date || null,
         wizard_step || 1,
         broker_token || null,
         resolvedCitizenshipStatus,
@@ -17297,6 +20913,323 @@ const handlePublicSaveDraft: RequestHandler = async (req, res) => {
     res.status(500).json({ success: false, error: "Failed to save draft" });
   } finally {
     connection.release();
+  }
+};
+
+/**
+ * POST /api/apply/free-analysis
+ * Public Free Analysis via broker share link (same attribution model as /apply/:token).
+ * New contacts → client source `free_analysis` + draft loan (pipeline lead).
+ * Existing contacts → reuse client (no name overwrite); create draft only if they have no loans.
+ * CRM upsert commits and releases the pool connection before PDF parse/email work.
+ */
+const handlePublicFreeAnalysis: RequestHandler = async (req, res) => {
+  const file = (req as any).file as Express.Multer.File | undefined;
+  if (!file) {
+    res.status(400).json({
+      success: false,
+      error: "PDF file is required (application/pdf, max 4MB)",
+    });
+    return;
+  }
+  if (file.mimetype !== "application/pdf") {
+    res.status(400).json({
+      success: false,
+      error: "Only application/pdf is accepted",
+    });
+    return;
+  }
+  if (file.size > CREDIT_ANALYSIS_MAX_PDF_BYTES) {
+    res.status(400).json({
+      success: false,
+      error: "PDF must be 4MB or smaller",
+    });
+    return;
+  }
+
+  const broker_token = String(req.body.broker_token || "").trim();
+  const first_name = String(req.body.first_name || "").trim();
+  const last_name = String(req.body.last_name || "").trim();
+  const email = String(req.body.email || "")
+    .toLowerCase()
+    .trim();
+  const phoneRaw = String(req.body.phone || "").trim() || null;
+  const phoneNormRaw = normalizePhoneLast10(phoneRaw);
+  const phoneNorm = phoneNormRaw.length === 10 ? phoneNormRaw : null;
+  const language = req.body.language === "es" ? "es" : "en";
+  const goal =
+    String(req.body.goal || req.body.client_goal || "").trim() || null;
+  const emailOptIn =
+    req.body.email_opt_in === true ||
+    req.body.email_opt_in === "true" ||
+    req.body.email_opt_in === "1" ||
+    req.body.email_opt_in === 1;
+
+  if (!broker_token || !first_name || !last_name || !email) {
+    res.status(400).json({
+      success: false,
+      error: "broker_token, first_name, last_name, and email are required",
+    });
+    return;
+  }
+
+  let clientId = 0;
+  let isNewLead = false;
+  let draftCreated = false;
+  let draftId: number | null = null;
+  let applicationNumber: string | null = null;
+  let resolvedBrokerUserId: number | null = null;
+  let resolvedPartnerBrokerId: number | null = null;
+  let ownerBrokerId: number | null = null;
+  let repName = "Encore Mortgage";
+  /** Names used for analysis (never overwrite CRM names for existing clients). */
+  let analysisFirstName = first_name;
+  let analysisLastName = last_name;
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const tokenField = isUUIDToken(broker_token) ? "public_token" : "slug";
+    const [brokerRows] = await connection.query<any[]>(
+      `SELECT id, role, created_by_broker_id, first_name, last_name, status
+       FROM brokers WHERE ${tokenField} = ? AND status = 'active' LIMIT 1`,
+      [broker_token],
+    );
+    if (!brokerRows.length) {
+      await connection.rollback();
+      res.status(404).json({
+        success: false,
+        error: "Share link not found or inactive",
+      });
+      return;
+    }
+    const {
+      id: bkId,
+      role: bkRole,
+      created_by_broker_id,
+      first_name: bkFirst,
+      last_name: bkLast,
+    } = brokerRows[0];
+    repName = `${bkFirst || ""} ${bkLast || ""}`.trim() || "Encore Mortgage";
+    if (
+      bkRole === "admin" ||
+      bkRole === "superadmin" ||
+      bkRole === "platform_owner"
+    ) {
+      resolvedBrokerUserId = bkId;
+    } else {
+      resolvedPartnerBrokerId = bkId;
+      if (created_by_broker_id) resolvedBrokerUserId = created_by_broker_id;
+    }
+    ownerBrokerId = resolvedBrokerUserId ?? resolvedPartnerBrokerId ?? null;
+
+    const ensureClientAndMaybeDraft = async (): Promise<void> => {
+      const existingResolve = await resolveClientByEmailSafe(
+        connection,
+        MORTGAGE_TENANT_ID,
+        email,
+        { ownerBrokerId },
+      );
+
+      if (existingResolve.client) {
+        clientId = existingResolve.client.id as number;
+        isNewLead = false;
+        analysisFirstName =
+          String(existingResolve.client.first_name || "").trim() || first_name;
+        analysisLastName =
+          String(existingResolve.client.last_name || "").trim() || last_name;
+
+        // Do not overwrite name. Only fill empty phone / normalized_phone.
+        await connection.query(
+          `UPDATE clients SET
+             phone = CASE
+               WHEN (phone IS NULL OR TRIM(phone) = '') AND ? IS NOT NULL THEN ?
+               ELSE phone
+             END,
+             normalized_phone = CASE
+               WHEN (normalized_phone IS NULL OR TRIM(normalized_phone) = '') AND ? IS NOT NULL THEN ?
+               ELSE normalized_phone
+             END,
+             assigned_broker_id = COALESCE(assigned_broker_id, ?),
+             updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            phoneRaw,
+            phoneRaw,
+            phoneNorm,
+            phoneNorm,
+            ownerBrokerId,
+            clientId,
+            MORTGAGE_TENANT_ID,
+          ],
+        );
+
+        const [existingLoans] = await connection.query<any[]>(
+          `SELECT id FROM loan_applications
+           WHERE client_user_id = ? AND tenant_id = ?
+           LIMIT 1`,
+          [clientId, MORTGAGE_TENANT_ID],
+        );
+        if (existingLoans.length === 0) {
+          draftCreated = true;
+        }
+      } else {
+        isNewLead = true;
+        draftCreated = true;
+        try {
+          const [clientResult] = await connection.query<any>(
+            `INSERT INTO clients
+              (tenant_id, email, first_name, last_name, phone, normalized_phone,
+               income_type, assigned_broker_id, status, email_verified, source, password_hash)
+             VALUES (?, ?, ?, ?, ?, ?, 'W-2', ?, 'active', 0, 'free_analysis', NULL)`,
+            [
+              MORTGAGE_TENANT_ID,
+              email,
+              first_name,
+              last_name,
+              phoneRaw,
+              phoneNorm,
+              ownerBrokerId,
+            ],
+          );
+          clientId = clientResult.insertId;
+        } catch (insertErr) {
+          if (!isMysqlDuplicateError(insertErr)) throw insertErr;
+          // Race: another request created the same owner+email — reuse it.
+          const raced = await resolveClientByEmailSafe(
+            connection,
+            MORTGAGE_TENANT_ID,
+            email,
+            { ownerBrokerId },
+          );
+          if (!raced.client) throw insertErr;
+          clientId = raced.client.id as number;
+          isNewLead = false;
+          analysisFirstName =
+            String(raced.client.first_name || "").trim() || first_name;
+          analysisLastName =
+            String(raced.client.last_name || "").trim() || last_name;
+          const [existingLoans] = await connection.query<any[]>(
+            `SELECT id FROM loan_applications
+             WHERE client_user_id = ? AND tenant_id = ?
+             LIMIT 1`,
+            [clientId, MORTGAGE_TENANT_ID],
+          );
+          draftCreated = existingLoans.length === 0;
+        }
+      }
+
+      if (draftCreated) {
+        applicationNumber = `LA${Date.now().toString().slice(-8)}`;
+        const [loanResult] = await connection.query<any>(
+          `INSERT INTO loan_applications
+            (tenant_id, application_number, client_user_id, broker_user_id, partner_broker_id,
+             loan_type, loan_amount, status, current_step, total_steps, priority, broker_token, notes)
+           VALUES (?,?,?,?,?, 'purchase', 0, 'draft', 1, 8, 'medium', ?, ?)`,
+          [
+            MORTGAGE_TENANT_ID,
+            applicationNumber,
+            clientId,
+            resolvedBrokerUserId,
+            resolvedPartnerBrokerId,
+            broker_token,
+            "Lead created via Free Analysis share link",
+          ],
+        );
+        draftId = loanResult.insertId;
+      }
+    };
+
+    await ensureClientAndMaybeDraft();
+    await connection.commit();
+  } catch (error: any) {
+    try {
+      await connection.rollback();
+    } catch {
+      /* ignore */
+    }
+    console.error("[apply:free-analysis] CRM error:", error?.message || error);
+    if (isMysqlDuplicateError(error)) {
+      res.status(409).json({
+        success: false,
+        error:
+          "A client with this email already exists for this broker. Retry.",
+      });
+      return;
+    }
+    res.status(500).json({
+      success: false,
+      error: "Failed to save Free Analysis lead",
+    });
+    return;
+  } finally {
+    connection.release();
+  }
+
+  if (!clientId) {
+    // 404 already sent (inactive share link)
+    return;
+  }
+
+  try {
+    const analysis = await runAndPersistCreditAnalysis({
+      tenantId: MORTGAGE_TENANT_ID,
+      clientId,
+      brokerUserId: ownerBrokerId,
+      mode: "client",
+      language,
+      goal,
+      emailOptIn,
+      file,
+      clientFirstName: analysisFirstName,
+      clientLastName: analysisLastName,
+      clientEmail: email,
+      repName,
+    });
+
+    if (isNewLead || draftCreated) {
+      const targetBrokerIds = [
+        resolvedBrokerUserId,
+        resolvedPartnerBrokerId,
+      ].filter((id): id is number => typeof id === "number");
+      await createBrokerNotification({
+        brokerIds: targetBrokerIds.length ? targetBrokerIds : null,
+        notifyAllAdminsOnEmpty: targetBrokerIds.length === 0,
+        title: "New Free Analysis lead",
+        message: `${analysisFirstName} ${analysisLastName} completed Free Analysis${
+          applicationNumber ? ` (${applicationNumber})` : ""
+        }`,
+        category: "lead",
+        type: "success",
+        actionUrl: `/admin/free-analysis?clientId=${clientId}`,
+      });
+    }
+
+    res.json({
+      success: true,
+      analysis,
+      client_id: clientId,
+      is_new_lead: isNewLead || draftCreated,
+      draft_id: draftId,
+      application_number: applicationNumber,
+    });
+  } catch (error: any) {
+    console.error(
+      "[apply:free-analysis] analysis error:",
+      error?.message || error,
+    );
+    if (error?.code === "LIMIT_FILE_SIZE") {
+      res.status(400).json({
+        success: false,
+        error: "PDF must be 4MB or smaller",
+      });
+      return;
+    }
+    res.status(500).json({
+      success: false,
+      error: "Failed to generate free analysis",
+    });
   }
 };
 
@@ -17678,12 +21611,14 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
 
     // Track this outbound email as a conversation if the recipient is an existing client
     if (shareLinkSendResult.success) {
-      const [existingClientRows] = await pool.query<RowDataPacket[]>(
-        "SELECT id FROM clients WHERE email = ? AND tenant_id = ?",
-        [client_email, MORTGAGE_TENANT_ID],
+      const emailHit = await resolveClientByEmailSafe(
+        pool,
+        MORTGAGE_TENANT_ID,
+        client_email,
+        { ownerBrokerId: brokerId },
       );
-      if (existingClientRows.length > 0) {
-        const foundClientId = existingClientRows[0].id;
+      if (emailHit.client) {
+        const foundClientId = emailHit.client.id as number;
         const convId = `conv_client_${foundClientId}`;
         await pool.query(
           `INSERT INTO communications
@@ -17730,6 +21665,968 @@ const handleSendShareLinkEmail: RequestHandler = async (req, res) => {
 /**
  * Get all loan applications (pipeline)
  */
+
+// ─── Broker calculator saves (CRM-linked) ─────────────────────────────────────
+// Pure note formatters inlined for Vercel serverless (keep in sync with
+// shared/calculator-save-note.ts). Do NOT import from shared/ at runtime.
+
+type CalculatorSaveKindInline =
+  | "fha"
+  | "va"
+  | "conventional"
+  | "investment"
+  | "mobile_home"
+  | "income";
+
+const CALCULATOR_SAVE_KINDS: CalculatorSaveKindInline[] = [
+  "fha",
+  "va",
+  "conventional",
+  "investment",
+  "mobile_home",
+  "income",
+];
+
+function calculatorKindLabelInline(kind: string): string {
+  switch (kind) {
+    case "fha":
+      return "FHA";
+    case "va":
+      return "VA";
+    case "conventional":
+      return "Conventional";
+    case "investment":
+      return "Investment Property";
+    case "mobile_home":
+      return "Mobile Home";
+    case "income":
+      return "Wage Earner Income";
+    default:
+      return String(kind);
+  }
+}
+
+function calculatorNoteMoneyInline(n: unknown): string {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(v);
+}
+
+function calculatorNotePctInline(n: unknown): string {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return `${v.toFixed(3)}%`;
+}
+
+function formatCalculatorApplyNoteInline(input: {
+  kind: string;
+  title: string;
+  summary?: Record<string, unknown> | null;
+  payload?: Record<string, unknown> | null;
+  savedAt?: string | Date | null;
+  brokerName?: string | null;
+}): string {
+  const when = input.savedAt
+    ? new Date(input.savedAt).toLocaleString("en-US")
+    : new Date().toLocaleString("en-US");
+  const kindLabel = calculatorKindLabelInline(input.kind);
+  const summary = input.summary ?? {};
+  const payload = input.payload ?? {};
+  const lines: string[] = [
+    "——— Calculator snapshot ———",
+    `Kind: ${kindLabel}`,
+    `Title: ${input.title || "(untitled)"}`,
+    `Saved: ${when}`,
+  ];
+  if (input.brokerName?.trim()) {
+    lines.push(`By: ${input.brokerName.trim()}`);
+  }
+  if (input.kind === "income") {
+    const household =
+      summary.household_total ??
+      summary.householdTotal ??
+      (payload as { householdTotal?: number }).householdTotal;
+    lines.push(
+      `Household qualifying income (mo): ${calculatorNoteMoneyInline(household)}`,
+    );
+    const borrowers = Array.isArray(
+      (payload as { borrowers?: unknown }).borrowers,
+    )
+      ? (payload as { borrowers: Array<{ name?: string }> }).borrowers
+      : [];
+    borrowers.forEach((b, i) => {
+      const name = (b?.name ?? "").trim() || `Borrower ${i + 1}`;
+      lines.push(`  · ${name}`);
+    });
+  } else {
+    const sales =
+      summary.sales_price ??
+      summary.salesPrice ??
+      (payload as { salesPrice?: number }).salesPrice;
+    const payment =
+      summary.total_monthly_payment ??
+      summary.totalMonthlyPayment ??
+      summary.payment;
+    const loanAmt =
+      summary.total_loan ??
+      summary.totalLoan ??
+      (payload as { totalLoan?: number }).totalLoan;
+    const rate =
+      summary.interest_rate ??
+      summary.interestRate ??
+      (payload as { interestRate?: number }).interestRate;
+    const ltv = summary.ltv;
+    const front = summary.front_end_ratio ?? summary.frontEndRatio;
+    const back = summary.back_end_ratio ?? summary.backEndRatio;
+    lines.push(`Sales price: ${calculatorNoteMoneyInline(sales)}`);
+    if (loanAmt != null)
+      lines.push(`Total loan: ${calculatorNoteMoneyInline(loanAmt)}`);
+    if (rate != null) lines.push(`Rate: ${calculatorNotePctInline(rate)}`);
+    if (payment != null)
+      lines.push(`Est. monthly payment: ${calculatorNoteMoneyInline(payment)}`);
+    if (ltv != null) lines.push(`LTV: ${calculatorNotePctInline(ltv)}`);
+    if (front != null || back != null) {
+      lines.push(
+        `DTI: front ${front != null ? calculatorNotePctInline(front) : "—"} / back ${back != null ? calculatorNotePctInline(back) : "—"}`,
+      );
+    }
+  }
+  lines.push("——— end snapshot ———");
+  return lines.join("\n");
+}
+
+function appendCalculatorNoteToLoanNotesInline(
+  existingNotes: string | null | undefined,
+  snapshotBlock: string,
+): string {
+  const prev = (existingNotes ?? "").trimEnd();
+  if (!prev) return snapshotBlock;
+  return `${prev}\n\n${snapshotBlock}`;
+}
+
+function parseJsonColumnInline(value: unknown): unknown {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value;
+}
+
+function mapCalculatorSaveRow(row: RowDataPacket) {
+  return {
+    id: row.id as number,
+    tenant_id: row.tenant_id as number,
+    broker_id: row.broker_id as number,
+    client_id: row.client_id as number,
+    loan_application_id: (row.loan_application_id as number | null) ?? null,
+    kind: row.kind as CalculatorSaveKindInline,
+    title: row.title as string,
+    summary_json: parseJsonColumnInline(row.summary_json) as Record<
+      string,
+      unknown
+    > | null,
+    payload_json: (parseJsonColumnInline(row.payload_json) ?? {}) as Record<
+      string,
+      unknown
+    >,
+    borrower_client_ids: parseJsonColumnInline(
+      row.borrower_client_ids,
+    ) as Array<number | null> | null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    client_first_name: row.client_first_name ?? null,
+    client_last_name: row.client_last_name ?? null,
+    client_email: row.client_email ?? null,
+    client_phone: row.client_phone ?? null,
+    broker_first_name: row.broker_first_name ?? null,
+    broker_last_name: row.broker_last_name ?? null,
+    application_number: row.application_number ?? null,
+  };
+}
+
+/** Client access for calculator saves: PO any; else assigned_broker_id = me (or legacy loan path). */
+async function assertCalculatorClientAccess(
+  clientId: number,
+  brokerId: number,
+  brokerRole: string,
+): Promise<
+  | { ok: true; client: RowDataPacket }
+  | { ok: false; status: number; error: string }
+> {
+  const [[client]] = await pool.query<RowDataPacket[]>(
+    `SELECT id, assigned_broker_id, list_visibility, first_name, last_name, email, phone
+       FROM clients
+      WHERE id = ? AND tenant_id = ?
+      LIMIT 1`,
+    [clientId, MORTGAGE_TENANT_ID],
+  );
+  if (!client) {
+    return { ok: false, status: 404, error: "Client not found" };
+  }
+  if (brokerRole === "platform_owner") {
+    return { ok: true, client };
+  }
+  const crmFlags = await getPerOwnerCrmFlags(
+    pool,
+    MORTGAGE_TENANT_ID,
+    brokerId,
+  );
+  if (crmFlags.activeForBroker) {
+    if (
+      Number(client.assigned_broker_id) !== brokerId ||
+      client.list_visibility !== "active"
+    ) {
+      return { ok: false, status: 403, error: "Access denied" };
+    }
+    return { ok: true, client };
+  }
+  if (Number(client.assigned_broker_id) === brokerId) {
+    return { ok: true, client };
+  }
+  const [[access]] = await pool.query<RowDataPacket[]>(
+    `SELECT 1 FROM loan_applications
+      WHERE client_user_id = ? AND tenant_id = ?
+        AND (broker_user_id = ? OR partner_broker_id = ?)
+      LIMIT 1`,
+    [clientId, MORTGAGE_TENANT_ID, brokerId, brokerId],
+  );
+  if (!access) {
+    return { ok: false, status: 403, error: "Access denied" };
+  }
+  return { ok: true, client };
+}
+
+async function assertCalculatorSaveAccess(
+  saveId: number,
+  brokerId: number,
+  brokerRole: string,
+): Promise<
+  | { ok: true; row: RowDataPacket }
+  | { ok: false; status: number; error: string }
+> {
+  const [[row]] = await pool.query<RowDataPacket[]>(
+    `SELECT bcs.*,
+            c.first_name AS client_first_name, c.last_name AS client_last_name,
+            c.email AS client_email, c.phone AS client_phone,
+            b.first_name AS broker_first_name, b.last_name AS broker_last_name,
+            la.application_number
+       FROM broker_calculator_saves bcs
+       JOIN clients c ON c.id = bcs.client_id AND c.tenant_id = bcs.tenant_id
+       JOIN brokers b ON b.id = bcs.broker_id AND b.tenant_id = bcs.tenant_id
+       LEFT JOIN loan_applications la ON la.id = bcs.loan_application_id
+      WHERE bcs.id = ? AND bcs.tenant_id = ?
+      LIMIT 1`,
+    [saveId, MORTGAGE_TENANT_ID],
+  );
+  if (!row) {
+    return { ok: false, status: 404, error: "Calculator save not found" };
+  }
+  if (brokerRole === "platform_owner") {
+    return { ok: true, row };
+  }
+  if (Number(row.broker_id) !== brokerId) {
+    return { ok: false, status: 403, error: "Access denied" };
+  }
+  return { ok: true, row };
+}
+
+/**
+ * GET /api/calculator-saves
+ * PO: all tenant saves. Admin/broker: own broker_id only.
+ */
+const handleListCalculatorSaves: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const isPO = brokerRole === "platform_owner";
+    const {
+      page = "1",
+      limit = "25",
+      q,
+      kind,
+      client_id,
+      loan_id,
+      broker_id,
+      sortBy = "updated_at",
+      sortOrder = "DESC",
+    } = req.query;
+
+    let where = "WHERE bcs.tenant_id = ?";
+    const params: unknown[] = [MORTGAGE_TENANT_ID];
+
+    if (isPO) {
+      if (broker_id != null && String(broker_id).trim() !== "") {
+        const bid = parseInt(String(broker_id), 10);
+        if (Number.isFinite(bid)) {
+          where += " AND bcs.broker_id = ?";
+          params.push(bid);
+        }
+      }
+    } else {
+      where += " AND bcs.broker_id = ?";
+      params.push(brokerId);
+    }
+
+    if (kind && kind !== "all") {
+      if (!CALCULATOR_SAVE_KINDS.includes(kind as CalculatorSaveKindInline)) {
+        return res.status(400).json({ success: false, error: "Invalid kind" });
+      }
+      where += " AND bcs.kind = ?";
+      params.push(kind);
+    }
+
+    if (client_id != null && String(client_id).trim() !== "") {
+      const cid = parseInt(String(client_id), 10);
+      if (Number.isFinite(cid)) {
+        where += " AND bcs.client_id = ?";
+        params.push(cid);
+      }
+    }
+
+    if (loan_id != null && String(loan_id).trim() !== "") {
+      const lid = parseInt(String(loan_id), 10);
+      if (Number.isFinite(lid)) {
+        where += " AND bcs.loan_application_id = ?";
+        params.push(lid);
+      }
+    }
+
+    if (q && String(q).trim()) {
+      const term = `%${String(q).trim()}%`;
+      where += ` AND (
+        bcs.title LIKE ? OR
+        c.first_name LIKE ? OR
+        c.last_name LIKE ? OR
+        CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR
+        la.application_number LIKE ?
+      )`;
+      params.push(term, term, term, term, term);
+    }
+
+    const validSort = ["updated_at", "created_at", "title", "kind"];
+    const sortCol = validSort.includes(String(sortBy))
+      ? String(sortBy)
+      : "updated_at";
+    const order = String(sortOrder).toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+    const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+    const limitNum = Math.min(
+      100,
+      Math.max(1, parseInt(String(limit), 10) || 25),
+    );
+    const offset = (pageNum - 1) * limitNum;
+
+    const [[countRow]] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS total
+         FROM broker_calculator_saves bcs
+         JOIN clients c ON c.id = bcs.client_id AND c.tenant_id = bcs.tenant_id
+         LEFT JOIN loan_applications la ON la.id = bcs.loan_application_id
+       ${where}`,
+      params,
+    );
+    const total = Number(countRow?.total ?? 0);
+    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT bcs.*,
+              c.first_name AS client_first_name, c.last_name AS client_last_name,
+              c.email AS client_email, c.phone AS client_phone,
+              b.first_name AS broker_first_name, b.last_name AS broker_last_name,
+              la.application_number
+         FROM broker_calculator_saves bcs
+         JOIN clients c ON c.id = bcs.client_id AND c.tenant_id = bcs.tenant_id
+         JOIN brokers b ON b.id = bcs.broker_id AND b.tenant_id = bcs.tenant_id
+         LEFT JOIN loan_applications la ON la.id = bcs.loan_application_id
+       ${where}
+       ORDER BY bcs.${sortCol} ${order}
+       LIMIT ? OFFSET ?`,
+      [...params, limitNum, offset],
+    );
+
+    return res.json({
+      success: true,
+      saves: rows.map(mapCalculatorSaveRow),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
+      },
+    });
+  } catch (error) {
+    console.error("[calculator-saves] list error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to list calculator saves",
+    });
+  }
+};
+
+/**
+ * POST /api/calculator-saves
+ * client_id required; loan_application_id optional.
+ */
+const handleCreateCalculatorSave: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const body = req.body ?? {};
+    const clientId = parseInt(String(body.client_id), 10);
+    if (!Number.isFinite(clientId)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "client_id is required" });
+    }
+    const kind = body.kind as string;
+    if (!CALCULATOR_SAVE_KINDS.includes(kind as CalculatorSaveKindInline)) {
+      return res.status(400).json({ success: false, error: "Invalid kind" });
+    }
+    const title = String(body.title ?? "").trim();
+    if (!title) {
+      return res
+        .status(400)
+        .json({ success: false, error: "title is required" });
+    }
+    if (
+      body.payload_json == null ||
+      typeof body.payload_json !== "object" ||
+      Array.isArray(body.payload_json)
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, error: "payload_json is required" });
+    }
+
+    const clientAccess = await assertCalculatorClientAccess(
+      clientId,
+      brokerId,
+      brokerRole,
+    );
+    if (clientAccess.ok === false) {
+      return res
+        .status(clientAccess.status)
+        .json({ success: false, error: clientAccess.error });
+    }
+
+    let loanId: number | null = null;
+    if (
+      body.loan_application_id != null &&
+      String(body.loan_application_id).trim() !== ""
+    ) {
+      loanId = parseInt(String(body.loan_application_id), 10);
+      if (!Number.isFinite(loanId)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid loan_application_id" });
+      }
+      const loanAccess = await assertLoanAccess(brokerId, brokerRole, loanId);
+      if (loanAccess.ok === false) {
+        return res
+          .status(loanAccess.status)
+          .json({ success: false, error: loanAccess.error });
+      }
+      const [[loanClient]] = await pool.query<RowDataPacket[]>(
+        `SELECT client_user_id FROM loan_applications
+          WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [loanId, MORTGAGE_TENANT_ID],
+      );
+      if (!loanClient || Number(loanClient.client_user_id) !== clientId) {
+        return res.status(400).json({
+          success: false,
+          error: "Loan does not belong to the selected client",
+        });
+      }
+    }
+
+    const [result] = await pool.query<ResultSetHeader>(
+      `INSERT INTO broker_calculator_saves
+         (tenant_id, broker_id, client_id, loan_application_id, kind, title,
+          summary_json, payload_json, borrower_client_ids)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        clientId,
+        loanId,
+        kind,
+        title.slice(0, 255),
+        body.summary_json != null ? JSON.stringify(body.summary_json) : null,
+        JSON.stringify(body.payload_json),
+        body.borrower_client_ids != null
+          ? JSON.stringify(body.borrower_client_ids)
+          : null,
+      ],
+    );
+
+    // Creator always owns the new row
+    const [[row]] = await pool.query<RowDataPacket[]>(
+      `SELECT bcs.*,
+              c.first_name AS client_first_name, c.last_name AS client_last_name,
+              c.email AS client_email, c.phone AS client_phone,
+              b.first_name AS broker_first_name, b.last_name AS broker_last_name,
+              la.application_number
+         FROM broker_calculator_saves bcs
+         JOIN clients c ON c.id = bcs.client_id AND c.tenant_id = bcs.tenant_id
+         JOIN brokers b ON b.id = bcs.broker_id AND b.tenant_id = bcs.tenant_id
+         LEFT JOIN loan_applications la ON la.id = bcs.loan_application_id
+        WHERE bcs.id = ? AND bcs.tenant_id = ?
+        LIMIT 1`,
+      [result.insertId, MORTGAGE_TENANT_ID],
+    );
+
+    return res.status(201).json({
+      success: true,
+      save: mapCalculatorSaveRow(row),
+    });
+  } catch (error) {
+    console.error("[calculator-saves] create error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to create calculator save",
+    });
+  }
+};
+
+const handleGetCalculatorSave: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: "Invalid id" });
+    }
+    const access = await assertCalculatorSaveAccess(id, brokerId, brokerRole);
+    if (access.ok === false) {
+      return res
+        .status(access.status)
+        .json({ success: false, error: access.error });
+    }
+    return res.json({ success: true, save: mapCalculatorSaveRow(access.row) });
+  } catch (error) {
+    console.error("[calculator-saves] get error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to load calculator save",
+    });
+  }
+};
+
+const handleUpdateCalculatorSave: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: "Invalid id" });
+    }
+    const access = await assertCalculatorSaveAccess(id, brokerId, brokerRole);
+    if (access.ok === false) {
+      return res
+        .status(access.status)
+        .json({ success: false, error: access.error });
+    }
+
+    const body = req.body ?? {};
+    const updates: string[] = [];
+    const values: unknown[] = [];
+
+    if (body.client_id != null) {
+      const clientId = parseInt(String(body.client_id), 10);
+      if (!Number.isFinite(clientId)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid client_id" });
+      }
+      const clientAccess = await assertCalculatorClientAccess(
+        clientId,
+        brokerId,
+        brokerRole,
+      );
+      if (clientAccess.ok === false) {
+        return res
+          .status(clientAccess.status)
+          .json({ success: false, error: clientAccess.error });
+      }
+      updates.push("client_id = ?");
+      values.push(clientId);
+    }
+
+    if (body.loan_application_id !== undefined) {
+      if (
+        body.loan_application_id == null ||
+        String(body.loan_application_id).trim() === ""
+      ) {
+        updates.push("loan_application_id = NULL");
+      } else {
+        const loanId = parseInt(String(body.loan_application_id), 10);
+        if (!Number.isFinite(loanId)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid loan_application_id" });
+        }
+        const loanAccess = await assertLoanAccess(brokerId, brokerRole, loanId);
+        if (loanAccess.ok === false) {
+          return res
+            .status(loanAccess.status)
+            .json({ success: false, error: loanAccess.error });
+        }
+        const effectiveClientId =
+          body.client_id != null
+            ? parseInt(String(body.client_id), 10)
+            : Number(access.row.client_id);
+        const [[loanClient]] = await pool.query<RowDataPacket[]>(
+          `SELECT client_user_id FROM loan_applications
+            WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [loanId, MORTGAGE_TENANT_ID],
+        );
+        if (
+          !loanClient ||
+          Number(loanClient.client_user_id) !== effectiveClientId
+        ) {
+          return res.status(400).json({
+            success: false,
+            error: "Loan does not belong to the selected client",
+          });
+        }
+        updates.push("loan_application_id = ?");
+        values.push(loanId);
+      }
+    } else if (body.client_id != null) {
+      // Client changed without an explicit loan update — keep or clear loan
+      const existingLoanId = access.row.loan_application_id
+        ? Number(access.row.loan_application_id)
+        : null;
+      if (existingLoanId) {
+        const newClientId = parseInt(String(body.client_id), 10);
+        const [[loanClient]] = await pool.query<RowDataPacket[]>(
+          `SELECT client_user_id FROM loan_applications
+            WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [existingLoanId, MORTGAGE_TENANT_ID],
+        );
+        if (!loanClient || Number(loanClient.client_user_id) !== newClientId) {
+          updates.push("loan_application_id = NULL");
+        }
+      }
+    }
+
+    if (body.kind != null) {
+      if (
+        !CALCULATOR_SAVE_KINDS.includes(body.kind as CalculatorSaveKindInline)
+      ) {
+        return res.status(400).json({ success: false, error: "Invalid kind" });
+      }
+      updates.push("kind = ?");
+      values.push(body.kind);
+    }
+    if (body.title != null) {
+      const title = String(body.title).trim();
+      if (!title) {
+        return res
+          .status(400)
+          .json({ success: false, error: "title cannot be empty" });
+      }
+      updates.push("title = ?");
+      values.push(title.slice(0, 255));
+    }
+    if (body.summary_json !== undefined) {
+      updates.push("summary_json = ?");
+      values.push(
+        body.summary_json != null ? JSON.stringify(body.summary_json) : null,
+      );
+    }
+    if (body.payload_json !== undefined) {
+      if (
+        body.payload_json == null ||
+        typeof body.payload_json !== "object" ||
+        Array.isArray(body.payload_json)
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid payload_json" });
+      }
+      updates.push("payload_json = ?");
+      values.push(JSON.stringify(body.payload_json));
+    }
+    if (body.borrower_client_ids !== undefined) {
+      updates.push("borrower_client_ids = ?");
+      values.push(
+        body.borrower_client_ids != null
+          ? JSON.stringify(body.borrower_client_ids)
+          : null,
+      );
+    }
+
+    if (updates.length === 0) {
+      return res.json({
+        success: true,
+        save: mapCalculatorSaveRow(access.row),
+      });
+    }
+
+    values.push(id, MORTGAGE_TENANT_ID);
+    await pool.query(
+      `UPDATE broker_calculator_saves SET ${updates.join(", ")}
+        WHERE id = ? AND tenant_id = ?`,
+      values,
+    );
+
+    const refreshed = await assertCalculatorSaveAccess(
+      id,
+      brokerId,
+      brokerRole,
+    );
+    if (refreshed.ok === false) {
+      return res
+        .status(refreshed.status)
+        .json({ success: false, error: refreshed.error });
+    }
+    return res.json({
+      success: true,
+      save: mapCalculatorSaveRow(refreshed.row),
+    });
+  } catch (error) {
+    console.error("[calculator-saves] update error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to update calculator save",
+    });
+  }
+};
+
+const handleDeleteCalculatorSave: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: "Invalid id" });
+    }
+    const access = await assertCalculatorSaveAccess(id, brokerId, brokerRole);
+    if (access.ok === false) {
+      return res
+        .status(access.status)
+        .json({ success: false, error: access.error });
+    }
+    await pool.query(
+      `DELETE FROM broker_calculator_saves WHERE id = ? AND tenant_id = ?`,
+      [id, MORTGAGE_TENANT_ID],
+    );
+    return res.json({ success: true, message: "Calculator save deleted" });
+  } catch (error) {
+    console.error("[calculator-saves] delete error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to delete calculator save",
+    });
+  }
+};
+
+/**
+ * POST /api/calculator-saves/:id/apply-note
+ * Append formatted snapshot to loan_applications.notes only (never overwrite income).
+ */
+const handleApplyCalculatorSaveNote: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: "Invalid id" });
+    }
+    const access = await assertCalculatorSaveAccess(id, brokerId, brokerRole);
+    if (access.ok === false) {
+      return res
+        .status(access.status)
+        .json({ success: false, error: access.error });
+    }
+
+    const bodyLoanId =
+      req.body?.loan_application_id != null
+        ? parseInt(String(req.body.loan_application_id), 10)
+        : null;
+    const loanId =
+      bodyLoanId && Number.isFinite(bodyLoanId)
+        ? bodyLoanId
+        : access.row.loan_application_id != null
+          ? Number(access.row.loan_application_id)
+          : null;
+
+    if (!loanId || !Number.isFinite(loanId)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "loan_application_id is required on the save or in the request body",
+      });
+    }
+
+    const loanAccess = await assertLoanAccess(brokerId, brokerRole, loanId);
+    if (loanAccess.ok === false) {
+      return res
+        .status(loanAccess.status)
+        .json({ success: false, error: loanAccess.error });
+    }
+    const [[loanRow]] = await pool.query<RowDataPacket[]>(
+      `SELECT client_user_id, notes FROM loan_applications
+        WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [loanId, MORTGAGE_TENANT_ID],
+    );
+    if (!loanRow) {
+      return res.status(404).json({ success: false, error: "Loan not found" });
+    }
+    if (Number(loanRow.client_user_id) !== Number(access.row.client_id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Loan does not belong to the linked client",
+      });
+    }
+
+    const brokerName = [
+      access.row.broker_first_name,
+      access.row.broker_last_name,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const snapshot = formatCalculatorApplyNoteInline({
+      kind: String(access.row.kind),
+      title: String(access.row.title),
+      summary: parseJsonColumnInline(access.row.summary_json) as Record<
+        string,
+        unknown
+      > | null,
+      payload: parseJsonColumnInline(access.row.payload_json) as Record<
+        string,
+        unknown
+      > | null,
+      savedAt: access.row.updated_at ?? access.row.created_at,
+      brokerName,
+    });
+
+    const existingNotes = (loanRow.notes as string | null | undefined) ?? null;
+    const nextNotes = appendCalculatorNoteToLoanNotesInline(
+      existingNotes,
+      snapshot,
+    );
+
+    await pool.query(
+      `UPDATE loan_applications SET notes = ? WHERE id = ? AND tenant_id = ?`,
+      [nextNotes, loanId, MORTGAGE_TENANT_ID],
+    );
+
+    // Persist loan link on the save when applying from body
+    if (
+      access.row.loan_application_id == null ||
+      Number(access.row.loan_application_id) !== loanId
+    ) {
+      await pool.query(
+        `UPDATE broker_calculator_saves
+            SET loan_application_id = ?
+          WHERE id = ? AND tenant_id = ?`,
+        [loanId, id, MORTGAGE_TENANT_ID],
+      );
+    }
+
+    return res.json({
+      success: true,
+      loan_application_id: loanId,
+      notes: nextNotes,
+      message: "Calculator snapshot appended to loan notes",
+    });
+  } catch (error) {
+    console.error("[calculator-saves] apply-note error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to append calculator note",
+    });
+  }
+};
+
+/**
+ * GET /api/clients/:clientId/open-loans
+ * Lightweight loan list for calculator matching (application_number, property_value).
+ */
+const handleGetClientOpenLoans: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const clientId = parseInt(req.params.clientId, 10);
+    if (!Number.isFinite(clientId)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid client ID" });
+    }
+
+    const clientAccess = await assertCalculatorClientAccess(
+      clientId,
+      brokerId,
+      brokerRole,
+    );
+    if (clientAccess.ok === false) {
+      return res
+        .status(clientAccess.status)
+        .json({ success: false, error: clientAccess.error });
+    }
+
+    const [loans] = await pool.query<RowDataPacket[]>(
+      `SELECT la.id, la.application_number, la.loan_type, la.loan_amount,
+              la.property_value, la.status, la.interest_rate, la.created_at
+         FROM loan_applications la
+        WHERE la.client_user_id = ? AND la.tenant_id = ?
+          AND la.status NOT IN ('draft', 'loan_funded')
+        ORDER BY la.created_at DESC
+        LIMIT 50`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+
+    // Non-PO: only loans they can access
+    const filtered = [];
+    for (const loan of loans) {
+      if (brokerRole === "platform_owner") {
+        filtered.push(loan);
+        continue;
+      }
+      const access = await assertLoanAccess(
+        brokerId,
+        brokerRole,
+        Number(loan.id),
+      );
+      if (access.ok) filtered.push(loan);
+    }
+
+    return res.json({
+      success: true,
+      loans: filtered.map((la) => ({
+        id: la.id as number,
+        application_number: la.application_number as string,
+        loan_type: la.loan_type as string,
+        loan_amount: Number(la.loan_amount),
+        property_value:
+          la.property_value != null ? Number(la.property_value) : null,
+        status: la.status as string,
+        interest_rate:
+          la.interest_rate != null ? Number(la.interest_rate) : null,
+        created_at: la.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error("[calculator-saves] open-loans error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to load client open loans",
+    });
+  }
+};
+
 const handleGetLoans: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
@@ -18129,6 +23026,9 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
       employment_status,
       employer_name,
       years_employed,
+      employer_phone,
+      employer_address,
+      employment_start_date,
       property_unit,
       marital_status,
       dependent_count,
@@ -18244,6 +23144,9 @@ const handleUpdateLoanDetails: RequestHandler = async (req, res) => {
     maybeSet("employment_status", employment_status);
     maybeSet("employer_name", employer_name);
     maybeSet("years_employed", years_employed);
+    maybeSet("employer_phone", employer_phone);
+    maybeSet("employer_address", employer_address);
+    maybeSet("employment_start_date", employment_start_date);
     maybeSet("property_unit", property_unit);
     const VALID_MARITAL = [
       "single",
@@ -18583,8 +23486,8 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
         brokerId,
       ).catch((err) => console.error("Reminder flow trigger error:", err));
     } else {
-      triggerReminderFlows(loanId, newStatus, MORTGAGE_TENANT_ID).catch(
-        (err) => console.error("Reminder flow trigger error:", err),
+      triggerReminderFlows(loanId, newStatus, MORTGAGE_TENANT_ID).catch((err) =>
+        console.error("Reminder flow trigger error:", err),
       );
     }
 
@@ -19303,8 +24206,22 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
         .json({ success: false, error: "Client not found" });
     }
 
-    // Access control for non-superadmins: client owner or any banker linked on one of the client's loans.
-    if (!hasGlobalClientAccess) {
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      brokerId,
+    );
+
+    // Per-owner CRM: strict owner-row access (no loan co-ownership bypass).
+    if (!hasGlobalClientAccess && crmFlags.activeForBroker) {
+      if (
+        Number(client.assigned_broker_id) !== brokerId ||
+        client.list_visibility !== "active"
+      ) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+    } else if (!hasGlobalClientAccess) {
+      // Legacy access: client owner or loan co-ownership path.
       const [[access]] = await pool.query<RowDataPacket[]>(
         `SELECT 1 FROM loan_applications
          WHERE client_user_id = ? AND tenant_id = ?
@@ -19430,14 +24347,854 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
   }
 };
 
+// =====================================================
+// PER-OWNER CRM API (Phases 4–7 — flag-gated, non-breaking when flags OFF)
+// =====================================================
+
+const handleGetCrmConfig: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const flags = await getPerOwnerCrmFlags(pool, MORTGAGE_TENANT_ID, brokerId);
+    res.json({
+      success: true,
+      per_owner_crm: {
+        ...flags,
+        inactive_reason: flags.activeForBroker ? null : "disabled",
+      },
+    });
+  } catch (error) {
+    console.error("[handleGetCrmConfig]", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to load CRM config" });
+  }
+};
+
+const handleGetCrmPeople: RequestHandler = async (req, res) => {
+  try {
+    const brokerRole = (req as any).brokerRole as string;
+    if (brokerRole !== "platform_owner") {
+      return res
+        .status(403)
+        .json({ success: false, error: "Platform owner access required" });
+    }
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit as string) || 30),
+    );
+    const offset = (page - 1) * limit;
+    const search = ((req.query.search as string) || "").trim();
+
+    let searchClause = "";
+    const searchParams: string[] = [];
+    if (search) {
+      const digits = search.replace(/\D/g, "").slice(-10);
+      searchClause = ` AND (c.normalized_phone LIKE ? OR c.phone LIKE ?${
+        digits.length === 10 ? " OR c.normalized_phone = ?" : ""
+      })`;
+      searchParams.push(`%${search}%`, `%${search}%`);
+      if (digits.length === 10) searchParams.push(digits);
+    }
+
+    const [[countRow]] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(DISTINCT c.normalized_phone) AS total
+       FROM clients c
+       WHERE c.tenant_id = ? AND c.phone IS NOT NULL AND c.normalized_phone IS NOT NULL
+         ${searchClause}`,
+      [MORTGAGE_TENANT_ID, ...searchParams],
+    );
+    const total = Number(countRow?.total || 0);
+
+    const [phoneRows] = await pool.query<RowDataPacket[]>(
+      `SELECT c.normalized_phone,
+              MAX(c.phone) AS display_phone,
+              COUNT(*) AS member_count
+       FROM clients c
+       WHERE c.tenant_id = ? AND c.phone IS NOT NULL AND c.normalized_phone IS NOT NULL
+         ${searchClause}
+       GROUP BY c.normalized_phone
+       ORDER BY member_count DESC, c.normalized_phone
+       LIMIT ${limit} OFFSET ${offset}`,
+      [MORTGAGE_TENANT_ID, ...searchParams],
+    );
+
+    const groups = [];
+    for (const row of phoneRows) {
+      const norm = row.normalized_phone as string;
+      const [members] = await pool.query<RowDataPacket[]>(
+        `SELECT c.id AS client_id, c.first_name, c.last_name,
+                c.assigned_broker_id, c.list_visibility,
+                CONCAT(b.first_name, ' ', b.last_name) AS assigned_broker_name,
+                g.id AS link_group_id, g.status AS link_group_status
+         FROM clients c
+         LEFT JOIN brokers b ON b.id = c.assigned_broker_id
+         LEFT JOIN crm_person_group_members m
+           ON m.tenant_id = c.tenant_id AND m.entity_type = 'client' AND m.entity_id = c.id
+         LEFT JOIN crm_person_groups g ON g.id = m.group_id AND g.status IN ('pending','linked')
+         WHERE c.tenant_id = ? AND c.normalized_phone = ?
+         ORDER BY c.list_visibility, c.last_name, c.first_name`,
+        [MORTGAGE_TENANT_ID, norm],
+      );
+      groups.push({
+        normalized_phone: norm,
+        display_phone: row.display_phone ?? null,
+        member_count: Number(row.member_count),
+        members: members.map((m) => ({
+          client_id: m.client_id,
+          first_name: m.first_name,
+          last_name: m.last_name,
+          assigned_broker_id: m.assigned_broker_id,
+          assigned_broker_name: m.assigned_broker_name?.trim() || null,
+          list_visibility: m.list_visibility,
+          link_group_id: m.link_group_id ?? null,
+          link_group_status: m.link_group_status ?? null,
+        })),
+      });
+    }
+
+    res.json({
+      success: true,
+      groups,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    console.error("[handleGetCrmPeople]", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to load people view" });
+  }
+};
+
+const handleCreatePersonGroup: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const flags = await getPerOwnerCrmFlags(pool, MORTGAGE_TENANT_ID, brokerId);
+    if (!flags.activeForBroker) {
+      return res.status(403).json({
+        success: false,
+        error: "Per-owner CRM is not enabled for your account",
+      });
+    }
+    const { member_entity_type, member_entity_id, notes } = req.body as {
+      member_entity_type?: string;
+      member_entity_id?: number;
+      notes?: string;
+    };
+    if (member_entity_type !== "client" || !member_entity_id) {
+      return res.status(400).json({
+        success: false,
+        error: "member_entity_type must be client with member_entity_id",
+      });
+    }
+
+    await connection.beginTransaction();
+
+    const [[sourceClient]] = await connection.query<RowDataPacket[]>(
+      `SELECT id, normalized_phone, assigned_broker_id FROM clients
+       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [member_entity_id, MORTGAGE_TENANT_ID],
+    );
+    if (!sourceClient?.normalized_phone) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, error: "Client not found" });
+    }
+    if (Number(sourceClient.assigned_broker_id) !== brokerId) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        error: "You can only request links for clients on your list",
+      });
+    }
+
+    const [dupes] = await connection.query<RowDataPacket[]>(
+      `SELECT id FROM clients
+       WHERE tenant_id = ? AND normalized_phone = ? AND id != ? AND phone IS NOT NULL
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, sourceClient.normalized_phone, member_entity_id],
+    );
+    if (dupes.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        error: "No other owner rows share this phone number",
+      });
+    }
+
+    const [existingMember] = await connection.query<RowDataPacket[]>(
+      `SELECT g.id FROM crm_person_group_members m
+       JOIN crm_person_groups g ON g.id = m.group_id
+       WHERE m.tenant_id = ? AND m.entity_type = 'client' AND m.entity_id = ?
+         AND g.status IN ('pending','linked')
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, member_entity_id],
+    );
+    if (existingMember.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        error: "Client is already in a pending or active link group",
+        group_id: existingMember[0].id,
+      });
+    }
+
+    const [groupResult] = await connection.query<ResultSetHeader>(
+      `INSERT INTO crm_person_groups
+         (tenant_id, status, created_by_broker_id, notes)
+       VALUES (?, 'pending', ?, ?)`,
+      [MORTGAGE_TENANT_ID, brokerId, notes?.trim() || null],
+    );
+    const groupId = groupResult.insertId;
+
+    const [samePhoneClients] = await connection.query<RowDataPacket[]>(
+      `SELECT id FROM clients
+       WHERE tenant_id = ? AND normalized_phone = ? AND phone IS NOT NULL`,
+      [MORTGAGE_TENANT_ID, sourceClient.normalized_phone],
+    );
+    for (const c of samePhoneClients) {
+      await connection.query(
+        `INSERT IGNORE INTO crm_person_group_members
+           (tenant_id, group_id, entity_type, entity_id, role)
+         VALUES (?, ?, 'client', ?, 'member')`,
+        [MORTGAGE_TENANT_ID, groupId, c.id],
+      );
+    }
+
+    await connection.commit();
+    res.status(201).json({
+      success: true,
+      group: { id: groupId, status: "pending", notes: notes?.trim() || null },
+      message: "Link request created — awaiting admin approval",
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("[handleCreatePersonGroup]", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to create link request" });
+  } finally {
+    connection.release();
+  }
+};
+
+const handleApprovePersonGroup: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    if (!isMortgageBankerOrOwner(brokerRole)) {
+      return res
+        .status(403)
+        .json({ success: false, error: "Admin access required" });
+    }
+    const groupId = parseInt(req.params.groupId, 10);
+    const { approve, notes } = req.body as {
+      approve?: boolean;
+      notes?: string;
+    };
+    if (typeof approve !== "boolean") {
+      return res
+        .status(400)
+        .json({ success: false, error: "approve boolean required" });
+    }
+
+    const [[group]] = await pool.query<RowDataPacket[]>(
+      `SELECT id, status FROM crm_person_groups
+       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [groupId, MORTGAGE_TENANT_ID],
+    );
+    if (!group) {
+      return res.status(404).json({ success: false, error: "Group not found" });
+    }
+    if (group.status !== "pending") {
+      return res
+        .status(409)
+        .json({ success: false, error: "Group is not pending" });
+    }
+
+    const newStatus = approve ? "linked" : "rejected";
+    await pool.query(
+      `UPDATE crm_person_groups
+       SET status = ?, approved_by_broker_id = ?, approved_at = NOW(),
+           notes = COALESCE(?, notes), updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [newStatus, brokerId, notes?.trim() || null, groupId, MORTGAGE_TENANT_ID],
+    );
+
+    res.json({ success: true, status: newStatus });
+  } catch (error) {
+    console.error("[handleApprovePersonGroup]", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to update link group" });
+  }
+};
+
+const handleMergePersonGroup: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const brokerRole = (req as any).brokerRole as string;
+    if (brokerRole !== "platform_owner") {
+      return res
+        .status(403)
+        .json({ success: false, error: "Platform owner access required" });
+    }
+    const groupId = parseInt(req.params.groupId, 10);
+    const { survivor_client_id } = req.body as { survivor_client_id?: number };
+    if (!survivor_client_id) {
+      return res.status(400).json({
+        success: false,
+        error: "survivor_client_id required",
+      });
+    }
+
+    await connection.beginTransaction();
+
+    const [[group]] = await connection.query<RowDataPacket[]>(
+      `SELECT id, status FROM crm_person_groups WHERE id = ? AND tenant_id = ?`,
+      [groupId, MORTGAGE_TENANT_ID],
+    );
+    if (!group || !["pending", "linked"].includes(group.status as string)) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, error: "Group not found or not mergeable" });
+    }
+
+    const [members] = await connection.query<RowDataPacket[]>(
+      `SELECT entity_id FROM crm_person_group_members
+       WHERE group_id = ? AND tenant_id = ? AND entity_type = 'client'`,
+      [groupId, MORTGAGE_TENANT_ID],
+    );
+    const memberIds = members.map((m) => m.entity_id as number);
+    if (!memberIds.includes(survivor_client_id)) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        error: "Survivor must be a group member",
+      });
+    }
+
+    const archiveIds = memberIds.filter((id) => id !== survivor_client_id);
+    for (const archiveId of archiveIds) {
+      await connection.query(
+        `UPDATE clients SET list_visibility = 'archived', hidden_reason = 'crm_merge',
+            hidden_at = NOW(), updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [archiveId, MORTGAGE_TENANT_ID],
+      );
+      await connection.query(
+        `UPDATE conversation_threads
+         SET client_id = ?, owner_client_scope_broker_id = (
+           SELECT assigned_broker_id FROM clients WHERE id = ? LIMIT 1
+         )
+         WHERE client_id = ? AND tenant_id = ?`,
+        [survivor_client_id, survivor_client_id, archiveId, MORTGAGE_TENANT_ID],
+      );
+      await connection.query(
+        `UPDATE loan_applications SET client_user_id = ?
+         WHERE client_user_id = ? AND tenant_id = ?`,
+        [survivor_client_id, archiveId, MORTGAGE_TENANT_ID],
+      );
+    }
+
+    await connection.query(
+      `UPDATE crm_person_groups
+       SET status = 'merged', canonical_client_id = ?, updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [survivor_client_id, groupId, MORTGAGE_TENANT_ID],
+    );
+
+    await connection.commit();
+    res.json({
+      success: true,
+      survivor_client_id,
+      archived_client_ids: archiveIds,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("[handleMergePersonGroup]", error);
+    res.status(500).json({ success: false, error: "Failed to merge group" });
+  } finally {
+    connection.release();
+  }
+};
+
+const handleStartCrmTransfer: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const flags = await getPerOwnerCrmFlags(pool, MORTGAGE_TENANT_ID, brokerId);
+    if (!flags.activeForBroker) {
+      return res.status(403).json({
+        success: false,
+        error: "Per-owner CRM is not enabled for your account",
+      });
+    }
+    const { to_broker_id, source_entity_type, source_entity_id } = req.body as {
+      to_broker_id?: number;
+      source_entity_type?: string;
+      source_entity_id?: number;
+    };
+    if (
+      source_entity_type !== "client" ||
+      !source_entity_id ||
+      !to_broker_id ||
+      to_broker_id === brokerId
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid transfer request" });
+    }
+
+    await connection.beginTransaction();
+
+    const [[client]] = await connection.query<RowDataPacket[]>(
+      `SELECT id, first_name, last_name, phone, normalized_phone, email, assigned_broker_id
+       FROM clients WHERE id = ? AND tenant_id = ?`,
+      [source_entity_id, MORTGAGE_TENANT_ID],
+    );
+    if (!client || Number(client.assigned_broker_id) !== brokerId) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        error: "You can only transfer clients you own",
+      });
+    }
+
+    const [[targetBroker]] = await connection.query<RowDataPacket[]>(
+      `SELECT id FROM brokers WHERE id = ? AND tenant_id = ? AND status = 'active'`,
+      [to_broker_id, MORTGAGE_TENANT_ID],
+    );
+    if (!targetBroker) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, error: "Target broker not found" });
+    }
+
+    const conflicts: Array<{
+      field: string;
+      source_value: string;
+      target_value: string;
+    }> = [];
+    if (client.normalized_phone) {
+      const [targetDup] = await connection.query<RowDataPacket[]>(
+        `SELECT id, first_name, last_name FROM clients
+         WHERE tenant_id = ? AND assigned_broker_id = ? AND normalized_phone = ?
+           AND phone IS NOT NULL AND id != ? LIMIT 1`,
+        [
+          MORTGAGE_TENANT_ID,
+          to_broker_id,
+          client.normalized_phone,
+          source_entity_id,
+        ],
+      );
+      if (targetDup.length > 0) {
+        conflicts.push({
+          field: "phone",
+          source_value: `${client.first_name} ${client.last_name}`.trim(),
+          target_value:
+            `${targetDup[0].first_name} ${targetDup[0].last_name}`.trim(),
+        });
+      }
+    }
+
+    const status = conflicts.length > 0 ? "review" : "pending";
+    const [jobResult] = await connection.query<ResultSetHeader>(
+      `INSERT INTO crm_transfer_jobs
+         (tenant_id, from_broker_id, to_broker_id, source_entity_type, source_entity_id,
+          status, created_by_broker_id)
+       VALUES (?, ?, ?, 'client', ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        to_broker_id,
+        source_entity_id,
+        status,
+        brokerId,
+      ],
+    );
+
+    await connection.commit();
+    res.status(201).json({
+      success: true,
+      job: {
+        id: jobResult.insertId,
+        status,
+        from_broker_id: brokerId,
+        to_broker_id,
+        source_entity_id,
+      },
+      conflicts: conflicts.length ? conflicts : undefined,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("[handleStartCrmTransfer]", error);
+    res.status(500).json({ success: false, error: "Failed to start transfer" });
+  } finally {
+    connection.release();
+  }
+};
+
+const handleGetCrmTransfer: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const jobId = parseInt(req.params.jobId, 10);
+    const [[job]] = await pool.query<RowDataPacket[]>(
+      `SELECT * FROM crm_transfer_jobs WHERE id = ? AND tenant_id = ?`,
+      [jobId, MORTGAGE_TENANT_ID],
+    );
+    if (!job) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Transfer job not found" });
+    }
+    if (
+      job.from_broker_id !== brokerId &&
+      job.to_broker_id !== brokerId &&
+      (req as any).brokerRole !== "platform_owner"
+    ) {
+      return res.status(403).json({ success: false, error: "Access denied" });
+    }
+
+    let conflicts: Array<{
+      field: string;
+      source_value: string;
+      target_value: string;
+    }> = [];
+    if (job.status === "review" && job.source_entity_type === "client") {
+      const [[src]] = await pool.query<RowDataPacket[]>(
+        `SELECT first_name, last_name, normalized_phone FROM clients WHERE id = ?`,
+        [job.source_entity_id],
+      );
+      if (src?.normalized_phone) {
+        const [tgt] = await pool.query<RowDataPacket[]>(
+          `SELECT first_name, last_name FROM clients
+           WHERE tenant_id = ? AND assigned_broker_id = ? AND normalized_phone = ?
+             AND id != ? LIMIT 1`,
+          [
+            MORTGAGE_TENANT_ID,
+            job.to_broker_id,
+            src.normalized_phone,
+            job.source_entity_id,
+          ],
+        );
+        if (tgt.length > 0) {
+          conflicts.push({
+            field: "phone",
+            source_value: `${src.first_name} ${src.last_name}`.trim(),
+            target_value: `${tgt[0].first_name} ${tgt[0].last_name}`.trim(),
+          });
+        }
+      }
+    }
+
+    res.json({ success: true, job, conflicts });
+  } catch (error) {
+    console.error("[handleGetCrmTransfer]", error);
+    res.status(500).json({ success: false, error: "Failed to load transfer" });
+  }
+};
+
+const handleResolveCrmTransfer: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const jobId = parseInt(req.params.jobId, 10);
+    const { resolution } = req.body as { resolution?: CrmTransferResolution };
+    const validResolutions: CrmTransferResolution[] = [
+      "keep_target_name",
+      "replace_with_source",
+      "merge_fields",
+      "duplicate_import_name",
+      "rename_on_import",
+    ];
+    if (!resolution || !validResolutions.includes(resolution)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid resolution" });
+    }
+
+    await connection.beginTransaction();
+
+    const [[job]] = await connection.query<RowDataPacket[]>(
+      `SELECT * FROM crm_transfer_jobs WHERE id = ? AND tenant_id = ? FOR UPDATE`,
+      [jobId, MORTGAGE_TENANT_ID],
+    );
+    if (!job || !["pending", "review"].includes(job.status as string)) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, error: "Transfer job not found" });
+    }
+    if (
+      job.from_broker_id !== brokerId &&
+      (req as any).brokerRole !== "platform_owner"
+    ) {
+      await connection.rollback();
+      return res
+        .status(403)
+        .json({ success: false, error: "Only the source owner can resolve" });
+    }
+
+    const clientId = job.source_entity_id as number;
+    const toBrokerId = job.to_broker_id as number;
+
+    if (
+      resolution === "keep_target_name" ||
+      resolution === "duplicate_import_name"
+    ) {
+      await connection.query(
+        `UPDATE clients SET list_visibility = 'hidden', hidden_reason = 'transfer',
+            hidden_at = NOW(), updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [clientId, MORTGAGE_TENANT_ID],
+      );
+    } else if (resolution === "replace_with_source") {
+      const [[src]] = await connection.query<RowDataPacket[]>(
+        `SELECT first_name, last_name, email, phone, normalized_phone FROM clients WHERE id = ?`,
+        [clientId],
+      );
+      const [tgtRows] = await connection.query<RowDataPacket[]>(
+        `SELECT id FROM clients
+         WHERE tenant_id = ? AND assigned_broker_id = ? AND normalized_phone = ?
+           AND id != ? LIMIT 1`,
+        [MORTGAGE_TENANT_ID, toBrokerId, src?.normalized_phone, clientId],
+      );
+      if (tgtRows.length > 0) {
+        await connection.query(
+          `UPDATE clients SET first_name = ?, last_name = ?, email = COALESCE(email, ?),
+              updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            src?.first_name,
+            src?.last_name,
+            src?.email,
+            tgtRows[0].id,
+            MORTGAGE_TENANT_ID,
+          ],
+        );
+      }
+      await connection.query(
+        `UPDATE clients SET list_visibility = 'hidden', hidden_reason = 'transfer',
+            hidden_at = NOW(), updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [clientId, MORTGAGE_TENANT_ID],
+      );
+    } else {
+      await connection.query(
+        `UPDATE clients SET assigned_broker_id = ?, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [toBrokerId, clientId, MORTGAGE_TENANT_ID],
+      );
+      await connection.query(
+        `UPDATE conversation_threads
+         SET owner_client_scope_broker_id = ?, broker_id = ?
+         WHERE client_id = ? AND tenant_id = ?`,
+        [toBrokerId, toBrokerId, clientId, MORTGAGE_TENANT_ID],
+      );
+    }
+
+    await connection.query(
+      `UPDATE crm_transfer_jobs
+       SET status = 'completed', resolution_json = ?, completed_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [JSON.stringify({ resolution }), jobId, MORTGAGE_TENANT_ID],
+    );
+
+    await connection.commit();
+    res.json({ success: true, status: "completed", resolution });
+  } catch (error) {
+    await connection.rollback();
+    console.error("[handleResolveCrmTransfer]", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to resolve transfer" });
+  } finally {
+    connection.release();
+  }
+};
+
 /**
- * Get all clients
+ * POST /api/conversations/:conversationId/claim
+ * Claim an unclaimed shared-queue thread (creates owner-scoped client row).
+ */
+const handleClaimSharedConversation: RequestHandler = async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const { conversationId } = req.params;
+    const flags = await getPerOwnerCrmFlags(pool, MORTGAGE_TENANT_ID, brokerId);
+    if (!flags.activeForBroker) {
+      return res.status(403).json({
+        success: false,
+        error: "Per-owner CRM is not enabled for your account",
+      });
+    }
+    const { first_name, last_name, email } = req.body as {
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+    };
+
+    await connection.beginTransaction();
+
+    const [[thread]] = await connection.query<RowDataPacket[]>(
+      `SELECT id, client_id, broker_id, client_phone, client_email, conversation_id
+       FROM conversation_threads
+       WHERE conversation_id = ? AND tenant_id = ? FOR UPDATE`,
+      [conversationId, MORTGAGE_TENANT_ID],
+    );
+    if (!thread) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, error: "Thread not found" });
+    }
+    if (thread.client_id != null || thread.broker_id != null) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        error: "already_claimed",
+        message:
+          "Another mortgage banker has already claimed this conversation.",
+      });
+    }
+
+    const fn = first_name?.trim() || "Unknown";
+    const ln = last_name?.trim() || "Caller";
+    const clientPhone = thread.client_phone || null;
+    const normalizedPhone = clientPhone
+      ? normalizePhoneLast10(clientPhone) || null
+      : null;
+
+    if (normalizedPhone) {
+      const conflict = await findClientPhoneConflict(
+        connection as unknown as Pool,
+        MORTGAGE_TENANT_ID,
+        normalizedPhone,
+        { brokerId },
+      );
+      if (conflict) {
+        await connection.rollback();
+        return res.status(409).json({
+          success: false,
+          error: "You already have a client with this phone number",
+          conflict: phoneConflictResponse(conflict),
+          existing_client_id: conflict.id,
+        });
+      }
+    }
+
+    const providedEmail = email?.trim().toLowerCase() || null;
+    const placeholderEmail = `noemail_${(clientPhone || String(Date.now())).replace(/\D/g, "")}@noemail.placeholder`;
+    const clientEmail =
+      providedEmail ?? thread.client_email ?? placeholderEmail;
+
+    if (providedEmail) {
+      const emailDup = await findClientEmailConflict(
+        connection as unknown as Pool,
+        MORTGAGE_TENANT_ID,
+        providedEmail,
+        { brokerId },
+      );
+      if (emailDup) {
+        await connection.rollback();
+        const crmFlagsForEmail = await getPerOwnerCrmFlags(
+          pool,
+          MORTGAGE_TENANT_ID,
+          brokerId,
+        );
+        return res
+          .status(409)
+          .json(
+            buildClientEmailConflictPayload(
+              emailDup,
+              crmFlagsForEmail,
+              brokerId,
+            ),
+          );
+      }
+    }
+
+    const [insertResult] = await connection.query<ResultSetHeader>(
+      `INSERT INTO clients
+         (tenant_id, first_name, last_name, email, phone, normalized_phone,
+          status, assigned_broker_id, source, list_visibility)
+       VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 'claimed_shared', 'active')`,
+      [
+        MORTGAGE_TENANT_ID,
+        fn,
+        ln,
+        clientEmail,
+        clientPhone,
+        normalizedPhone,
+        brokerId,
+      ],
+    );
+    const newClientId = insertResult.insertId;
+    const fullName = `${fn} ${ln}`;
+
+    await connection.query(
+      `UPDATE conversation_threads
+       SET client_id = ?, broker_id = ?, owner_client_scope_broker_id = ?,
+           client_name = ?, client_email = COALESCE(NULLIF(client_email, ''), ?),
+           updated_at = NOW()
+       WHERE conversation_id = ? AND tenant_id = ?`,
+      [
+        newClientId,
+        brokerId,
+        brokerId,
+        fullName,
+        providedEmail,
+        conversationId,
+        MORTGAGE_TENANT_ID,
+      ],
+    );
+
+    await connection.query(
+      `UPDATE communications SET from_user_id = ?
+       WHERE conversation_id = ? AND direction = 'inbound' AND tenant_id = ?`,
+      [newClientId, conversationId, MORTGAGE_TENANT_ID],
+    );
+
+    await connection.commit();
+    res.json({
+      success: true,
+      client_id: newClientId,
+      client_name: fullName,
+      conversation_id: conversationId,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("[handleClaimSharedConversation]", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to claim conversation" });
+  } finally {
+    connection.release();
+  }
+};
+
+/**
+ * GET /api/clients
+ * List clients with pagination, search, and sorting.
+ * When per-owner CRM is active (flag-gated), non–platform-owners see only their
+ * assigned rows with list_visibility = active.
  */
 const handleGetClients: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
     const hasGlobalClientAccess = brokerRole === "platform_owner";
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      brokerId,
+    );
 
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(
@@ -19469,11 +25226,24 @@ const handleGetClients: RequestHandler = async (req, res) => {
       WHERE op.id = la.partner_broker_id AND op.created_by_broker_id = ? AND op.tenant_id = la.tenant_id
     ))`;
 
-    const baseWhere = `WHERE c.tenant_id = ?${hasGlobalClientAccess ? "" : ` AND ${clientOwnershipSql}`}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR CONCAT(c.last_name, ' ', c.first_name) LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR (c.phone IS NOT NULL AND (c.phone LIKE ? OR c.normalized_phone LIKE ? OR c.normalized_phone = ?)) OR (c.phone IS NULL AND ct.conversation_id = CONCAT('conv_client_', c.id) AND (ct.normalized_client_phone LIKE ? OR ct.normalized_client_phone = ?)))" : ""}`;
+    const usePerOwnerList = crmFlags.activeForBroker && !hasGlobalClientAccess;
+    const visibilityFilter = clientListVisibilityFilter(crmFlags);
 
-    const filterParams: any[] = hasGlobalClientAccess
-      ? [MORTGAGE_TENANT_ID]
-      : [MORTGAGE_TENANT_ID, ...loanOwnershipWhereParams(brokerId)];
+    let ownershipClause = "";
+    if (usePerOwnerList) {
+      ownershipClause = ` AND ${perOwnerClientListWhere("c", visibilityFilter)}`;
+    } else if (!hasGlobalClientAccess) {
+      ownershipClause = ` AND ${clientOwnershipSql}`;
+    }
+
+    const baseWhere = `WHERE c.tenant_id = ?${ownershipClause}${sourceFilter ? " AND c.source = ?" : ""}${search ? " AND (CONCAT(c.first_name, ' ', c.last_name) LIKE ? OR CONCAT(c.last_name, ' ', c.first_name) LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR c.email LIKE ? OR (c.phone IS NOT NULL AND (c.phone LIKE ? OR c.normalized_phone LIKE ? OR c.normalized_phone = ?)) OR (c.phone IS NULL AND ct.conversation_id = CONCAT('conv_client_', c.id) AND (ct.normalized_client_phone LIKE ? OR ct.normalized_client_phone = ?)))" : ""}`;
+
+    const filterParams: any[] = [MORTGAGE_TENANT_ID];
+    if (usePerOwnerList) {
+      filterParams.push(brokerId, ...visibilityFilter);
+    } else if (!hasGlobalClientAccess) {
+      filterParams.push(...loanOwnershipWhereParams(brokerId));
+    }
     if (sourceFilter) filterParams.push(sourceFilter);
     if (search) {
       const like = `%${search}%`;
@@ -19609,30 +25379,29 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       });
     }
 
-    // Check for duplicate real email under this tenant (skip placeholder emails)
+    // Check for duplicate real email under this owner (per-owner CRM) or tenant (legacy)
     if (trimmedEmail) {
-      const [[existing]] = await pool.query<any[]>(
-        `SELECT c.id, c.first_name, c.last_name,
-                b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
-         FROM clients c
-         LEFT JOIN brokers b ON b.id = c.assigned_broker_id
-         WHERE c.tenant_id = ? AND c.email = ? LIMIT 1`,
-        [MORTGAGE_TENANT_ID, trimmedEmail],
+      const crmFlagsForEmail = await getPerOwnerCrmFlags(
+        pool,
+        MORTGAGE_TENANT_ID,
+        brokerId,
+      );
+      const existing = await findClientEmailConflict(
+        pool,
+        MORTGAGE_TENANT_ID,
+        trimmedEmail,
+        { brokerId },
       );
       if (existing) {
-        return res.status(409).json({
-          success: false,
-          error: "A client with this email already exists",
-          conflict: {
-            client_id: existing.id as number,
-            client_name: `${existing.first_name} ${existing.last_name}`.trim(),
-            broker_id: existing.broker_id as number | null,
-            broker_name: existing.broker_id
-              ? `${existing.broker_first} ${existing.broker_last}`.trim()
-              : null,
-            conflict_field: "email",
-          },
-        });
+        return res
+          .status(409)
+          .json(
+            buildClientEmailConflictPayload(
+              existing,
+              crmFlagsForEmail,
+              brokerId,
+            ),
+          );
       }
     }
 
@@ -19640,34 +25409,29 @@ const handleCreateClient: RequestHandler = async (req, res) => {
     // downstream code (reminder flows, email guards) can detect the absence.
     const trimmedPhone = phone?.trim() || null;
     const normalizedPhone = trimmedPhone
-      ? trimmedPhone.replace(/\D/g, "").slice(-10) || null
+      ? normalizePhoneLast10(trimmedPhone) || null
       : null;
 
-    // Reject if another client already owns this phone number
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      brokerId,
+    );
+
+    // Per-owner CRM: same phone allowed for different mortgage bankers; block only duplicates on this owner's list.
     if (normalizedPhone) {
-      const [[phoneExists]] = await pool.query<any[]>(
-        `SELECT c.id, c.first_name, c.last_name,
-                b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
-         FROM clients c
-         LEFT JOIN brokers b ON b.id = c.assigned_broker_id
-           WHERE c.tenant_id = ? AND c.normalized_phone = ? AND c.phone IS NOT NULL LIMIT 1`,
-        [MORTGAGE_TENANT_ID, normalizedPhone],
+      const phoneExists = await findClientPhoneConflict(
+        pool,
+        MORTGAGE_TENANT_ID,
+        normalizedPhone,
+        { brokerId },
       );
       if (phoneExists) {
-        return res.status(409).json({
-          success: false,
-          error: "This phone number is already linked to another client",
-          conflict: {
-            client_id: phoneExists.id as number,
-            client_name:
-              `${phoneExists.first_name} ${phoneExists.last_name}`.trim(),
-            broker_id: phoneExists.broker_id as number | null,
-            broker_name: phoneExists.broker_id
-              ? `${phoneExists.broker_first} ${phoneExists.broker_last}`.trim()
-              : null,
-            conflict_field: "phone",
-          },
-        });
+        return res
+          .status(409)
+          .json(
+            buildClientPhoneConflictPayload(phoneExists, crmFlags, brokerId),
+          );
       }
     }
 
@@ -19676,8 +25440,8 @@ const handleCreateClient: RequestHandler = async (req, res) => {
       `noemail_${Date.now()}${trimmedPhone ? trimmedPhone.replace(/\D/g, "") : Math.random().toString(36).slice(2)}@noemail.placeholder`;
 
     const [result] = await pool.query<any>(
-      `INSERT INTO clients (tenant_id, first_name, middle_name, last_name, email, phone, normalized_phone, address_street, address_unit, address_city, address_state, address_zip, status, assigned_broker_id, income_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'W-2')`,
+      `INSERT INTO clients (tenant_id, first_name, middle_name, last_name, email, phone, normalized_phone, address_street, address_unit, address_city, address_state, address_zip, status, assigned_broker_id, income_type, list_visibility)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'W-2', 'active')`,
       [
         MORTGAGE_TENANT_ID,
         first_name.trim(),
@@ -19934,29 +25698,34 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
             .status(400)
             .json({ success: false, error: "Invalid email format" });
         }
-        const [[emailExists]] = await pool.query<any[]>(
-          `SELECT c.id, c.first_name, c.last_name,
-                  b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
-           FROM clients c
-           LEFT JOIN brokers b ON b.id = c.assigned_broker_id
-           WHERE c.email = ? AND c.tenant_id = ? AND c.id != ? LIMIT 1`,
-          [trimmedEmail, MORTGAGE_TENANT_ID, clientId],
+        const [[clientOwnerForEmail]] = await pool.query<RowDataPacket[]>(
+          `SELECT assigned_broker_id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [clientId, MORTGAGE_TENANT_ID],
+        );
+        const ownerForEmail =
+          (clientOwnerForEmail?.assigned_broker_id as number | null) ??
+          brokerId;
+        const crmFlagsForEmail = await getPerOwnerCrmFlags(
+          pool,
+          MORTGAGE_TENANT_ID,
+          ownerForEmail,
+        );
+        const emailExists = await findClientEmailConflict(
+          pool,
+          MORTGAGE_TENANT_ID,
+          trimmedEmail,
+          { brokerId: ownerForEmail, excludeClientId: Number(clientId) },
         );
         if (emailExists) {
-          return res.status(409).json({
-            success: false,
-            error: "A client with this email already exists",
-            conflict: {
-              client_id: emailExists.id as number,
-              client_name:
-                `${emailExists.first_name} ${emailExists.last_name}`.trim(),
-              broker_id: emailExists.broker_id as number | null,
-              broker_name: emailExists.broker_id
-                ? `${emailExists.broker_first} ${emailExists.broker_last}`.trim()
-                : null,
-              conflict_field: "email",
-            },
-          });
+          return res
+            .status(409)
+            .json(
+              buildClientEmailConflictPayload(
+                emailExists,
+                crmFlagsForEmail,
+                ownerForEmail,
+              ),
+            );
         }
       }
       updates.push("email = ?");
@@ -19984,29 +25753,33 @@ const handleUpdateClient: RequestHandler = async (req, res) => {
         : null;
       // Reject if another client already owns this phone number
       if (normPhone) {
-        const [[phoneExists]] = await pool.query<any[]>(
-          `SELECT c.id, c.first_name, c.last_name,
-                  b.id AS broker_id, b.first_name AS broker_first, b.last_name AS broker_last
-           FROM clients c
-           LEFT JOIN brokers b ON b.id = c.assigned_broker_id
-           WHERE c.tenant_id = ? AND c.normalized_phone = ? AND c.id != ? AND c.phone IS NOT NULL LIMIT 1`,
-          [MORTGAGE_TENANT_ID, normPhone, clientId],
+        const [[clientOwner]] = await pool.query<RowDataPacket[]>(
+          `SELECT assigned_broker_id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [clientId, MORTGAGE_TENANT_ID],
+        );
+        const ownerBrokerId =
+          (clientOwner?.assigned_broker_id as number | null) ?? brokerId;
+        const crmFlags = await getPerOwnerCrmFlags(
+          pool,
+          MORTGAGE_TENANT_ID,
+          ownerBrokerId,
+        );
+        const phoneExists = await findClientPhoneConflict(
+          pool,
+          MORTGAGE_TENANT_ID,
+          normPhone,
+          { brokerId: ownerBrokerId, excludeClientId: Number(clientId) },
         );
         if (phoneExists) {
-          return res.status(409).json({
-            success: false,
-            error: "This phone number is already linked to another client",
-            conflict: {
-              client_id: phoneExists.id as number,
-              client_name:
-                `${phoneExists.first_name} ${phoneExists.last_name}`.trim(),
-              broker_id: phoneExists.broker_id as number | null,
-              broker_name: phoneExists.broker_id
-                ? `${phoneExists.broker_first} ${phoneExists.broker_last}`.trim()
-                : null,
-              conflict_field: "phone",
-            },
-          });
+          return res
+            .status(409)
+            .json(
+              buildClientPhoneConflictPayload(
+                phoneExists,
+                crmFlags,
+                ownerBrokerId,
+              ),
+            );
         }
       }
       updates.push("normalized_phone = ?");
@@ -20297,9 +26070,10 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
     );
 
     // Cascade: remove tasks linked to this client's loan applications
+    // tasks.application_id → loan_applications.id (there is no tasks.loan_id)
     await pool.query(
       `DELETE t FROM tasks t
-       INNER JOIN loan_applications la ON t.loan_id = la.id
+       INNER JOIN loan_applications la ON t.application_id = la.id
        WHERE la.client_user_id = ? AND la.tenant_id = ?`,
       [clientId, MORTGAGE_TENANT_ID],
     );
@@ -20352,6 +26126,7 @@ const handleDeleteClient: RequestHandler = async (req, res) => {
  */
 const handleConvertClientToBroker: RequestHandler = async (req, res) => {
   try {
+    const brokerId = (req as any).brokerId as number;
     const { clientId } = req.params;
     const { created_by_broker_id } = req.body as {
       created_by_broker_id?: number | null;
@@ -20382,23 +26157,90 @@ const handleConvertClientToBroker: RequestHandler = async (req, res) => {
       });
     }
 
-    // Create broker record
+    // Create broker record (per-owner uniqueness + normalized_phone)
     const publicToken = require("crypto").randomUUID();
-    const [ins] = await pool.query<ResultSetHeader>(
-      `INSERT INTO brokers
-         (tenant_id, email, first_name, last_name, phone, role, status, public_token, created_by_broker_id)
-       VALUES (?, ?, ?, ?, ?, 'broker', 'active', ?, ?)`,
-      [
+    const ownerForRealtor = created_by_broker_id ?? brokerId ?? null;
+    const convertEmail = String(c.email || "")
+      .trim()
+      .toLowerCase();
+    const convertPhoneNorm = c.phone
+      ? String(c.phone).replace(/\D/g, "").slice(-10) || null
+      : null;
+
+    if (convertEmail) {
+      const emailConflict = await findBrokerEmailConflict(
+        pool,
         MORTGAGE_TENANT_ID,
-        c.email,
-        c.first_name,
-        c.last_name,
-        c.phone ?? null,
-        publicToken,
-        created_by_broker_id ?? null,
-      ],
-    );
-    const newBrokerId = ins.insertId;
+        convertEmail,
+        { role: "broker", createdByBrokerId: ownerForRealtor },
+      );
+      if (emailConflict) {
+        return res.status(409).json({
+          success: false,
+          error: "A realtor with this email already exists on your list",
+        });
+      }
+    }
+    if (convertPhoneNorm) {
+      const phoneConflict = await findBrokerPhoneConflict(
+        pool,
+        MORTGAGE_TENANT_ID,
+        convertPhoneNorm,
+        { role: "broker", createdByBrokerId: ownerForRealtor },
+      );
+      if (phoneConflict) {
+        return res.status(409).json({
+          success: false,
+          error: "A realtor with this phone number already exists on your list",
+        });
+      }
+    }
+
+    let newBrokerId: number;
+    const inactiveRealtor = convertEmail
+      ? await findInactiveBrokerEmailForReactivate(
+          pool,
+          MORTGAGE_TENANT_ID,
+          convertEmail,
+          { createdByBrokerId: ownerForRealtor, role: "broker" },
+        )
+      : null;
+    if (inactiveRealtor) {
+      await pool.query(
+        `UPDATE brokers
+         SET first_name = ?, last_name = ?, email = ?, phone = ?, normalized_phone = ?,
+             status = 'active', public_token = COALESCE(public_token, ?), updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          c.first_name,
+          c.last_name,
+          convertEmail,
+          c.phone ?? null,
+          convertPhoneNorm,
+          publicToken,
+          inactiveRealtor.id,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+      newBrokerId = Number(inactiveRealtor.id);
+    } else {
+      const [ins] = await pool.query<ResultSetHeader>(
+        `INSERT INTO brokers
+           (tenant_id, email, first_name, last_name, phone, normalized_phone, role, status, public_token, created_by_broker_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'broker', 'active', ?, ?)`,
+        [
+          MORTGAGE_TENANT_ID,
+          convertEmail,
+          c.first_name,
+          c.last_name,
+          c.phone ?? null,
+          convertPhoneNorm,
+          publicToken,
+          ownerForRealtor,
+        ],
+      );
+      newBrokerId = ins.insertId;
+    }
 
     // Deactivate client
     await pool.query(
@@ -20562,11 +26404,8 @@ const handleConvertBrokerToClient: RequestHandler = async (req, res) => {
     );
     const newClientId = ins.insertId;
 
-    // Deactivate broker
-    await pool.query(
-      `UPDATE brokers SET status = 'inactive' WHERE id = ? AND tenant_id = ?`,
-      [brokerId, MORTGAGE_TENANT_ID],
-    );
+    // Deactivate broker and free email/phone for UNIQUE (same as soft-delete)
+    await freeInactiveBrokerIdentity(pool, MORTGAGE_TENANT_ID, targetId);
 
     // Re-link conversation threads: clear contact_broker_id, set client_id
     await pool.query(
@@ -20763,6 +26602,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
       role,
       license_number,
       specializations,
+      created_by_broker_id: bodyCreatedByBrokerId,
     } = req.body;
 
     const [adminCheck] = (await pool.query(
@@ -20805,53 +26645,144 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
       });
     }
 
-    // Check if email already exists
-    const [existing] = (await pool.query(
-      "SELECT id FROM brokers WHERE email = ? AND tenant_id = ?",
-      [email, MORTGAGE_TENANT_ID],
-    )) as [RowDataPacket[], any];
-
-    if (existing.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: "A broker with this email already exists",
-      });
-    }
-
-    // Reject if another broker already uses this phone
-    if (phone?.trim()) {
-      const normalizedBrokerPhone = phone.trim().replace(/\D/g, "").slice(-10);
-      if (normalizedBrokerPhone) {
-        const [[brokerPhoneExists]] = await pool.query<any[]>(
-          "SELECT id FROM brokers WHERE tenant_id = ? AND REGEXP_REPLACE(phone, '[^0-9]', '') LIKE ? LIMIT 1",
-          [MORTGAGE_TENANT_ID, `%${normalizedBrokerPhone}`],
-        );
-        if (brokerPhoneExists) {
-          return res.status(409).json({
-            success: false,
-            error:
-              "This phone number is already linked to another broker. Use a different number or leave it blank.",
-          });
-        }
-      }
-    }
-
-    const createdByBrokerId = isOwner
+    let createdByBrokerId = isOwner
       ? resolvedRole === "broker"
         ? brokerId
         : null
       : brokerId;
+    // Platform owner may assign the partner to an MB at create time
+    if (
+      isOwner &&
+      resolvedRole === "broker" &&
+      bodyCreatedByBrokerId != null &&
+      Number.isFinite(Number(bodyCreatedByBrokerId))
+    ) {
+      const assignedMb = Number(bodyCreatedByBrokerId);
+      const [mbRows] = (await pool.query(
+        "SELECT id, role FROM brokers WHERE id = ? AND tenant_id = ? AND status = 'active'",
+        [assignedMb, MORTGAGE_TENANT_ID],
+      )) as [RowDataPacket[], any];
+      if (
+        !mbRows.length ||
+        !isMortgageBankerOrOwner(String(mbRows[0].role || ""))
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "created_by_broker_id must reference an active Mortgage Banker or platform owner",
+        });
+      }
+      createdByBrokerId = assignedMb;
+    }
+
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      createdByBrokerId ?? brokerId,
+    );
+
+    // Email uniqueness: partners per owning MB; admins tenant-wide (active only)
+    const emailNorm = String(email).trim().toLowerCase();
+    const emailConflict = await findBrokerEmailConflict(
+      pool,
+      MORTGAGE_TENANT_ID,
+      emailNorm,
+      { role: resolvedRole, createdByBrokerId },
+    );
+    if (emailConflict) {
+      const conflictName =
+        `${emailConflict.first_name || ""} ${emailConflict.last_name || ""}`.trim();
+      return res.status(400).json({
+        success: false,
+        error:
+          crmFlags.activeForBroker && createdByBrokerId != null
+            ? conflictName
+              ? `You already have a realtor with this email on your list (${conflictName}). Open them from the list to edit instead of creating a new one.`
+              : "You already have a realtor with this email on your list. Open them from the list to edit instead of creating a new one."
+            : "A broker with this email already exists",
+        existing_broker_id: emailConflict.id,
+      });
+    }
+
+    const normalizedBrokerPhone = phone?.trim()
+      ? phone.trim().replace(/\D/g, "").slice(-10) || null
+      : null;
+
+    // Phone uniqueness (blank OK). Partners scoped to owning MB when CRM on.
+    if (normalizedBrokerPhone) {
+      const phoneConflict = await findBrokerPhoneConflict(
+        pool,
+        MORTGAGE_TENANT_ID,
+        normalizedBrokerPhone,
+        { role: resolvedRole, createdByBrokerId },
+      );
+      if (phoneConflict) {
+        return res.status(409).json({
+          success: false,
+          error:
+            crmFlags.activeForBroker && createdByBrokerId != null
+              ? "You already have a realtor with this phone number on your list"
+              : "This phone number is already linked to another broker. Use a different number or leave it blank.",
+        });
+      }
+    }
+
+    // Soft-deleted partner with same email: reactivate instead of UNIQUE clash
+    const inactiveMatch = await findInactiveBrokerEmailForReactivate(
+      pool,
+      MORTGAGE_TENANT_ID,
+      emailNorm,
+      { createdByBrokerId, role: resolvedRole },
+    );
+    if (inactiveMatch) {
+      await pool.query(
+        `UPDATE brokers
+         SET first_name = ?, last_name = ?, email = ?, phone = ?, normalized_phone = ?,
+             license_number = COALESCE(?, license_number),
+             specializations = COALESCE(?, specializations),
+             status = 'active', email_verified = 0, updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          first_name,
+          last_name,
+          emailNorm,
+          phone || null,
+          normalizedBrokerPhone,
+          license_number || null,
+          specializations ? JSON.stringify(specializations) : null,
+          inactiveMatch.id,
+          MORTGAGE_TENANT_ID,
+        ],
+      );
+      const [reactivated] = (await pool.query(
+        "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_by_broker_id, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
+        [inactiveMatch.id, MORTGAGE_TENANT_ID],
+      )) as [RowDataPacket[], any];
+      sendBrokerManualWelcomeEmail(
+        reactivated[0].email,
+        reactivated[0].first_name,
+        reactivated[0].last_name,
+        reactivated[0].role,
+      ).catch(() => {});
+      return res.json({
+        success: true,
+        broker: reactivated[0],
+        message: "Broker reactivated successfully",
+        reactivated: true,
+      });
+    }
 
     const [result] = (await pool.query(
       `INSERT INTO brokers 
-        (tenant_id, email, first_name, last_name, phone, role, license_number, specializations, status, email_verified, created_by_broker_id, public_token) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, UUID())`,
+        (tenant_id, email, first_name, last_name, phone, normalized_phone, role, license_number, specializations, status, email_verified, created_by_broker_id, public_token) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, UUID())`,
       [
         MORTGAGE_TENANT_ID,
-        email,
+        emailNorm,
         first_name,
         last_name,
         phone || null,
+        normalizedBrokerPhone,
         resolvedRole,
         license_number || null,
         specializations ? JSON.stringify(specializations) : null,
@@ -20860,7 +26791,7 @@ const handleCreateBroker: RequestHandler = async (req, res) => {
     )) as [ResultSetHeader, any];
 
     const [newBroker] = (await pool.query(
-      "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
+      "SELECT id, email, first_name, last_name, phone, role, status, license_number, specializations, email_verified, created_by_broker_id, created_at FROM brokers WHERE id = ? AND tenant_id = ?",
       [result.insertId, MORTGAGE_TENANT_ID],
     )) as [RowDataPacket[], any];
 
@@ -20975,11 +26906,11 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
           error: "Mortgage Banker not found",
         });
       }
-      if (mbCheck[0].role !== "admin") {
+      if (!isMortgageBankerOrOwner(String(mbCheck[0].role || ""))) {
         return res.status(400).json({
           success: false,
           error:
-            "created_by_broker_id must reference a Mortgage Banker (admin role)",
+            "created_by_broker_id must reference a Mortgage Banker or platform owner",
         });
       }
     }
@@ -21004,11 +26935,24 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
             .status(400)
             .json({ success: false, error: "Invalid email format" });
         }
-        const [[emailExists]] = await pool.query<any[]>(
-          "SELECT id FROM brokers WHERE email = ? AND tenant_id = ? AND id != ? LIMIT 1",
-          [trimmedEmail, MORTGAGE_TENANT_ID, targetBrokerId],
+        const [[targetRow]] = await pool.query<RowDataPacket[]>(
+          `SELECT role, created_by_broker_id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [targetBrokerId, MORTGAGE_TENANT_ID],
         );
-        if (emailExists) {
+        const targetRole = String(targetRow?.role || "broker");
+        const targetOwner =
+          (targetRow?.created_by_broker_id as number | null) ?? null;
+        const emailConflict = await findBrokerEmailConflict(
+          pool,
+          MORTGAGE_TENANT_ID,
+          trimmedEmail,
+          {
+            role: targetRole,
+            createdByBrokerId: targetOwner,
+            excludeBrokerId: Number(targetBrokerId),
+          },
+        );
+        if (emailConflict) {
           return res.status(409).json({
             success: false,
             error: "A broker with this email already exists",
@@ -21022,27 +26966,39 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
     }
     if (phone !== undefined) {
       const trimmedBrokerPhone = phone?.trim() || null;
-      // Reject if another broker already uses this phone
-      if (trimmedBrokerPhone) {
-        const normalizedBrokerPhone = trimmedBrokerPhone
-          .replace(/\D/g, "")
-          .slice(-10);
-        if (normalizedBrokerPhone) {
-          const [[brokerPhoneExists]] = await pool.query<any[]>(
-            "SELECT id FROM brokers WHERE tenant_id = ? AND REGEXP_REPLACE(phone, '[^0-9]', '') LIKE ? AND id != ? LIMIT 1",
-            [MORTGAGE_TENANT_ID, `%${normalizedBrokerPhone}`, targetBrokerId],
-          );
-          if (brokerPhoneExists) {
-            return res.status(409).json({
-              success: false,
-              error:
-                "This phone number is already linked to another broker. Use a different number or leave it blank.",
-            });
-          }
+      const normalizedBrokerPhone = trimmedBrokerPhone
+        ? trimmedBrokerPhone.replace(/\D/g, "").slice(-10) || null
+        : null;
+      if (normalizedBrokerPhone) {
+        const [[targetRow]] = await pool.query<RowDataPacket[]>(
+          `SELECT role, created_by_broker_id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+          [targetBrokerId, MORTGAGE_TENANT_ID],
+        );
+        const targetRole = String(targetRow?.role || "broker");
+        const targetOwner =
+          (targetRow?.created_by_broker_id as number | null) ?? null;
+        const phoneConflict = await findBrokerPhoneConflict(
+          pool,
+          MORTGAGE_TENANT_ID,
+          normalizedBrokerPhone,
+          {
+            role: targetRole,
+            createdByBrokerId: targetOwner,
+            excludeBrokerId: Number(targetBrokerId),
+          },
+        );
+        if (phoneConflict) {
+          return res.status(409).json({
+            success: false,
+            error:
+              "This phone number is already linked to another broker. Use a different number or leave it blank.",
+          });
         }
       }
       updates.push("phone = ?");
       values.push(trimmedBrokerPhone);
+      updates.push("normalized_phone = ?");
+      values.push(normalizedBrokerPhone);
     }
     if (role !== undefined) {
       updates.push("role = ?");
@@ -21061,8 +27017,75 @@ const handleUpdateBroker: RequestHandler = async (req, res) => {
       values.push(specializations ? JSON.stringify(specializations) : null);
     }
     if (created_by_broker_id !== undefined) {
+      const newOwner =
+        created_by_broker_id === null || created_by_broker_id === ""
+          ? null
+          : Number(created_by_broker_id);
+      const [[curRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT email, phone, normalized_phone, role, created_by_broker_id
+         FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [targetBrokerId, MORTGAGE_TENANT_ID],
+      );
+      const curOwner = (curRow?.created_by_broker_id as number | null) ?? null;
+      if (newOwner !== curOwner) {
+        const targetRole = String(curRow?.role || "broker");
+        const emailForCheck =
+          email !== undefined
+            ? String(email || "")
+                .trim()
+                .toLowerCase()
+            : String(curRow?.email || "")
+                .trim()
+                .toLowerCase();
+        const phoneForCheck =
+          phone !== undefined
+            ? phone?.trim()
+              ? String(phone).replace(/\D/g, "").slice(-10) || null
+              : null
+            : curRow?.normalized_phone
+              ? String(curRow.normalized_phone)
+              : null;
+        if (emailForCheck) {
+          const emailConflict = await findBrokerEmailConflict(
+            pool,
+            MORTGAGE_TENANT_ID,
+            emailForCheck,
+            {
+              role: targetRole,
+              createdByBrokerId: newOwner,
+              excludeBrokerId: Number(targetBrokerId),
+            },
+          );
+          if (emailConflict) {
+            return res.status(409).json({
+              success: false,
+              error:
+                "A broker with this email already exists under the selected Mortgage Banker",
+            });
+          }
+        }
+        if (phoneForCheck) {
+          const phoneConflict = await findBrokerPhoneConflict(
+            pool,
+            MORTGAGE_TENANT_ID,
+            phoneForCheck,
+            {
+              role: targetRole,
+              createdByBrokerId: newOwner,
+              excludeBrokerId: Number(targetBrokerId),
+            },
+          );
+          if (phoneConflict) {
+            return res.status(409).json({
+              success: false,
+              error:
+                "This phone number is already linked to another broker under the selected Mortgage Banker",
+            });
+          }
+        }
+      }
       updates.push("created_by_broker_id = ?");
-      values.push(created_by_broker_id ?? null);
+      values.push(newOwner);
     }
 
     if (updates.length === 0) {
@@ -21195,10 +27218,11 @@ const handleDeleteBroker: RequestHandler = async (req, res) => {
       );
     }
 
-    // Soft delete - set status to inactive (preserve data integrity)
-    await pool.query(
-      "UPDATE brokers SET status = 'inactive', updated_at = NOW() WHERE id = ? AND tenant_id = ?",
-      [targetBrokerId, MORTGAGE_TENANT_ID],
+    // Soft delete — deactivate and free email/phone so UNIQUE allows re-add
+    await freeInactiveBrokerIdentity(
+      pool,
+      MORTGAGE_TENANT_ID,
+      Number(targetBrokerId),
     );
 
     console.log(`✅ Successfully deactivated broker ${targetBrokerId}`);
@@ -21293,6 +27317,161 @@ const handleUpdateSlug: RequestHandler = async (req, res) => {
     );
     return res.json({ success: true, slug: normalized });
   } catch (err) {
+    return res
+      .status(500)
+      .json({ success: false, error: "Internal server error" });
+  }
+};
+
+/**
+ * GET /api/broker/notification-preferences
+ * Authenticated broker reads own email alert prefs (defaults = all ON).
+ */
+const handleGetBrokerNotificationPreferences: RequestHandler = async (
+  req,
+  res,
+) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+    if (!brokerRows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Broker not found" });
+    }
+    const accountEmail = String(brokerRows[0].email || "");
+    const prefs = await loadBrokerNotificationPrefsInline(brokerId);
+    return res.json({
+      success: true,
+      preferences: {
+        ...prefs,
+        account_email: accountEmail,
+        account_email_sendable: isSendableBrokerEmailInline(accountEmail),
+      },
+    });
+  } catch (err) {
+    console.error("get notification preferences:", err);
+    return res
+      .status(500)
+      .json({ success: false, error: "Internal server error" });
+  }
+};
+
+/**
+ * PUT /api/broker/notification-preferences
+ * Authenticated broker updates own email alert prefs only.
+ */
+const handlePutBrokerNotificationPreferences: RequestHandler = async (
+  req,
+  res,
+) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const body = (req.body || {}) as Record<string, unknown>;
+    const current = await loadBrokerNotificationPrefsInline(brokerId);
+
+    const boolKeys: Array<keyof BrokerNotificationPrefsInline> = [
+      "email_new_application",
+      "email_voicemail",
+      "email_inbound_sms",
+      "email_inbound_email",
+      "email_scheduler_booking",
+      "email_reminder_flow_broker",
+    ];
+    const next: BrokerNotificationPrefsInline = { ...current };
+    const changedColumns: string[] = [];
+    for (const key of boolKeys) {
+      if (key in body) {
+        const v = body[key];
+        if (
+          typeof v !== "boolean" &&
+          v !== 0 &&
+          v !== 1 &&
+          v !== "0" &&
+          v !== "1"
+        ) {
+          return res
+            .status(400)
+            .json({ success: false, error: `${key} must be a boolean` });
+        }
+        next[key] = coalesceBoolInline(v, true) as never;
+        changedColumns.push(key);
+      }
+    }
+    if ("secondary_email" in body) {
+      const raw = body.secondary_email;
+      if (raw === null || raw === "") {
+        next.secondary_email = null;
+      } else if (typeof raw !== "string") {
+        return res.status(400).json({
+          success: false,
+          error: "secondary_email must be a string or null",
+        });
+      } else {
+        const normalized = normalizeSecondaryEmailInline(raw);
+        if (raw.trim() && !normalized) {
+          return res.status(400).json({
+            success: false,
+            error: "secondary_email must be a valid email address",
+          });
+        }
+        next.secondary_email = normalized;
+      }
+      changedColumns.push("secondary_email");
+    }
+
+    if (!changedColumns.length) {
+      return res.status(400).json({
+        success: false,
+        error: "No preference fields to update",
+      });
+    }
+
+    // Ensure row exists with defaults, then UPDATE only patched columns.
+    // Avoids concurrent toggle races that rewrite untouched columns.
+    await pool.query(
+      `INSERT IGNORE INTO broker_notification_preferences (broker_id, tenant_id)
+       VALUES (?, ?)`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+
+    const setParts: string[] = [];
+    const setVals: Array<string | number | null> = [];
+    for (const col of changedColumns) {
+      setParts.push(`${col} = ?`);
+      if (col === "secondary_email") {
+        setVals.push(next.secondary_email);
+      } else {
+        setVals.push((next as Record<string, unknown>)[col] ? 1 : 0);
+      }
+    }
+    setVals.push(brokerId, MORTGAGE_TENANT_ID);
+    await pool.query(
+      `UPDATE broker_notification_preferences
+       SET ${setParts.join(", ")}
+       WHERE broker_id = ? AND tenant_id = ?`,
+      setVals,
+    );
+
+    const prefs = await loadBrokerNotificationPrefsInline(brokerId);
+    const [brokerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT email FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [brokerId, MORTGAGE_TENANT_ID],
+    );
+    const accountEmail = String(brokerRows[0]?.email || "");
+    return res.json({
+      success: true,
+      preferences: {
+        ...prefs,
+        account_email: accountEmail,
+        account_email_sendable: isSendableBrokerEmailInline(accountEmail),
+      },
+    });
+  } catch (err) {
+    console.error("put notification preferences:", err);
     return res
       .status(500)
       .json({ success: false, error: "Internal server error" });
@@ -23718,22 +29897,14 @@ const handleGenerateMISMO: RequestHandler = async (req, res) => {
 
     const loan = loanRows[0];
 
-    // Check if all tasks are approved
-    const [taskStats] = await pool.query<RowDataPacket[]>(
-      `SELECT 
-        COUNT(*) as total_tasks,
-        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_tasks
-       FROM tasks 
-       WHERE application_id = ?`,
-      [loanId],
+    const tasksGate = await assertLoanTasksGate(
+      Number(loan.tenant_id ?? MORTGAGE_TENANT_ID),
+      Number(loanId),
+      "mismo_require_all_tasks",
+      "All tasks must be approved before exporting MISMO",
     );
-
-    const stats = taskStats[0];
-    if (stats.total_tasks > 0 && stats.approved_tasks < stats.total_tasks) {
-      return res.status(400).json({
-        success: false,
-        error: `Not all tasks are approved. ${stats.approved_tasks}/${stats.total_tasks} tasks approved.`,
-      });
+    if (tasksGate.ok === false) {
+      return res.status(400).json({ success: false, error: tasksGate.error });
     }
 
     // Generate MISMO 3.4 XML
@@ -24631,6 +30802,15 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
       conditions.push("td.document_type = ?");
       params.push(filterType);
     }
+    const filterBrokerId = parseInt(req.query.filterBroker as string, 10);
+    if (
+      hasGlobalDocumentAccess &&
+      Number.isFinite(filterBrokerId) &&
+      filterBrokerId > 0
+    ) {
+      conditions.push("a.broker_user_id = ?");
+      params.push(filterBrokerId);
+    }
 
     const whereClause = conditions.length
       ? `WHERE ${conditions.join(" AND ")}`
@@ -24670,6 +30850,879 @@ const handleGetAllTaskDocuments: RequestHandler = async (req, res) => {
     res
       .status(500)
       .json({ success: false, error: "Failed to get task documents" });
+  }
+};
+
+// ── Document download labels + store ZIP (inlined from shared/ for Vercel) ──
+
+type DocumentDownloadLabel = "ID" | "Seguro" | "Bank_Statement" | "Document";
+
+function resolveDocumentDownloadLabel(input: {
+  taskTitle?: string | null;
+  fieldName?: string | null;
+  fieldLabel?: string | null;
+}): DocumentDownloadLabel {
+  const hay = [input.fieldName, input.fieldLabel, input.taskTitle]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (
+    /\bssn\b/.test(hay) ||
+    hay.includes("social security") ||
+    hay.includes("seguro") ||
+    hay.includes("borrower_ssn") ||
+    hay.includes("spouse_ssn")
+  ) {
+    return "Seguro";
+  }
+  if (
+    hay.includes("borrower_id") ||
+    hay.includes("spouse_id") ||
+    /\bid\b/.test(hay) ||
+    hay.includes("identification") ||
+    hay.includes("driver") ||
+    hay.includes("passport") ||
+    hay.includes("green card")
+  ) {
+    return "ID";
+  }
+  if (hay.includes("bank") || hay.includes("statement")) {
+    return "Bank_Statement";
+  }
+  return "Document";
+}
+
+function buildDocumentDownloadFilename(opts: {
+  applicationNumber?: string | null;
+  label: DocumentDownloadLabel;
+  fieldName?: string | null;
+  fieldLabel?: string | null;
+  extension?: string;
+}): string {
+  const ext = (opts.extension || "pdf").replace(/^\./, "") || "pdf";
+  const loan = (opts.applicationNumber || "DOC")
+    .replace(/[^\w.-]+/g, "_")
+    .slice(0, 40);
+  let suffix = "";
+  const field =
+    `${opts.fieldName || ""} ${opts.fieldLabel || ""}`.toLowerCase();
+  if (field.includes("spouse") || field.includes("co-borrower")) {
+    suffix = "_spouse";
+  } else if (field.includes("month_1") || field.includes("month 1")) {
+    suffix = "_Month1";
+  } else if (field.includes("month_2") || field.includes("month 2")) {
+    suffix = "_Month2";
+  }
+  return `${loan}_${opts.label}${suffix}.${ext}`;
+}
+
+function zipU16(n: number): Buffer {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(n, 0);
+  return b;
+}
+function zipU32(n: number): Buffer {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(n >>> 0, 0);
+  return b;
+}
+function buildStoreZip(entries: Array<{ name: string; data: Buffer }>): Buffer {
+  const now = new Date();
+  const time =
+    ((now.getHours() & 0x1f) << 11) |
+    ((now.getMinutes() & 0x3f) << 5) |
+    ((Math.floor(now.getSeconds() / 2) & 0x1f) << 0);
+  const date =
+    (((now.getFullYear() - 1980) & 0x7f) << 9) |
+    (((now.getMonth() + 1) & 0xf) << 5) |
+    (now.getDate() & 0x1f);
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+  // CRC-32 (IEEE) — inline so we do not depend on Node zlib.crc32 availability
+  const crcTable = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  const crc32 = (buf: Buffer) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+      c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name.replace(/\\/g, "/"), "utf8");
+    const data = entry.data;
+    const crc = crc32(data) >>> 0;
+    const size = data.length;
+    const localHeader = Buffer.concat([
+      zipU32(0x04034b50),
+      zipU16(20),
+      zipU16(0),
+      zipU16(0),
+      zipU16(time),
+      zipU16(date),
+      zipU32(crc),
+      zipU32(size),
+      zipU32(size),
+      zipU16(nameBuf.length),
+      zipU16(0),
+      nameBuf,
+    ]);
+    localParts.push(localHeader, data);
+    centralParts.push(
+      Buffer.concat([
+        zipU32(0x02014b50),
+        zipU16(20),
+        zipU16(20),
+        zipU16(0),
+        zipU16(0),
+        zipU16(time),
+        zipU16(date),
+        zipU32(crc),
+        zipU32(size),
+        zipU32(size),
+        zipU16(nameBuf.length),
+        zipU16(0),
+        zipU16(0),
+        zipU16(0),
+        zipU16(0),
+        zipU32(0),
+        zipU32(offset),
+        nameBuf,
+      ]),
+    );
+    offset += localHeader.length + data.length;
+  }
+  const centralDir = Buffer.concat(centralParts);
+  return Buffer.concat([
+    ...localParts,
+    centralDir,
+    zipU32(0x06054b50),
+    zipU16(0),
+    zipU16(0),
+    zipU16(entries.length),
+    zipU16(entries.length),
+    zipU32(centralDir.length),
+    zipU32(offset),
+    zipU16(0),
+  ]);
+}
+
+function resolveCdnFileUrl(filePath: string): string | null {
+  const raw = String(filePath || "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  // Uploaded docs live under /data/encore/... on the PHP CDN.
+  // Public base is https://disruptinglabs.com/data/api + path
+  // (same as Documents.tsx). Bare https://disruptinglabs.com/data/encore
+  // returns Apache HTML catch-all — that corrupted zip downloads.
+  const cleaned = raw.startsWith("/") ? raw : `/${raw}`;
+  return `https://disruptinglabs.com/data/api${cleaned}`;
+}
+
+/** True when buffer looks like HTML (CDN miss), not a real document. */
+function isHtmlBuffer(buf: Buffer): boolean {
+  if (!buf.length) return true;
+  const head = buf
+    .subarray(0, Math.min(64, buf.length))
+    .toString("utf8")
+    .trimStart();
+  return (
+    head.startsWith("<!DOCTYPE") ||
+    head.startsWith("<!doctype") ||
+    head.startsWith("<html") ||
+    head.startsWith("<HTML")
+  );
+}
+
+function detectImageKind(buf: Buffer): "jpeg" | "png" | null {
+  if (
+    buf.length >= 3 &&
+    buf[0] === 0xff &&
+    buf[1] === 0xd8 &&
+    buf[2] === 0xff
+  ) {
+    return "jpeg";
+  }
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47
+  ) {
+    return "png";
+  }
+  return null;
+}
+
+function readJpegSize(buf: Buffer): { width: number; height: number } | null {
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) break;
+    const marker = buf[i + 1];
+    const len = (buf[i + 2] << 8) | buf[i + 3];
+    // SOF0 / SOF2
+    if (marker === 0xc0 || marker === 0xc2) {
+      const height = (buf[i + 5] << 8) | buf[i + 6];
+      const width = (buf[i + 7] << 8) | buf[i + 8];
+      if (width > 0 && height > 0) return { width, height };
+    }
+    i += 2 + len;
+  }
+  return null;
+}
+
+/**
+ * Wrap a JPEG in a single-page PDF so labeled downloads are always .pdf
+ * (Daniel: phone uploads are jpg but brokers expect PDF attachments).
+ */
+function jpegToSinglePagePdf(jpeg: Buffer): Buffer | null {
+  const size = readJpegSize(jpeg) || { width: 612, height: 792 };
+  const { width, height } = size;
+  // Fit on US Letter while preserving aspect ratio
+  const pageW = 612;
+  const pageH = 792;
+  const scale = Math.min(pageW / width, pageH / height);
+  const drawW = width * scale;
+  const drawH = height * scale;
+  const ox = (pageW - drawW) / 2;
+  const oy = (pageH - drawH) / 2;
+
+  const objects: Buffer[] = [];
+  const add = (body: string | Buffer) => {
+    objects.push(typeof body === "string" ? Buffer.from(body, "utf8") : body);
+  };
+
+  add("<< /Type /Catalog /Pages 2 0 R >>");
+  add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  add(
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>`,
+  );
+  const content = `q ${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${ox.toFixed(2)} ${oy.toFixed(2)} cm /Im0 Do Q\n`;
+  add(
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`,
+  );
+  add(
+    Buffer.concat([
+      Buffer.from(
+        `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`,
+        "utf8",
+      ),
+      jpeg,
+      Buffer.from("\nendstream", "utf8"),
+    ]),
+  );
+
+  const parts: Buffer[] = [Buffer.from("%PDF-1.4\n", "utf8")];
+  const offsets: number[] = [0];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.concat(parts).length);
+    parts.push(
+      Buffer.from(`${i + 1} 0 obj\n`, "utf8"),
+      objects[i],
+      Buffer.from("\nendobj\n", "utf8"),
+    );
+  }
+  const body = Buffer.concat(parts);
+  const xrefStart = body.length;
+  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= objects.length; i++) {
+    xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  const trailer = `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.concat([
+    body,
+    Buffer.from(xref, "utf8"),
+    Buffer.from(trailer, "utf8"),
+  ]);
+}
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+/**
+ * Decode PNG → raw RGB (8-bit). Supports color types 2 (RGB) and 6 (RGBA),
+ * non-interlaced only. Inlined from shared/document-download.ts for Vercel.
+ */
+function pngToRgb(
+  png: Buffer,
+): { width: number; height: number; rgb: Buffer } | null {
+  if (
+    png.length < 8 ||
+    png[0] !== 0x89 ||
+    png[1] !== 0x50 ||
+    png[2] !== 0x4e ||
+    png[3] !== 0x47
+  ) {
+    return null;
+  }
+
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = -1;
+  let interlace = 0;
+  const idatParts: Buffer[] = [];
+  let offset = 8;
+
+  while (offset + 12 <= png.length) {
+    const len = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + len;
+    if (dataEnd + 4 > png.length) return null;
+    const data = png.subarray(dataStart, dataEnd);
+
+    if (type === "IHDR") {
+      if (len < 13) return null;
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === "IDAT") {
+      idatParts.push(Buffer.from(data));
+    } else if (type === "IEND") {
+      break;
+    }
+
+    offset = dataEnd + 4;
+  }
+
+  if (
+    !width ||
+    !height ||
+    bitDepth !== 8 ||
+    interlace !== 0 ||
+    (colorType !== 2 && colorType !== 6) ||
+    idatParts.length === 0
+  ) {
+    return null;
+  }
+
+  const bpp = colorType === 6 ? 4 : 3;
+  let inflated: Buffer;
+  try {
+    inflated = inflateSync(Buffer.concat(idatParts));
+  } catch {
+    return null;
+  }
+
+  const stride = width * bpp;
+  const expected = height * (1 + stride);
+  if (inflated.length < expected) return null;
+
+  const raw = Buffer.alloc(height * stride);
+  let src = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = inflated[src++];
+    const rowStart = y * stride;
+    const prevStart = (y - 1) * stride;
+    for (let i = 0; i < stride; i++) {
+      const x = inflated[src++];
+      const a = i >= bpp ? raw[rowStart + i - bpp] : 0;
+      const b = y > 0 ? raw[prevStart + i] : 0;
+      const c = y > 0 && i >= bpp ? raw[prevStart + i - bpp] : 0;
+      let val: number;
+      switch (filter) {
+        case 0:
+          val = x;
+          break;
+        case 1:
+          val = (x + a) & 0xff;
+          break;
+        case 2:
+          val = (x + b) & 0xff;
+          break;
+        case 3:
+          val = (x + ((a + b) >> 1)) & 0xff;
+          break;
+        case 4:
+          val = (x + paethPredictor(a, b, c)) & 0xff;
+          break;
+        default:
+          return null;
+      }
+      raw[rowStart + i] = val;
+    }
+  }
+
+  if (colorType === 2) {
+    return { width, height, rgb: raw };
+  }
+
+  const rgb = Buffer.alloc(width * height * 3);
+  for (let i = 0, j = 0; i < raw.length; i += 4, j += 3) {
+    rgb[j] = raw[i];
+    rgb[j + 1] = raw[i + 1];
+    rgb[j + 2] = raw[i + 2];
+  }
+  return { width, height, rgb };
+}
+
+function rgbToSinglePagePdf(
+  width: number,
+  height: number,
+  rgb: Buffer,
+): Buffer {
+  const compressed = deflateSync(rgb);
+  const pageW = 612;
+  const pageH = 792;
+  const scale = Math.min(pageW / width, pageH / height);
+  const drawW = width * scale;
+  const drawH = height * scale;
+  const ox = (pageW - drawW) / 2;
+  const oy = (pageH - drawH) / 2;
+
+  const objects: Buffer[] = [];
+  const add = (body: string | Buffer) => {
+    objects.push(typeof body === "string" ? Buffer.from(body, "utf8") : body);
+  };
+
+  add("<< /Type /Catalog /Pages 2 0 R >>");
+  add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  add(
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>`,
+  );
+  const content = `q ${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${ox.toFixed(2)} ${oy.toFixed(2)} cm /Im0 Do Q\n`;
+  add(
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`,
+  );
+  add(
+    Buffer.concat([
+      Buffer.from(
+        `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`,
+        "utf8",
+      ),
+      compressed,
+      Buffer.from("\nendstream", "utf8"),
+    ]),
+  );
+
+  const parts: Buffer[] = [Buffer.from("%PDF-1.4\n", "utf8")];
+  const offsets: number[] = [0];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.concat(parts).length);
+    parts.push(
+      Buffer.from(`${i + 1} 0 obj\n`, "utf8"),
+      objects[i],
+      Buffer.from("\nendobj\n", "utf8"),
+    );
+  }
+  const body = Buffer.concat(parts);
+  const xrefStart = body.length;
+  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= objects.length; i++) {
+    xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  const trailer = `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.concat([
+    body,
+    Buffer.from(xref, "utf8"),
+    Buffer.from(trailer, "utf8"),
+  ]);
+}
+
+/** PNG→PDF (RGB/RGBA 8-bit). Inlined from shared/document-download.ts. */
+function pngToSinglePagePdf(png: Buffer): Buffer | null {
+  const decoded = pngToRgb(png);
+  if (!decoded) return null;
+  return rgbToSinglePagePdf(decoded.width, decoded.height, decoded.rgb);
+}
+
+/**
+ * Normalize fetched document bytes for download/zip:
+ * - reject HTML CDN misses
+ * - wrap JPEG and PNG as PDF (brokers expect PDF attachments)
+ */
+function prepareDocumentDownloadBytes(
+  raw: Buffer,
+  opts: { documentType?: string | null; contentType?: string | null },
+): { data: Buffer; extension: string; contentType: string } | null {
+  if (!raw.length || isHtmlBuffer(raw)) return null;
+  if (raw.length >= 5 && raw.subarray(0, 5).toString("utf8") === "%PDF-") {
+    return {
+      data: raw,
+      extension: "pdf",
+      contentType: "application/pdf",
+    };
+  }
+  const kind = detectImageKind(raw);
+  if (kind === "jpeg") {
+    const pdf = jpegToSinglePagePdf(raw);
+    if (pdf) {
+      return {
+        data: pdf,
+        extension: "pdf",
+        contentType: "application/pdf",
+      };
+    }
+  }
+  if (kind === "png") {
+    const pdf = pngToSinglePagePdf(raw);
+    if (pdf) {
+      return {
+        data: pdf,
+        extension: "pdf",
+        contentType: "application/pdf",
+      };
+    }
+    return {
+      data: raw,
+      extension: "png",
+      contentType: "image/png",
+    };
+  }
+  const ct = String(opts.contentType || "").toLowerCase();
+  if (ct.includes("jpeg") || ct.includes("jpg")) {
+    const pdf = jpegToSinglePagePdf(raw);
+    if (pdf) {
+      return {
+        data: pdf,
+        extension: "pdf",
+        contentType: "application/pdf",
+      };
+    }
+  }
+  const ext =
+    opts.documentType === "image" ? "jpg" : ct.includes("pdf") ? "pdf" : "bin";
+  return {
+    data: raw,
+    extension: ext,
+    contentType: opts.contentType || "application/octet-stream",
+  };
+}
+
+async function assertBrokerCanAccessTaskDocument(
+  documentId: number,
+  brokerId: number,
+  brokerRole: string,
+): Promise<RowDataPacket | null> {
+  const hasGlobal = brokerRole === "platform_owner" || brokerRole === "admin";
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT td.id, td.file_path, td.original_filename, td.filename, td.document_type,
+            t.title AS task_title, tff.field_name, tff.field_label,
+            a.application_number, a.id AS application_id,
+            a.broker_user_id, a.partner_broker_id, c.assigned_broker_id
+     FROM task_documents td
+     INNER JOIN tasks t ON td.task_id = t.id
+     INNER JOIN loan_applications a ON t.application_id = a.id
+     INNER JOIN clients c ON a.client_user_id = c.id
+     LEFT JOIN task_form_fields tff ON tff.id = td.field_id
+     WHERE td.id = ? AND a.tenant_id = ?
+     LIMIT 1`,
+    [documentId, MORTGAGE_TENANT_ID],
+  );
+  const doc = rows[0];
+  if (!doc) return null;
+  if (hasGlobal) return doc;
+  const allowed =
+    Number(doc.assigned_broker_id) === brokerId ||
+    Number(doc.broker_user_id) === brokerId ||
+    Number(doc.partner_broker_id) === brokerId;
+  return allowed ? doc : null;
+}
+
+/**
+ * GET /api/documents/:documentId/download — labeled attachment via CDN proxy
+ */
+const handleDownloadTaskDocument: RequestHandler = async (req, res) => {
+  try {
+    const documentId = parseInt(req.params.documentId, 10);
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = String((req as any).brokerRole || "");
+    if (!Number.isFinite(documentId)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid document id" });
+    }
+    const doc = await assertBrokerCanAccessTaskDocument(
+      documentId,
+      brokerId,
+      brokerRole,
+    );
+    if (!doc) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Document not found" });
+    }
+    const url = resolveCdnFileUrl(String(doc.file_path));
+    if (!url) {
+      return res
+        .status(404)
+        .json({ success: false, error: "File path missing" });
+    }
+    const upstream = await fetch(url);
+    if (!upstream.ok) {
+      return res.status(502).json({
+        success: false,
+        error: `Upstream returned ${upstream.status}`,
+      });
+    }
+    const rawBuf = Buffer.from(await upstream.arrayBuffer());
+    const prepared = prepareDocumentDownloadBytes(rawBuf, {
+      documentType: doc.document_type as string,
+      contentType: upstream.headers.get("content-type"),
+    });
+    if (!prepared) {
+      return res.status(502).json({
+        success: false,
+        error: "Document file is missing or unreadable on storage",
+      });
+    }
+    const label = resolveDocumentDownloadLabel({
+      taskTitle: doc.task_title as string,
+      fieldName: doc.field_name as string,
+      fieldLabel: doc.field_label as string,
+    });
+    const downloadName = buildDocumentDownloadFilename({
+      applicationNumber: doc.application_number as string,
+      label,
+      fieldName: doc.field_name as string,
+      fieldLabel: doc.field_label as string,
+      extension: prepared.extension,
+    });
+    res.setHeader("Content-Type", prepared.contentType);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${downloadName.replace(/"/g, "")}"`,
+    );
+    res.send(prepared.data);
+  } catch (error) {
+    console.error("Error downloading document:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to download document" });
+  }
+};
+
+/**
+ * POST /api/documents/bulk-download — zip of selected document ids
+ * Body: { document_ids: number[] } OR { application_id: number }
+ */
+const handleBulkDownloadTaskDocuments: RequestHandler = async (req, res) => {
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = String((req as any).brokerRole || "");
+    const body = req.body as {
+      document_ids?: number[];
+      application_id?: number;
+    };
+    let ids: number[] = Array.isArray(body.document_ids)
+      ? body.document_ids
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n))
+      : [];
+    if (body.application_id) {
+      const appId = Number(body.application_id);
+      const hasGlobal =
+        brokerRole === "platform_owner" || brokerRole === "admin";
+      const accessSql = hasGlobal
+        ? `a.id = ? AND a.tenant_id = ?`
+        : `a.id = ? AND a.tenant_id = ? AND (c.assigned_broker_id = ? OR a.broker_user_id = ? OR a.partner_broker_id = ?)`;
+      const accessParams = hasGlobal
+        ? [appId, MORTGAGE_TENANT_ID]
+        : [appId, MORTGAGE_TENANT_ID, brokerId, brokerId, brokerId];
+      const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT td.id
+         FROM task_documents td
+         INNER JOIN tasks t ON td.task_id = t.id
+         INNER JOIN loan_applications a ON t.application_id = a.id
+         INNER JOIN clients c ON a.client_user_id = c.id
+         WHERE ${accessSql}`,
+        accessParams,
+      );
+      ids = rows.map((r) => Number(r.id));
+    }
+    if (!ids.length) {
+      return res.status(400).json({
+        success: false,
+        error: "No documents selected",
+      });
+    }
+    if (ids.length > 100) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Maximum 100 documents per zip. Select fewer or download in batches.",
+      });
+    }
+
+    const entries: Array<{ name: string; data: Buffer }> = [];
+    let loanLabel = "documents";
+    for (const id of ids) {
+      const doc = await assertBrokerCanAccessTaskDocument(
+        id,
+        brokerId,
+        brokerRole,
+      );
+      if (!doc) continue;
+      const url = resolveCdnFileUrl(String(doc.file_path));
+      if (!url) continue;
+      const upstream = await fetch(url);
+      if (!upstream.ok) continue;
+      const rawBuf = Buffer.from(await upstream.arrayBuffer());
+      const prepared = prepareDocumentDownloadBytes(rawBuf, {
+        documentType: doc.document_type as string,
+        contentType: upstream.headers.get("content-type"),
+      });
+      if (!prepared) continue;
+      const label = resolveDocumentDownloadLabel({
+        taskTitle: doc.task_title as string,
+        fieldName: doc.field_name as string,
+        fieldLabel: doc.field_label as string,
+      });
+      const name = buildDocumentDownloadFilename({
+        applicationNumber: doc.application_number as string,
+        label,
+        fieldName: doc.field_name as string,
+        fieldLabel: doc.field_label as string,
+        extension: prepared.extension,
+      });
+      if (doc.application_number) {
+        loanLabel = String(doc.application_number).replace(/[^\w.-]+/g, "_");
+      }
+      // Avoid duplicate names inside the zip
+      const uniqueName = entries.some((e) => e.name === name)
+        ? name.replace(/(\.[^.]+)$/, `_${id}$1`)
+        : name;
+      entries.push({ name: uniqueName, data: prepared.data });
+    }
+    if (!entries.length) {
+      return res.status(404).json({
+        success: false,
+        error: "No accessible documents could be downloaded",
+      });
+    }
+    const zip = buildStoreZip(entries);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${loanLabel}_documents.zip"`,
+    );
+    res.send(zip);
+  } catch (error) {
+    console.error("Error bulk-downloading documents:", error);
+    res.status(500).json({ success: false, error: "Failed to build zip" });
+  }
+};
+
+/**
+ * POST /api/loans/:applicationId/refresh-document-checklist
+ * Ensures ID / SSN / Bank auto-tasks exist; template multi-slots apply live.
+ */
+const handleRefreshDocumentChecklist: RequestHandler = async (req, res) => {
+  try {
+    const applicationId = parseInt(req.params.applicationId, 10);
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = String((req as any).brokerRole || "");
+    if (!Number.isFinite(applicationId)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid application id" });
+    }
+    const hasGlobal = brokerRole === "platform_owner" || brokerRole === "admin";
+    const [[loan]] = await pool.query<RowDataPacket[]>(
+      `SELECT a.id, a.client_user_id, a.broker_user_id, a.partner_broker_id, a.status
+       FROM loan_applications a
+       WHERE a.id = ? AND a.tenant_id = ? LIMIT 1`,
+      [applicationId, MORTGAGE_TENANT_ID],
+    );
+    if (!loan) {
+      return res.status(404).json({ success: false, error: "Loan not found" });
+    }
+    if (
+      !hasGlobal &&
+      Number(loan.broker_user_id) !== brokerId &&
+      Number(loan.partner_broker_id) !== brokerId
+    ) {
+      return res.status(403).json({ success: false, error: "Access denied" });
+    }
+
+    const requiredTitles = [
+      "Government-Issued ID",
+      "Social Security Card (SSN)",
+      "2 Months Bank Statements",
+    ];
+    const [templates] = await pool.query<RowDataPacket[]>(
+      `SELECT id, title, description, task_type, priority, default_due_days
+       FROM task_templates
+       WHERE tenant_id = ? AND is_active = 1 AND title IN (?, ?, ?)`,
+      [MORTGAGE_TENANT_ID, ...requiredTitles],
+    );
+    const [existing] = await pool.query<RowDataPacket[]>(
+      `SELECT id, title, template_id, status FROM tasks WHERE application_id = ?`,
+      [applicationId],
+    );
+    const existingTitles = new Set(
+      existing.map((t) => String(t.title).toLowerCase()),
+    );
+    let created = 0;
+    for (const tpl of templates) {
+      if (existingTitles.has(String(tpl.title).toLowerCase())) continue;
+      const dueDays = Number(tpl.default_due_days) || 7;
+      const due = new Date();
+      due.setDate(due.getDate() + dueDays);
+      await pool.query(
+        `INSERT INTO tasks
+           (tenant_id, template_id, application_id, title, description, task_type,
+            status, priority, assigned_to_user_id, due_date, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NOW(), NOW())`,
+        [
+          MORTGAGE_TENANT_ID,
+          tpl.id,
+          applicationId,
+          tpl.title,
+          tpl.description,
+          tpl.task_type,
+          tpl.priority || "high",
+          loan.client_user_id,
+          due.toISOString().slice(0, 19).replace("T", " "),
+        ],
+      );
+      created++;
+    }
+
+    const [fieldCounts] = await pool.query<RowDataPacket[]>(
+      `SELECT tt.title, COUNT(tff.id) AS field_count,
+              SUM(tff.is_required) AS required_count
+       FROM task_templates tt
+       LEFT JOIN task_form_fields tff ON tff.task_template_id = tt.id
+       WHERE tt.title IN (?, ?, ?) AND tt.tenant_id = ?
+       GROUP BY tt.id, tt.title`,
+      [...requiredTitles, MORTGAGE_TENANT_ID],
+    );
+
+    res.json({
+      success: true,
+      created_tasks: created,
+      message:
+        created > 0
+          ? `Added ${created} missing checklist task(s). Open each task to upload borrower / spouse / Month 1–2 files.`
+          : "Checklist templates already assigned. Open ID, SSN, or Bank tasks to use the new upload slots (spouse optional; two bank months required).",
+      template_fields: fieldCounts,
+    });
+  } catch (error) {
+    console.error("Error refreshing document checklist:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to refresh document checklist",
+    });
   }
 };
 
@@ -25067,27 +32120,54 @@ const handleUpdateClientTask: RequestHandler = async (req, res) => {
     if (actualStatus === "pending_approval") {
       const templateId = tasks[0].template_id;
       if (templateId) {
-        const [fileFieldRows] = await pool.query<any[]>(
-          `SELECT COUNT(*) AS cnt FROM task_form_fields
+        const [requiredFileFields] = await pool.query<RowDataPacket[]>(
+          `SELECT id, field_label FROM task_form_fields
            WHERE task_template_id = ?
-             AND field_type IN ('file_pdf', 'file_image', 'file_upload')`,
+             AND field_type IN ('file_pdf', 'file_image', 'file_upload')
+             AND is_required = 1`,
           [templateId],
         );
-        const requiresDocuments = (fileFieldRows[0]?.cnt || 0) > 0;
 
-        if (requiresDocuments) {
-          const [docRows] = await pool.query<any[]>(
+        if (requiredFileFields.length > 0) {
+          const [uploadedFieldRows] = await pool.query<RowDataPacket[]>(
+            `SELECT DISTINCT field_id FROM task_documents
+             WHERE task_id = ? AND field_id IS NOT NULL`,
+            [taskId],
+          );
+          const uploadedFieldIds = new Set(
+            uploadedFieldRows.map((r) => Number(r.field_id)),
+          );
+          // Legacy docs without field_id still count toward "any upload" fallback
+          const [anyDocs] = await pool.query<RowDataPacket[]>(
             `SELECT COUNT(*) AS cnt FROM task_documents WHERE task_id = ?`,
             [taskId],
           );
-          const documentCount = docRows[0]?.cnt || 0;
+          const totalDocs = Number(anyDocs[0]?.cnt || 0);
 
-          if (documentCount === 0) {
-            return res.status(400).json({
-              success: false,
-              error:
-                "This task requires at least one uploaded document before it can be submitted for review. Please upload your document(s) and try again.",
-            });
+          const missingRequired = requiredFileFields.filter(
+            (f) => !uploadedFieldIds.has(Number(f.id)),
+          );
+
+          // If every required field has a field_id-tagged upload → OK.
+          // If some required fields are missing but the task has zero docs → block.
+          // If some required fields are missing but legacy unscoped docs exist:
+          //   require at least as many docs as required fields (Month 1+2).
+          if (missingRequired.length > 0) {
+            const allHaveFieldIds = uploadedFieldIds.size > 0;
+            const enoughLegacyDocs =
+              !allHaveFieldIds && totalDocs >= requiredFileFields.length;
+            if (!enoughLegacyDocs) {
+              return res.status(400).json({
+                success: false,
+                error:
+                  missingRequired.length === requiredFileFields.length &&
+                  totalDocs === 0
+                    ? "This task requires uploaded document(s) before it can be submitted for review. Please upload your document(s) and try again."
+                    : `Please upload all required documents before submitting: ${missingRequired
+                        .map((f) => f.field_label)
+                        .join(", ")}`,
+              });
+            }
           }
         }
       }
@@ -26303,11 +33383,76 @@ async function triggerPipelineAutomation(
  * Non-throwing — failures are logged only.
  * Returns how many new executions were created (0 when no active flow matches).
  */
+type ReminderFlowTriggerResult = {
+  triggeredCount: number;
+  flowIds: number[];
+  skipReason: string | null;
+};
+
+async function explainNoMatchingReminderFlows(
+  tenantId: number,
+  triggerEvent: string,
+  loanType: string,
+  brokerId: number | null,
+): Promise<string> {
+  const [inactiveRows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, name FROM reminder_flows
+     WHERE tenant_id = ? AND trigger_event = ? AND flow_category = 'loan' AND is_active = 0
+     ORDER BY id`,
+    [tenantId, triggerEvent],
+  );
+  if (inactiveRows.length > 0) {
+    const labels = inactiveRows.map((f) => `#${f.id} "${f.name}"`).join(", ");
+    return `Reminder flow(s) exist but are inactive: ${labels}. Reactivate in Reminder Flows.`;
+  }
+
+  const [loanTypeRows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, name, loan_type_filter FROM reminder_flows
+     WHERE tenant_id = ? AND trigger_event = ? AND flow_category = 'loan' AND is_active = 1
+       AND loan_type_filter NOT IN ('all', ?)
+     ORDER BY id`,
+    [tenantId, triggerEvent, loanType],
+  );
+  if (loanTypeRows.length > 0) {
+    const labels = loanTypeRows
+      .map((f) => `#${f.id} "${f.name}" (${f.loan_type_filter} only)`)
+      .join(", ");
+    return `Active flow(s) do not apply to loan type "${loanType}": ${labels}.`;
+  }
+
+  if (brokerId != null) {
+    const [restrictedRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, name, restricted_to_broker_id FROM reminder_flows
+       WHERE tenant_id = ? AND trigger_event = ? AND flow_category = 'loan' AND is_active = 1
+         AND restricted_to_broker_id IS NOT NULL AND restricted_to_broker_id != ?
+       ORDER BY id`,
+      [tenantId, triggerEvent, brokerId],
+    );
+    if (restrictedRows.length > 0) {
+      const labels = restrictedRows
+        .map((f) => `#${f.id} "${f.name}"`)
+        .join(", ");
+      return `Active flow(s) are restricted to another loan officer: ${labels}.`;
+    }
+  }
+
+  const [anyRows] = await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM reminder_flows
+     WHERE tenant_id = ? AND trigger_event = ? AND flow_category = 'loan'`,
+    [tenantId, triggerEvent],
+  );
+  if (Number(anyRows[0]?.c ?? 0) === 0) {
+    return `No "${triggerEvent}" reminder flow is configured. Create one in Reminder Flows.`;
+  }
+
+  return `No active reminder flow matched trigger "${triggerEvent}".`;
+}
+
 async function triggerReminderFlows(
   loanId: number,
   newStatus: string,
   tenantId: number,
-): Promise<{ triggeredCount: number; flowIds: number[] }> {
+): Promise<ReminderFlowTriggerResult> {
   try {
     // Load loan context needed for execution context_data
     const [loanRows] = await pool.query<RowDataPacket[]>(
@@ -26323,7 +33468,9 @@ async function triggerReminderFlows(
       [loanId, tenantId],
     );
 
-    if (!loanRows.length) return { triggeredCount: 0, flowIds: [] };
+    if (!loanRows.length) {
+      return { triggeredCount: 0, flowIds: [], skipReason: "Loan not found." };
+    }
     const loan = loanRows[0];
     const loanType: string = loan.loan_type || "purchase";
 
@@ -26345,10 +33492,16 @@ async function triggerReminderFlows(
     );
 
     if (!flows.length) {
-      console.warn(
-        `⚠️ No active reminder flows for trigger_event=${newStatus} loan=#${loanId} (${loan.application_number})`,
+      const skipReason = await explainNoMatchingReminderFlows(
+        tenantId,
+        newStatus,
+        loanType,
+        loan.broker_id ?? null,
       );
-      return { triggeredCount: 0, flowIds: [] };
+      console.warn(
+        `⚠️ No active reminder flows for trigger_event=${newStatus} loan=#${loanId} (${loan.application_number}) — ${skipReason}`,
+      );
+      return { triggeredCount: 0, flowIds: [], skipReason };
     }
 
     const brokerName = loan.broker_first_name
@@ -26372,6 +33525,7 @@ async function triggerReminderFlows(
 
     const flowIds: number[] = [];
     let triggeredCount = 0;
+    let duplicateSkips = 0;
 
     for (const flow of flows) {
       // R2 fix: Skip if there is already an active execution for the same
@@ -26386,6 +33540,7 @@ async function triggerReminderFlows(
         [tenantId, flow.id, loanId, loan.client_id],
       );
       if (existing.length > 0) {
+        duplicateSkips++;
         console.log(
           `⏭️  Reminder flow #${flow.id} — skipping duplicate trigger for loan #${loanId} client #${loan.client_id} (exec #${existing[0].id} already active)`,
         );
@@ -26432,10 +33587,22 @@ async function triggerReminderFlows(
       flowIds.push(flow.id);
       triggeredCount++;
     }
-    return { triggeredCount, flowIds };
+    if (triggeredCount === 0 && duplicateSkips > 0) {
+      return {
+        triggeredCount: 0,
+        flowIds: [],
+        skipReason:
+          "Welcome flow is already running for this loan (duplicate trigger skipped).",
+      };
+    }
+    return { triggeredCount, flowIds, skipReason: null };
   } catch (err) {
     console.error("❌ Reminder flow trigger failed:", err);
-    return { triggeredCount: 0, flowIds: [] };
+    return {
+      triggeredCount: 0,
+      flowIds: [],
+      skipReason: "Reminder flow engine error — check server logs.",
+    };
   }
 }
 
@@ -26445,8 +33612,51 @@ type ApplicationReceivedAutomationSource =
   | "status_change";
 
 /**
+ * One config alert per root cause per 24h (platform owners only) when fallback
+ * covers the borrower but the real nurture flow did not start.
+ */
+async function maybeNotifyWelcomeFlowConfigIssue(
+  tenantId: number,
+  skipReason: string,
+  clientName: string,
+  applicationNumber: string,
+): Promise<void> {
+  const title = "Application Received flow bypassed";
+  const reasonPrefix = skipReason.slice(0, 150);
+
+  const [recent] = await pool.query<RowDataPacket[]>(
+    `SELECT id FROM notifications
+     WHERE tenant_id = ? AND title = ? AND message LIKE ?
+       AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+     LIMIT 1`,
+    [tenantId, title, `${reasonPrefix}%`],
+  );
+  if (recent.length > 0) return;
+
+  const [owners] = await pool.query<RowDataPacket[]>(
+    `SELECT id FROM brokers
+     WHERE tenant_id = ? AND status = 'active' AND role = 'platform_owner'`,
+    [tenantId],
+  );
+  if (!owners.length) return;
+
+  const message = `${skipReason} — Latest application: ${clientName} (${applicationNumber}). Fallback welcome email was sent instead of the nurture sequence.`;
+
+  await createBrokerNotification({
+    brokerIds: owners.map((o) => Number(o.id)),
+    title,
+    message,
+    category: "loan",
+    type: "warning",
+    actionUrl: "/admin/reminder-flows",
+  });
+}
+
+/**
  * Triggers the Application Received reminder flow(s). When no active flow is
- * configured, sends a fallback welcome email and alerts admins + the assigned LO.
+ * configured, sends a fallback welcome email. Platform owners get one deduped
+ * config alert per 24h with the skip reason when fallback succeeds. Per-loan
+ * alerts fire only when the borrower did not receive any welcome email.
  */
 async function ensureApplicationReceivedAutomation(
   loanId: number,
@@ -26454,38 +33664,51 @@ async function ensureApplicationReceivedAutomation(
   source: ApplicationReceivedAutomationSource,
   notifyBrokerId?: number | null,
 ): Promise<void> {
-  const { triggeredCount } = await triggerReminderFlows(
+  const { triggeredCount, skipReason } = await triggerReminderFlows(
     loanId,
     "application_received",
     tenantId,
   );
   if (triggeredCount > 0) return;
 
+  const reason =
+    skipReason ?? "No active Application Received reminder flow matched.";
+
   console.warn(
-    `⚠️ application_received automation fallback for loan #${loanId} (source=${source})`,
+    `⚠️ application_received automation fallback for loan #${loanId} (source=${source}) — ${reason}`,
   );
 
+  let fallbackSent = false;
   try {
-    await sendApplicationReceivedFallbackEmail(loanId, tenantId);
+    fallbackSent = await sendApplicationReceivedFallbackEmail(loanId, tenantId);
   } catch (err) {
     console.error("❌ Fallback welcome email failed:", err);
   }
 
-  try {
-    const [loanRows] = await pool.query<RowDataPacket[]>(
-      `SELECT la.application_number, la.broker_user_id,
-              CONCAT(c.first_name, ' ', c.last_name) AS client_name
-       FROM loan_applications la
-       INNER JOIN clients c ON la.client_user_id = c.id
-       WHERE la.id = ? AND la.tenant_id = ?`,
-      [loanId, tenantId],
-    );
-    if (!loanRows.length) return;
+  const [loanRows] = await pool.query<RowDataPacket[]>(
+    `SELECT la.application_number, la.broker_user_id,
+            CONCAT(c.first_name, ' ', c.last_name) AS client_name
+     FROM loan_applications la
+     INNER JOIN clients c ON la.client_user_id = c.id
+     WHERE la.id = ? AND la.tenant_id = ?`,
+    [loanId, tenantId],
+  );
+  if (!loanRows.length) return;
+  const loan = loanRows[0];
 
-    const loan = loanRows[0];
+  if (fallbackSent) {
+    await maybeNotifyWelcomeFlowConfigIssue(
+      tenantId,
+      reason,
+      String(loan.client_name),
+      String(loan.application_number),
+    );
+    return;
+  }
+
+  try {
     const brokerIds = new Set<number>();
-    const assignedBrokerId =
-      notifyBrokerId ?? loan.broker_user_id ?? null;
+    const assignedBrokerId = notifyBrokerId ?? loan.broker_user_id ?? null;
     if (assignedBrokerId) brokerIds.add(Number(assignedBrokerId));
 
     const [admins] = await pool.query<RowDataPacket[]>(
@@ -26500,8 +33723,8 @@ async function ensureApplicationReceivedAutomation(
 
     await createBrokerNotification({
       brokerIds: [...brokerIds],
-      title: "Welcome flow did not run",
-      message: `No active Application Received reminder flow. A fallback welcome email was attempted for ${loan.client_name} (${loan.application_number}). Reactivate the flow in Reminder Flows.`,
+      title: "Welcome email not sent",
+      message: `${reason} Fallback welcome email could not be sent for ${loan.client_name} (${loan.application_number}). Check Reminder Flows or the client's email on file.`,
       category: "loan",
       type: "warning",
       actionUrl: "/admin/reminder-flows",
@@ -27068,6 +34291,24 @@ async function executeFlowSendStep(
           category: "system",
           type: "info",
           actionUrl: config.action_url ?? "/realtor-prospecting",
+        });
+        const adminBase = getAdminBaseUrl();
+        const actionPath = String(config.action_url ?? "/realtor-prospecting");
+        const safeBody = String(body || "").slice(0, 500);
+        await deliverBrokerEmailAlert({
+          brokerId: Number(brokerId),
+          event: "reminder_flow_broker",
+          subject: String(subject || "Workflow alert"),
+          html: `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;padding:24px;">
+            <table width="600" style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;">
+              <tr><td style="padding:20px 24px;border-bottom:3px solid #e8192c;"><strong style="color:#0f172a;">${String(subject || "Workflow alert")}</strong></td></tr>
+              <tr><td style="padding:24px;">
+                <p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:1.5;">${safeBody}</p>
+                <a href="${adminBase}${actionPath.startsWith("/") ? actionPath : `/${actionPath}`}" style="display:inline-block;background:#e8192c;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700;font-size:14px;">Open in Encore</a>
+              </td></tr>
+            </table></body></html>`,
+          quotaRefType: "broker_reminder_flow_notify",
+          quotaRefId: String(execution.id),
         });
       } else if (clientId) {
         await pool.query(
@@ -28640,19 +35881,33 @@ const handleGetMailFolderMessage: RequestHandler = async (req, res) => {
 const handleGetConversationMailboxes: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole as string | undefined;
+    const isPlatformOwner = brokerRole === "platform_owner";
+
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT m.id, m.provider, m.mailbox_email, m.display_name,
-              m.assigned_broker_id,
-              CONCAT(b.first_name, ' ', b.last_name) AS assigned_broker_name,
-              m.status, m.is_default,
-              m.last_sync_at, m.last_sync_status, m.last_sync_error,
-              m.created_at, m.updated_at
-       FROM conversation_email_mailboxes m
-       LEFT JOIN brokers b ON b.id = m.assigned_broker_id
-       WHERE m.tenant_id = ? AND m.status != 'pending'
-         AND m.assigned_broker_id = ?
-       ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`,
-      [MORTGAGE_TENANT_ID, brokerId],
+      isPlatformOwner
+        ? `SELECT m.id, m.provider, m.mailbox_email, m.display_name,
+                  m.assigned_broker_id,
+                  CONCAT(b.first_name, ' ', b.last_name) AS assigned_broker_name,
+                  m.status, m.is_default,
+                  m.last_sync_at, m.last_sync_status, m.last_sync_error,
+                  m.created_at, m.updated_at
+           FROM conversation_email_mailboxes m
+           LEFT JOIN brokers b ON b.id = m.assigned_broker_id
+           WHERE m.tenant_id = ? AND m.status != 'pending'
+           ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`
+        : `SELECT m.id, m.provider, m.mailbox_email, m.display_name,
+                  m.assigned_broker_id,
+                  CONCAT(b.first_name, ' ', b.last_name) AS assigned_broker_name,
+                  m.status, m.is_default,
+                  m.last_sync_at, m.last_sync_status, m.last_sync_error,
+                  m.created_at, m.updated_at
+           FROM conversation_email_mailboxes m
+           LEFT JOIN brokers b ON b.id = m.assigned_broker_id
+           WHERE m.tenant_id = ? AND m.status != 'pending'
+             AND m.assigned_broker_id = ?
+           ORDER BY m.is_default DESC, m.status = 'active' DESC, m.mailbox_email ASC`,
+      isPlatformOwner ? [MORTGAGE_TENANT_ID] : [MORTGAGE_TENANT_ID, brokerId],
     );
 
     return res.json({ success: true, mailboxes: rows });
@@ -28805,14 +36060,16 @@ const handleEmailSend: RequestHandler = async (req, res) => {
       typeof lead_id === "number" ? lead_id : null;
 
     if (!resolvedClientId) {
-      const [cLookup] = await pool.query<RowDataPacket[]>(
-        `SELECT id, assigned_broker_id FROM clients WHERE tenant_id = ? AND LOWER(email) = ? LIMIT 1`,
-        [MORTGAGE_TENANT_ID, finalTo.toLowerCase()],
+      const emailHit = await resolveClientByEmailSafe(
+        pool,
+        MORTGAGE_TENANT_ID,
+        finalTo.toLowerCase(),
+        { ownerBrokerId: brokerId },
       );
-      if (cLookup.length > 0) {
-        resolvedClientId = cLookup[0].id;
+      if (emailHit.client) {
+        resolvedClientId = emailHit.client.id as number;
         console.log(
-          `[emailSend] matched recipient to client #${resolvedClientId}`,
+          `[emailSend] matched recipient to client #${resolvedClientId} (owner-scoped)`,
         );
       }
     }
@@ -30135,15 +37392,19 @@ const handlePollInboundEmail: RequestHandler = async (req, res) => {
               applicationId = threadRows[0].application_id;
               leadId = threadRows[0].lead_id;
             } else if (senderEmail) {
-              // Thread doesn't exist yet — match by sender email
-              const [clientRows] = await pool.query<RowDataPacket[]>(
-                "SELECT id, assigned_broker_id FROM clients WHERE email = ? AND tenant_id = ? LIMIT 1",
-                [senderEmail, MORTGAGE_TENANT_ID],
+              // Thread doesn't exist yet — match by sender email (mailbox-owner scoped)
+              const emailHit = await resolveClientByEmailSafe(
+                pool,
+                MORTGAGE_TENANT_ID,
+                senderEmail,
+                { ownerBrokerId: null },
               );
-              if (clientRows.length > 0) {
-                clientId = clientRows[0].id;
-                brokerId = clientRows[0].assigned_broker_id;
+              if (emailHit.client && !emailHit.ambiguous) {
+                clientId = emailHit.client.id as number;
+                brokerId =
+                  (emailHit.client.assigned_broker_id as number | null) ?? null;
               }
+              // Ambiguous multi-owner email: leave unlinked
             }
 
             // --- Insert inbound communications record ---
@@ -30441,6 +37702,264 @@ const handleInboundEmail: RequestHandler = async (req, res) => {
 };
 
 // =====================================================
+// BLOCKED PHONE NUMBERS
+// =====================================================
+// Tenant-wide block list. Inbound calls from a blocked number are rejected
+// before anything rings; inbound SMS are dropped (STOP/START still honoured).
+// Matching uses the last 10 digits, same as the rest of the phone routing.
+
+const BLOCKED_NUMBER_ADMIN_ROLES = new Set([
+  "admin",
+  "superadmin",
+  "platform_owner",
+]);
+
+/** E.164 for 10-digit / 1+10-digit US numbers; otherwise "+" + digits. */
+function toBlockedPhoneE164(raw: string): string | null {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) return null;
+  if (digits.length === 10) return `+1${digits}`;
+  return `+${digits}`;
+}
+
+/**
+ * Returns true when the phone is blocked for the channel and bumps the
+ * counters. Fails OPEN on any DB error so a lookup problem never drops a
+ * legitimate call or text.
+ */
+async function checkAndCountBlockedPhone(
+  tenantId: number,
+  phone: string | null | undefined,
+  channel: "call" | "sms",
+): Promise<boolean> {
+  const last10 = phoneLast10(phone);
+  if (!last10) return false;
+  try {
+    const channelCol = channel === "call" ? "block_calls" : "block_sms";
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM blocked_phone_numbers
+       WHERE tenant_id = ? AND normalized_phone = ? AND ${channelCol} = 1
+       LIMIT 1`,
+      [tenantId, last10],
+    );
+    if (rows.length === 0) return false;
+    const counterCol =
+      channel === "call" ? "blocked_call_count" : "blocked_sms_count";
+    // Awaited: on Vercel, work left running after the response may be frozen.
+    await pool
+      .query(
+        `UPDATE blocked_phone_numbers
+         SET ${counterCol} = ${counterCol} + 1, last_blocked_at = NOW()
+         WHERE id = ?`,
+        [rows[0].id],
+      )
+      .catch((err) =>
+        console.error("blocked_phone_numbers counter update failed:", err),
+      );
+    return true;
+  } catch (err) {
+    console.error("Blocked-number lookup failed (failing open):", err);
+    return false;
+  }
+}
+
+const BLOCKED_NUMBER_SELECT = `
+  SELECT bpn.id, bpn.phone_e164, bpn.normalized_phone, bpn.block_calls,
+         bpn.block_sms, bpn.reason, bpn.blocked_by_broker_id,
+         NULLIF(TRIM(CONCAT(COALESCE(b.first_name, ''), ' ', COALESCE(b.last_name, ''))), '') AS blocked_by_name,
+         bpn.blocked_call_count, bpn.blocked_sms_count, bpn.last_blocked_at,
+         bpn.created_at
+  FROM blocked_phone_numbers bpn
+  LEFT JOIN brokers b ON b.id = bpn.blocked_by_broker_id AND b.tenant_id = bpn.tenant_id`;
+
+function serializeBlockedPhoneNumber(row: RowDataPacket) {
+  const iso = (v: unknown) =>
+    v == null ? null : v instanceof Date ? v.toISOString() : String(v);
+  return {
+    id: Number(row.id),
+    phone_e164: String(row.phone_e164),
+    normalized_phone: String(row.normalized_phone),
+    block_calls: !!row.block_calls,
+    block_sms: !!row.block_sms,
+    reason: (row.reason as string | null) ?? null,
+    blocked_by_broker_id:
+      row.blocked_by_broker_id != null
+        ? Number(row.blocked_by_broker_id)
+        : null,
+    blocked_by_name: (row.blocked_by_name as string | null) ?? null,
+    blocked_call_count: Number(row.blocked_call_count ?? 0),
+    blocked_sms_count: Number(row.blocked_sms_count ?? 0),
+    last_blocked_at: iso(row.last_blocked_at),
+    created_at: iso(row.created_at) ?? "",
+  };
+}
+
+/** GET /api/blocked-numbers — admin roles only. */
+const handleListBlockedNumbers: RequestHandler = async (req, res) => {
+  if (!BLOCKED_NUMBER_ADMIN_ROLES.has((req as any).brokerRole)) {
+    return res
+      .status(403)
+      .json({ success: false, error: "Admin access required" });
+  }
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `${BLOCKED_NUMBER_SELECT}
+       WHERE bpn.tenant_id = ?
+       ORDER BY bpn.created_at DESC, bpn.id DESC`,
+      [MORTGAGE_TENANT_ID],
+    );
+    return res.json({
+      success: true,
+      blocked_numbers: rows.map(serializeBlockedPhoneNumber),
+    });
+  } catch (error) {
+    console.error("Error listing blocked numbers:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to load blocked numbers" });
+  }
+};
+
+/** POST /api/blocked-numbers — admin roles only. */
+const handleCreateBlockedNumber: RequestHandler = async (req, res) => {
+  if (!BLOCKED_NUMBER_ADMIN_ROLES.has((req as any).brokerRole)) {
+    return res
+      .status(403)
+      .json({ success: false, error: "Admin access required" });
+  }
+  try {
+    const brokerId = (req as any).brokerId as number;
+    const body = (req.body ?? {}) as {
+      phone?: string;
+      reason?: string | null;
+      block_calls?: boolean | string;
+      block_sms?: boolean | string;
+    };
+    const phone = body.phone;
+    const reason = body.reason;
+    // Strict: only an explicit false / "false" / 0 turns a channel off.
+    const channelOn = (v: unknown) =>
+      !(v === false || v === "false" || v === 0 || v === "0");
+    const block_calls = channelOn(body.block_calls);
+    const block_sms = channelOn(body.block_sms);
+
+    const e164 = toBlockedPhoneE164(phone ?? "");
+    const last10 = phoneLast10(e164);
+    if (!e164 || !last10) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Enter a valid phone number" });
+    }
+    if (!block_calls && !block_sms) {
+      return res.status(400).json({
+        success: false,
+        error: "Block calls, texts, or both",
+      });
+    }
+    const trimmedReason =
+      typeof reason === "string" && reason.trim()
+        ? reason.trim().slice(0, 255)
+        : null;
+
+    // Never allow blocking one of our own Twilio lines.
+    const [ownLine] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM brokers
+       WHERE tenant_id = ? AND twilio_caller_id IS NOT NULL
+         AND RIGHT(REGEXP_REPLACE(twilio_caller_id, '[^0-9]', ''), 10) = ?
+       LIMIT 1`,
+      [MORTGAGE_TENANT_ID, last10],
+    );
+    if (ownLine.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "That number is one of your own phone lines",
+      });
+    }
+
+    const [existing] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM blocked_phone_numbers
+       WHERE tenant_id = ? AND normalized_phone = ? LIMIT 1`,
+      [MORTGAGE_TENANT_ID, last10],
+    );
+    if (existing.length > 0) {
+      return res
+        .status(409)
+        .json({ success: false, error: "This number is already blocked" });
+    }
+
+    const [result] = await pool.query<ResultSetHeader>(
+      `INSERT INTO blocked_phone_numbers
+         (tenant_id, phone_e164, normalized_phone, block_calls, block_sms,
+          reason, blocked_by_broker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        e164,
+        last10,
+        block_calls ? 1 : 0,
+        block_sms ? 1 : 0,
+        trimmedReason,
+        brokerId ?? null,
+      ],
+    );
+    const [[row]] = await pool.query<RowDataPacket[]>(
+      `${BLOCKED_NUMBER_SELECT} WHERE bpn.id = ?`,
+      [result.insertId],
+    );
+    console.log(
+      `🚫 Number blocked: ${e164} by broker=${brokerId} calls=${!!block_calls} sms=${!!block_sms}`,
+    );
+    return res.status(201).json({
+      success: true,
+      blocked_number: serializeBlockedPhoneNumber(row),
+    });
+  } catch (error: any) {
+    if (error?.code === "ER_DUP_ENTRY") {
+      return res
+        .status(409)
+        .json({ success: false, error: "This number is already blocked" });
+    }
+    console.error("Error blocking number:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to block number" });
+  }
+};
+
+/** DELETE /api/blocked-numbers/:id — admin roles only. */
+const handleDeleteBlockedNumber: RequestHandler = async (req, res) => {
+  if (!BLOCKED_NUMBER_ADMIN_ROLES.has((req as any).brokerRole)) {
+    return res
+      .status(403)
+      .json({ success: false, error: "Admin access required" });
+  }
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ success: false, error: "Invalid id" });
+    }
+    const [result] = await pool.query<ResultSetHeader>(
+      `DELETE FROM blocked_phone_numbers WHERE id = ? AND tenant_id = ?`,
+      [id, MORTGAGE_TENANT_ID],
+    );
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Blocked number not found" });
+    }
+    console.log(
+      `✅ Number unblocked: id=${id} by broker=${(req as any).brokerId}`,
+    );
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Error unblocking number:", error);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to unblock number" });
+  }
+};
+
+// =====================================================
 // INBOUND SMS WEBHOOK  (Twilio)
 // =====================================================
 
@@ -30615,6 +38134,15 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
         );
     }
 
+    // ── Blocked sender — drop silently (after STOP/START so opt-outs still apply)
+    if (await checkAndCountBlockedPhone(MORTGAGE_TENANT_ID, fromPhone, "sms")) {
+      console.log(
+        `🚫 Inbound SMS dropped — blocked sender from=${fromPhone} to=${toPhone ?? "none"}`,
+      );
+      res.set("Content-Type", "text/xml");
+      return res.status(200).send("<Response></Response>");
+    }
+
     // Group MMS — separate path when OtherRecipients present (skips direct 1:1)
     const groupConv = getGroupConversationsModule();
     if (groupConv.enabled) {
@@ -30659,36 +38187,81 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
       fromDigits.length === 11 && fromDigits.startsWith("1")
         ? fromDigits.slice(1) // strip leading country code "1" → "3234756240"
         : fromDigits;
-    const [clientRows] = await pool.query<RowDataPacket[]>(
-      `SELECT c.id, c.assigned_broker_id, la.id AS loan_id
-       FROM clients c
-       LEFT JOIN loan_applications la ON la.client_user_id = c.id
-                                      AND la.tenant_id = c.tenant_id
-                                      AND la.status NOT IN ('loan_funded', 'declined')
-       WHERE c.tenant_id = ?
-         AND (
-           c.phone = ?
-           OR c.phone = ?
-           OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
-           OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
-           OR c.normalized_phone = ?
-           OR (
-             c.alternate_phone IS NOT NULL
-             AND RIGHT(REGEXP_REPLACE(c.alternate_phone, '[^0-9]', ''), 10) = ?
-           )
-         )
-       ORDER BY la.created_at DESC
-       LIMIT 1`,
-      [
+
+    // Per-owner CRM: the same phone can exist as separate client rows under
+    // different owners. When the SMS arrives on a broker's personal line,
+    // resolve ONLY that owner's client row — same rule as outbound send and
+    // inbound voice. A tenant-wide LIMIT 1 here routed replies into another
+    // owner's conv_client_* thread (hidden from the line owner, visible to the
+    // other owner) while the bell/email still fired for the line owner.
+    const lineOwnerBrokerId = await resolveInboxLineOwnerBrokerId(
+      pool,
+      MORTGAGE_TENANT_ID,
+      toPhone,
+    );
+    const inboundCrmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      lineOwnerBrokerId,
+    );
+    const scopeToLineOwner =
+      inboundCrmFlags.activeForBroker && lineOwnerBrokerId != null;
+
+    let clientRows: RowDataPacket[];
+    if (scopeToLineOwner) {
+      const scopedClientId = await resolveClientIdByPhone(
+        pool,
         MORTGAGE_TENANT_ID,
         fromPhone,
-        fromRaw,
-        fromDigits,
-        fromDigits10,
-        fromDigits10,
-        fromDigits10,
-      ],
-    );
+        { brokerId: lineOwnerBrokerId, inboxNumber: toPhone },
+      );
+      if (scopedClientId != null) {
+        [clientRows] = await pool.query<RowDataPacket[]>(
+          `SELECT c.id, c.assigned_broker_id, la.id AS loan_id
+           FROM clients c
+           LEFT JOIN loan_applications la ON la.client_user_id = c.id
+                                          AND la.tenant_id = c.tenant_id
+                                          AND la.status NOT IN ('loan_funded', 'declined')
+           WHERE c.tenant_id = ? AND c.id = ?
+           ORDER BY la.created_at DESC
+           LIMIT 1`,
+          [MORTGAGE_TENANT_ID, scopedClientId],
+        );
+      } else {
+        clientRows = [];
+      }
+    } else {
+      [clientRows] = await pool.query<RowDataPacket[]>(
+        `SELECT c.id, c.assigned_broker_id, la.id AS loan_id
+         FROM clients c
+         LEFT JOIN loan_applications la ON la.client_user_id = c.id
+                                        AND la.tenant_id = c.tenant_id
+                                        AND la.status NOT IN ('loan_funded', 'declined')
+         WHERE c.tenant_id = ?
+           AND (
+             c.phone = ?
+             OR c.phone = ?
+             OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
+             OR REGEXP_REPLACE(c.phone, '[^0-9]', '') = ?
+             OR c.normalized_phone = ?
+             OR (
+               c.alternate_phone IS NOT NULL
+               AND RIGHT(REGEXP_REPLACE(c.alternate_phone, '[^0-9]', ''), 10) = ?
+             )
+           )
+         ORDER BY la.created_at DESC
+         LIMIT 1`,
+        [
+          MORTGAGE_TENANT_ID,
+          fromPhone,
+          fromRaw,
+          fromDigits,
+          fromDigits10,
+          fromDigits10,
+          fromDigits10,
+        ],
+      );
+    }
 
     let clientId: number | null = null;
     let brokerId: number | null = null;
@@ -30793,7 +38366,7 @@ const handleInboundSMS: RequestHandler = async (req, res) => {
         }
       }
       console.log(
-        `[InboundSMS Trace] client=${clientId} canonical=${canonicalClientConversationId} selected=${conversationId ?? "none"} inbox=${toPhone ?? "none"}`,
+        `[InboundSMS Trace] client=${clientId} canonical=${canonicalClientConversationId} selected=${conversationId ?? "none"} inbox=${toPhone ?? "none"} lineOwner=${lineOwnerBrokerId ?? "none"} ownerScoped=${scopeToLineOwner}`,
       );
     }
 
@@ -31075,12 +38648,40 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
     // broker sent one message was the root cause of cross-broker conversation
     // leakage (a broker could initiate a thread against another broker's client
     // and then always see it). Ownership is the authoritative gate.
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      brokerId,
+    );
+    const inboxScopeRaw = String(req.query.inbox_scope ?? "").toLowerCase();
+    const inboxScope: ConversationInboxScope =
+      inboxScopeRaw === "shared" ||
+      inboxScopeRaw === "mine" ||
+      inboxScopeRaw === "all"
+        ? (inboxScopeRaw as ConversationInboxScope)
+        : defaultConversationInboxScope(crmFlags);
+
+    // Platform owners are NOT exempt — same ownership / mine+shared rules as MBs.
+    // (A prior CRM change incorrectly skipped filtering for platform_owner.)
     if (!isSuperAdmin) {
-      const groupVis = getGroupConversationsModule().enabled
-        ? getGroupConversationsModule().groupVisibilitySql()
-        : "";
-      whereConditions.push(
-        `(ct.broker_id = ?
+      if (crmFlags.activeForBroker) {
+        if (inboxScope === "shared") {
+          whereConditions.push(perOwnerThreadSharedQueueWhere("ct"));
+        } else if (inboxScope === "mine") {
+          whereConditions.push(perOwnerThreadMineWhere("ct"));
+          queryParams.push(brokerId, brokerId, brokerId);
+        } else {
+          whereConditions.push(
+            `(${perOwnerThreadMineWhere("ct")} OR ${perOwnerThreadSharedQueueWhere("ct")})`,
+          );
+          queryParams.push(brokerId, brokerId, brokerId);
+        }
+      } else {
+        const groupVis = getGroupConversationsModule().enabled
+          ? getGroupConversationsModule().groupVisibilitySql()
+          : "";
+        whereConditions.push(
+          `(ct.broker_id = ?
           OR (ct.client_id IS NULL AND ct.broker_id IS NULL)
           ${
             isAdmin
@@ -31109,10 +38710,11 @@ const handleGetConversationThreads: RequestHandler = async (req, res) => {
              )
          )
          ${groupVis})`,
-      );
-      queryParams.push(brokerId, brokerId, brokerId, brokerId);
-      if (getGroupConversationsModule().enabled) {
+        );
         queryParams.push(brokerId, brokerId, brokerId, brokerId);
+        if (getGroupConversationsModule().enabled) {
+          queryParams.push(brokerId, brokerId, brokerId, brokerId);
+        }
       }
     }
 
@@ -31828,18 +39430,12 @@ const handleSendMessage: RequestHandler = async (req, res) => {
         typeof client_id === "number" ? client_id : null;
 
       if (!guardClientId && finalRecipientPhone) {
-        const lastTen = finalRecipientPhone.replace(/\D/g, "").slice(-10);
-        if (lastTen.length === 10) {
-          const [gcPhoneRows] = await pool.query<RowDataPacket[]>(
-            `SELECT id FROM clients
-             WHERE tenant_id = ?
-               AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', ''), 10) = ?
-             LIMIT 1`,
-            [MORTGAGE_TENANT_ID, lastTen],
-          );
-          if (gcPhoneRows.length > 0)
-            guardClientId = gcPhoneRows[0].id as number;
-        }
+        guardClientId = await resolveClientIdByPhone(
+          pool,
+          MORTGAGE_TENANT_ID,
+          finalRecipientPhone,
+          { brokerId },
+        );
       }
 
       if (!guardClientId && finalRecipientEmail) {
@@ -32041,6 +39637,7 @@ const handleSendMessage: RequestHandler = async (req, res) => {
             pool,
             MORTGAGE_TENANT_ID,
             finalRecipientPhone,
+            { brokerId },
           );
           if (phoneClientId) {
             finalConversationId = `conv_client_${phoneClientId}`;
@@ -32728,27 +40325,64 @@ const handleSaveContactFromConversation: RequestHandler = async (req, res) => {
     const placeholderEmail = `noemail_${(thread.client_phone || String(Date.now())).replace(/\D/g, "")}@noemail.placeholder`;
     const clientEmail = providedEmail ?? placeholderEmail;
 
-    // Guard against duplicate email (only for real emails)
+    // Guard against duplicate email for this owner (only for real emails)
     if (providedEmail) {
-      const [[dup]] = await pool.query<RowDataPacket[]>(
-        "SELECT id FROM clients WHERE tenant_id = ? AND email = ? LIMIT 1",
-        [MORTGAGE_TENANT_ID, clientEmail],
+      const emailDup = await findClientEmailConflict(
+        pool,
+        MORTGAGE_TENANT_ID,
+        clientEmail,
+        { brokerId },
       );
-      if (dup) {
-        return res.status(409).json({
-          success: false,
-          error: "A client with this email already exists",
-        });
+      if (emailDup) {
+        const crmFlagsForEmail = await getPerOwnerCrmFlags(
+          pool,
+          MORTGAGE_TENANT_ID,
+          brokerId,
+        );
+        return res
+          .status(409)
+          .json(
+            buildClientEmailConflictPayload(
+              emailDup,
+              crmFlagsForEmail,
+              brokerId,
+            ),
+          );
       }
     }
 
     // Resolve phone — prefer explicitly provided, fall back to thread phone
     const clientPhone = phone?.trim() || thread.client_phone || null;
+    const normalizedPhone = clientPhone
+      ? clientPhone.replace(/\D/g, "").slice(-10) || null
+      : null;
+
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      brokerId,
+    );
+
+    if (normalizedPhone) {
+      const phoneExists = await findClientPhoneConflict(
+        pool,
+        MORTGAGE_TENANT_ID,
+        normalizedPhone,
+        { brokerId },
+      );
+      if (phoneExists) {
+        return res
+          .status(409)
+          .json(
+            buildClientPhoneConflictPayload(phoneExists, crmFlags, brokerId),
+          );
+      }
+    }
 
     // Create client with all provided fields
     const [result] = await pool.query<any>(
       `INSERT INTO clients (
-         tenant_id, first_name, last_name, email, phone, alternate_phone,
+         tenant_id, first_name, last_name, email, phone, normalized_phone, alternate_phone,
          date_of_birth, address_street, address_city, address_state, address_zip,
          employment_status, income_type, annual_income, credit_score,
          citizenship_status, status, assigned_broker_id
@@ -32759,6 +40393,7 @@ const handleSaveContactFromConversation: RequestHandler = async (req, res) => {
         last_name.trim(),
         clientEmail,
         clientPhone,
+        normalizedPhone,
         alternate_phone?.trim() || null,
         date_of_birth || null,
         address_street?.trim() || null,
@@ -32793,12 +40428,15 @@ const handleSaveContactFromConversation: RequestHandler = async (req, res) => {
     await pool.query(
       `UPDATE conversation_threads
        SET client_id = ?, client_name = ?, client_email = COALESCE(NULLIF(client_email, ''), ?),
+           broker_id = ?, owner_client_scope_broker_id = ?,
            conversation_id = ?
        WHERE conversation_id = ? AND tenant_id = ?`,
       [
         newClientId,
         fullName,
         providedEmail,
+        brokerId,
+        brokerId,
         isRandomId ? canonicalConvId : conversationId,
         conversationId,
         MORTGAGE_TENANT_ID,
@@ -34461,6 +42099,7 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
       pool,
       MORTGAGE_TENANT_ID,
       callerNumber,
+      { inboxNumber: calledNumber },
     );
     const conversationId = voicemailClientId
       ? `conv_client_${voicemailClientId}`
@@ -34558,9 +42197,8 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
 
     // Send an immediate email notification to the banker so they're alerted
     // even when auto-transcription is disabled (transcription email fires
-    // separately only when Twilio transcribes). This ensures the banker is
-    // ALWAYS notified on every voicemail.
-    if (voicemailBankerEmail && !voicemailBankerEmail.startsWith("noemail_")) {
+    // separately only when Twilio transcribes). Respects Profile prefs.
+    if (voicemailToBrokerId) {
       try {
         const companyName = await fetchTenantCompanyName(
           pool,
@@ -34576,21 +42214,14 @@ const handleVoicemailRecording: RequestHandler = async (req, res) => {
           companyName,
         });
         const durationDisplay = durationSec ? ` — ${durationSec}s` : "";
-        await sendEmailMessage(
-          voicemailBankerEmail,
-          `🎙️ New Voicemail from ${callerNumber}${durationDisplay}`,
+        await deliverBrokerEmailAlert({
+          brokerId: voicemailToBrokerId,
+          event: "voicemail",
+          subject: `🎙️ New Voicemail from ${callerNumber}${durationDisplay}`,
           html,
-          true,
-          undefined,
-          {
-            billing: systemEmailQuota("voicemail_notification", externalId),
-          },
-        ).catch((e) =>
-          console.error(
-            "[handleVoicemailRecording] immediate email failed:",
-            e,
-          ),
-        );
+          quotaRefType: "voicemail_notification",
+          quotaRefId: externalId,
+        });
       } catch (emailErr) {
         console.error(
           "[handleVoicemailRecording] email notification error:",
@@ -34683,12 +42314,11 @@ const handleVoicemailTranscription: RequestHandler = async (req, res) => {
           if (inbox_number) {
             // 2. Find the banker whose personal line received the call
             const [bankerRows] = await pool.query<RowDataPacket[]>(
-              `SELECT email, first_name, last_name
+              `SELECT id, email, first_name, last_name
                FROM brokers
                WHERE tenant_id = ?
                  AND status = 'active'
                  AND twilio_caller_id = ?
-                 AND email NOT LIKE 'noemail_%'
                ORDER BY id ASC
                LIMIT 1`,
               [MORTGAGE_TENANT_ID, inbox_number],
@@ -34696,6 +42326,7 @@ const handleVoicemailTranscription: RequestHandler = async (req, res) => {
 
             if (bankerRows.length > 0) {
               const banker = bankerRows[0] as {
+                id: number;
                 email: string;
                 first_name: string;
                 last_name: string;
@@ -34727,24 +42358,14 @@ const handleVoicemailTranscription: RequestHandler = async (req, res) => {
                 : "";
               const subject = `🎙️ New Voicemail from ${callerDisplay}${durationDisplay}`;
 
-              await sendEmailMessage(
-                banker.email,
+              await deliverBrokerEmailAlert({
+                brokerId: banker.id,
+                event: "voicemail",
                 subject,
                 html,
-                true,
-                undefined,
-                {
-                  billing: systemEmailQuota(
-                    "voicemail_transcription",
-                    externalId,
-                  ),
-                },
-              ).catch((e) =>
-                console.error(
-                  "[handleVoicemailTranscription] email send failed:",
-                  e,
-                ),
-              );
+                quotaRefType: "voicemail_transcription",
+                quotaRefId: externalId,
+              });
             }
           }
         }
@@ -34805,6 +42426,20 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     // The Twilio number that was dialled (E.164 or local format)
     const calledNumber =
       (req.body?.To as string) || (req.body?.Called as string) || "";
+
+    // Blocked caller — reject before anything rings (no voicemail, no thread).
+    const blockedCaller =
+      (req.body?.From as string) || (req.body?.Caller as string) || "";
+    if (
+      await checkAndCountBlockedPhone(MORTGAGE_TENANT_ID, blockedCaller, "call")
+    ) {
+      console.log(
+        `🚫 [voice-incoming] rejected blocked caller from=${blockedCaller} to=${calledNumber}`,
+      );
+      const rejectTwiml = new twilio.twiml.VoiceResponse();
+      rejectTwiml.reject({ reason: "busy" });
+      return res.send(rejectTwiml.toString());
+    }
 
     // ---------- determine which brokers should ring ----------
 
@@ -34914,20 +42549,25 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
 
     // Fire-and-forget: log the incoming call attempt asynchronously.
     void (async () => {
+      const personalLineBrokerId: number | null =
+        assignedRows.length > 0 ? (assignedRows[0].id as number) : null;
       const callClientId = await resolveClientIdByPhone(
         pool,
         MORTGAGE_TENANT_ID,
         callerNumber,
+        {
+          brokerId: personalLineBrokerId,
+          inboxNumber: calledNumber || null,
+        },
       );
       const conversationId = callClientId
         ? `conv_client_${callClientId}`
         : await resolvePhoneConversationId(pool, MORTGAGE_TENANT_ID, {
             phone: callerNumber,
             inboxNumber: calledNumber || null,
+            brokerId: personalLineBrokerId,
           });
       const body = `📞 Incoming call from ${callerNumber}`;
-      const personalLineBrokerId: number | null =
-        assignedRows.length > 0 ? (assignedRows[0].id as number) : null;
       try {
         const [commResult] = await pool.query<any>(
           `INSERT INTO communications
@@ -35824,6 +43464,404 @@ const handleServeMmsMediaPublic: RequestHandler = async (req, res) => {
   }
 };
 
+// ── Short links (inlined from shared/short-links.ts for Vercel) ───────────────
+const BROADCAST_MMS_MAX_RECIPIENTS = 50;
+const DEFAULT_PORTAL_SHORT_LINK_ORIGIN = "https://portal.encoremortgage.org";
+const LINK_ASSET_RETENTION_DAYS = 90;
+const SHORT_LINK_ALLOWED_HOST_SUFFIXES = ["encoremortgage.org"] as const;
+const BROADCAST_LINK_ALLOWED_MIMES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+] as const;
+
+function generateShortLinkCodeInline(length = 8): string {
+  const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.randomBytes(length);
+  let out = "";
+  for (let i = 0; i < length; i++) out += alphabet[bytes[i]! % alphabet.length];
+  return out;
+}
+
+function buildPortalShortLinkUrlInline(code: string, origin?: string): string {
+  const base = String(
+    origin || process.env.CLIENT_URL || DEFAULT_PORTAL_SHORT_LINK_ORIGIN,
+  ).replace(/\/$/, "");
+  const safe = String(code || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "");
+  return `${base}/l/${safe}`;
+}
+
+function isAllowedBroadcastLinkMimeInline(mime: string): boolean {
+  return (BROADCAST_LINK_ALLOWED_MIMES as readonly string[]).includes(mime);
+}
+
+function collectShortLinkExtraHostsInline(): string[] {
+  const hosts: string[] = [];
+  for (const raw of [
+    process.env.CLIENT_URL,
+    process.env.MMS_PUBLIC_URL,
+    typeof getBaseUrl === "function" ? getBaseUrl() : "",
+  ]) {
+    try {
+      if (raw) hosts.push(new URL(String(raw)).hostname.toLowerCase());
+    } catch {
+      /* ignore */
+    }
+  }
+  return hosts;
+}
+
+function isAllowedShortLinkTargetUrlInline(
+  targetUrl: string,
+  extraAllowedHosts: string[] = collectShortLinkExtraHostsInline(),
+): { ok: boolean; error?: string } {
+  const raw = String(targetUrl || "").trim();
+  if (!raw || !/^https?:\/\//i.test(raw)) {
+    return {
+      ok: false,
+      error: "target_url must be an absolute http(s) URL",
+    };
+  }
+  if (raw.length > 2048) {
+    return { ok: false, error: "target_url is too long" };
+  }
+  let hostname = "";
+  try {
+    hostname = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return { ok: false, error: "target_url is not a valid URL" };
+  }
+  if (!hostname) {
+    return { ok: false, error: "target_url is not a valid URL" };
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return { ok: true };
+  }
+  for (const suffix of SHORT_LINK_ALLOWED_HOST_SUFFIXES) {
+    if (hostname === suffix || hostname.endsWith(`.${suffix}`)) {
+      return { ok: true };
+    }
+  }
+  for (const extra of extraAllowedHosts) {
+    const e = String(extra || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//i, "")
+      .split("/")[0]
+      ?.split(":")[0];
+    if (!e) continue;
+    if (hostname === e || hostname.endsWith(`.${e}`)) return { ok: true };
+  }
+  return {
+    ok: false,
+    error:
+      "Short links may only target Encore Mortgage domains (or your portal / MMS public host).",
+  };
+}
+
+function requirePlatformOwnerForShortLinks(
+  req: express.Request,
+  res: express.Response,
+): boolean {
+  const brokerRole = (req as any).brokerRole as string;
+  if (brokerRole !== "platform_owner") {
+    res.status(403).json({
+      success: false,
+      error: "Platform owner access required",
+    });
+    return false;
+  }
+  return true;
+}
+
+const linkAssetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (isAllowedBroadcastLinkMimeInline(file.mimetype)) cb(null, true);
+    else cb(new Error(`Unsupported file type: ${file.mimetype}`));
+  },
+});
+
+async function insertShortLinkRow(params: {
+  tenantId: number;
+  brokerId: number;
+  targetUrl: string;
+  title?: string | null;
+  assetId?: string | null;
+}): Promise<{ id: number; code: string; shortUrl: string }> {
+  let code = generateShortLinkCodeInline(8);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const [ins] = await pool.query<ResultSetHeader>(
+        `INSERT INTO short_links
+           (tenant_id, created_by, code, target_url, title, asset_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          params.tenantId,
+          params.brokerId,
+          code,
+          params.targetUrl,
+          params.title || null,
+          params.assetId || null,
+        ],
+      );
+      return {
+        id: ins.insertId,
+        code,
+        shortUrl: buildPortalShortLinkUrlInline(code),
+      };
+    } catch (err: any) {
+      if (err?.code === "ER_DUP_ENTRY") {
+        code = generateShortLinkCodeInline(8);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Could not allocate short link code");
+}
+
+/** POST /api/short-links — create short link from URL (optional title) */
+const handleCreateShortLink: RequestHandler = async (req, res) => {
+  try {
+    if (!requirePlatformOwnerForShortLinks(req, res)) return;
+    const brokerId = (req as any).brokerId as number;
+    const targetUrl = String(req.body?.target_url || "").trim();
+    const title =
+      typeof req.body?.title === "string" ? req.body.title.trim() : "";
+    const allowed = isAllowedShortLinkTargetUrlInline(targetUrl);
+    if (!allowed.ok) {
+      return res.status(400).json({
+        success: false,
+        error: allowed.error || "Invalid target_url",
+      });
+    }
+    const row = await insertShortLinkRow({
+      tenantId: MORTGAGE_TENANT_ID,
+      brokerId,
+      targetUrl,
+      title: title || null,
+    });
+    return res.json({
+      success: true,
+      short_link: {
+        id: row.id,
+        code: row.code,
+        short_url: row.shortUrl,
+        target_url: targetUrl,
+        title: title || null,
+        click_count: 0,
+      },
+    });
+  } catch (err) {
+    console.error("[handleCreateShortLink]", err);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to create short link" });
+  }
+};
+
+/**
+ * POST /api/short-links/upload — upload PDF/image, host it, return short URL
+ */
+const handleUploadShortLinkAsset: RequestHandler = async (req, res) => {
+  try {
+    if (!requirePlatformOwnerForShortLinks(req, res)) return;
+    const brokerId = (req as any).brokerId as number;
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No file provided" });
+    }
+    if (!isAllowedBroadcastLinkMimeInline(file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        error: "Only PDF and images (jpg/png/gif/webp) are allowed",
+      });
+    }
+    const assetId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO link_assets
+         (id, tenant_id, created_by, content_type, filename, byte_size, data)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        assetId,
+        MORTGAGE_TENANT_ID,
+        brokerId,
+        file.mimetype,
+        file.originalname || null,
+        file.buffer.length,
+        file.buffer,
+      ],
+    );
+    const publicBase =
+      process.env.MMS_PUBLIC_URL || process.env.CLIENT_URL || getBaseUrl();
+    const targetUrl = `${String(publicBase).replace(/\/$/, "")}/api/link-assets/public/${assetId}`;
+    const title =
+      typeof req.body?.title === "string" && req.body.title.trim()
+        ? req.body.title.trim()
+        : file.originalname || "Broadcast asset";
+
+    // Durable asset only (no short link) — used for scheduled MMS
+    const createShort =
+      String(req.body?.create_short_link ?? "true").toLowerCase() !== "false" &&
+      String(req.body?.create_short_link ?? "1") !== "0";
+    if (!createShort) {
+      return res.json({
+        success: true,
+        asset: {
+          id: assetId,
+          url: targetUrl,
+          content_type: file.mimetype,
+          filename: file.originalname || null,
+        },
+      });
+    }
+
+    const row = await insertShortLinkRow({
+      tenantId: MORTGAGE_TENANT_ID,
+      brokerId,
+      targetUrl,
+      title,
+      assetId,
+    });
+    return res.json({
+      success: true,
+      short_link: {
+        id: row.id,
+        code: row.code,
+        short_url: row.shortUrl,
+        target_url: targetUrl,
+        title,
+        click_count: 0,
+        asset_id: assetId,
+        content_type: file.mimetype,
+        filename: file.originalname || null,
+      },
+    });
+  } catch (err) {
+    console.error("[handleUploadShortLinkAsset]", err);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to upload and shorten asset" });
+  }
+};
+
+/** GET /api/link-assets/public/:id — durable public file for short-link targets */
+const handleServeLinkAssetPublic: RequestHandler = async (req, res) => {
+  try {
+    const id = req.params.id as string;
+    if (
+      !id ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
+    ) {
+      return res.status(400).json({ error: "Invalid asset ID" });
+    }
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT content_type, filename, data FROM link_assets WHERE id = ? LIMIT 1`,
+      [id],
+    );
+    if (!rows.length) return res.status(404).json({ error: "Not found" });
+    const row = rows[0];
+    res.set(
+      "Content-Type",
+      String(row.content_type || "application/octet-stream"),
+    );
+    if (row.filename) {
+      res.set(
+        "Content-Disposition",
+        `inline; filename="${String(row.filename).replace(/"/g, "")}"`,
+      );
+    }
+    res.set("Cache-Control", "public, max-age=86400");
+    return res.send(
+      Buffer.isBuffer(row.data) ? row.data : Buffer.from(row.data),
+    );
+  } catch (err) {
+    console.error("[handleServeLinkAssetPublic]", err);
+    return res.status(500).json({ error: "Internal error" });
+  }
+};
+
+/** GET /api/short-links — recent short links for the broker (analytics) */
+const handleListShortLinks: RequestHandler = async (req, res) => {
+  try {
+    if (!requirePlatformOwnerForShortLinks(req, res)) return;
+    const brokerId = (req as any).brokerId as number;
+    const limit = Math.min(
+      50,
+      Math.max(1, parseInt(String(req.query.limit || "20"), 10) || 20),
+    );
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, code, target_url, title, asset_id, broadcast_id,
+              click_count, last_clicked_at, created_at
+       FROM short_links
+       WHERE tenant_id = ? AND created_by = ?
+       ORDER BY id DESC
+       LIMIT ?`,
+      [MORTGAGE_TENANT_ID, brokerId, limit],
+    );
+    return res.json({
+      success: true,
+      short_links: rows.map((r) => ({
+        id: r.id,
+        code: r.code,
+        short_url: buildPortalShortLinkUrlInline(String(r.code)),
+        target_url: r.target_url,
+        title: r.title,
+        asset_id: r.asset_id,
+        broadcast_id: r.broadcast_id,
+        click_count: Number(r.click_count || 0),
+        last_clicked_at: r.last_clicked_at,
+        created_at: r.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error("[handleListShortLinks]", err);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to list short links" });
+  }
+};
+
+/** GET /l/:code — public 302 redirect + click tracking */
+const handleShortLinkRedirect: RequestHandler = async (req, res) => {
+  try {
+    const code = String(req.params.code || "")
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!code || code.length > 16) {
+      return res.status(404).send("Link not found");
+    }
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, target_url FROM short_links WHERE code = ? LIMIT 1`,
+      [code],
+    );
+    if (!rows.length) return res.status(404).send("Link not found");
+    const target = String(rows[0].target_url || "");
+    if (!/^https?:\/\//i.test(target)) {
+      return res.status(404).send("Link not found");
+    }
+    await pool.query(
+      `UPDATE short_links
+       SET click_count = click_count + 1, last_clicked_at = NOW()
+       WHERE id = ?`,
+      [rows[0].id],
+    );
+    res.set("Cache-Control", "no-store");
+    return res.redirect(302, target);
+  } catch (err) {
+    console.error("[handleShortLinkRedirect]", err);
+    return res.status(500).send("Internal error");
+  }
+};
+
 /**
  * GET /api/cron/expire-quota-reservations
  * Releases quota held by pending tenant_usage_reservations past expires_at.
@@ -35877,6 +43915,58 @@ const handleCronPurgeMmsMedia: RequestHandler = async (req, res) => {
   }
 };
 
+/**
+ * Purge durable link_assets past retention that are not referenced by an active
+ * short link or an in-flight broadcast MMS attach.
+ */
+async function purgeExpiredLinkAssets(batchLimit = 500): Promise<number> {
+  const limit = Math.max(1, Math.min(10_000, batchLimit));
+  const [result] = await pool.query<ResultSetHeader>(
+    `DELETE FROM link_assets
+     WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+       AND id NOT IN (
+         SELECT asset_id FROM short_links WHERE asset_id IS NOT NULL
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM realtor_broadcasts rb
+         WHERE rb.media_url LIKE CONCAT('%/api/link-assets/public/', link_assets.id, '%')
+           AND rb.status IN ('draft', 'scheduled', 'sending')
+       )
+     LIMIT ?`,
+    [LINK_ASSET_RETENTION_DAYS, limit],
+  );
+  return result.affectedRows ?? 0;
+}
+
+/**
+ * GET /api/cron/purge-link-assets
+ * Deletes orphaned durable broadcast assets older than LINK_ASSET_RETENTION_DAYS.
+ * Requires ?secret=CRON_SECRET or Authorization: Bearer CRON_SECRET.
+ */
+const handleCronPurgeLinkAssets: RequestHandler = async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const provided =
+    (req.query.secret as string | undefined) ||
+    req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  if (!secret || provided !== secret) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    const deleted = await purgeExpiredLinkAssets(10_000);
+    console.log(
+      `[handleCronPurgeLinkAssets] Deleted ${deleted} expired row(s)`,
+    );
+    return res.json({
+      success: true,
+      deleted,
+      retention_days: LINK_ASSET_RETENTION_DAYS,
+    });
+  } catch (err) {
+    console.error("[handleCronPurgeLinkAssets] Error:", err);
+    return res.status(500).json({ error: "Internal error" });
+  }
+};
+
 /** Max rows touched per table per cron tick (avoids Vercel timeout on large backlogs). */
 const PURGE_OLD_DATA_BATCH = 10_000;
 
@@ -35913,6 +44003,12 @@ const handleCronPurgeOldData: RequestHandler = async (req, res) => {
       "DELETE FROM mms_media WHERE expires_at <= NOW() LIMIT ?",
       [batch],
     );
+    try {
+      results["link_assets"] = await purgeExpiredLinkAssets(batch);
+    } catch (err) {
+      console.error("[handleCronPurgeOldData] link_assets purge error:", err);
+      results["link_assets"] = 0;
+    }
     await batchedDelete(
       "broker_sessions",
       "DELETE FROM broker_sessions WHERE expires_at < NOW() LIMIT ?",
@@ -36065,6 +44161,7 @@ const handleGetCallHistory: RequestHandler = async (req, res) => {
  */
 const handleLookupContact: RequestHandler = async (req, res) => {
   try {
+    const brokerId = (req as any).brokerId as number;
     const { phone } = req.query;
     if (!phone || typeof phone !== "string") {
       return res
@@ -36077,7 +44174,40 @@ const handleLookupContact: RequestHandler = async (req, res) => {
     const lastTen = digits.slice(-10);
     const e164 = `+1${lastTen}`;
 
-    // 1. Try clients table — match on exact, e164, or last-10-digit suffix
+    const scopedClientId = await resolveClientIdByPhone(
+      pool,
+      MORTGAGE_TENANT_ID,
+      phone,
+      { brokerId },
+    );
+    if (scopedClientId) {
+      const [clientRows] = await pool.query<any>(
+        `SELECT id, first_name, last_name, phone FROM clients WHERE id = ? LIMIT 1`,
+        [scopedClientId],
+      );
+      if (clientRows.length) {
+        const c = clientRows[0];
+        return res.json({
+          success: true,
+          found: true,
+          client_id: c.id,
+          client_name: `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim(),
+          phone: c.phone,
+          source: "client",
+        });
+      }
+    }
+
+    const crmFlags = await getPerOwnerCrmFlags(
+      pool,
+      MORTGAGE_TENANT_ID,
+      brokerId,
+    );
+    if (crmFlags.activeForBroker) {
+      return res.json({ success: true, found: false });
+    }
+
+    // Legacy tenant-wide fallbacks (flags off only)
     const [clientRows] = await pool.query<any>(
       `SELECT id, first_name, last_name, phone
        FROM clients
@@ -37140,7 +45270,7 @@ function buildSignatureSectionHtml(letter: Record<string, any>): string {
 
   if (isPartnerLoan) {
     const partnerLicenseHtml = letter.partner_license_number
-      ? `<p style="margin:3px 0; font-size:13px; color:#555;">NMLS# ${letter.partner_license_number}</p>`
+      ? `<p style="margin:3px 0; font-size:13px; color:#555;">DRE# ${letter.partner_license_number}</p>`
       : "";
     const partnerPhotoHtml = letter.partner_photo_url
       ? `<div style="width:72px; height:72px; border-radius:50%; overflow:hidden; border:3px solid #1a3a5c; box-sizing:border-box;"><img src="${letter.partner_photo_url}" style="width:100%; height:100%; object-fit:cover; display:block;" /></div>`
@@ -37159,7 +45289,7 @@ function buildSignatureSectionHtml(letter: Record<string, any>): string {
     <td style="vertical-align: top; padding-left: 24px; padding-right: 0; width: 88px;">${partnerPhotoHtml}</td>
     <td style="vertical-align: top; padding-left: 16px; font-size: 13px;">
       <p style="margin: 0 0 3px;"><strong>${letter.partner_first_name} ${letter.partner_last_name}</strong></p>
-      <p style="margin: 0 0 3px; color: #444;">Partner</p>
+      <p style="margin: 0 0 3px; color: #444;">Realtor</p>
       ${partnerLicenseHtml}
       <p style="margin: 3px 0; color: #444;">${letter.partner_phone ?? ""}</p>
       <p style="margin: 0; color: #444;">${letter.partner_email ?? ""}</p>
@@ -37505,6 +45635,48 @@ const handleGetPreApprovalLetter: RequestHandler = async (req, res) => {
 };
 
 /**
+ * When a tenant setting requires all tasks approved, block the action until every
+ * task on the loan is approved.
+ */
+async function assertLoanTasksGate(
+  tenantId: number,
+  loanId: number,
+  settingKey: string,
+  emptyTasksMessage: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [settingRows] = await pool.query<RowDataPacket[]>(
+    `SELECT setting_value FROM system_settings
+     WHERE setting_key = ?
+       AND (tenant_id = ? OR tenant_id IS NULL)
+     ORDER BY tenant_id DESC LIMIT 1`,
+    [settingKey, tenantId],
+  );
+  const requireAll =
+    String(settingRows[0]?.setting_value ?? "false").toLowerCase() === "true";
+  if (!requireAll) return { ok: true };
+
+  const [taskStats] = await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS total_tasks,
+            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_tasks
+     FROM tasks
+     WHERE application_id = ? AND tenant_id = ?`,
+    [loanId, tenantId],
+  );
+  const total = Number(taskStats[0]?.total_tasks ?? 0);
+  const approved = Number(taskStats[0]?.approved_tasks ?? 0);
+  if (total === 0) {
+    return { ok: false, error: emptyTasksMessage };
+  }
+  if (approved < total) {
+    return {
+      ok: false,
+      error: `Not all tasks are approved (${approved}/${total})`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * POST /api/loans/:loanId/pre-approval-letter
  * Create a pre-approval letter for a loan. Admin only (sets max_approved_amount).
  */
@@ -37572,6 +45744,16 @@ const handleCreatePreApprovalLetter: RequestHandler = async (req, res) => {
       return res.status(404).json({ success: false, error: "Loan not found" });
     }
     const loan = loanRows[0];
+
+    const tasksGate = await assertLoanTasksGate(
+      loan.tenant_id,
+      Number(loanId),
+      "pre_approval_require_all_tasks",
+      "All tasks must be approved before issuing a pre-approval letter",
+    );
+    if (tasksGate.ok === false) {
+      return res.status(400).json({ success: false, error: tasksGate.error });
+    }
 
     // Check for existing letter (one per loan)
     const [existing] = await pool.query<RowDataPacket[]>(
@@ -38462,6 +46644,7 @@ const handleGetReminderFlow: RequestHandler = async (req, res) => {
 const handleSaveReminderFlow: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole as string | undefined;
     const { flowId } = req.params;
     const {
       name,
@@ -38610,7 +46793,7 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [flowRows] = await pool.query<RowDataPacket[]>(
-      `SELECT id FROM reminder_flows
+      `SELECT id, name, is_active, trigger_event, flow_category FROM reminder_flows
         WHERE id = ? AND tenant_id = ?
           AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
       [flowId, tenantId, brokerId],
@@ -38620,6 +46803,18 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, error: "Reminder flow not found" });
+    }
+
+    const existingFlow = flowRows[0];
+    if (is_active === false || is_active === 0) {
+      const blockReason = await assertCanDeactivateReminderFlow(
+        existingFlow,
+        tenantId,
+        brokerRole,
+      );
+      if (blockReason) {
+        return res.status(403).json({ success: false, error: blockReason });
+      }
     }
 
     const conn = await pool.getConnection();
@@ -38738,6 +46933,19 @@ const handleSaveReminderFlow: RequestHandler = async (req, res) => {
       }
 
       await conn.commit();
+
+      if (is_active !== undefined) {
+        const nowActive = Boolean(is_active);
+        if (nowActive !== Boolean(existingFlow.is_active)) {
+          await auditReminderFlowToggle(
+            brokerId,
+            tenantId,
+            existingFlow,
+            nowActive,
+          );
+        }
+      }
+
       return res.json({
         success: true,
         message: "Reminder flow saved",
@@ -38864,12 +47072,68 @@ const handleGetReminderFlowTrace: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Block deactivation of the last active loan flow for critical triggers
+ * (e.g. application_received welcome sequence). Prevents accidental toggle-off.
+ */
+async function assertCanDeactivateReminderFlow(
+  flow: RowDataPacket,
+  tenantId: number,
+  brokerRole: string | undefined,
+): Promise<string | null> {
+  if (flow.flow_category !== "loan" || !flow.is_active) return null;
+  if (flow.trigger_event !== "application_received") return null;
+
+  const [countRows] = await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM reminder_flows
+     WHERE tenant_id = ? AND trigger_event = 'application_received'
+       AND flow_category = 'loan' AND is_active = 1`,
+    [tenantId],
+  );
+  const activeCount = Number(countRows[0]?.c ?? 0);
+  if (activeCount > 1) return null;
+
+  if (brokerRole !== "platform_owner") {
+    return "The Application Received welcome flow cannot be deactivated. Ask a platform owner if you need it off.";
+  }
+  return null;
+}
+
+async function auditReminderFlowToggle(
+  brokerId: number,
+  tenantId: number,
+  flow: RowDataPacket,
+  newActive: boolean,
+): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (tenant_id, broker_id, actor_type, action, entity_type, entity_id, changes, status)
+       VALUES (?, ?, 'broker', ?, 'reminder_flow', ?, ?, 'success')`,
+      [
+        tenantId,
+        brokerId,
+        newActive ? "activate_reminder_flow" : "deactivate_reminder_flow",
+        flow.id,
+        JSON.stringify({
+          flow_id: flow.id,
+          flow_name: flow.name,
+          trigger_event: flow.trigger_event,
+          is_active: newActive,
+        }),
+      ],
+    );
+  } catch (err) {
+    console.warn("auditReminderFlowToggle failed (non-fatal):", err);
+  }
+}
+
+/**
  * PATCH /api/reminder-flows/:flowId/toggle
  * Toggle is_active on a flow
  */
 const handleToggleReminderFlow: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
+    const brokerRole = (req as any).brokerRole as string | undefined;
     const { flowId } = req.params;
 
     const [tenantRows] = await pool.query<RowDataPacket[]>(
@@ -38879,7 +47143,7 @@ const handleToggleReminderFlow: RequestHandler = async (req, res) => {
     const tenantId = tenantRows[0]?.tenant_id;
 
     const [flowRows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, is_active FROM reminder_flows
+      `SELECT id, name, is_active, trigger_event, flow_category FROM reminder_flows
         WHERE id = ? AND tenant_id = ?
           AND (restricted_to_broker_id IS NULL OR restricted_to_broker_id = ?)`,
       [flowId, tenantId, brokerId],
@@ -38891,11 +47155,26 @@ const handleToggleReminderFlow: RequestHandler = async (req, res) => {
         .json({ success: false, error: "Reminder flow not found" });
     }
 
-    const newActive = !flowRows[0].is_active;
+    const flow = flowRows[0];
+    const newActive = !flow.is_active;
+
+    if (!newActive) {
+      const blockReason = await assertCanDeactivateReminderFlow(
+        flow,
+        tenantId,
+        brokerRole,
+      );
+      if (blockReason) {
+        return res.status(403).json({ success: false, error: blockReason });
+      }
+    }
+
     await pool.query("UPDATE reminder_flows SET is_active = ? WHERE id = ?", [
       newActive ? 1 : 0,
       flowId,
     ]);
+
+    await auditReminderFlowToggle(brokerId, tenantId, flow, newActive);
 
     return res.json({
       success: true,
@@ -39042,6 +47321,2527 @@ const handleGetReminderFlowExecutions: RequestHandler = async (req, res) => {
 
 // Create the Express app once (reused across invocations)
 let app: express.Application | null = null;
+
+// FREE ANALYSIS ENGINE (inlined for Vercel serverless)
+// Keep in sync with:
+//   shared/credit-analysis-algorithm.ts
+//   shared/credit-analysis-extract.ts
+//   shared/credit-analysis-engine.ts
+// Algorithm-only — NO Claude/Anthropic enhance.
+// =====================================================
+
+export const ENCORE_COLORS = {
+  navy: "#121829",
+  gold: "#C0A06A",
+  foreground: "#0f172a",
+  muted: "#64748b",
+  border: "#e2e8f0",
+  cardBg: "#f8fafc",
+  critical: "#dc2626",
+  high: "#ea580c",
+  medium: "#ca8a04",
+  lower: "#2563eb",
+  utilOk: "#16a34a",
+} as const;
+
+function escapeHtml(s: string) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export type AnalystLang = "English" | "Spanish";
+export type DisputePriority = "CRITICAL" | "HIGH" | "MEDIUM" | "LOWER";
+export type GoalKind =
+  | "fha"
+  | "conventional"
+  | "jumbo"
+  | "auto"
+  | "business"
+  | "general";
+
+export type AnalystScores = {
+  transunion: number | null;
+  experian: number | null;
+  equifax: number | null;
+};
+
+export type AnalystNegativeInput = {
+  type: string;
+  creditor?: string;
+  bureaus?: string[];
+  detail?: string;
+};
+
+export type AnalystUtilRow = {
+  account: string;
+  limit: number;
+  balance: number;
+  pctUsed: number;
+  payTo30: number;
+  payTo10: number;
+};
+
+/** Flat JSON — ALL VALUES FLAT, NO ARRAYS, NO NESTED OBJECTS */
+export type CreditAnalysisAnalystFlat = {
+  client_name: string;
+  analysis_goal: string;
+  report_date: string;
+  referral_name: string;
+  referral_company: string;
+
+  score_transunion: number | null;
+  score_experian: number | null;
+  score_equifax: number | null;
+  score_tu_label: string;
+  score_ex_label: string;
+  score_eq_label: string;
+  middle_score: number | null;
+  fha_status: string;
+  goal_score: number;
+  goal_description: string;
+  gap_tu: number | null;
+  gap_ex: number | null;
+  gap_eq: number | null;
+
+  neg_1_account: string;
+  neg_1_type: string;
+  neg_1_bureaus: string;
+  neg_1_priority: string;
+  neg_1_dispute_basis: string;
+  neg_2_account: string;
+  neg_2_type: string;
+  neg_2_bureaus: string;
+  neg_2_priority: string;
+  neg_2_dispute_basis: string;
+  neg_3_account: string;
+  neg_3_type: string;
+  neg_3_bureaus: string;
+  neg_3_priority: string;
+  neg_3_dispute_basis: string;
+  neg_4_account: string;
+  neg_4_type: string;
+  neg_4_bureaus: string;
+  neg_4_priority: string;
+  neg_4_dispute_basis: string;
+  neg_5_account: string;
+  neg_5_type: string;
+  neg_5_bureaus: string;
+  neg_5_priority: string;
+  neg_5_dispute_basis: string;
+
+  utilization_critical_note: string;
+  util_1_account: string;
+  util_1_limit: string;
+  util_1_balance: string;
+  util_1_percent: string;
+  util_1_pay30: string;
+  util_1_pay10: string;
+  util_2_account: string;
+  util_2_limit: string;
+  util_2_balance: string;
+  util_2_percent: string;
+  util_2_pay30: string;
+  util_2_pay10: string;
+  util_3_account: string;
+  util_3_limit: string;
+  util_3_balance: string;
+  util_3_percent: string;
+  util_3_pay30: string;
+  util_3_pay10: string;
+  total_revolving_limit: string;
+  total_revolving_balance: string;
+  total_revolving_util: string;
+  paydown_30_instruction: string;
+  paydown_10_instruction: string;
+
+  score_today: number | null;
+  score_30_days: number | null;
+  score_60_days: number | null;
+  score_90_days: number | null;
+  score_target: number | null;
+  target_timeframe: string;
+
+  round_1_actions: string;
+  round_2_actions: string;
+  round_3_actions: string;
+  positive_accounts_protect: string;
+
+  action_1_time: string;
+  action_1_action: string;
+  action_1_reason: string;
+  action_2_time: string;
+  action_2_action: string;
+  action_2_reason: string;
+  action_3_time: string;
+  action_3_action: string;
+  action_3_reason: string;
+  action_4_time: string;
+  action_4_action: string;
+  action_4_reason: string;
+  action_5_time: string;
+  action_5_action: string;
+  action_5_reason: string;
+  action_6_time: string;
+  action_6_action: string;
+  action_6_reason: string;
+
+  file_strength_score: number;
+  file_strength_rating: string;
+  fs_label_1: string;
+  fs_open_revolving: string;
+  fs_label_2: string;
+  fs_installment_mix: string;
+  fs_label_3: string;
+  fs_mortgage: string;
+  fs_label_4: string;
+  fs_account_age: string;
+  fs_label_5: string;
+  fs_post_repair: string;
+  tradeline_recommendation: string;
+
+  negative_items_html: string;
+  negative_count: number;
+  critical_count: number;
+  high_count: number;
+  utilization_html: string;
+  action_plan_html: string;
+  mortgage_tu: number | null;
+  mortgage_ex: number | null;
+  mortgage_eq: number | null;
+  tradeline_needed: string;
+  client_text_message: string;
+  text_language: AnalystLang;
+};
+
+export type CreditAnalysisAlgorithmInput = {
+  clientName: string;
+  firstName: string;
+  lastName: string;
+  repName?: string | null;
+  clientGoal?: string | null;
+  language: "en" | "es";
+  /** client = borrower-facing wording; agent = banker-assisted review */
+  mode?: "client" | "agent";
+  scores: AnalystScores;
+  negatives: AnalystNegativeInput[];
+  reportText: string;
+  utilization?: AnalystUtilRow[];
+  positiveAccounts?: string[];
+  reportDate?: string | null;
+  weakExtraction?: boolean;
+};
+
+type RankedNeg = {
+  account: string;
+  type: string;
+  bureaus: string;
+  priority: DisputePriority;
+  dispute_basis: string;
+};
+
+type TFn = (en: string, es: string) => string;
+
+const PRIORITY_RANK: Record<DisputePriority, number> = {
+  CRITICAL: 0,
+  HIGH: 1,
+  MEDIUM: 2,
+  LOWER: 3,
+};
+
+const HISPANIC_SURNAME_HINT =
+  /\b(garcia|rodriguez|martinez|hernandez|lopez|gonzalez|perez|sanchez|ramirez|torres|flores|rivera|gomez|diaz|reyes|morales|cruz|ortiz|gutierrez|chavez|ramos|ruiz|alvarez|mendoza|castillo|jimenez|moreno|romero|vargas|herrera|medina|aguilar|guerrero|contreras|delgado|vega|campos|soto|guzman|castro|fernandez|munoz|muñoz|silva|rojas|mendez|navarro|dominguez|espinoza|valdez|salazar|guillen|ibarra|carrillo)\b/i;
+
+// escapeHtml is defined once later in this file (shared by email + analyst HTML).
+
+function money(n: number): string {
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+function clampScore(n: number): number {
+  return Math.min(850, Math.max(300, Math.round(n)));
+}
+
+function makeT(lang: AnalystLang): TFn {
+  return (en, es) => (lang === "Spanish" ? es : en);
+}
+
+function fsFormat(score: number, max: number, notes: string): string {
+  return `${score}/${max} — ${notes}`;
+}
+
+export function scoreBandLabel(score: number | null | undefined): string {
+  if (score == null || Number.isNaN(score)) return "";
+  if (score < 580) return "POOR";
+  if (score < 670) return "FAIR";
+  if (score < 740) return "GOOD";
+  if (score < 800) return "VERY GOOD";
+  return "EXCELLENT";
+}
+
+/** Median of 3; lower of 2 if one null; single if only one. */
+export function computeMiddleScore(scores: AnalystScores): number | null {
+  const vals = [scores.transunion, scores.experian, scores.equifax].filter(
+    (n): n is number => n != null && !Number.isNaN(n),
+  );
+  if (vals.length === 0) return null;
+  vals.sort((a, b) => a - b);
+  if (vals.length === 2) return vals[0];
+  return vals[Math.floor(vals.length / 2)];
+}
+
+export function classifyGoalKind(goal: string | null | undefined): GoalKind {
+  const g = (goal || "").toLowerCase();
+  if (/fha/.test(g)) return "fha";
+  if (/jumbo/.test(g)) return "jumbo";
+  if (/conventional/.test(g)) return "conventional";
+  if (/auto|car|vehicle/.test(g)) return "auto";
+  if (/business|sba|funding/.test(g)) return "business";
+  if (/general|improv/.test(g)) return "general";
+  if (/mortgage|home|house|purchase/.test(g)) return "conventional";
+  if (!g.trim()) return "general";
+  return "general";
+}
+
+export function resolveTextLanguage(
+  language: "en" | "es",
+  _lastName?: string,
+): AnalystLang {
+  return language === "es" ? "Spanish" : "English";
+}
+
+export function extractUtilizationFromText(text: string): AnalystUtilRow[] {
+  const results: AnalystUtilRow[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(
+      /([A-Za-z0-9*\/\s]{4,40}?)\s+[\$]?([\d,]+)\s+[\$]?([\d,]+)\s+(\d{1,3})%/,
+    );
+    if (!m) continue;
+    const limit = Number(m[2].replace(/,/g, ""));
+    const balance = Number(m[3].replace(/,/g, ""));
+    const pctUsed = Number(m[4]);
+    if (limit <= 0 || pctUsed > 100) continue;
+    results.push({
+      account: m[1].trim().slice(0, 40),
+      limit,
+      balance,
+      pctUsed,
+      payTo30: Math.max(0, Math.ceil(balance - limit * 0.3)),
+      payTo10: Math.max(0, Math.ceil(balance - limit * 0.1)),
+    });
+  }
+  return results.slice(0, 12);
+}
+
+function utilColor(pct: number): string {
+  if (pct > 80) return ENCORE_COLORS.critical;
+  if (pct > 50) return ENCORE_COLORS.high;
+  if (pct > 30) return ENCORE_COLORS.medium;
+  return ENCORE_COLORS.utilOk;
+}
+
+function priorityColor(p: DisputePriority): string {
+  if (p === "CRITICAL") return ENCORE_COLORS.critical;
+  if (p === "HIGH") return ENCORE_COLORS.high;
+  if (p === "MEDIUM") return ENCORE_COLORS.medium;
+  return ENCORE_COLORS.lower;
+}
+
+function extractBalanceHint(detail: string): number | null {
+  const m = detail.match(/\$?\s*([\d,]{2,})/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function countBureaus(text: string, explicit?: string[]): number {
+  if (explicit?.length) return explicit.length;
+  let n = 0;
+  if (/\b(TU|TransUnion)\b/i.test(text)) n++;
+  if (/\b(EX|Experian)\b/i.test(text)) n++;
+  if (/\b(EQ|Equifax)\b/i.test(text)) n++;
+  return n;
+}
+
+function formatBureaus(hay: string, explicit?: string[]): string {
+  if (explicit?.length) return explicit.join("/");
+  const found: string[] = [];
+  if (/\b(TU|TransUnion)\b/i.test(hay)) found.push("TU");
+  if (/\b(EX|Experian)\b/i.test(hay)) found.push("EX");
+  if (/\b(EQ|Equifax)\b/i.test(hay)) found.push("EQ");
+  return found.length ? found.join("/") : "TU/EX/EQ";
+}
+
+export function rankNegativeItem(n: AnalystNegativeInput): RankedNeg {
+  const hay = `${n.type} ${n.creditor || ""} ${n.detail || ""}`;
+  const type = n.type || "Derogatory Item";
+  const account = (n.creditor || type).slice(0, 60);
+  const bureauCount = countBureaus(hay, n.bureaus);
+  const bureaus = formatBureaus(hay, n.bureaus);
+  const bal = extractBalanceHint(n.detail || "");
+
+  let priority: DisputePriority = "MEDIUM";
+  let basis =
+    "FCRA accuracy review — verify reporting and dispute unsupported items.";
+
+  if (/inqui/i.test(hay)) {
+    priority = "LOWER";
+    basis =
+      "Hard inquiry — verify permissible purpose under FCRA; dispute unauthorized inquiries.";
+  } else if (
+    /personal|address|name|ssn|dob|identity/i.test(hay) &&
+    /error|incorrect|wrong/i.test(hay)
+  ) {
+    priority = "LOWER";
+    basis =
+      "Personal information error — request correction of inaccurate consumer data (FCRA).";
+  } else if (
+    /90\+|90 day|120/i.test(hay) &&
+    /late|delinquen|past due|active/i.test(hay)
+  ) {
+    priority = "CRITICAL";
+    basis =
+      "Active 90+ delinquency — high-impact; dispute inaccurate status/dates with all reporting bureaus.";
+  } else if (/charge.?off|charged off/i.test(hay)) {
+    if (bureauCount > 0 && bureauCount < 3) {
+      priority = "CRITICAL";
+      basis =
+        "Charge-off not consistent across all 3 bureaus — prioritize metro inconsistency dispute (FCRA).";
+    } else {
+      priority = "HIGH";
+      basis =
+        "Charge-off on file — dispute inaccurate balance, status, or dates; request method of verification.";
+    }
+  } else if (/collection/i.test(hay)) {
+    if (bal != null && bal < 500) {
+      priority = "MEDIUM";
+      basis =
+        "Small collection (<$500) — dispute validation under FDCPA/FCRA; verify original creditor & amount.";
+    } else {
+      priority = "HIGH";
+      basis =
+        "Collection account — demand validation (FDCPA) and dispute inaccurate reporting (FCRA).";
+    }
+  } else if (/late|past due|delinquen/i.test(hay)) {
+    priority = "HIGH";
+    basis =
+      "Recent late payment — dispute incorrect late marks; verify payment history dates.";
+  } else if (/bankrupt|foreclos|repossess|judgment|lien/i.test(hay)) {
+    priority = "HIGH";
+    basis =
+      "Public-record / severe derogatory — verify court data accuracy and reporting period (FCRA).";
+  }
+
+  return { account, type, bureaus, priority, dispute_basis: basis };
+}
+
+function adjustmentFactors(
+  util: AnalystUtilRow[],
+  negatives: RankedNeg[],
+  reportText: string,
+): number {
+  const totalLimit = util.reduce((s, u) => s + u.limit, 0);
+  const totalBal = util.reduce((s, u) => s + u.balance, 0);
+  const utilPct = totalLimit > 0 ? (totalBal / totalLimit) * 100 : 0;
+  const highUtil = utilPct > 50;
+  const recentLates = negatives.some((n) => /late|delinquen/i.test(n.type));
+  const collections = negatives.some((n) => /collection|charge/i.test(n.type));
+  const accountMentions = (reportText.match(/\baccount\b/gi) || []).length;
+  const thinFile =
+    accountMentions > 0 && accountMentions < 4 && util.length < 2;
+
+  let delta = 25;
+  if (highUtil) delta += utilPct > 80 ? 18 : 12;
+  if (recentLates) delta += 20;
+  if (collections) delta += 28;
+  if (thinFile) delta += 15;
+  if (!highUtil && !recentLates && !collections && !thinFile) delta = 18;
+  return Math.min(55, Math.max(15, delta));
+}
+
+function nextTierGoal(mid: number): number {
+  if (mid < 580) return 580;
+  if (mid < 670) return 670;
+  if (mid < 740) return 740;
+  if (mid < 800) return 800;
+  return Math.min(850, mid + 20);
+}
+
+function autoTier(score: number): { tier: string; label: string } {
+  if (score >= 720) return { tier: "Tier 1", label: "best rates" };
+  if (score >= 680) return { tier: "Tier 2", label: "competitive rates" };
+  if (score >= 620)
+    return { tier: "Tier 3", label: "standard/subprime border" };
+  return { tier: "Subprime", label: "higher-cost financing" };
+}
+
+function estimateAccountAgeYears(text: string): number {
+  const m = text.match(/(\d{1,2})\s*(?:yrs?|years)\s*(?:old|history|age)?/i);
+  if (m) return Number(m[1]);
+  if (/opened\s+\d{2}\/\d{2}\/(19|20)\d{2}/i.test(text)) return 5;
+  return 3;
+}
+
+function countOpenRevolving(util: AnalystUtilRow[], text: string): number {
+  if (util.length > 0) return util.length;
+  const cards = (text.match(/revolving|credit card|bank card/gi) || []).length;
+  return Math.min(5, Math.floor(cards / 2));
+}
+
+function hasInstallment(text: string): boolean {
+  return /installment|auto loan|student|mortgage|personal loan/i.test(text);
+}
+
+function hasAuto(text: string): boolean {
+  return /auto loan|vehicle|car loan|automobile/i.test(text);
+}
+
+function hasMortgage(text: string): boolean {
+  return /mortgage|home equity|heloc/i.test(text);
+}
+
+function hasBusinessLine(text: string): boolean {
+  return /business (credit|line|card)|sba|d&b|dun/i.test(text);
+}
+
+function localizeDisputeBasis(basis: string, lang: AnalystLang): string {
+  if (lang !== "Spanish") return basis;
+  return basis
+    .replace(
+      "FCRA accuracy review — verify reporting and dispute unsupported items.",
+      "Revisión de exactitud FCRA — verificar el reporte y disputar ítems no respaldados.",
+    )
+    .replace(
+      "Hard inquiry — verify permissible purpose under FCRA; dispute unauthorized inquiries.",
+      "Consulta dura — verificar propósito permisible bajo FCRA; disputar consultas no autorizadas.",
+    )
+    .replace(
+      "Personal information error — request correction of inaccurate consumer data (FCRA).",
+      "Error de información personal — solicitar corrección de datos inexactos (FCRA).",
+    )
+    .replace(
+      "Active 90+ delinquency — high-impact; dispute inaccurate status/dates with all reporting bureaus.",
+      "Morosidad activa 90+ — alto impacto; disputar estado/fechas inexactas con las 3 agencias.",
+    )
+    .replace(
+      "Charge-off not consistent across all 3 bureaus — prioritize metro inconsistency dispute (FCRA).",
+      "Cargo fallido inconsistente entre las 3 agencias — priorizar disputa por inconsistencia (FCRA).",
+    )
+    .replace(
+      "Charge-off on file — dispute inaccurate balance, status, or dates; request method of verification.",
+      "Cargo fallido en el archivo — disputar saldo, estado o fechas; solicitar método de verificación.",
+    )
+    .replace(
+      "Small collection (<$500) — dispute validation under FDCPA/FCRA; verify original creditor & amount.",
+      "Cobro pequeño (<$500) — disputar validación bajo FDCPA/FCRA; verificar acreedor original y monto.",
+    )
+    .replace(
+      "Collection account — demand validation (FDCPA) and dispute inaccurate reporting (FCRA).",
+      "Cuenta en cobro — exigir validación (FDCPA) y disputar reporte inexacto (FCRA).",
+    )
+    .replace(
+      "Recent late payment — dispute incorrect late marks; verify payment history dates.",
+      "Pago atrasado reciente — disputar marcas incorrectas; verificar fechas del historial.",
+    )
+    .replace(
+      "Public-record / severe derogatory — verify court data accuracy and reporting period (FCRA).",
+      "Registro público / negativo severo — verificar exactitud judicial y período de reporte (FCRA).",
+    );
+}
+
+function buildNegativeHtml(items: RankedNeg[]): string {
+  return items
+    .map(
+      (n) =>
+        `<tr><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};"><strong>${escapeHtml(n.account)}</strong></td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};">${escapeHtml(n.type)}</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};text-align:center;">${escapeHtml(n.bureaus)}</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};text-align:center;color:${priorityColor(n.priority)};font-weight:bold;">${n.priority}</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};font-size:12px;">${escapeHtml(n.dispute_basis)}</td></tr>`,
+    )
+    .join("");
+}
+
+function buildUtilHtml(rows: AnalystUtilRow[]): string {
+  return rows
+    .map(
+      (u) =>
+        `<tr><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};"><strong>${escapeHtml(u.account)}</strong></td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};">${money(u.limit)}</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};">${money(u.balance)}</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};color:${utilColor(u.pctUsed)};font-weight:bold;">${u.pctUsed}%</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};">${money(u.payTo30)}</td><td style="padding:8px;border-bottom:1px solid ${ENCORE_COLORS.border};">${money(u.payTo10)}</td></tr>`,
+    )
+    .join("");
+}
+
+function buildActionPlanHtml(
+  actions: Array<{ time: string; action: string; reason: string }>,
+): string {
+  return actions
+    .map(
+      (a) =>
+        `<tr><td style="padding:10px;border-bottom:1px solid ${ENCORE_COLORS.border};font-weight:bold;white-space:nowrap;background:${ENCORE_COLORS.navy};color:${ENCORE_COLORS.gold};">${escapeHtml(a.time)}</td><td style="padding:10px;border-bottom:1px solid ${ENCORE_COLORS.border};font-weight:bold;color:${ENCORE_COLORS.foreground};">${escapeHtml(a.action)}</td><td style="padding:10px;border-bottom:1px solid ${ENCORE_COLORS.border};color:${ENCORE_COLORS.muted};font-size:13px;">${escapeHtml(a.reason)}</td></tr>`,
+    )
+    .join("");
+}
+
+function lendingConversion(
+  kind: GoalKind,
+  scores: AnalystScores,
+  mid: number | null,
+  delta: number,
+  t: TFn,
+): {
+  fha_status: string;
+  goal_score: number;
+  goal_description: string;
+  mortgage_tu: number | null;
+  mortgage_ex: number | null;
+  mortgage_eq: number | null;
+  lendingMid: number | null;
+} {
+  const convert = (s: number | null, bump: number) =>
+    s == null ? null : clampScore(s - (delta + bump));
+
+  if (kind === "fha" || kind === "conventional" || kind === "jumbo") {
+    const mortgage_tu = convert(scores.transunion, 5); // ~FICO 4
+    const mortgage_ex = convert(scores.experian, 0); // ~FICO 2
+    const mortgage_eq = convert(scores.equifax, 8); // ~FICO 5
+    const lendingMid = computeMiddleScore({
+      transunion: mortgage_tu,
+      experian: mortgage_ex,
+      equifax: mortgage_eq,
+    });
+    const m = lendingMid ?? mid ?? 0;
+
+    if (kind === "fha") {
+      let status: string;
+      if (m >= 580)
+        status = t(
+          "FHA Eligible (3.5% down path) — focus on rate optimization",
+          "Elegible FHA (enganche 3.5%) — enfocarse en optimizar tasa",
+        );
+      else if (m >= 500)
+        status = t(
+          "FHA possible with 10% down (500–579) — strengthen mid score toward 580+",
+          "FHA posible con 10% de enganche (500–579) — fortalecer puntaje medio hacia 580+",
+        );
+      else
+        status = t(
+          "Below typical FHA thresholds — prioritize score repair before application",
+          "Por debajo de umbrales FHA típicos — priorizar reparación antes de aplicar",
+        );
+      return {
+        fha_status: status,
+        goal_score: Math.max(620, Math.min(680, nextTierGoal(m))),
+        goal_description: t(
+          "Target mortgage mid score typically 620–680 for stronger FHA pricing",
+          "Meta de puntaje hipotecario medio típicamente 620–680 para mejor precio FHA",
+        ),
+        mortgage_tu,
+        mortgage_ex,
+        mortgage_eq,
+        lendingMid,
+      };
+    }
+
+    if (kind === "conventional") {
+      const ok = m >= 620;
+      return {
+        fha_status: t(
+          `Conventional Loan Eligibility: ${ok ? "Eligible at minimum — ideal 740+" : "Below 620 minimum — repair needed"}`,
+          `Elegibilidad Hipoteca Convencional: ${ok ? "Elegible al mínimo — ideal 740+" : "Bajo el mínimo 620 — se necesita reparación"}`,
+        ),
+        goal_score: Math.max(
+          680,
+          Math.min(740, nextTierGoal(Math.max(m, 620))),
+        ),
+        goal_description: t(
+          "Conventional programs typically need 620+; best pricing near 740+",
+          "Programas convencionales suelen requerir 620+; mejor precio cerca de 740+",
+        ),
+        mortgage_tu,
+        mortgage_ex,
+        mortgage_eq,
+        lendingMid,
+      };
+    }
+
+    // jumbo
+    const ok = m >= 700;
+    return {
+      fha_status: t(
+        `Jumbo Loan Eligibility: ${ok ? "Meets common 700+ floor — ideal 740+" : "Below typical 700 Jumbo floor"}`,
+        `Elegibilidad Préstamo Jumbo: ${ok ? "Cumple piso común 700+ — ideal 740+" : "Bajo el piso típico Jumbo de 700"}`,
+      ),
+      goal_score: Math.max(720, Math.min(760, nextTierGoal(Math.max(m, 700)))),
+      goal_description: t(
+        "Jumbo underwriting commonly looks for 700+, with 740+ preferred",
+        "Suscripción Jumbo suele buscar 700+, con preferencia 740+",
+      ),
+      mortgage_tu,
+      mortgage_ex,
+      mortgage_eq,
+      lendingMid,
+    };
+  }
+
+  if (kind === "auto") {
+    const autoDelta = Math.min(30, Math.max(10, Math.round(delta * 0.55)));
+    const mortgage_tu =
+      scores.transunion == null
+        ? null
+        : clampScore(scores.transunion - autoDelta + 2);
+    const mortgage_ex =
+      scores.experian == null ? null : clampScore(scores.experian - autoDelta);
+    const mortgage_eq =
+      scores.equifax == null
+        ? null
+        : clampScore(scores.equifax - autoDelta - 2);
+    const lendingMid = computeMiddleScore({
+      transunion: mortgage_tu,
+      experian: mortgage_ex,
+      equifax: mortgage_eq,
+    });
+    const m = lendingMid ?? mid ?? 0;
+    const tier = autoTier(m);
+    return {
+      fha_status: t(
+        `Auto Financing Tier: ${tier.tier} — ${tier.label}`,
+        `Nivel Financiamiento Auto: ${tier.tier} — ${tier.label}`,
+      ),
+      goal_score: m < 660 ? 660 : m < 720 ? 720 : Math.min(760, m + 20),
+      goal_description: t(
+        "Auto lending scores often differ 10–30 pts from FICO 8; Tier 1 starts at 720+",
+        "Puntajes auto suelen diferir 10–30 pts del FICO 8; Tier 1 inicia en 720+",
+      ),
+      mortgage_tu,
+      mortgage_ex,
+      mortgage_eq,
+      lendingMid,
+    };
+  }
+
+  if (kind === "business") {
+    const m = mid ?? 0;
+    let status: string;
+    if (m >= 680)
+      status = t(
+        "Business Funding Eligibility: Strong for SBA / lines of credit",
+        "Elegibilidad Financiamiento Empresarial: Fuerte para SBA / líneas de crédito",
+      );
+    else if (m >= 650)
+      status = t(
+        "Business Funding Eligibility: Possible for some SBA programs; strengthen toward 680+",
+        "Elegibilidad Financiamiento Empresarial: Posible en algunos programas SBA; fortalecer hacia 680+",
+      );
+    else if (m >= 600)
+      status = t(
+        "Business Funding Eligibility: Some term loans possible; SBA/LOC prefer 680+",
+        "Elegibilidad Financiamiento Empresarial: Algunos préstamos a plazo posibles; SBA/LOC prefieren 680+",
+      );
+    else
+      status = t(
+        "Business Funding Eligibility: Below common lender floors — prioritize personal FICO 8 repair",
+        "Elegibilidad Financiamiento Empresarial: Bajo pisos comunes — priorizar reparación de FICO 8 personal",
+      );
+    return {
+      fha_status: status,
+      goal_score: Math.max(680, Math.min(720, nextTierGoal(m || 600))),
+      goal_description: t(
+        "Most business lenders use personal FICO 8 or SBSS; 680+ preferred",
+        "La mayoría de prestamistas usan FICO 8 personal o SBSS; se prefiere 680+",
+      ),
+      mortgage_tu: scores.transunion,
+      mortgage_ex: scores.experian,
+      mortgage_eq: scores.equifax,
+      lendingMid: mid,
+    };
+  }
+
+  // general
+  const m = mid ?? 0;
+  const band = scoreBandLabel(m) || "FAIR";
+  return {
+    fha_status: t(
+      `General Credit Health: ${band}`,
+      `Salud Crediticia General: ${band}`,
+    ),
+    goal_score: nextTierGoal(m || 580),
+    goal_description: t(
+      "Focus on overall credit health and the next score tier",
+      "Enfocarse en la salud crediticia general y el siguiente nivel de puntaje",
+    ),
+    mortgage_tu: scores.transunion,
+    mortgage_ex: scores.experian,
+    mortgage_eq: scores.equifax,
+    lendingMid: mid,
+  };
+}
+
+function timelineLabel(kind: GoalKind, t: TFn): string {
+  if (kind === "auto")
+    return t("Auto lending score progression", "Progresión puntaje auto");
+  if (kind === "business")
+    return t(
+      "Business lending score progression",
+      "Progresión puntaje financiamiento empresarial",
+    );
+  if (kind === "general")
+    return t("Credit score progression", "Progresión del puntaje de crédito");
+  return t(
+    "Mortgage mid score progression",
+    "Progresión puntaje hipotecario medio",
+  );
+}
+
+function buildFileStrength(
+  kind: GoalKind,
+  util: AnalystUtilRow[],
+  text: string,
+  ranked: RankedNeg[],
+  scores: AnalystScores,
+  t: TFn,
+): {
+  labels: [string, string, string, string, string];
+  values: [string, string, string, string, string];
+  total: number;
+  rating: string;
+  tradelineNeeded: boolean;
+  tradelineRec: string;
+} {
+  const openRev = countOpenRevolving(util, text);
+  let fs1 = 0;
+  let n1 = "";
+  if (openRev >= 3) {
+    fs1 = 20;
+    n1 = t("3+ open bank cards / low util", "3+ tarjetas abiertas / util baja");
+  } else if (openRev >= 1) {
+    fs1 = 10;
+    n1 = t("1–2 open revolving", "1–2 revolving abiertas");
+  } else {
+    fs1 = 0;
+    n1 = t("no open bank revolving", "sin revolving bancario abierto");
+  }
+
+  const types =
+    (util.length > 0 || /credit card|revolving/i.test(text) ? 1 : 0) +
+    (/installment|student|personal loan/i.test(text) ? 1 : 0) +
+    (hasAuto(text) ? 1 : 0) +
+    (hasMortgage(text) ? 1 : 0);
+  let fs2 = 10;
+  let n2 = t("1 account type", "1 tipo de cuenta");
+  if (types >= 3) {
+    fs2 = 20;
+    n2 = t("revolving + installment + auto", "revolving + installment + auto");
+  } else if (types === 2) {
+    fs2 = 15;
+    n2 = t("2 account types", "2 tipos de cuenta");
+  }
+
+  let label3 = "";
+  let fs3 = 0;
+  let n3 = "";
+  if (kind === "fha" || kind === "conventional" || kind === "jumbo") {
+    label3 = t("Mortgage History", "Historial Hipotecario");
+    if (hasMortgage(text)) {
+      fs3 = 20;
+      n3 = t("active mortgage on file", "hipoteca activa en archivo");
+    } else {
+      fs3 = 0;
+      n3 = t(
+        "no mortgage (expected for new buyers)",
+        "sin hipoteca (esperado en compradores nuevos)",
+      );
+    }
+  } else if (kind === "auto") {
+    label3 = t("Auto Loan History", "Historial de Auto");
+    if (/paid as agreed|never late/i.test(text) && hasAuto(text)) {
+      fs3 = 20;
+      n3 = t("prior auto loan paid on time", "auto previo pagado a tiempo");
+    } else if (hasAuto(text)) {
+      fs3 = 10;
+      n3 = t("current auto loan", "auto actual");
+    } else {
+      fs3 = 0;
+      n3 = t("no auto history", "sin historial de auto");
+    }
+  } else if (kind === "business") {
+    label3 = t("Business Credit Lines", "Líneas de Crédito Empresarial");
+    if (hasBusinessLine(text)) {
+      fs3 = 20;
+      n3 = t("business credit line on file", "línea empresarial en archivo");
+    } else if (util.length > 0 || /credit card/i.test(text)) {
+      fs3 = 10;
+      n3 = t("personal lines only", "solo líneas personales");
+    } else {
+      fs3 = 0;
+      n3 = t("none", "ninguna");
+    }
+  } else {
+    label3 = t("Account Diversity", "Diversidad de Cuentas");
+    const div =
+      (hasMortgage(text) ? 1 : 0) +
+      (hasAuto(text) ? 1 : 0) +
+      (util.length > 0 || /credit card/i.test(text) ? 1 : 0);
+    if (div >= 3) {
+      fs3 = 20;
+      n3 = t("mortgage + auto + cards", "hipoteca + auto + tarjetas");
+    } else if (div === 2) {
+      fs3 = 15;
+      n3 = t("2 types", "2 tipos");
+    } else if (div === 1) {
+      fs3 = 10;
+      n3 = t("1 type", "1 tipo");
+    } else {
+      fs3 = 5;
+      n3 = t("thin file", "archivo delgado");
+    }
+  }
+
+  const age = estimateAccountAgeYears(text);
+  let fs4 = 5;
+  let n4 = t("under 2 years", "menos de 2 años");
+  if (age >= 7) {
+    fs4 = 20;
+    n4 = t("7+ years", "7+ años");
+  } else if (age >= 3) {
+    fs4 = 12;
+    n4 = t("3–6 years", "3–6 años");
+  }
+
+  const remain = Math.min(ranked.length, 5);
+  let fs5 = 20;
+  let n5 = t("none expected after repair", "ninguno esperado tras reparación");
+  if (remain >= 3) {
+    fs5 = 5;
+    n5 = t("3+ may remain", "3+ pueden permanecer");
+  } else if (remain >= 1) {
+    fs5 = 10;
+    n5 = t("1–2 may remain", "1–2 pueden permanecer");
+  }
+
+  const total = fs1 + fs2 + fs3 + fs4 + fs5;
+  let rating = "WEAK";
+  if (total >= 80) rating = "STRONG";
+  else if (total >= 60) rating = "GOOD";
+  else if (total >= 40) rating = "MODERATE";
+
+  const exNull = scores.experian == null;
+  const tradelineNeeded =
+    openRev === 0 ||
+    exNull ||
+    openRev + (hasInstallment(text) ? 1 : 0) < 2 ||
+    age < 2 ||
+    (text.match(/\baccount\b/gi) || []).length < 4;
+
+  const tradelineRec = tradelineNeeded
+    ? t(
+        "Authorized-user / seasoned tradeline support may help deepen thin areas of the file after disputes begin.",
+        "Una tradeline autorizada / sazonada puede ayudar a fortalecer áreas delgadas del archivo tras iniciar disputas.",
+      )
+    : t(
+        "File depth looks adequate — prioritize disputes and utilization before adding tradelines.",
+        "La profundidad del archivo parece adecuada — priorizar disputas y utilización antes de agregar tradelines.",
+      );
+
+  return {
+    labels: [
+      t(
+        "Open Revolving Accounts (3+ needed)",
+        "Cuentas Revolving Abiertas (se necesitan 3+)",
+      ),
+      t("Credit Mix", "Mezcla de Crédito"),
+      label3,
+      t("Account Age", "Antigüedad de Cuentas"),
+      t("Negative Items Post-Repair", "Ítems Negativos Post-Reparación"),
+    ],
+    values: [
+      fsFormat(fs1, 20, n1),
+      fsFormat(fs2, 20, n2),
+      fsFormat(fs3, 20, n3),
+      fsFormat(fs4, 20, n4),
+      fsFormat(fs5, 20, n5),
+    ],
+    total,
+    rating,
+    tradelineNeeded,
+    tradelineRec,
+  };
+}
+
+function bullet(items: string[]): string {
+  return items.map((i) => `★ ${i}`).join("\n");
+}
+
+export function runCreditAnalysisAlgorithm(
+  input: CreditAnalysisAlgorithmInput,
+): CreditAnalysisAnalystFlat {
+  const lang = resolveTextLanguage(input.language, input.lastName);
+  const t = makeT(lang);
+  const goalRaw =
+    (input.clientGoal || "").trim() ||
+    t("General Improvement", "Mejora General");
+  const goalKind = classifyGoalKind(input.clientGoal);
+  const scores = input.scores;
+  const mid = computeMiddleScore(scores);
+  const util =
+    input.utilization ?? extractUtilizationFromText(input.reportText || "");
+  const ranked = [...input.negatives.map(rankNegativeItem)].sort(
+    (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority],
+  );
+  for (const n of ranked) {
+    n.dispute_basis = localizeDisputeBasis(n.dispute_basis, lang);
+  }
+
+  const delta = adjustmentFactors(util, ranked, input.reportText || "");
+  const lending = lendingConversion(goalKind, scores, mid, delta, t);
+  const lendingToday = lending.lendingMid ?? mid;
+
+  const totalLimit = util.reduce((s, u) => s + u.limit, 0);
+  const totalBal = util.reduce((s, u) => s + u.balance, 0);
+  const totalPct =
+    totalLimit > 0 ? Math.round((totalBal / totalLimit) * 100) : 0;
+  const topUtil = [...util].sort((a, b) => b.pctUsed - a.pctUsed).slice(0, 3);
+
+  const goalScore = lending.goal_score;
+  const today = lendingToday;
+  const gapToGoal = today != null ? Math.max(0, goalScore - today) : goalScore;
+  const score_30 =
+    today == null
+      ? null
+      : clampScore(today + Math.min(25, Math.round(gapToGoal * 0.2)));
+  const score_60 =
+    today == null
+      ? null
+      : clampScore(today + Math.min(45, Math.round(gapToGoal * 0.45)));
+  const score_90 =
+    today == null
+      ? null
+      : clampScore(today + Math.min(70, Math.round(gapToGoal * 0.7)));
+  const score_target =
+    today == null ? goalScore : clampScore(Math.min(goalScore, score_90! + 15));
+
+  const top5 = ranked.slice(0, 5);
+  const negSlots = [0, 1, 2, 3, 4].map((i) => top5[i] || null);
+
+  const utilSlots = [0, 1, 2].map((i) => topUtil[i] || null);
+
+  const fs = buildFileStrength(
+    goalKind,
+    util,
+    input.reportText || "",
+    ranked,
+    scores,
+    t,
+  );
+
+  const topNames = top5.map((n) => n.account).filter(Boolean);
+  const round1 = bullet(
+    [
+      topNames[0]
+        ? t(
+            `Dispute ${topNames[0]} (${top5[0]?.priority}) with all reporting bureaus`,
+            `Disputar ${topNames[0]} (${top5[0]?.priority}) con todas las agencias`,
+          )
+        : t(
+            "Audit personal info & freeze unauthorized inquiries",
+            "Auditar info personal y congelar consultas no autorizadas",
+          ),
+      topNames[1]
+        ? t(
+            `Package documentation for ${topNames[1]}`,
+            `Preparar documentación para ${topNames[1]}`,
+          )
+        : t(
+            "Pull method-of-verification requests for top derogatories",
+            "Solicitar método de verificación de los principales negativos",
+          ),
+      t(
+        "Keep all open accounts current — no new late marks",
+        "Mantener todas las cuentas al corriente — sin nuevos atrasos",
+      ),
+    ].slice(0, 4),
+  );
+
+  const round2 = bullet([
+    t(
+      "Follow up Round 1 disputes; escalate inconsistent bureau responses",
+      "Seguimiento de disputas Ronda 1; escalar respuestas inconsistentes",
+    ),
+    topNames[2]
+      ? t(
+          `Second-wave dispute on ${topNames[2]}`,
+          `Segunda ola de disputa sobre ${topNames[2]}`,
+        )
+      : t(
+          "Re-dispute remaining HIGH items with fresh evidence",
+          "Redisputar ítems HIGH restantes con evidencia nueva",
+        ),
+    totalPct > 30
+      ? t(
+          "Re-check revolving utilization after paydown progress",
+          "Revisar utilización revolving tras avances de pago",
+        )
+      : t(
+          "Protect positive accounts — do not close oldest cards",
+          "Proteger cuentas positivas — no cerrar las tarjetas más antiguas",
+        ),
+  ]);
+
+  const round3 = bullet([
+    t(
+      "Final challenge on stubborn negatives still reporting",
+      "Desafío final a negativos persistentes que siguen reportando",
+    ),
+    t(
+      "Confirm deletions/updates across TU, EX, and EQ",
+      "Confirmar eliminaciones/actualizaciones en TU, EX y EQ",
+    ),
+    fs.tradelineNeeded
+      ? t(
+          "Evaluate seasoned tradeline if file still thin for goal",
+          "Evaluar tradeline sazonada si el archivo sigue delgado para la meta",
+        )
+      : t(
+          "Lock in utilization under 10–30% before funding applications",
+          "Fijar utilización bajo 10–30% antes de solicitudes de financiamiento",
+        ),
+  ]);
+
+  const actions = [
+    {
+      time: t("WEEK 1", "SEMANA 1"),
+      action: t(
+        "Complete credit analysis review & dispute intake",
+        "Completar revisión del análisis e ingreso de disputas",
+      ),
+      reason: t(
+        "Establish accurate baseline and priority queue",
+        "Establecer línea base precisa y cola de prioridades",
+      ),
+    },
+    {
+      time: t("WEEK 1–2", "SEMANA 1–2"),
+      action: t(
+        "File Round 1 disputes on CRITICAL/HIGH items",
+        "Presentar disputas Ronda 1 en ítems CRITICAL/HIGH",
+      ),
+      reason: t(
+        "Highest-impact negatives move first",
+        "Los negativos de mayor impacto se atienden primero",
+      ),
+    },
+    {
+      time: t("MONTH 1", "MES 1"),
+      action:
+        totalPct > 30
+          ? t(
+              "Lower revolving utilization toward 30%",
+              "Bajar utilización revolving hacia 30%",
+            )
+          : t(
+              "Hold utilization at or under 30%",
+              "Mantener utilización en o bajo 30%",
+            ),
+      reason: t(
+        "Utilization is a fast-moving FICO lever",
+        "La utilización es una palanca FICO de movimiento rápido",
+      ),
+    },
+    {
+      time: t("MONTH 2", "MES 2"),
+      action: t(
+        "Round 2 follow-ups + bureau consistency checks",
+        "Seguimientos Ronda 2 + chequeos de consistencia entre agencias",
+      ),
+      reason: t(
+        "Catch metro 2 mismatches and incomplete deletions",
+        "Detectar inconsistencias metro 2 y eliminaciones incompletas",
+      ),
+    },
+    {
+      time: t("MONTH 2–3", "MES 2–3"),
+      action: t(
+        "Round 3 + goal-specific readiness check",
+        "Ronda 3 + revisión de preparación según la meta",
+      ),
+      reason: lending.goal_description,
+    },
+    {
+      time: t("MONTH 3+", "MES 3+"),
+      action: fs.tradelineNeeded
+        ? t(
+            "Consider file-strength options (tradeline / mix)",
+            "Considerar opciones de fortaleza (tradeline / mezcla)",
+          )
+        : t(
+            "Re-score & prepare lending application package",
+            "Re-puntuar y preparar paquete de solicitud de financiamiento",
+          ),
+      reason: t(
+        "Align timing with goal score and lender guidelines",
+        "Alinear el momento con el puntaje meta y guías del prestamista",
+      ),
+    },
+  ];
+
+  const positives =
+    input.positiveAccounts && input.positiveAccounts.length
+      ? input.positiveAccounts.slice(0, 5).join("; ")
+      : t(
+          "Keep oldest revolving accounts open and paid as agreed.",
+          "Mantener abiertas las revolving más antiguas y pagadas según acuerdo.",
+        );
+
+  const rep =
+    (input.repName || "").trim() ||
+    t("Your Encore Advisor", "Tu Asesor Encore");
+  const premium = "https://www.encoremortgage.org";
+
+  let line1: string;
+  let line2: string;
+  if (goalKind === "auto") {
+    line1 = t(
+      `Hi ${input.firstName}, your estimated auto lending mid score is ${lendingToday ?? "—"}.`,
+      `Hola ${input.firstName}, tu puntaje medio estimado de auto es ${lendingToday ?? "—"}.`,
+    );
+    line2 = lending.fha_status;
+  } else if (goalKind === "business") {
+    line1 = t(
+      `Hi ${input.firstName}, your business lending score (personal FICO 8 mid) is ${lendingToday ?? "—"}.`,
+      `Hola ${input.firstName}, tu puntaje de financiamiento empresarial (FICO 8 medio) es ${lendingToday ?? "—"}.`,
+    );
+    line2 = lending.fha_status;
+  } else if (goalKind === "general") {
+    line1 = t(
+      `Hi ${input.firstName}, your current mid score is ${mid ?? "—"}.`,
+      `Hola ${input.firstName}, tu puntaje medio actual es ${mid ?? "—"}.`,
+    );
+    line2 = t(
+      `There's clear room to climb toward ${goalScore} with a focused dispute plan.`,
+      `Hay un claro margen para subir hacia ${goalScore} con un plan de disputas enfocado.`,
+    );
+  } else {
+    line1 = t(
+      `Hi ${input.firstName}, your estimated mortgage mid score is ${lendingToday ?? "—"}.`,
+      `Hola ${input.firstName}, tu puntaje hipotecario medio estimado es ${lendingToday ?? "—"}.`,
+    );
+    line2 = lending.fha_status;
+  }
+  const line3 = t(
+    `When you're ready, start here: ${premium}`,
+    `Cuando estés listo, comienza aquí: ${premium}`,
+  );
+  const modeNote =
+    input.mode === "agent"
+      ? t(
+          `Prepared with your mortgage banker (${rep}).`,
+          `Preparado con tu banquero hipotecario (${rep}).`,
+        )
+      : t(
+          "Prepared for you by Encore Mortgage.",
+          "Preparado para ti por Encore Mortgage.",
+        );
+  const client_text_message = `${line1} ${line2}\n${line3}\n${modeNote}\n- ${rep} | Encore Mortgage`;
+
+  const utilNote =
+    totalPct > 50
+      ? t(
+          "Utilization is elevated — paying revolving balances down is one of the fastest score levers.",
+          "La utilización está elevada — bajar saldos revolving es una de las palancas más rápidas.",
+        )
+      : totalPct > 30
+        ? t(
+            "Utilization is above the ideal 30% band on one or more cards.",
+            "La utilización está por encima del rango ideal del 30% en una o más tarjetas.",
+          )
+        : t(
+            "Revolving utilization looks manageable — protect it while disputes run.",
+            "La utilización revolving se ve manejable — protégela mientras corren las disputas.",
+          );
+
+  const gap = (s: number | null) =>
+    s == null || goalScore == null ? null : Math.max(0, goalScore - s);
+
+  const out: CreditAnalysisAnalystFlat = {
+    client_name: input.clientName,
+    analysis_goal: goalRaw,
+    report_date: input.reportDate || new Date().toISOString().slice(0, 10),
+    referral_name: "Encore Mortgage",
+    referral_company: "Encore Mortgage",
+
+    score_transunion: scores.transunion,
+    score_experian: scores.experian,
+    score_equifax: scores.equifax,
+    score_tu_label: scoreBandLabel(scores.transunion),
+    score_ex_label: scoreBandLabel(scores.experian),
+    score_eq_label: scoreBandLabel(scores.equifax),
+    middle_score: mid,
+    fha_status: lending.fha_status,
+    goal_score: goalScore,
+    goal_description: lending.goal_description,
+    gap_tu: gap(lending.mortgage_tu ?? scores.transunion),
+    gap_ex: gap(lending.mortgage_ex ?? scores.experian),
+    gap_eq: gap(lending.mortgage_eq ?? scores.equifax),
+
+    neg_1_account: negSlots[0]?.account || "",
+    neg_1_type: negSlots[0]?.type || "",
+    neg_1_bureaus: negSlots[0]?.bureaus || "",
+    neg_1_priority: negSlots[0]?.priority || "",
+    neg_1_dispute_basis: negSlots[0]?.dispute_basis || "",
+    neg_2_account: negSlots[1]?.account || "",
+    neg_2_type: negSlots[1]?.type || "",
+    neg_2_bureaus: negSlots[1]?.bureaus || "",
+    neg_2_priority: negSlots[1]?.priority || "",
+    neg_2_dispute_basis: negSlots[1]?.dispute_basis || "",
+    neg_3_account: negSlots[2]?.account || "",
+    neg_3_type: negSlots[2]?.type || "",
+    neg_3_bureaus: negSlots[2]?.bureaus || "",
+    neg_3_priority: negSlots[2]?.priority || "",
+    neg_3_dispute_basis: negSlots[2]?.dispute_basis || "",
+    neg_4_account: negSlots[3]?.account || "",
+    neg_4_type: negSlots[3]?.type || "",
+    neg_4_bureaus: negSlots[3]?.bureaus || "",
+    neg_4_priority: negSlots[3]?.priority || "",
+    neg_4_dispute_basis: negSlots[3]?.dispute_basis || "",
+    neg_5_account: negSlots[4]?.account || "",
+    neg_5_type: negSlots[4]?.type || "",
+    neg_5_bureaus: negSlots[4]?.bureaus || "",
+    neg_5_priority: negSlots[4]?.priority || "",
+    neg_5_dispute_basis: negSlots[4]?.dispute_basis || "",
+
+    utilization_critical_note: utilNote,
+    util_1_account: utilSlots[0]?.account || "",
+    util_1_limit: utilSlots[0] ? money(utilSlots[0].limit) : "",
+    util_1_balance: utilSlots[0] ? money(utilSlots[0].balance) : "",
+    util_1_percent: utilSlots[0] ? `${utilSlots[0].pctUsed}%` : "",
+    util_1_pay30: utilSlots[0] ? money(utilSlots[0].payTo30) : "",
+    util_1_pay10: utilSlots[0] ? money(utilSlots[0].payTo10) : "",
+    util_2_account: utilSlots[1]?.account || "",
+    util_2_limit: utilSlots[1] ? money(utilSlots[1].limit) : "",
+    util_2_balance: utilSlots[1] ? money(utilSlots[1].balance) : "",
+    util_2_percent: utilSlots[1] ? `${utilSlots[1].pctUsed}%` : "",
+    util_2_pay30: utilSlots[1] ? money(utilSlots[1].payTo30) : "",
+    util_2_pay10: utilSlots[1] ? money(utilSlots[1].payTo10) : "",
+    util_3_account: utilSlots[2]?.account || "",
+    util_3_limit: utilSlots[2] ? money(utilSlots[2].limit) : "",
+    util_3_balance: utilSlots[2] ? money(utilSlots[2].balance) : "",
+    util_3_percent: utilSlots[2] ? `${utilSlots[2].pctUsed}%` : "",
+    util_3_pay30: utilSlots[2] ? money(utilSlots[2].payTo30) : "",
+    util_3_pay10: utilSlots[2] ? money(utilSlots[2].payTo10) : "",
+    total_revolving_limit: money(totalLimit),
+    total_revolving_balance: money(totalBal),
+    total_revolving_util: `${totalPct}%`,
+    paydown_30_instruction:
+      totalPct > 30
+        ? t(
+            `Pay down about ${money(Math.max(0, totalBal - totalLimit * 0.3))} across revolving to reach ~30% util.`,
+            `Abona aproximadamente ${money(Math.max(0, totalBal - totalLimit * 0.3))} en revolving para llegar a ~30% de util.`,
+          )
+        : t(
+            "Already near or under 30% — maintain statement balances.",
+            "Ya cerca o bajo 30% — mantén los saldos del estado de cuenta.",
+          ),
+    paydown_10_instruction:
+      totalPct > 10
+        ? t(
+            `For stronger scoring, target ~10% util (~${money(Math.max(0, totalBal - totalLimit * 0.1))} paydown).`,
+            `Para un puntaje más fuerte, apunta a ~10% util (~${money(Math.max(0, totalBal - totalLimit * 0.1))} de abono).`,
+          )
+        : t(
+            "Utilization already near the 10% sweet spot.",
+            "La utilización ya está cerca del punto ideal del 10%.",
+          ),
+
+    score_today: today,
+    score_30_days: score_30,
+    score_60_days: score_60,
+    score_90_days: score_90,
+    score_target,
+    target_timeframe: `${timelineLabel(goalKind, t)} · ${t("≈ 90 days", "≈ 90 días")}`,
+
+    round_1_actions: round1,
+    round_2_actions: round2,
+    round_3_actions: round3,
+    positive_accounts_protect: positives,
+
+    action_1_time: actions[0].time,
+    action_1_action: actions[0].action,
+    action_1_reason: actions[0].reason,
+    action_2_time: actions[1].time,
+    action_2_action: actions[1].action,
+    action_2_reason: actions[1].reason,
+    action_3_time: actions[2].time,
+    action_3_action: actions[2].action,
+    action_3_reason: actions[2].reason,
+    action_4_time: actions[3].time,
+    action_4_action: actions[3].action,
+    action_4_reason: actions[3].reason,
+    action_5_time: actions[4].time,
+    action_5_action: actions[4].action,
+    action_5_reason: actions[4].reason,
+    action_6_time: actions[5].time,
+    action_6_action: actions[5].action,
+    action_6_reason: actions[5].reason,
+
+    file_strength_score: fs.total,
+    file_strength_rating: fs.rating,
+    fs_label_1: fs.labels[0],
+    fs_open_revolving: fs.values[0],
+    fs_label_2: fs.labels[1],
+    fs_installment_mix: fs.values[1],
+    fs_label_3: fs.labels[2],
+    fs_mortgage: fs.values[2],
+    fs_label_4: fs.labels[3],
+    fs_account_age: fs.values[3],
+    fs_label_5: fs.labels[4],
+    fs_post_repair: fs.values[4],
+    tradeline_recommendation: fs.tradelineRec,
+
+    negative_items_html: buildNegativeHtml(ranked),
+    negative_count: ranked.length,
+    critical_count: ranked.filter((n) => n.priority === "CRITICAL").length,
+    high_count: ranked.filter((n) => n.priority === "HIGH").length,
+    utilization_html: buildUtilHtml(util),
+    action_plan_html: buildActionPlanHtml(actions),
+    mortgage_tu: lending.mortgage_tu,
+    mortgage_ex: lending.mortgage_ex,
+    mortgage_eq: lending.mortgage_eq,
+    tradeline_needed: fs.tradelineNeeded ? t("Yes", "Sí") : t("No", "No"),
+    client_text_message,
+    text_language: lang,
+  };
+
+  if (input.weakExtraction) {
+    out.utilization_critical_note = t(
+      "Limited PDF text extraction — scores and tables may be incomplete. Re-upload a text-based SmartCredit or Xactus PDF for a full analysis.",
+      "Extracción limitada del PDF — puntajes y tablas pueden estar incompletos. Sube un PDF de texto de SmartCredit o Xactus para un análisis completo.",
+    );
+    out.fha_status = t(
+      "Analysis limited — could not fully read the report",
+      "Análisis limitado — no se pudo leer el informe por completo",
+    );
+  }
+
+  return out;
+}
+
+/**
+ * Rich HTML narrative for email + result panel (Encore navy/gold styling).
+ */
+export function buildAnalystAnalysisHtml(opts: {
+  firstName: string;
+  analyst: CreditAnalysisAnalystFlat;
+  weakExtraction?: boolean;
+  croaDisclosure: string;
+}): { html: string; text: string } {
+  const a = opts.analyst;
+  const isEs = a.text_language === "Spanish";
+  const C = ENCORE_COLORS;
+
+  if (opts.weakExtraction) {
+    const html = `
+      <h2 style="margin:0 0 12px;font-size:20px;font-weight:800;color:${C.foreground};">${isEs ? `Tu análisis de crédito, ${escapeHtml(opts.firstName)}` : `Your Credit Analysis, ${escapeHtml(opts.firstName)}`}</h2>
+      <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">${escapeHtml(a.utilization_critical_note)}</p>
+      <p style="margin:16px 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">${opts.croaDisclosure}</p>
+    `.trim();
+    return {
+      html,
+      text: [
+        isEs
+          ? `Tu análisis de crédito, ${opts.firstName}`
+          : `Your Credit Analysis, ${opts.firstName}`,
+        a.utilization_critical_note,
+        opts.croaDisclosure,
+      ].join("\n\n"),
+    };
+  }
+
+  const scoreRow = (label: string, score: number | null, band: string) =>
+    `<td style="padding:12px;text-align:center;border:1px solid ${C.border};">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:${C.muted};text-transform:uppercase;">${label}</div>
+      <div style="font-size:28px;font-weight:800;color:${C.navy};margin:6px 0;">${score ?? "—"}</div>
+      <div style="font-size:11px;font-weight:700;color:${C.gold};">${escapeHtml(band || "—")}</div>
+    </td>`;
+
+  const html = `
+    <h2 style="margin:0 0 8px;font-size:22px;font-weight:800;color:${C.navy};">${isEs ? `Tu análisis de crédito, ${escapeHtml(opts.firstName)}` : `Your Credit Analysis, ${escapeHtml(opts.firstName)}`}</h2>
+    <p style="margin:0 0 20px;font-size:14px;color:${C.muted};">${isEs ? "Meta" : "Goal"}: <strong style="color:${C.foreground};">${escapeHtml(a.analysis_goal)}</strong></p>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:collapse;">
+      <tr>
+        ${scoreRow("TransUnion", a.score_transunion, a.score_tu_label)}
+        ${scoreRow("Experian", a.score_experian, a.score_ex_label)}
+        ${scoreRow("Equifax", a.score_equifax, a.score_eq_label)}
+      </tr>
+    </table>
+
+    <div style="margin:0 0 20px;padding:16px;border-radius:12px;background:${C.cardBg};border:1px solid ${C.border};">
+      <div style="font-size:12px;font-weight:700;color:${C.gold};letter-spacing:0.04em;text-transform:uppercase;margin-bottom:6px;">${isEs ? "Puntaje medio / meta" : "Mid score / goal"}</div>
+      <p style="margin:0 0 8px;font-size:15px;color:#334155;"><strong style="color:${C.navy};font-size:22px;">${a.middle_score ?? "—"}</strong>
+        → <strong style="color:${C.gold};">${a.goal_score}</strong></p>
+      <p style="margin:0;font-size:14px;color:#334155;">${escapeHtml(a.fha_status)}</p>
+      <p style="margin:8px 0 0;font-size:13px;color:${C.muted};">${escapeHtml(a.goal_description)}</p>
+    </div>
+
+    ${
+      a.negative_count > 0
+        ? `<h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:${C.navy};">${isEs ? "Ítems negativos (prioridad de disputa)" : "Negative items (dispute priority)"}</h3>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:collapse;font-size:13px;">
+        <tr style="background:${C.navy};color:${C.gold};">
+          <th style="padding:8px;text-align:left;">${isEs ? "Cuenta" : "Account"}</th>
+          <th style="padding:8px;text-align:left;">${isEs ? "Tipo" : "Type"}</th>
+          <th style="padding:8px;text-align:center;">${isEs ? "Agencias" : "Bureaus"}</th>
+          <th style="padding:8px;text-align:center;">${isEs ? "Prioridad" : "Priority"}</th>
+          <th style="padding:8px;text-align:left;">${isEs ? "Base" : "Basis"}</th>
+        </tr>
+        ${a.negative_items_html}
+      </table>`
+        : `<p style="margin:0 0 20px;font-size:14px;color:${C.utilOk};font-weight:600;">${isEs ? "No detectamos ítems negativos obvios." : "No obvious negative items detected."}</p>`
+    }
+
+    ${
+      a.utilization_html
+        ? `<h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:${C.navy};">${isEs ? "Utilización revolving" : "Revolving utilization"}</h3>
+      <p style="margin:0 0 8px;font-size:13px;color:${C.muted};">${escapeHtml(a.utilization_critical_note)}</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 8px;border-collapse:collapse;font-size:13px;">
+        <tr style="background:${C.cardBg};">
+          <th style="padding:8px;text-align:left;">${isEs ? "Cuenta" : "Account"}</th>
+          <th style="padding:8px;text-align:left;">${isEs ? "Límite" : "Limit"}</th>
+          <th style="padding:8px;text-align:left;">${isEs ? "Saldo" : "Balance"}</th>
+          <th style="padding:8px;text-align:left;">Util%</th>
+          <th style="padding:8px;text-align:left;">→30%</th>
+          <th style="padding:8px;text-align:left;">→10%</th>
+        </tr>
+        ${a.utilization_html}
+      </table>
+      <p style="margin:0 0 20px;font-size:12px;color:${C.muted};">${escapeHtml(a.total_revolving_util)} util · ${escapeHtml(a.paydown_30_instruction)}</p>`
+        : ""
+    }
+
+    <h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:${C.navy};">${isEs ? "Línea de tiempo estimada" : "Estimated timeline"}</h3>
+    <p style="margin:0 0 4px;font-size:13px;color:${C.muted};">${escapeHtml(a.target_timeframe)}</p>
+    <p style="margin:0 0 20px;font-size:14px;color:#334155;">
+      <strong>${a.score_today ?? "—"}</strong> → 30d <strong>${a.score_30_days ?? "—"}</strong> → 60d <strong>${a.score_60_days ?? "—"}</strong> → 90d <strong>${a.score_90_days ?? "—"}</strong> → ${isEs ? "meta" : "target"} <strong style="color:${C.gold};">${a.score_target ?? "—"}</strong>
+    </p>
+
+    <h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:${C.navy};">${isEs ? "Fortaleza del archivo" : "File strength"}: ${a.file_strength_score}/100 · ${escapeHtml(a.file_strength_rating)}</h3>
+    <ul style="margin:0 0 20px;padding-left:18px;font-size:13px;color:#334155;line-height:1.7;">
+      <li><strong>${escapeHtml(a.fs_label_1)}</strong> — ${escapeHtml(a.fs_open_revolving)}</li>
+      <li><strong>${escapeHtml(a.fs_label_2)}</strong> — ${escapeHtml(a.fs_installment_mix)}</li>
+      <li><strong>${escapeHtml(a.fs_label_3)}</strong> — ${escapeHtml(a.fs_mortgage)}</li>
+      <li><strong>${escapeHtml(a.fs_label_4)}</strong> — ${escapeHtml(a.fs_account_age)}</li>
+      <li><strong>${escapeHtml(a.fs_label_5)}</strong> — ${escapeHtml(a.fs_post_repair)}</li>
+    </ul>
+
+    <h3 style="margin:0 0 8px;font-size:15px;font-weight:800;color:${C.navy};">${isEs ? "Plan de acción" : "Action plan"}</h3>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:collapse;font-size:13px;">
+      ${a.action_plan_html}
+    </table>
+
+    <div style="margin:0 0 16px;padding:14px;border-left:3px solid ${C.gold};background:${C.cardBg};">
+      <div style="font-size:12px;font-weight:700;color:${C.navy};margin-bottom:6px;">${isEs ? "Mensaje para el cliente" : "Client message"}</div>
+      <p style="margin:0;font-size:13px;line-height:1.6;color:#334155;white-space:pre-wrap;">${escapeHtml(a.client_text_message)}</p>
+    </div>
+
+    <p style="margin:16px 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">${opts.croaDisclosure}</p>
+  `.trim();
+
+  const text = [
+    isEs
+      ? `Tu análisis de crédito, ${opts.firstName}`
+      : `Your Credit Analysis, ${opts.firstName}`,
+    `Goal: ${a.analysis_goal}`,
+    `TU ${a.score_transunion ?? "—"} (${a.score_tu_label}) · EX ${a.score_experian ?? "—"} (${a.score_ex_label}) · EQ ${a.score_equifax ?? "—"} (${a.score_eq_label})`,
+    `Mid: ${a.middle_score ?? "—"} → Goal: ${a.goal_score}`,
+    a.fha_status,
+    a.goal_description,
+    `Negatives: ${a.negative_count} (CRITICAL ${a.critical_count}, HIGH ${a.high_count})`,
+    a.neg_1_account &&
+      `${a.neg_1_priority}: ${a.neg_1_account} — ${a.neg_1_type}`,
+    a.neg_2_account &&
+      `${a.neg_2_priority}: ${a.neg_2_account} — ${a.neg_2_type}`,
+    a.neg_3_account &&
+      `${a.neg_3_priority}: ${a.neg_3_account} — ${a.neg_3_type}`,
+    `Timeline: ${a.score_today} → ${a.score_30_days} → ${a.score_60_days} → ${a.score_90_days} → ${a.score_target}`,
+    `File strength: ${a.file_strength_score}/100 ${a.file_strength_rating}`,
+    a.client_text_message,
+    opts.croaDisclosure,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return { html, text };
+}
+
+export type CreditAnalysisNegativeItem = {
+  type: string;
+  creditor?: string;
+  bureaus?: string[];
+  detail?: string;
+};
+
+export type ReportProvider =
+  | "identityiq"
+  | "smartcredit"
+  | "myscoreiq"
+  | "xactus"
+  | "generic";
+
+export type BureauScores = {
+  transunion: number | null;
+  experian: number | null;
+  equifax: number | null;
+};
+
+export function detectProvider(text: string): ReportProvider {
+  const t = text.toLowerCase();
+  // SmartCredit primary; IdentityIQ / MyScoreIQ(MFSN-family) / Xactus / myFICO / generic.
+  // Not Credit Karma / OCR — text-based tri-merge PDFs only.
+  if (t.includes("smartcredit") || t.includes("smart credit"))
+    return "smartcredit";
+  if (t.includes("identityiq") || t.includes("identity iq"))
+    return "identityiq";
+  if (
+    t.includes("myscoreiq") ||
+    t.includes("my score iq") ||
+    t.includes("myfreescorenow") ||
+    t.includes("my free score now")
+  )
+    return "myscoreiq";
+  if (isXactusReport(t)) return "xactus";
+  if (t.includes("myfico") || t.includes("my fico")) return "generic";
+  return "generic";
+}
+
+/** Statewide / Xactus-style reseller tri-merge (Client Code X-…, TUC/EXP/EQX, Credit Assure). */
+function isXactusReport(t: string): boolean {
+  if (t.includes("xactus")) return true;
+  if (/client\s*code:\s*x-?\d+/i.test(t)) return true;
+  if (
+    t.includes("repositories: tuc/exp/eqx") ||
+    t.includes("repositories:tuc/exp/eqx")
+  )
+    return true;
+  // Common Xactus / Statewide header + CreditXpert Credit Assure blocks
+  const hasReedRd = t.includes("370 reed rd");
+  const hasCreditAssure =
+    t.includes("credit assure") || t.includes("creditxpert");
+  const hasFicoVersions =
+    /fico\s*score\s*4/i.test(t) &&
+    /fico\s*score\s*2/i.test(t) &&
+    /fico\s*score\s*5/i.test(t);
+  if ((hasReedRd || hasCreditAssure) && hasFicoVersions) return true;
+  if (
+    t.includes("order verifications") &&
+    hasFicoVersions &&
+    t.includes("statewide")
+  )
+    return true;
+  return false;
+}
+
+function scoreInRange(n: number): boolean {
+  return Number.isFinite(n) && n >= 300 && n <= 850;
+}
+
+function extractBureauScoreGeneric(
+  text: string,
+  bureau: string,
+): number | null {
+  const patterns = [
+    new RegExp(`${bureau}[^\\d]{0,60}(\\d{3})`, "i"),
+    new RegExp(`${bureau.slice(0, 3)}[^\\d]{0,30}(\\d{3})`, "i"),
+    new RegExp(`(${bureau.slice(0, 2)})\\s*[:\\-]?\\s*(\\d{3})`, "i"),
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    const score = m ? Number(m[m.length - 1]) : NaN;
+    if (scoreInRange(score)) return score;
+  }
+  return null;
+}
+
+/**
+ * Xactus / Statewide tri-merge:
+ *  - Explicit lines: "TransUnion 550" / "Experian 622" / "Equifax 594"
+ *  - FICO model mapping: Score 4 → TU, Score 2 → EX, Score 5 → EQ
+ *  - "Name TransUnion FICO Score 4 Fair Isaac 309-839" (range, not the score)
+ */
+function extractXactusBureauScore(
+  text: string,
+  bureau: "transunion" | "experian" | "equifax",
+): number | null {
+  const full =
+    bureau === "transunion"
+      ? "TransUnion"
+      : bureau === "experian"
+        ? "Experian"
+        : "Equifax";
+
+  // Prefer explicit "Bureau 550" lines (often near Credit Assure / factors footer)
+  const explicit = new RegExp(`\\b${full}\\b\\s*[:\\-]?\\s*(\\d{3})\\b`, "i");
+  const explicitMatches = [...text.matchAll(new RegExp(explicit.source, "gi"))];
+  for (const m of explicitMatches) {
+    const score = Number(m[1]);
+    // Skip Fair Isaac ranges like 309-839 (first number is range floor)
+    const after = text.slice(
+      (m.index ?? 0) + m[0].length,
+      (m.index ?? 0) + m[0].length + 8,
+    );
+    if (/^\s*-\s*\d{3}/.test(after)) continue;
+    if (scoreInRange(score)) return score;
+  }
+
+  // FICO Score N block: "FICO Score 4\n550" or "FICO Score 5\n[ 594 ]"
+  const ficoModel =
+    bureau === "transunion" ? "4" : bureau === "experian" ? "2" : "5";
+  const ficoBlock = new RegExp(
+    `FICO\\s*Score\\s*${ficoModel}\\s*(?:\\[[^\\]]*\\]|[^\\d]{0,40})(\\d{3})`,
+    "i",
+  );
+  const fm = text.match(ficoBlock);
+  if (fm) {
+    const score = Number(fm[1]);
+    if (scoreInRange(score)) return score;
+  }
+
+  // Line after FICO Score N
+  const ficoNextLine = new RegExp(
+    `FICO\\s*Score\\s*${ficoModel}\\s*(?:\\r?\\n)+\\s*\\[?\\s*(\\d{3})\\s*\\]?`,
+    "i",
+  );
+  const fn = text.match(ficoNextLine);
+  if (fn) {
+    const score = Number(fn[1]);
+    if (scoreInRange(score)) return score;
+  }
+
+  return extractBureauScoreGeneric(text, full);
+}
+
+function extractBureauScoreProvider(
+  text: string,
+  bureau: "transunion" | "experian" | "equifax",
+  provider: ReportProvider,
+): number | null {
+  if (provider === "xactus") {
+    return extractXactusBureauScore(text, bureau);
+  }
+
+  const labels: Record<typeof bureau, string[]> = {
+    transunion: ["transunion", "trans union", "tu"],
+    experian: ["experian", "exp", "ex"],
+    equifax: ["equifax", "eq"],
+  };
+
+  const providerPatterns: RegExp[] = [];
+  const abbrev =
+    bureau === "transunion" ? "TU" : bureau === "experian" ? "EX" : "EQ";
+  providerPatterns.push(new RegExp(`\\b${abbrev}\\b[^\\d]{0,20}(\\d{3})`, "i"));
+
+  if (
+    provider === "identityiq" ||
+    provider === "smartcredit" ||
+    provider === "myscoreiq"
+  ) {
+    for (const label of labels[bureau]) {
+      providerPatterns.push(
+        new RegExp(
+          `${label}[^\\d]{0,40}(?:score|vantage|fico)?[^\\d]{0,10}(\\d{3})`,
+          "i",
+        ),
+      );
+      providerPatterns.push(
+        new RegExp(
+          `(?:score|vantage|fico)[^\\d]{0,20}${label}[^\\d]{0,20}(\\d{3})`,
+          "i",
+        ),
+      );
+    }
+  }
+
+  for (const re of providerPatterns) {
+    const m = text.match(re);
+    const score = m ? Number(m[1]) : NaN;
+    if (scoreInRange(score)) return score;
+  }
+
+  const genericName =
+    bureau === "transunion"
+      ? "TransUnion"
+      : bureau === "experian"
+        ? "Experian"
+        : "Equifax";
+  return extractBureauScoreGeneric(text, genericName);
+}
+
+export function extractAllScores(
+  text: string,
+  provider: ReportProvider = detectProvider(text),
+): BureauScores {
+  return {
+    transunion: extractBureauScoreProvider(text, "transunion", provider),
+    experian: extractBureauScoreProvider(text, "experian", provider),
+    equifax: extractBureauScoreProvider(text, "equifax", provider),
+  };
+}
+
+function middleScore(scores: BureauScores): number | null {
+  const vals = [scores.transunion, scores.experian, scores.equifax].filter(
+    (n): n is number => n != null,
+  );
+  if (vals.length === 0) return null;
+  vals.sort((a, b) => a - b);
+  return vals[Math.floor(vals.length / 2)];
+}
+
+const NEGATIVE_LINE_KEYWORDS =
+  /collection|charge.?off|late payment|inquiry|repossession|foreclosure|bankruptcy|lien|judgment|delinquent|past due|derogatory|charged off/i;
+
+/** Pull creditor names from Xactus Underwriting Alerts blocks. */
+function extractXactusAlertCreditors(text: string): string[] {
+  const out: string[] = [];
+  const blocks: Array<[string, RegExp]> = [
+    [
+      "Collection",
+      /Collection Accounts:\s*The following account\(s\) are reported as collection accounts:\s*([\s\S]*?)(?=Disputed Accounts:|Charge Off Accounts:|Credit Summary|$)/i,
+    ],
+    [
+      "Charge-Off",
+      /Charge Off Accounts:\s*The following account\(s\) are reported as Charge Off accounts:\s*([\s\S]*?)(?=Disputed Accounts:|Collection Accounts:|Credit Summary|$)/i,
+    ],
+    [
+      "Dispute",
+      /Disputed Accounts:\s*The following account\(s\)[^:]*:\s*([\s\S]*?)(?=Charge Off Accounts:|Collection Accounts:|Credit Summary|$)/i,
+    ],
+  ];
+  for (const [type, re] of blocks) {
+    const m = text.match(re);
+    if (!m?.[1]) continue;
+    let chunk = m[1]
+      .replace(/\s+/g, " ")
+      .replace(/\.\s*Order\b.*$/i, "")
+      .replace(/\.\s*If using\b.*$/i, "")
+      .replace(/\*\s*$/g, "")
+      .trim();
+    // "CAVALRY PORTFOLIO SERV, LVNV FUNDING LLC, ..." or "LOANME INC (EXP), CITI (TUC)"
+    const parts = chunk
+      .split(/,\s*/)
+      .map((p) =>
+        p
+          .replace(/\([^)]*\)/g, "")
+          .replace(/\.+$/, "")
+          .trim(),
+      )
+      .filter(Boolean);
+    for (const name of parts.slice(0, 10)) {
+      if (name.length < 3 || name.length > 60) continue;
+      if (/^the following/i.test(name)) continue;
+      if (/^(order|if using|information|tradeline|consumer)/i.test(name))
+        continue;
+      out.push(`${name} ${type}`);
+    }
+  }
+  return out;
+}
+
+export function detectNegativeLines(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 8 && l.length < 140);
+  const accountPrefix =
+    /^([A-Z0-9*\/\s&.'-]{4,60}?)\s+(?:-\s+)?(?:collection|charge|late|inquiry|repossession|foreclosure|bankruptcy|lien|judgment|delinquent|past due|derogatory)/i;
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  const push = (raw: string) => {
+    const normalized = raw.trim().slice(0, 100);
+    if (normalized.length < 4) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    // Skip meta/header / factor-code noise
+    if (/^client code:/i.test(normalized)) return;
+    if (/^historical$/i.test(normalized)) return;
+    if (/^past due$/i.test(normalized)) return;
+    if (/^collections\/charge-offs:?$/i.test(normalized)) return;
+    if (/^bankruptcy:?$/i.test(normalized)) return;
+    if (/collection accounts:\s*the following/i.test(normalized)) return;
+    if (/charge off accounts:\s*the following/i.test(normalized)) return;
+    if (/disputed accounts:\s*the following/i.test(normalized)) return;
+    if (/^•?\s*\d{2,3}\s*-/.test(normalized)) return;
+    if (/^order (tradeline|a rapid)/i.test(normalized)) return;
+    seen.add(key);
+    out.push(normalized);
+  };
+
+  if (detectProvider(text) === "xactus") {
+    for (const alert of extractXactusAlertCreditors(text)) push(alert);
+    // Underwriting Alerts are authoritative; skip noisy tradeline/factor keyword lines
+    if (out.length > 0) return out.slice(0, 25);
+  }
+
+  for (const line of lines) {
+    if (!NEGATIVE_LINE_KEYWORDS.test(line)) continue;
+    if (/^B\s+I\s+/i.test(line)) continue;
+    if (/\t/.test(line)) continue;
+    const prefixMatch = line.match(accountPrefix);
+    push(prefixMatch?.[1] ?? line);
+    if (out.length >= 25) break;
+  }
+  return out.slice(0, 25);
+}
+
+const NEGATIVE_TYPE_PATTERNS: Array<[string, RegExp]> = [
+  ["Bankruptcy", /bankrupt/i],
+  ["Foreclosure", /foreclosure/i],
+  ["Repossession", /repossession/i],
+  ["Charge-Off", /charge.?off|charged off/i],
+  ["Collection", /collection/i],
+  ["Judgment", /judgment/i],
+  ["Lien", /\blien\b/i],
+  ["Late Payment", /late payment|past due|delinquent/i],
+  ["Hard Inquiry", /inquiry/i],
+  ["Dispute", /disput/i],
+  ["Derogatory Item", /derogatory/i],
+];
+
+/** Turn the flat lines from detectNegativeLines into structured items for the API/UI. */
+export function classifyNegativeLine(line: string): CreditAnalysisNegativeItem {
+  const found = NEGATIVE_TYPE_PATTERNS.find(([, re]) => re.test(line));
+  const type = found ? found[0] : "Derogatory Item";
+  const creditorGuess = line
+    .replace(
+      /[-–—]?\s*(collection|charge.?off|charged off|late payment|inquiry|repossession|foreclosure|bankrupt(?:cy)?|lien|judgment|delinquent|past due|derogatory|dispute).*$/i,
+      "",
+    )
+    .trim();
+  const creditor =
+    creditorGuess &&
+    creditorGuess.length > 1 &&
+    creditorGuess.length < line.length
+      ? creditorGuess
+      : undefined;
+  return { type, creditor, detail: line };
+}
+
+export function buildNegativeItems(
+  lines: string[],
+): CreditAnalysisNegativeItem[] {
+  return lines.map(classifyNegativeLine);
+}
+
+/**
+ * Map detected negative lines + full report text to analysis label slugs.
+ * Slugs must match the seeded `labels` rows (layer='analysis') from
+ * database/migrations/20260731_190000_prospects_labels_analysis.sql.
+ */
+export function inferAnalysisLabelSlugs(
+  negatives: string[],
+  text: string,
+): string[] {
+  const haystack = `${negatives.join(" \n ")}\n${text}`.toLowerCase();
+  const rules: Array<[string, RegExp]> = [
+    ["housing", /mortgage|foreclosure|\brent\b|landlord|housing/],
+    ["auto", /auto loan|vehicle|car loan|repossession|\bauto\b/],
+    [
+      "credit_card",
+      /credit card|visa|mastercard|discover|amex|american express|jpmcb card|citi|capital one/,
+    ],
+    [
+      "collections",
+      /collection agency|placed for collection|\bcollections?\b|cavalry|lvnv|dnf assoc/,
+    ],
+    ["student_loan", /student loan|sallie mae|navient|dept\.? of education/],
+    ["personal_loan", /personal loan|installment loan|signature loan|loanme/],
+    ["medical", /medical|hospital|clinic|health ?care/],
+    ["bankruptcy", /bankrupt/],
+    ["inquiry", /hard inquiry|\binquiry\b/],
+  ];
+  const matched = new Set<string>();
+  for (const [slug, re] of rules) {
+    if (re.test(haystack)) matched.add(slug);
+  }
+  if (matched.size === 0 && negatives.length > 0) {
+    matched.add("other_derogatory");
+  }
+  return Array.from(matched);
+}
+
+export type CreditAnalysisExtractionStatus =
+  | "ok"
+  | "empty"
+  | "parse_failed"
+  | "unsupported_type";
+
+export function resolveExtractionStatus(
+  mime: string | null | undefined,
+  text: string,
+  parseFailed: boolean,
+): CreditAnalysisExtractionStatus {
+  if (mime !== "application/pdf") return "unsupported_type";
+  if (parseFailed) return "parse_failed";
+  if (text.trim().length < 80) return "empty";
+  return "ok";
+}
+
+// silence unused helper warning in some TS configs
+void middleScore;
+
+const CREDIT_ANALYSIS_MAX_PDF_BYTES = 4 * 1024 * 1024;
+
+const CROA_DISCLOSURE_EN =
+  "Encore Mortgage provides this complimentary credit report analysis for educational and mortgage-readiness purposes. Encore Mortgage is not a credit repair organization under the Credit Repair Organizations Act (CROA), 15 U.S.C. §1679 et seq. We do not guarantee lending approval or specific score improvements. Results vary by individual.";
+const CROA_DISCLOSURE_ES =
+  "Encore Mortgage proporciona este análisis gratuito de informe de crédito con fines educativos y de preparación hipotecaria. Encore Mortgage no es una organización de reparación de crédito bajo la Ley de Organizaciones de Reparación de Crédito (CROA), 15 U.S.C. §1679 et seq. No garantizamos aprobación de crédito ni mejoras específicas en el puntaje. Los resultados varían según el individuo.";
+
+type PdfParseFn = (buf: Buffer) => Promise<{ text: string }>;
+let pdfParseLoader: Promise<PdfParseFn> | null = null;
+
+/** Lazy-load pdf-parse (v2+ exports PDFParse class). Keep in sync with shared usage notes. */
+async function loadPdfParse(): Promise<PdfParseFn> {
+  if (!pdfParseLoader) {
+    pdfParseLoader = import("pdf-parse").then((mod: any) => {
+      const PDFParse = mod.PDFParse || mod.default?.PDFParse || mod.default;
+      if (typeof PDFParse === "function") {
+        // Class-style API (pdf-parse v2+)
+        if (PDFParse.prototype && PDFParse.prototype.getText) {
+          return async (buf: Buffer) => {
+            const parser = new PDFParse({ data: buf });
+            try {
+              const result = await parser.getText();
+              return { text: result?.text || "" };
+            } finally {
+              if (typeof parser.destroy === "function") await parser.destroy();
+            }
+          };
+        }
+        // Function-style fallback
+        return async (buf: Buffer) => {
+          const result = await PDFParse(buf);
+          return { text: result?.text || "" };
+        };
+      }
+      throw new Error(
+        "pdf-parse module did not export PDFParse class or a parse function",
+      );
+    });
+  }
+  return pdfParseLoader;
+}
+
+// =====================================================
+// FREE ANALYSIS HTTP HANDLERS
+// Keep route contracts in sync with api/swagger.yaml + shared/api.ts
+// =====================================================
+
+const creditAnalysisUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CREDIT_ANALYSIS_MAX_PDF_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf") {
+      cb(null, true);
+    } else {
+      cb(new Error("Only application/pdf files are accepted"));
+    }
+  },
+});
+
+function mapCreditAnalysisRow(row: RowDataPacket): any {
+  const parseJson = (v: unknown) => {
+    if (v == null) return null;
+    if (typeof v === "object") return v;
+    try {
+      return JSON.parse(String(v));
+    } catch {
+      return null;
+    }
+  };
+  const scores = parseJson(row.scores_json);
+  const negatives = parseJson(row.negatives_json) || [];
+  const labels = parseJson(row.labels_suggested_json) || [];
+  const analyst = parseJson(row.analyst_json);
+  return {
+    id: Number(row.id),
+    tenant_id: Number(row.tenant_id),
+    client_id: Number(row.client_id),
+    broker_user_id:
+      row.broker_user_id != null ? Number(row.broker_user_id) : null,
+    mode: row.mode,
+    language: row.language,
+    goal: row.goal,
+    provider_detected: row.provider_detected,
+    scores,
+    negatives,
+    suggested_labels: labels,
+    analysis_html: row.analysis_html || "",
+    analysis_text: row.analysis_text || null,
+    email_sent: !!row.email_sent_at,
+    email_opt_in: !!row.email_opt_in,
+    generated_at: row.generated_at
+      ? new Date(row.generated_at).toISOString()
+      : new Date(row.created_at).toISOString(),
+    extraction_status: row.extraction_status || "ok",
+    chars_extracted: Number(row.chars_extracted || 0),
+    analyst,
+    report_file_name: row.report_file_name || null,
+    client_name: row.client_name || null,
+  };
+}
+
+async function runAndPersistCreditAnalysis(opts: {
+  tenantId: number;
+  clientId: number;
+  brokerUserId: number | null;
+  mode: "client" | "agent";
+  language: "en" | "es";
+  goal: string | null;
+  emailOptIn: boolean;
+  file: Express.Multer.File;
+  clientFirstName: string;
+  clientLastName: string;
+  clientEmail: string | null;
+  repName: string;
+}): Promise<any> {
+  const {
+    tenantId,
+    clientId,
+    brokerUserId,
+    mode,
+    language,
+    goal,
+    emailOptIn,
+    file,
+    clientFirstName,
+    clientLastName,
+    clientEmail,
+    repName,
+  } = opts;
+
+  let reportText = "";
+  let pdfParseFailed = false;
+  if (file.mimetype === "application/pdf") {
+    try {
+      const pdfParse = await loadPdfParse();
+      const parsed = await pdfParse(file.buffer);
+      reportText = parsed.text || "";
+    } catch (e: any) {
+      pdfParseFailed = true;
+      console.error("[credit-analysis] pdf parse failed:", e?.message);
+    }
+  }
+
+  const extractionStatus = resolveExtractionStatus(
+    file.mimetype,
+    reportText,
+    pdfParseFailed,
+  );
+  const charsExtracted = reportText.trim().length;
+  const weakExtraction = extractionStatus !== "ok";
+  const provider = reportText ? detectProvider(reportText) : "generic";
+  const scores = reportText
+    ? extractAllScores(reportText, provider)
+    : { transunion: null, experian: null, equifax: null };
+  const hasScores = !!(scores.transunion || scores.experian || scores.equifax);
+  const negativeLines = reportText ? detectNegativeLines(reportText) : [];
+  const negatives = buildNegativeItems(negativeLines);
+  const suggestedLabels = inferAnalysisLabelSlugs(negativeLines, reportText);
+  const utilization = reportText ? extractUtilizationFromText(reportText) : [];
+
+  const analyst = runCreditAnalysisAlgorithm({
+    clientName: `${clientFirstName} ${clientLastName}`.trim(),
+    firstName: clientFirstName,
+    lastName: clientLastName,
+    repName,
+    clientGoal: goal || undefined,
+    language,
+    mode,
+    scores,
+    negatives,
+    reportText,
+    utilization,
+    weakExtraction,
+  });
+
+  const croa =
+    analyst.text_language === "Spanish"
+      ? CROA_DISCLOSURE_ES
+      : CROA_DISCLOSURE_EN;
+  const { html, text } = buildAnalystAnalysisHtml({
+    firstName: clientFirstName,
+    analyst,
+    weakExtraction,
+    croaDisclosure: croa,
+  });
+
+  let emailSent = false;
+  let emailSkippedNoAddress = false;
+  if (emailOptIn) {
+    if (!clientEmail) {
+      emailSkippedNoAddress = true;
+    } else {
+      try {
+        const emailLang: "en" | "es" =
+          analyst.text_language === "Spanish" ? "es" : "en";
+        const subject =
+          emailLang === "es"
+            ? "Tu análisis de crédito — Encore Mortgage"
+            : "Your Credit Analysis — Encore Mortgage";
+        const sendResult = await sendEmailMessage(
+          clientEmail,
+          subject,
+          html,
+          true,
+        );
+        emailSent = !!sendResult?.success;
+        if (!emailSent) {
+          console.error(
+            "[credit-analysis] email send failed:",
+            sendResult?.error || "unknown",
+          );
+        }
+      } catch (e: any) {
+        console.error("[credit-analysis] email send failed:", e?.message);
+      }
+    }
+  }
+
+  const generatedAt = new Date();
+  const [ins] = await pool.query<ResultSetHeader>(
+    `INSERT INTO credit_analyses
+       (tenant_id, client_id, broker_user_id, mode, language, goal,
+        provider_detected, extraction_status, chars_extracted,
+        scores_json, negatives_json, labels_suggested_json, analyst_json,
+        analysis_html, analysis_text, email_opt_in, email_sent_at, generated_at,
+        report_file_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      tenantId,
+      clientId,
+      brokerUserId,
+      mode,
+      language,
+      goal,
+      provider,
+      extractionStatus,
+      charsExtracted,
+      JSON.stringify(scores),
+      JSON.stringify(negatives),
+      JSON.stringify(suggestedLabels),
+      JSON.stringify(analyst),
+      html,
+      text,
+      emailOptIn ? 1 : 0,
+      emailSent ? generatedAt : null,
+      generatedAt,
+      file.originalname || null,
+    ],
+  );
+
+  return {
+    id: ins.insertId,
+    tenant_id: tenantId,
+    client_id: clientId,
+    broker_user_id: brokerUserId,
+    mode,
+    language,
+    goal,
+    provider_detected: provider,
+    scores: hasScores ? scores : null,
+    negatives,
+    suggested_labels: suggestedLabels,
+    analysis_html: html,
+    analysis_text: text,
+    email_sent: emailSent,
+    email_opt_in: emailOptIn,
+    email_skipped_no_address: emailSkippedNoAddress,
+    generated_at: generatedAt.toISOString(),
+    extraction_status: extractionStatus,
+    chars_extracted: charsExtracted,
+    analyst,
+    report_file_name: file.originalname || null,
+  };
+}
+
+const handleAdminCreateCreditAnalysis: RequestHandler = async (req, res) => {
+  try {
+    const broker = (req as any).broker;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "PDF file is required (application/pdf, max 4MB)",
+        });
+    }
+    if (file.mimetype !== "application/pdf") {
+      return res
+        .status(400)
+        .json({ success: false, error: "Only application/pdf is accepted" });
+    }
+    if (file.size > CREDIT_ANALYSIS_MAX_PDF_BYTES) {
+      return res
+        .status(400)
+        .json({ success: false, error: "PDF must be 4MB or smaller" });
+    }
+
+    const clientId = parseInt(String(req.body.client_id || ""), 10);
+    if (!clientId) {
+      return res
+        .status(400)
+        .json({ success: false, error: "client_id is required" });
+    }
+
+    const [clients] = await pool.query<RowDataPacket[]>(
+      `SELECT id, first_name, last_name, email, assigned_broker_id, tenant_id
+       FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+    if (!clients.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Client not found" });
+    }
+    const client = clients[0];
+
+    const canAccess =
+      brokerRole === "platform_owner" ||
+      client.assigned_broker_id === brokerId ||
+      (await brokerCanAccessLinkedClient(broker, clientId));
+    if (!canAccess) {
+      return res
+        .status(403)
+        .json({ success: false, error: "Access denied for this client" });
+    }
+
+    const mode = req.body.mode === "agent" ? "agent" : "client";
+    const language = req.body.language === "es" ? "es" : "en";
+    const goal =
+      String(req.body.goal || req.body.client_goal || "").trim() || null;
+    const emailOptIn =
+      req.body.email_opt_in === true ||
+      req.body.email_opt_in === "true" ||
+      req.body.email_opt_in === "1" ||
+      req.body.email_opt_in === 1;
+
+    const repName =
+      `${broker.first_name || ""} ${broker.last_name || ""}`.trim() ||
+      "Encore Mortgage";
+
+    const analysis = await runAndPersistCreditAnalysis({
+      tenantId: MORTGAGE_TENANT_ID,
+      clientId,
+      brokerUserId: brokerId,
+      mode,
+      language,
+      goal,
+      emailOptIn,
+      file,
+      clientFirstName: client.first_name,
+      clientLastName: client.last_name,
+      clientEmail: client.email || null,
+      repName,
+    });
+
+    res.json({ success: true, analysis });
+  } catch (error: any) {
+    console.error("[admin:credit-analysis] error:", error?.message || error);
+    if (error?.message?.includes("Only application/pdf")) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    if (error?.code === "LIMIT_FILE_SIZE") {
+      return res
+        .status(400)
+        .json({ success: false, error: "PDF must be 4MB or smaller" });
+    }
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to generate credit analysis" });
+  }
+};
+
+const handleAdminListCreditAnalyses: RequestHandler = async (req, res) => {
+  try {
+    const broker = (req as any).broker;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const clientId = parseInt(String(req.query.client_id || ""), 10);
+    if (!clientId) {
+      return res
+        .status(400)
+        .json({ success: false, error: "client_id is required", analyses: [] });
+    }
+
+    const canAccess =
+      brokerRole === "platform_owner" ||
+      (await brokerCanAccessLinkedClient(broker, clientId));
+    if (!canAccess) {
+      // also allow assigned broker
+      const [c] = await pool.query<RowDataPacket[]>(
+        `SELECT assigned_broker_id FROM clients WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        [clientId, MORTGAGE_TENANT_ID],
+      );
+      if (!c.length || c[0].assigned_broker_id !== brokerId) {
+        return res
+          .status(403)
+          .json({ success: false, error: "Access denied", analyses: [] });
+      }
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT ca.*, CONCAT(c.first_name, ' ', c.last_name) AS client_name
+       FROM credit_analyses ca
+       JOIN clients c ON c.id = ca.client_id
+       WHERE ca.client_id = ? AND ca.tenant_id = ?
+       ORDER BY ca.generated_at DESC, ca.id DESC
+       LIMIT 50`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+    res.json({ success: true, analyses: rows.map(mapCreditAnalysisRow) });
+  } catch (error: any) {
+    console.error(
+      "[admin:credit-analysis:list] error:",
+      error?.message || error,
+    );
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to list analyses", analyses: [] });
+  }
+};
+
+const handleAdminGetCreditAnalysis: RequestHandler = async (req, res) => {
+  try {
+    const broker = (req as any).broker;
+    const brokerId = (req as any).brokerId as number;
+    const brokerRole = (req as any).brokerRole as string;
+    const id = parseInt(String(req.params.id || ""), 10);
+    if (!id) {
+      return res.status(400).json({ success: false, error: "Invalid id" });
+    }
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT ca.*, CONCAT(c.first_name, ' ', c.last_name) AS client_name
+       FROM credit_analyses ca
+       JOIN clients c ON c.id = ca.client_id
+       WHERE ca.id = ? AND ca.tenant_id = ?
+       LIMIT 1`,
+      [id, MORTGAGE_TENANT_ID],
+    );
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Analysis not found" });
+    }
+    const row = rows[0];
+    const canAccess =
+      brokerRole === "platform_owner" ||
+      row.broker_user_id === brokerId ||
+      (await brokerCanAccessLinkedClient(broker, Number(row.client_id)));
+    if (!canAccess) {
+      return res.status(403).json({ success: false, error: "Access denied" });
+    }
+    res.json({ success: true, analysis: mapCreditAnalysisRow(row) });
+  } catch (error: any) {
+    console.error(
+      "[admin:credit-analysis:get] error:",
+      error?.message || error,
+    );
+    res.status(500).json({ success: false, error: "Failed to load analysis" });
+  }
+};
+
+const handlePortalListCreditAnalyses: RequestHandler = async (req, res) => {
+  try {
+    const clientId = (req as any).clientId as number;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT ca.*, CONCAT(c.first_name, ' ', c.last_name) AS client_name
+       FROM credit_analyses ca
+       JOIN clients c ON c.id = ca.client_id
+       WHERE ca.client_id = ? AND ca.tenant_id = ?
+       ORDER BY ca.generated_at DESC, ca.id DESC
+       LIMIT 20`,
+      [clientId, MORTGAGE_TENANT_ID],
+    );
+    const analyses = rows.map(mapCreditAnalysisRow);
+    res.json({
+      success: true,
+      analyses,
+      latest: analyses[0] || null,
+    });
+  } catch (error: any) {
+    console.error(
+      "[portal:credit-analysis:list] error:",
+      error?.message || error,
+    );
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to load analyses", analyses: [] });
+  }
+};
+
+const handlePortalCreateCreditAnalysis: RequestHandler = async (req, res) => {
+  try {
+    const client = (req as any).client;
+    const clientId = (req as any).clientId as number;
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "PDF file is required (application/pdf, max 4MB)",
+        });
+    }
+    if (file.mimetype !== "application/pdf") {
+      return res
+        .status(400)
+        .json({ success: false, error: "Only application/pdf is accepted" });
+    }
+
+    const language = req.body.language === "es" ? "es" : "en";
+    const goal =
+      String(req.body.goal || req.body.client_goal || "").trim() || null;
+    const emailOptIn =
+      req.body.email_opt_in === true ||
+      req.body.email_opt_in === "true" ||
+      req.body.email_opt_in === "1" ||
+      req.body.email_opt_in === 1;
+
+    const analysis = await runAndPersistCreditAnalysis({
+      tenantId: MORTGAGE_TENANT_ID,
+      clientId,
+      brokerUserId: null,
+      mode: "client",
+      language,
+      goal,
+      emailOptIn,
+      file,
+      clientFirstName: client.first_name,
+      clientLastName: client.last_name,
+      clientEmail: client.email || null,
+      repName: "Encore Mortgage",
+    });
+
+    res.json({ success: true, analysis });
+  } catch (error: any) {
+    console.error("[portal:credit-analysis] error:", error?.message || error);
+    if (error?.code === "LIMIT_FILE_SIZE") {
+      return res
+        .status(400)
+        .json({ success: false, error: "PDF must be 4MB or smaller" });
+    }
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to generate credit analysis" });
+  }
+};
+
+const handleFreeScoreRedirect: RequestHandler = async (_req, res) => {
+  const url =
+    process.env.ENCORE_FREE_SCORE_URL ||
+    "https://www.myfreescorenow.com/?utm_source=encore_mortgage&utm_medium=affiliate&utm_campaign=free_analysis";
+  res.redirect(302, url);
+};
 
 function createServer() {
   console.log("Creating Express server for Vercel...");
@@ -39249,6 +50049,23 @@ function createServer() {
     limiters.publicForm,
     handlePublicSaveDraft,
   );
+  expressApp.post(
+    "/api/apply/free-analysis",
+    limiters.publicForm,
+    (req, res, next) => {
+      creditAnalysisUpload.single("pdf")(req, res, (err: any) => {
+        if (err) {
+          const msg =
+            err.code === "LIMIT_FILE_SIZE"
+              ? "PDF must be 4MB or smaller"
+              : err.message || "Upload failed";
+          return res.status(400).json({ success: false, error: msg });
+        }
+        next();
+      });
+    },
+    handlePublicFreeAnalysis,
+  );
 
   // Public broker info for share link (no auth required)
   expressApp.get("/api/public/broker/:token", handleGetBrokerPublicInfo);
@@ -39277,6 +50094,16 @@ function createServer() {
     handleCheckSlug,
   );
   expressApp.put("/api/broker/slug", verifyBrokerSession, handleUpdateSlug);
+  expressApp.get(
+    "/api/broker/notification-preferences",
+    verifyBrokerSession,
+    handleGetBrokerNotificationPreferences,
+  );
+  expressApp.put(
+    "/api/broker/notification-preferences",
+    verifyBrokerSession,
+    handlePutBrokerNotificationPreferences,
+  );
 
   // Broker self-profile routes (require broker session)
   expressApp.get(
@@ -39353,6 +50180,128 @@ function createServer() {
     verifyBrokerSession,
     handleGenerateMISMO,
   );
+  expressApp.get("/api/crm/config", verifyBrokerSession, handleGetCrmConfig);
+  expressApp.get("/api/crm/people", verifyBrokerSession, handleGetCrmPeople);
+  expressApp.post(
+    "/api/crm/person-groups",
+    verifyBrokerSession,
+    handleCreatePersonGroup,
+  );
+  expressApp.post(
+    "/api/crm/person-groups/:groupId/approve",
+    verifyBrokerSession,
+    handleApprovePersonGroup,
+  );
+  expressApp.post(
+    "/api/crm/person-groups/:groupId/merge",
+    verifyBrokerSession,
+    handleMergePersonGroup,
+  );
+  expressApp.post(
+    "/api/crm/transfers",
+    verifyBrokerSession,
+    handleStartCrmTransfer,
+  );
+  expressApp.get(
+    "/api/crm/transfers/:jobId",
+    verifyBrokerSession,
+    handleGetCrmTransfer,
+  );
+  expressApp.post(
+    "/api/crm/transfers/:jobId/resolve",
+    verifyBrokerSession,
+    handleResolveCrmTransfer,
+  );
+
+  // Free Analysis (text-based tri-merge PDF credit analysis)
+  expressApp.post(
+    "/api/admin/credit-analysis",
+    verifyBrokerSession,
+    (req, res, next) => {
+      creditAnalysisUpload.single("pdf")(req, res, (err: any) => {
+        if (err) {
+          const msg =
+            err.code === "LIMIT_FILE_SIZE"
+              ? "PDF must be 4MB or smaller"
+              : err.message || "Upload failed";
+          return res.status(400).json({ success: false, error: msg });
+        }
+        next();
+      });
+    },
+    handleAdminCreateCreditAnalysis,
+  );
+  expressApp.get(
+    "/api/admin/credit-analysis",
+    verifyBrokerSession,
+    handleAdminListCreditAnalyses,
+  );
+  expressApp.get(
+    "/api/admin/credit-analysis/:id",
+    verifyBrokerSession,
+    handleAdminGetCreditAnalysis,
+  );
+  expressApp.get("/go/free-score", handleFreeScoreRedirect);
+  expressApp.get("/l/:code", handleShortLinkRedirect);
+  expressApp.get(
+    "/api/portal/credit-analysis",
+    verifyClientSession,
+    handlePortalListCreditAnalyses,
+  );
+  expressApp.post(
+    "/api/portal/credit-analysis",
+    verifyClientSession,
+    (req, res, next) => {
+      creditAnalysisUpload.single("pdf")(req, res, (err: any) => {
+        if (err) {
+          const msg =
+            err.code === "LIMIT_FILE_SIZE"
+              ? "PDF must be 4MB or smaller"
+              : err.message || "Upload failed";
+          return res.status(400).json({ success: false, error: msg });
+        }
+        next();
+      });
+    },
+    handlePortalCreateCreditAnalysis,
+  );
+
+  expressApp.get(
+    "/api/calculator-saves",
+    verifyBrokerSession,
+    handleListCalculatorSaves,
+  );
+  expressApp.post(
+    "/api/calculator-saves",
+    verifyBrokerSession,
+    handleCreateCalculatorSave,
+  );
+  expressApp.get(
+    "/api/calculator-saves/:id",
+    verifyBrokerSession,
+    handleGetCalculatorSave,
+  );
+  expressApp.put(
+    "/api/calculator-saves/:id",
+    verifyBrokerSession,
+    handleUpdateCalculatorSave,
+  );
+  expressApp.delete(
+    "/api/calculator-saves/:id",
+    verifyBrokerSession,
+    handleDeleteCalculatorSave,
+  );
+  expressApp.post(
+    "/api/calculator-saves/:id/apply-note",
+    verifyBrokerSession,
+    handleApplyCalculatorSaveNote,
+  );
+  expressApp.get(
+    "/api/clients/:clientId/open-loans",
+    verifyBrokerSession,
+    handleGetClientOpenLoans,
+  );
+
   expressApp.get("/api/clients", verifyBrokerSession, handleGetClients);
   expressApp.get(
     "/api/clients/:clientId/profile",
@@ -39551,6 +50500,21 @@ function createServer() {
     "/api/documents",
     verifyBrokerSession,
     handleGetAllTaskDocuments,
+  );
+  expressApp.get(
+    "/api/documents/:documentId/download",
+    verifyBrokerSession,
+    handleDownloadTaskDocument,
+  );
+  expressApp.post(
+    "/api/documents/bulk-download",
+    verifyBrokerSession,
+    handleBulkDownloadTaskDocuments,
+  );
+  expressApp.post(
+    "/api/loans/:applicationId/refresh-document-checklist",
+    verifyBrokerSession,
+    handleRefreshDocumentChecklist,
   );
 
   // Task form submission routes (broker and client can access)
@@ -39822,7 +50786,11 @@ function createServer() {
         );
       }
 
-      updateValues.push(MORTGAGE_TENANT_ID, MessageSid, JSON.stringify(MessageSid));
+      updateValues.push(
+        MORTGAGE_TENANT_ID,
+        MessageSid,
+        JSON.stringify(MessageSid),
+      );
 
       await pool.query(
         `UPDATE communications SET ${updateFields.join(", ")}
@@ -39924,6 +50892,8 @@ function createServer() {
   // MMS media cleanup cron — run daily via cPanel cron to purge expired rows:
   //   curl -s "https://portal.encoremortgage.org/api/cron/purge-mms-media?secret=CRON_SECRET"
   expressApp.get("/api/cron/purge-mms-media", handleCronPurgeMmsMedia);
+  //   curl -s "https://portal.encoremortgage.org/api/cron/purge-link-assets?secret=CRON_SECRET"
+  expressApp.get("/api/cron/purge-link-assets", handleCronPurgeLinkAssets);
 
   // Retention cleanup (logs, sessions, email body trim) — run weekly via cPanel cron:
   //   curl -s "https://admin.encoremortgage.org/api/cron/purge-old-data?secret=CRON_SECRET"
@@ -40008,6 +50978,26 @@ function createServer() {
     "/api/conversations/threads",
     verifyBrokerSession,
     handleGetConversationThreads,
+  );
+  expressApp.post(
+    "/api/conversations/:conversationId/claim",
+    verifyBrokerSession,
+    handleClaimSharedConversation,
+  );
+  expressApp.get(
+    "/api/blocked-numbers",
+    verifyBrokerSession,
+    handleListBlockedNumbers,
+  );
+  expressApp.post(
+    "/api/blocked-numbers",
+    verifyBrokerSession,
+    handleCreateBlockedNumber,
+  );
+  expressApp.delete(
+    "/api/blocked-numbers/:id",
+    verifyBrokerSession,
+    handleDeleteBlockedNumber,
   );
   expressApp.get(
     "/api/conversations/mailboxes",
@@ -40214,6 +51204,19 @@ function createServer() {
     verifyBrokerSession,
     mmsUpload.single("file"),
     handleUploadMMSMedia,
+  );
+  expressApp.get("/api/link-assets/public/:id", handleServeLinkAssetPublic);
+  expressApp.get("/api/short-links", verifyBrokerSession, handleListShortLinks);
+  expressApp.post(
+    "/api/short-links",
+    verifyBrokerSession,
+    handleCreateShortLink,
+  );
+  expressApp.post(
+    "/api/short-links/upload",
+    verifyBrokerSession,
+    linkAssetUpload.single("file"),
+    handleUploadShortLinkAsset,
   );
   expressApp.post(
     "/api/voice/availability",
@@ -40709,6 +51712,7 @@ function createServer() {
   }
 
   async function sendMeetingNotificationToBroker(opts: {
+    brokerId: number;
     brokerEmail: string;
     brokerName: string;
     clientName: string;
@@ -40760,12 +51764,7 @@ function createServer() {
         ? "Office Visit"
         : "Phone Call";
 
-    await sendViaResend(
-      {
-        from: process.env.SMTP_FROM,
-        to: opts.brokerEmail,
-        subject: `New Meeting Scheduled — ${opts.clientName} on ${formattedDate}`,
-        html: `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
       <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;padding:40px 16px;">
           <tr><td align="center">
@@ -40818,10 +51817,16 @@ function createServer() {
             </table>
           </td></tr>
         </table>
-      </body></html>`,
-      },
-      systemEmailQuota("scheduler_broker_notify", String(opts.meetingId)),
-    );
+      </body></html>`;
+
+    await deliverBrokerEmailAlert({
+      brokerId: opts.brokerId,
+      event: "scheduler_booking",
+      subject: `New Meeting Scheduled — ${opts.clientName} on ${formattedDate}`,
+      html,
+      quotaRefType: "scheduler_broker_notify",
+      quotaRefId: String(opts.meetingId),
+    });
   }
 
   async function sendMeetingCancellationEmail(opts: {
@@ -41860,7 +52865,8 @@ function createServer() {
             meetingEndTime: requestedSlot.end_time,
             meetingType: meeting_type,
             videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-            videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+            videoHostUrl:
+              meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
             brokerPhone: brokerData.phone,
             bookingToken,
             notes: notes || null,
@@ -41869,6 +52875,7 @@ function createServer() {
           }),
         () =>
           sendMeetingNotificationToBroker({
+            brokerId: brokerData.id,
             brokerEmail: brokerData.email,
             brokerName,
             clientName: client_name.trim(),
@@ -41879,7 +52886,8 @@ function createServer() {
             meetingEndTime: requestedSlot.end_time,
             meetingType: meeting_type,
             videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-            videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+            videoHostUrl:
+              meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
             notes: notes || null,
             meetingId: result.insertId,
             brokerTimezone: brokerData.timezone || undefined,
@@ -42217,6 +53225,7 @@ function createServer() {
           }),
         () =>
           sendMeetingNotificationToBroker({
+            brokerId: old.broker_id,
             brokerEmail: old.broker_email,
             brokerName,
             clientName: old.client_name,
@@ -43068,8 +54077,10 @@ function createServer() {
               meetingTime: meeting_time,
               meetingEndTime: endTime.slice(0, 5),
               meetingType: meeting_type,
-              videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-              videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+              videoRoomUrl:
+                meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+              videoHostUrl:
+                meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
               brokerPhone: brokerData.phone || null,
               bookingToken,
               notes: notes || null,
@@ -43078,6 +54089,7 @@ function createServer() {
             }),
           () =>
             sendMeetingNotificationToBroker({
+              brokerId: brokerData.id,
               brokerEmail: brokerData.email,
               brokerName,
               clientName: client_name.trim(),
@@ -43087,8 +54099,10 @@ function createServer() {
               meetingTime: meeting_time,
               meetingEndTime: endTime.slice(0, 5),
               meetingType: meeting_type,
-              videoRoomUrl: meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
-              videoHostUrl: meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
+              videoRoomUrl:
+                meeting_type === "teams" ? teamsJoinUrl : zoomJoinUrl,
+              videoHostUrl:
+                meeting_type === "teams" ? teamsHostUrl : zoomStartUrl,
               notes: notes || null,
               meetingId: result.insertId,
               brokerTimezone: brokerData.timezone || undefined,
@@ -44814,6 +55828,7 @@ function createServer() {
       name: string;
       email: string | null;
       phone: string | null;
+      normalized_phone?: string | null;
       role?: string;
       skipped: boolean;
       skipReason: string | null;
@@ -44927,7 +55942,8 @@ function createServer() {
     // 3. Active loan clients
     if (filter.segments.includes("all_clients")) {
       const [clientRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, email, phone, sms_blast_opted_in
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS name, email, phone,
+                normalized_phone, sms_blast_opted_in
          FROM clients
          WHERE tenant_id = ? AND status = 'active'
            AND (email IS NULL OR LOWER(TRIM(email)) NOT IN (
@@ -44945,6 +55961,7 @@ function createServer() {
           name: row.name || "Unknown",
           email: row.email || null,
           phone: row.phone || null,
+          normalized_phone: row.normalized_phone || null,
           skipped: false,
           skipReason,
         });
@@ -44962,13 +55979,17 @@ function createServer() {
       }
 
       const emailKey = c.email?.toLowerCase().trim();
-      const phoneKey = c.phone?.replace(/\D/g, "").slice(-10);
+      const phoneKey =
+        (c.normalized_phone &&
+          String(c.normalized_phone).replace(/\D/g, "").slice(-10)) ||
+        normalizePhoneLast10(c.phone);
 
       if (emailKey && seenEmails.has(emailKey)) continue;
-      if (phoneKey && seenPhones.has(phoneKey)) continue;
+      if (phoneKey && phoneKey.length === 10 && seenPhones.has(phoneKey))
+        continue;
 
       if (emailKey) seenEmails.add(emailKey);
-      if (phoneKey) seenPhones.add(phoneKey);
+      if (phoneKey && phoneKey.length === 10) seenPhones.add(phoneKey);
 
       result.push(c);
     }
@@ -45017,6 +56038,732 @@ function createServer() {
     }
   };
 
+  const TWILIO_BULK_MESSAGES_URL = "https://comms.twilio.com/v1/Messages";
+
+  function getTwilioBasicAuthHeader(): string | null {
+    const sid = process.env.TWILIO_ACCOUNT_SID;
+    const token = process.env.TWILIO_AUTH_TOKEN;
+    if (!sid || !token) return null;
+    return `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}`;
+  }
+
+  async function resolveBroadcastSmsEngineChoice(params: {
+    tenantId: number;
+    channel: string;
+    smsRecipientCount: number;
+  }): Promise<{
+    engine: "messages" | "bulk";
+    chunkSize: number;
+  }> {
+    // Internal ops gate only — not a Settings UI toggle.
+    const engineSetting = resolveBroadcastSmsEngineFromEnv(process.env);
+    const minRaw =
+      process.env.BROADCAST_BULK_MIN_RECIPIENTS?.trim() ||
+      (await getTenantSetting(
+        pool,
+        params.tenantId,
+        "broadcast_bulk_min_recipients",
+        "1",
+      ));
+    const chunkRaw =
+      process.env.BROADCAST_BULK_CHUNK_SIZE?.trim() ||
+      (await getTenantSetting(
+        pool,
+        params.tenantId,
+        "broadcast_bulk_chunk_size",
+        String(BROADCAST_BULK_DEFAULT_CHUNK_SIZE),
+      ));
+    const minRecipients = Math.max(1, parseInt(minRaw, 10) || 1);
+    const chunkSize = Math.max(
+      1,
+      Math.min(
+        10000,
+        parseInt(chunkRaw, 10) || BROADCAST_BULK_DEFAULT_CHUNK_SIZE,
+      ),
+    );
+    const useBulk = shouldUseBulkSmsEngine({
+      engineSetting,
+      channel: params.channel,
+      smsRecipientCount: params.smsRecipientCount,
+      minRecipients,
+    });
+    return { engine: useBulk ? "bulk" : "messages", chunkSize };
+  }
+
+  async function twilioBulkCreateMessages(
+    payload: Record<string, unknown>,
+  ): Promise<{
+    ok: boolean;
+    operationId: string | null;
+    error?: string;
+    status?: number;
+  }> {
+    const auth = getTwilioBasicAuthHeader();
+    if (!auth) {
+      return {
+        ok: false,
+        operationId: null,
+        error: "Twilio credentials missing",
+      };
+    }
+    try {
+      const res = await axios.post(TWILIO_BULK_MESSAGES_URL, payload, {
+        headers: {
+          Authorization: auth,
+          "Content-Type": "application/json",
+        },
+        validateStatus: () => true,
+        timeout: 60_000,
+      });
+      const operationId =
+        (res.headers?.operationid as string | undefined) ||
+        (res.headers?.["operation-id"] as string | undefined) ||
+        (res.headers?.operationId as string | undefined) ||
+        null;
+      if (res.status >= 200 && res.status < 300 && operationId) {
+        return { ok: true, operationId, status: res.status };
+      }
+      return {
+        ok: false,
+        operationId: null,
+        status: res.status,
+        error:
+          typeof res.data === "object"
+            ? JSON.stringify(res.data).slice(0, 500)
+            : String(res.data ?? `HTTP ${res.status}`).slice(0, 500),
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        operationId: null,
+        error: err?.message?.slice(0, 500) || "Bulk request failed",
+      };
+    }
+  }
+
+  async function twilioBulkFetchOperation(operationId: string): Promise<{
+    ok: boolean;
+    status: string | null;
+    stats: BulkOperationStats | null;
+    error?: string;
+  }> {
+    const auth = getTwilioBasicAuthHeader();
+    if (!auth) {
+      return {
+        ok: false,
+        status: null,
+        stats: null,
+        error: "Twilio credentials missing",
+      };
+    }
+    try {
+      const res = await axios.get(
+        `${TWILIO_BULK_MESSAGES_URL}/Operations/${encodeURIComponent(operationId)}`,
+        {
+          headers: { Authorization: auth },
+          validateStatus: () => true,
+          timeout: 30_000,
+        },
+      );
+      if (res.status < 200 || res.status >= 300) {
+        return {
+          ok: false,
+          status: null,
+          stats: null,
+          error: `HTTP ${res.status}`,
+        };
+      }
+      return {
+        ok: true,
+        status: String(res.data?.status ?? ""),
+        stats: (res.data?.stats ?? null) as BulkOperationStats | null,
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        status: null,
+        stats: null,
+        error: err?.message?.slice(0, 500) || "Operation fetch failed",
+      };
+    }
+  }
+
+  async function twilioBulkListFailedMessages(
+    operationId: string,
+  ): Promise<
+    Array<{ id: string; to: string; status: string; error?: string }>
+  > {
+    const auth = getTwilioBasicAuthHeader();
+    if (!auth) return [];
+    const out: Array<{
+      id: string;
+      to: string;
+      status: string;
+      error?: string;
+    }> = [];
+    let nextUrl: string | null =
+      `${TWILIO_BULK_MESSAGES_URL}?operation_id=${encodeURIComponent(operationId)}`;
+    let pages = 0;
+    while (nextUrl && pages < 20) {
+      pages++;
+      try {
+        const res = await axios.get(nextUrl, {
+          headers: { Authorization: auth },
+          validateStatus: () => true,
+          timeout: 30_000,
+        });
+        if (res.status < 200 || res.status >= 300) break;
+        const messages = Array.isArray(res.data?.messages)
+          ? res.data.messages
+          : [];
+        for (const msg of messages) {
+          const status = String(msg?.status ?? "").toUpperCase();
+          if (
+            ![
+              "FAILED",
+              "UNDELIVERED",
+              "UNADDRESSABLE",
+              "CANCELED",
+              "CANCELLED",
+            ].includes(status)
+          ) {
+            continue;
+          }
+          const toAddr =
+            msg?.to?.[0]?.address ||
+            msg?.to?.address ||
+            (typeof msg?.to === "string" ? msg.to : "") ||
+            "";
+          out.push({
+            id: String(msg?.id ?? ""),
+            to: String(toAddr),
+            status,
+            error: msg?.errorMessage || msg?.error_message || status,
+          });
+        }
+        const next = res.data?.pagination?.next;
+        nextUrl =
+          typeof next === "string" && next.startsWith("http") ? next : null;
+      } catch {
+        break;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Bulk SMS engine — one Twilio Bulk request per chunk; progress via Operation poll.
+   * On Bulk API failure, falls back to legacy sendBroadcastAsync for this campaign.
+   */
+  async function startBulkBroadcastSms(
+    broadcastId: number,
+    chunkSize: number,
+  ): Promise<{ usedBulk: boolean }> {
+    const [broadcastRows] = await pool.query<RowDataPacket[]>(
+      `SELECT rb.*, b.twilio_caller_id AS from_number, b.first_name, b.last_name
+       FROM realtor_broadcasts rb
+       JOIN brokers b ON b.id = rb.created_by
+       WHERE rb.id = ? LIMIT 1`,
+      [broadcastId],
+    );
+    if (!broadcastRows.length) return { usedBulk: false };
+    const broadcast = broadcastRows[0];
+    const tenantId = Number(broadcast.tenant_id);
+    const fromNumber = String(broadcast.from_number || "");
+    const smsBody = String(broadcast.body_sms || "").trim();
+    if (!fromNumber || !smsBody) {
+      logBroadcastTrace("bulk_skipped_missing_from_or_body", { broadcastId });
+      return { usedBulk: false };
+    }
+
+    const [recipientRows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, recipient_name, recipient_phone, sms_status
+       FROM realtor_broadcast_recipients
+       WHERE broadcast_id = ? AND tenant_id = ?
+         AND sms_status = 'pending'
+         AND recipient_phone IS NOT NULL AND TRIM(recipient_phone) != ''`,
+      [broadcastId, tenantId],
+    );
+    if (!recipientRows.length) {
+      return { usedBulk: false };
+    }
+
+    const chunks = chunkArray(recipientRows, chunkSize);
+    const operationIds: string[] = [];
+
+    for (const chunk of chunks) {
+      const [cancelCheck] = await pool.query<RowDataPacket[]>(
+        `SELECT is_cancelled FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
+        [broadcastId],
+      );
+      if (cancelCheck[0]?.is_cancelled) {
+        logBroadcastTrace("bulk_cancel_before_chunk", { broadcastId });
+        break;
+      }
+
+      const ids = chunk.map((r) => Number(r.id));
+      if (ids.length) {
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients
+           SET sms_status = 'processing', updated_at = NOW()
+           WHERE broadcast_id = ? AND tenant_id = ?
+             AND id IN (${ids.map(() => "?").join(",")})
+             AND sms_status = 'pending'`,
+          [broadcastId, tenantId, ...ids],
+        );
+      }
+
+      const to = chunk.map((r) => {
+        const name = String(r.recipient_name || "Friend");
+        const firstName = name.split(" ")[0] || name;
+        const lastName = name.split(" ").slice(1).join(" ") || "";
+        return {
+          address: String(r.recipient_phone),
+          channel: "PHONE",
+          variables: {
+            first_name: firstName,
+            last_name: lastName,
+            full_name: name,
+            broker_name:
+              `${broadcast.first_name || ""} ${broadcast.last_name || ""}`.trim(),
+          },
+        };
+      });
+
+      // Resolve merge tags with a generic recipient for shared body;
+      // per-recipient vars use Twilio variables when templates support them.
+      // For plain text, substitute first_name via a safe generic + variables where possible.
+      let bodyForSend = smsBody;
+      bodyForSend = bodyForSend
+        .replace(/\{\{first_name\}\}/gi, "{{first_name}}")
+        .replace(
+          /\{\{broker_name\}\}/gi,
+          `${broadcast.first_name || ""} ${broadcast.last_name || ""}`.trim(),
+        )
+        .replace(/\{\{company_name\}\}/gi, "Encore Mortgage");
+
+      // Twilio Bulk text content does not expand {{vars}} unless using content templates.
+      // Personalize per recipient when merge tags present by falling back to legacy for safety
+      // if any tag remains — OR send personalized bodies in chunk via individual text if tags exist.
+      const hasMergeTags = /\{\{[a-z_]+\}\}/i.test(smsBody);
+      let createPayload: Record<string, unknown>;
+      if (hasMergeTags) {
+        // Personalized: send one Bulk request still, but content.text is shared —
+        // fall back to legacy for correct personalization.
+        logBroadcastTrace("bulk_fallback_merge_tags", { broadcastId });
+        await pool.query(
+          `UPDATE realtor_broadcasts
+           SET sms_engine = 'messages', updated_at = NOW()
+           WHERE id = ?`,
+          [broadcastId],
+        );
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients
+           SET sms_status = 'pending', updated_at = NOW()
+           WHERE broadcast_id = ? AND tenant_id = ? AND sms_status = 'processing'`,
+          [broadcastId, tenantId],
+        );
+        return { usedBulk: false };
+      }
+
+      createPayload = {
+        from: { address: fromNumber, channel: "SMS" },
+        to,
+        content: { text: bodyForSend },
+      };
+
+      const created = await twilioBulkCreateMessages(createPayload);
+      if (!created.ok || !created.operationId) {
+        logBroadcastTrace("bulk_create_failed_fallback", {
+          broadcastId,
+          error: created.error,
+          status: created.status,
+        });
+        await pool.query(
+          `UPDATE realtor_broadcasts
+           SET sms_engine = 'messages',
+               twilio_operation_ids = NULL,
+               updated_at = NOW()
+           WHERE id = ?`,
+          [broadcastId],
+        );
+        await pool.query(
+          `UPDATE realtor_broadcast_recipients
+           SET sms_status = 'pending', updated_at = NOW()
+           WHERE broadcast_id = ? AND tenant_id = ? AND sms_status = 'processing'`,
+          [broadcastId, tenantId],
+        );
+        return { usedBulk: false };
+      }
+      operationIds.push(created.operationId);
+      logBroadcastTrace("bulk_chunk_accepted", {
+        broadcastId,
+        operationId: created.operationId,
+        chunkSize: chunk.length,
+      });
+    }
+
+    if (!operationIds.length) return { usedBulk: false };
+
+    await pool.query(
+      `UPDATE realtor_broadcasts
+       SET sms_engine = 'bulk',
+           twilio_operation_ids = ?,
+           started_at = COALESCE(started_at, NOW()),
+           status = IF(is_cancelled = 1, 'cancelled', 'sending'),
+           updated_at = NOW()
+       WHERE id = ?`,
+      [JSON.stringify(operationIds), broadcastId],
+    );
+
+    // Kick an immediate poll (non-blocking)
+    void pollBulkBroadcastOperations(broadcastId).catch((err) =>
+      console.error(`[Broadcast #${broadcastId}] bulk poll error:`, err),
+    );
+
+    return { usedBulk: true };
+  }
+
+  async function finalizeBulkBroadcastSuccess(
+    broadcastId: number,
+    tenantId: number,
+    sentTotal: number,
+    failedTotal: number,
+  ): Promise<void> {
+    // Mark remaining processing SMS as sent (Option A)
+    await pool.query(
+      `UPDATE realtor_broadcast_recipients
+       SET sms_status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW()
+       WHERE broadcast_id = ? AND tenant_id = ? AND sms_status = 'processing'`,
+      [broadcastId, tenantId],
+    );
+
+    const [ownerRows] = await pool.query<RowDataPacket[]>(
+      `SELECT created_by, title, body_sms, channel FROM realtor_broadcasts
+       WHERE id = ? AND tenant_id = ? LIMIT 1`,
+      [broadcastId, tenantId],
+    );
+    const createdBy = Number(ownerRows[0]?.created_by ?? 0);
+    const title = String(ownerRows[0]?.title ?? "Broadcast");
+    const smsBody = String(ownerRows[0]?.body_sms || "");
+    const channel = String(ownerRows[0]?.channel ?? "sms");
+    const segmentsPer = Math.max(1, smsSegmentsFromBody(smsBody));
+    const captureUnits = {
+      sms_segments: sentTotal * segmentsPer,
+      email_sends: 0,
+    };
+    try {
+      await quotaService.captureBroadcastDelivery(
+        tenantId,
+        broadcastId,
+        captureUnits,
+      );
+    } catch (err) {
+      console.error(
+        `[Broadcast #${broadcastId}] bulk quota capture error:`,
+        err,
+      );
+    }
+
+    // channel=both: email may still be in flight — keep sending until emails settle
+    const [[emailPending]] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM realtor_broadcast_recipients
+       WHERE broadcast_id = ? AND tenant_id = ?
+         AND email_status IN ('pending', 'processing')`,
+      [broadcastId, tenantId],
+    );
+    if (channel === "both" && Number(emailPending?.c ?? 0) > 0) {
+      const [agg] = await pool.query<RowDataPacket[]>(
+        `SELECT
+           SUM(CASE WHEN email_status = 'sent' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN sms_status = 'sent' THEN 1 ELSE 0 END) AS sent_total,
+           SUM(CASE WHEN email_status = 'failed' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN sms_status IN ('failed','undelivered') THEN 1 ELSE 0 END) AS failed_total
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [broadcastId, tenantId],
+      );
+      await pool.query(
+        `UPDATE realtor_broadcasts
+         SET status = IF(is_cancelled = 1, 'cancelled', 'sending'),
+             sent_count = ?, failed_count = ?,
+             updated_at = NOW()
+         WHERE id = ? AND tenant_id = ?`,
+        [
+          Number(agg[0]?.sent_total ?? sentTotal),
+          Number(agg[0]?.failed_total ?? failedTotal),
+          broadcastId,
+          tenantId,
+        ],
+      );
+      logBroadcastTrace("bulk_sms_done_awaiting_email", {
+        broadcastId,
+        sentTotal,
+        failedTotal,
+        emailPending: Number(emailPending?.c ?? 0),
+      });
+      return;
+    }
+
+    const [aggFinal] = await pool.query<RowDataPacket[]>(
+      `SELECT
+         SUM(CASE WHEN email_status = 'sent' THEN 1 ELSE 0 END)
+         + SUM(CASE WHEN sms_status = 'sent' THEN 1 ELSE 0 END) AS sent_total,
+         SUM(CASE WHEN email_status = 'failed' THEN 1 ELSE 0 END)
+         + SUM(CASE WHEN sms_status IN ('failed','undelivered') THEN 1 ELSE 0 END) AS failed_total
+       FROM realtor_broadcast_recipients
+       WHERE broadcast_id = ? AND tenant_id = ?`,
+      [broadcastId, tenantId],
+    );
+    const totalSent = Number(aggFinal[0]?.sent_total ?? sentTotal);
+    const totalFailed = Number(aggFinal[0]?.failed_total ?? failedTotal);
+    const finalStatus = totalSent > 0 ? "sent" : "failed";
+    await pool.query(
+      `UPDATE realtor_broadcasts
+       SET status = IF(is_cancelled = 1, 'cancelled', ?),
+           sent_count = ?, failed_count = ?,
+           completed_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [finalStatus, totalSent, totalFailed, broadcastId, tenantId],
+    );
+
+    try {
+      await quotaService.releaseBroadcastReservation(tenantId, broadcastId);
+    } catch (err) {
+      console.error(
+        `[Broadcast #${broadcastId}] bulk quota release error:`,
+        err,
+      );
+    }
+
+    if (createdBy) {
+      await createBrokerNotification({
+        brokerIds: createdBy,
+        title: "Broadcast Complete",
+        message: `"${title}" delivered to ${totalSent} contacts via Bulk.${totalFailed > 0 ? ` ${totalFailed} failed — check the broadcast detail.` : ""}`,
+        category: "system",
+        type: totalFailed > 0 ? "warning" : "success",
+        actionUrl: `/admin/broadcasts`,
+      });
+    }
+    logBroadcastTrace("bulk_finalize", {
+      broadcastId,
+      finalStatus,
+      sentTotal: totalSent,
+      failedTotal: totalFailed,
+      billingLabel: "Broadcast (Bulk)",
+    });
+  }
+
+  async function pollBulkBroadcastOperations(
+    broadcastId: number,
+  ): Promise<void> {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, tenant_id, recipient_count, twilio_operation_ids, sms_engine,
+              is_cancelled, status, body_sms
+       FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
+      [broadcastId],
+    );
+    if (!rows.length) return;
+    const row = rows[0];
+    if (parseBroadcastSmsEngine(row.sms_engine) !== "bulk") return;
+    if (row.is_cancelled) return;
+    if (!["sending", "scheduled"].includes(String(row.status))) return;
+
+    const operationIds = parseOperationIdsJson(row.twilio_operation_ids);
+    if (!operationIds.length) return;
+
+    const tenantId = Number(row.tenant_id);
+    let aggregate: BulkOperationStats = {
+      sent: 0,
+      delivered: 0,
+      failed: 0,
+      undelivered: 0,
+      unaddressable: 0,
+      canceled: 0,
+      queued: 0,
+      recipients: 0,
+    };
+    let allTerminal = true;
+    let lastStatus: string | null = null;
+
+    for (const opId of operationIds) {
+      const op = await twilioBulkFetchOperation(opId);
+      if (!op.ok || !op.stats) {
+        allTerminal = false;
+        logBroadcastTrace("bulk_poll_op_failed", {
+          broadcastId,
+          operationId: opId,
+          error: op.error,
+        });
+        continue;
+      }
+      lastStatus = op.status;
+      if (!isBulkOperationTerminal(op.status)) allTerminal = false;
+      const s = op.stats;
+      aggregate.sent = Number(aggregate.sent) + Number(s.sent ?? 0);
+      aggregate.delivered =
+        Number(aggregate.delivered) + Number(s.delivered ?? 0);
+      aggregate.failed = Number(aggregate.failed) + Number(s.failed ?? 0);
+      aggregate.undelivered =
+        Number(aggregate.undelivered) + Number(s.undelivered ?? 0);
+      aggregate.unaddressable =
+        Number(aggregate.unaddressable) + Number(s.unaddressable ?? 0);
+      aggregate.canceled = Number(aggregate.canceled) + Number(s.canceled ?? 0);
+      aggregate.queued = Number(aggregate.queued) + Number(s.queued ?? 0);
+      aggregate.recipients =
+        Number(aggregate.recipients) + Number(s.recipients ?? 0);
+
+      if (isBulkOperationTerminal(op.status)) {
+        const failedMsgs = await twilioBulkListFailedMessages(opId);
+        for (const fm of failedMsgs) {
+          const [cands] = await pool.query<RowDataPacket[]>(
+            `SELECT id, recipient_phone FROM realtor_broadcast_recipients
+             WHERE broadcast_id = ? AND tenant_id = ?
+               AND sms_status IN ('pending','processing')`,
+            [broadcastId, tenantId],
+          );
+          const match = cands.find((c) =>
+            phonesMatch(c.recipient_phone, fm.to),
+          );
+          if (!match) continue;
+          const smsStatus =
+            fm.status === "UNDELIVERED" ? "undelivered" : "failed";
+          await pool.query(
+            `UPDATE realtor_broadcast_recipients
+             SET sms_status = ?, sms_bulk_message_id = ?,
+                 error_message = ?, updated_at = NOW()
+             WHERE id = ? AND broadcast_id = ?`,
+            [
+              smsStatus,
+              fm.id || null,
+              String(fm.error || fm.status).slice(0, 500),
+              match.id,
+              broadcastId,
+            ],
+          );
+        }
+      }
+    }
+
+    const progress = mapBulkOperationStatsToProgress(
+      aggregate,
+      Number(row.recipient_count ?? 0),
+      lastStatus,
+    );
+
+    await pool.query(
+      `UPDATE realtor_broadcasts
+       SET bulk_stats_json = ?,
+           sent_count = ?,
+           failed_count = ?,
+           updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      [
+        JSON.stringify({ ...aggregate, polledAt: new Date().toISOString() }),
+        progress.sentCount,
+        progress.failedCount,
+        broadcastId,
+        tenantId,
+      ],
+    );
+
+    logBroadcastTrace("bulk_poll_progress", {
+      broadcastId,
+      ...progress,
+      billingLabel: "Broadcast (Bulk)",
+    });
+
+    if (allTerminal) {
+      await finalizeBulkBroadcastSuccess(
+        broadcastId,
+        tenantId,
+        progress.sentCount,
+        progress.failedCount,
+      );
+    }
+  }
+
+  /** Router: Bulk (flagged) or legacy messages.create loop. */
+  async function startBroadcastDelivery(broadcastId: number): Promise<void> {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, tenant_id, channel, body_sms, sms_engine, twilio_operation_ids,
+              media_url
+       FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
+      [broadcastId],
+    );
+    if (!rows.length) return;
+    const broadcast = rows[0];
+    const tenantId = Number(broadcast.tenant_id);
+    const channel = String(broadcast.channel);
+    // MMS (media_url) cannot use Bulk Messaging — force Messages API path
+    if (typeof broadcast.media_url === "string" && broadcast.media_url.trim()) {
+      await pool.query(
+        `UPDATE realtor_broadcasts SET sms_engine = 'messages', updated_at = NOW()
+         WHERE id = ?`,
+        [broadcastId],
+      );
+      await sendBroadcastAsync(broadcastId);
+      return;
+    }
+    const existingOps = parseOperationIdsJson(broadcast.twilio_operation_ids);
+
+    // Already submitted to Bulk — poll progress; for both, also drain emails
+    if (
+      parseBroadcastSmsEngine(broadcast.sms_engine) === "bulk" &&
+      existingOps.length > 0
+    ) {
+      await pollBulkBroadcastOperations(broadcastId);
+      if (channel === "both") {
+        const [[emailPending]] = await pool.query<RowDataPacket[]>(
+          `SELECT COUNT(*) AS c FROM realtor_broadcast_recipients
+           WHERE broadcast_id = ? AND tenant_id = ?
+             AND email_status IN ('pending', 'processing')`,
+          [broadcastId, tenantId],
+        );
+        if (Number(emailPending?.c ?? 0) > 0) {
+          await sendBroadcastAsync(broadcastId);
+        }
+      }
+      return;
+    }
+
+    const [[smsPending]] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM realtor_broadcast_recipients
+       WHERE broadcast_id = ? AND tenant_id = ? AND sms_status = 'pending'`,
+      [broadcastId, tenantId],
+    );
+    const smsRecipientCount = Number(smsPending?.c ?? 0);
+
+    const choice = await resolveBroadcastSmsEngineChoice({
+      tenantId,
+      channel,
+      smsRecipientCount,
+    });
+
+    let usedBulk = false;
+    if (choice.engine === "bulk" && smsRecipientCount > 0) {
+      logBroadcastTrace("delivery_router_bulk", {
+        broadcastId,
+        smsRecipientCount,
+        chunkSize: choice.chunkSize,
+      });
+      const result = await startBulkBroadcastSms(broadcastId, choice.chunkSize);
+      usedBulk = result.usedBulk;
+      if (!usedBulk) {
+        logBroadcastTrace("delivery_router_bulk_fallback_legacy", {
+          broadcastId,
+        });
+      }
+    }
+
+    // SMS-only Bulk: Operations poller finishes the campaign
+    if (usedBulk && channel === "sms") return;
+
+    // Legacy full loop, or email half of channel=both while Bulk owns SMS
+    await sendBroadcastAsync(broadcastId);
+  }
+
   async function sendBroadcastAsync(broadcastId: number): Promise<void> {
     const lockAcquired = await acquireBroadcastSendLock(broadcastId);
     if (!lockAcquired) {
@@ -45054,6 +56801,10 @@ function createServer() {
       const fromNumber: string | null = broadcast.from_number || null;
       const emailBody: string = (broadcast.body_email || "").trim();
       const smsBody: string = (broadcast.body_sms || "").trim();
+      const broadcastMediaUrl: string | null =
+        typeof broadcast.media_url === "string" && broadcast.media_url.trim()
+          ? String(broadcast.media_url).trim()
+          : null;
       const companyName: string = broadcast.company_name || "Encore Mortgage";
       const companyAddress: string = broadcast.company_address || "";
       const loadAggregateCounts = async () => {
@@ -45143,6 +56894,7 @@ function createServer() {
             smsBody,
             estimatedEmailUnits: pendingEmailRows,
             estimatedSmsUnits: pendingSmsRows,
+            hasMedia: !!broadcastMediaUrl,
           });
           if (!reserve.ok) {
             await pool.query(
@@ -45223,6 +56975,7 @@ function createServer() {
       }
 
       let processedCount = 0;
+      const sendDeadline = Date.now() + BROADCAST_SEND_MAX_MS;
       if (pendingDeliveryUnits > 0) {
         await quotaService.extendBroadcastReservation(
           tenantId,
@@ -45231,6 +56984,16 @@ function createServer() {
         );
       }
       for (const recipient of recipientRows) {
+        if (Date.now() >= sendDeadline) {
+          logBroadcastTrace("send_loop_time_budget_exceeded", {
+            broadcastId,
+            processedCount,
+            total,
+            budgetMs: BROADCAST_SEND_MAX_MS,
+          });
+          break;
+        }
+
         // Cancellation check each iteration
         const [cancelCheck] = await pool.query<RowDataPacket[]>(
           `SELECT is_cancelled FROM realtor_broadcasts WHERE id = ? LIMIT 1`,
@@ -45398,7 +57161,11 @@ function createServer() {
         }
 
         // ── SMS ────────────────────────────────────────────────────────────────
+        // Skip when Twilio Bulk owns SMS for this campaign (processing rows).
+        const bulkOwnsSms =
+          parseBroadcastSmsEngine(broadcast.sms_engine) === "bulk";
         const shouldSms =
+          !bulkOwnsSms &&
           (broadcast.channel === "sms" || broadcast.channel === "both") &&
           recipient.recipient_phone &&
           fromNumber &&
@@ -45431,6 +57198,7 @@ function createServer() {
                 resolvedSmsBody,
                 undefined,
                 fromNumber,
+                broadcastMediaUrl || undefined,
               );
 
               if (!smsResult.success)
@@ -45439,13 +57207,18 @@ function createServer() {
               await pool.query<ResultSetHeader>(
                 `INSERT INTO communications
                (tenant_id, from_broker_id, communication_type, direction,
-                body, status, conversation_id, delivery_status,
+                body, media_url, media_content_type, media_filename, status, conversation_id, delivery_status,
                 external_id, sent_at)
-             VALUES (?, ?, 'sms', 'outbound', ?, 'sent', ?, 'sent', ?, NOW())`,
+             VALUES (?, ?, 'sms', 'outbound', ?, ?, ?, ?, 'sent', ?, 'sent', ?, NOW())`,
                 [
                   tenantId,
                   createdBy,
                   resolvedSmsBody,
+                  broadcastMediaUrl,
+                  broadcastMediaUrl
+                    ? broadcast.media_content_type || null
+                    : null,
+                  broadcastMediaUrl ? broadcast.media_filename || null : null,
                   smsConvId,
                   smsResult.external_id || null,
                 ],
@@ -45464,7 +57237,12 @@ function createServer() {
               await quotaService.captureBroadcastDelivery(
                 tenantId,
                 broadcastId,
-                { sms_segments: smsSegmentsFromBody(resolvedSmsBody) },
+                {
+                  sms_segments: broadcastSmsQuotaUnits(
+                    resolvedSmsBody,
+                    !!broadcastMediaUrl,
+                  ),
+                },
                 recipient.id,
               );
               sentCount++;
@@ -45521,8 +57299,41 @@ function createServer() {
         }
       }
 
-      // Finalize
+      const [[pendingRow]] = await pool.query<RowDataPacket[]>(
+        `SELECT
+           SUM(CASE WHEN email_status IN ('pending', 'processing') THEN 1 ELSE 0 END) AS email_pending,
+           SUM(CASE WHEN sms_status IN ('pending', 'processing') THEN 1 ELSE 0 END) AS sms_pending
+         FROM realtor_broadcast_recipients
+         WHERE broadcast_id = ? AND tenant_id = ?`,
+        [broadcastId, tenantId],
+      );
+      const pendingRemaining =
+        Number(pendingRow?.email_pending ?? 0) +
+        Number(pendingRow?.sms_pending ?? 0);
+
       const { sentTotal, failedTotal } = await loadAggregateCounts();
+
+      if (pendingRemaining > 0) {
+        await pool.query(
+          `UPDATE realtor_broadcasts
+           SET sent_count = ?, failed_count = ?,
+               updated_at = NOW() - INTERVAL 6 MINUTE
+           WHERE id = ? AND tenant_id = ?`,
+          [sentTotal, failedTotal, broadcastId, tenantId],
+        );
+        logBroadcastTrace("send_loop_paused_pending", {
+          broadcastId,
+          pendingRemaining,
+          sentCountRun: sentCount,
+          failedCountRun: failedCount,
+          sentTotal,
+          failedTotal,
+          total,
+        });
+        return;
+      }
+
+      // Finalize — all recipients reached a terminal channel state
       const finalStatus = sentTotal > 0 ? "sent" : "failed";
       await pool.query(
         `UPDATE realtor_broadcasts
@@ -45643,7 +57454,7 @@ function createServer() {
       broadcastId,
       pendingTotal,
     });
-    sendBroadcastAsync(broadcastId).catch((err) =>
+    startBroadcastDelivery(broadcastId).catch((err) =>
       console.error(`[Broadcast #${broadcastId}] stale-resume error:`, err),
     );
   }
@@ -45658,10 +57469,11 @@ function createServer() {
           .json({ success: false, error: "Platform owner access required" });
       }
 
-      const { audience_filter, channel, body_sms } = req.body as {
+      const { audience_filter, channel, body_sms, media_url } = req.body as {
         audience_filter: any;
         channel: string;
         body_sms?: string;
+        media_url?: string | null;
       };
       if (!audience_filter?.segments) {
         return res
@@ -45682,6 +57494,7 @@ function createServer() {
         smsBody: body_sms,
         emailRecipientCount: emailCount,
         smsRecipientCount: smsCount,
+        hasMedia: typeof media_url === "string" && media_url.trim().length > 0,
       });
       const quota = await getUnifiedQuotaSummary(pool, MORTGAGE_TENANT_ID);
 
@@ -45740,6 +57553,10 @@ function createServer() {
         audience_filter,
         scheduled_at,
         send_now = true,
+        media_url,
+        media_content_type,
+        media_filename,
+        short_link_code,
       } = req.body as {
         title: string;
         channel: "email" | "sms" | "both";
@@ -45749,6 +57566,10 @@ function createServer() {
         audience_filter: any;
         scheduled_at?: string;
         send_now?: boolean;
+        media_url?: string;
+        media_content_type?: string;
+        media_filename?: string;
+        short_link_code?: string;
       };
 
       if (!title || !channel || !audience_filter?.segments) {
@@ -45787,6 +57608,31 @@ function createServer() {
             ).length
           : 0;
 
+      const mediaUrlClean =
+        typeof media_url === "string" && media_url.trim()
+          ? media_url.trim()
+          : null;
+      if (mediaUrlClean) {
+        if (channel === "email") {
+          return res.status(400).json({
+            success: false,
+            error: "MMS media is only valid for SMS or Email + SMS broadcasts.",
+          });
+        }
+        if (!/^https?:\/\//i.test(mediaUrlClean)) {
+          return res.status(400).json({
+            success: false,
+            error: "media_url must be an absolute http(s) URL",
+          });
+        }
+        if (estimatedSmsUnits > BROADCAST_MMS_MAX_RECIPIENTS) {
+          return res.status(400).json({
+            success: false,
+            error: `MMS broadcast is limited to ${BROADCAST_MMS_MAX_RECIPIENTS} SMS recipients. Use a short link (portal.encoremortgage.org/l/…) for larger audiences.`,
+          });
+        }
+      }
+
       const isDraft = !send_now && !scheduled_at;
 
       if (!isDraft) {
@@ -45808,6 +57654,7 @@ function createServer() {
         smsBody: body_sms,
         emailRecipientCount: estimatedEmailUnits,
         smsRecipientCount: estimatedSmsUnits,
+        hasMedia: !!mediaUrlClean,
       });
 
       // Determine initial status
@@ -45860,8 +57707,9 @@ function createServer() {
       const [broadcastInsert] = await pool.query<ResultSetHeader>(
         `INSERT INTO realtor_broadcasts
            (tenant_id, created_by, title, channel, subject, body_email, body_sms,
-            audience_filter, recipient_count, status, scheduled_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            media_url, media_content_type, media_filename, short_link_code,
+            audience_filter, recipient_count, status, scheduled_at, sms_engine)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           MORTGAGE_TENANT_ID,
           brokerId,
@@ -45870,13 +57718,34 @@ function createServer() {
           subject || null,
           body_email || null,
           body_sms || null,
+          mediaUrlClean,
+          mediaUrlClean ? media_content_type || null : null,
+          mediaUrlClean ? media_filename || null : null,
+          typeof short_link_code === "string" && short_link_code.trim()
+            ? short_link_code.trim().slice(0, 16)
+            : null,
           JSON.stringify(audience_filter),
           recipients.length,
           initialStatus,
           scheduled_at ? new Date(scheduled_at) : null,
+          mediaUrlClean ? "messages" : "messages",
         ],
       );
       const broadcastId = broadcastInsert.insertId;
+
+      if (typeof short_link_code === "string" && short_link_code.trim()) {
+        await pool.query(
+          `UPDATE short_links
+           SET broadcast_id = ?
+           WHERE tenant_id = ? AND created_by = ? AND code = ? AND broadcast_id IS NULL`,
+          [
+            broadcastId,
+            MORTGAGE_TENANT_ID,
+            brokerId,
+            short_link_code.trim().slice(0, 16),
+          ],
+        );
+      }
 
       // Bulk insert recipients (set correct broadcast_id)
       if (recipients.length > 0) {
@@ -45918,6 +57787,7 @@ function createServer() {
           smsBody: body_sms || "",
           estimatedEmailUnits,
           estimatedSmsUnits,
+          hasMedia: !!mediaUrlClean,
         });
         if (!reserve.ok) {
           await pool.query(
@@ -45955,7 +57825,7 @@ function createServer() {
 
       // Fire async send loop for immediate sends
       if (send_now && !scheduled_at) {
-        sendBroadcastAsync(broadcastId).catch((err) =>
+        startBroadcastDelivery(broadcastId).catch((err) =>
           console.error(`[Broadcast #${broadcastId}] send loop error:`, err),
         );
       }
@@ -46014,6 +57884,10 @@ function createServer() {
         audience_filter,
         scheduled_at,
         channel,
+        media_url,
+        media_content_type,
+        media_filename,
+        short_link_code,
       } = req.body as any;
 
       const fields: string[] = [];
@@ -46045,6 +57919,66 @@ function createServer() {
       if (scheduled_at !== undefined) {
         fields.push("scheduled_at = ?");
         values.push(scheduled_at ? new Date(scheduled_at) : null);
+      }
+      if (media_url !== undefined) {
+        const clean =
+          typeof media_url === "string" && media_url.trim()
+            ? media_url.trim()
+            : null;
+        if (clean) {
+          if (!/^https?:\/\//i.test(clean)) {
+            return res.status(400).json({
+              success: false,
+              error: "media_url must be an absolute http(s) URL",
+            });
+          }
+          const [smsCountRows] = await pool.query<RowDataPacket[]>(
+            `SELECT COUNT(*) AS c FROM realtor_broadcast_recipients
+             WHERE broadcast_id = ? AND tenant_id = ?
+               AND recipient_phone IS NOT NULL AND TRIM(recipient_phone) != ''
+               AND (sms_status IS NULL OR sms_status NOT IN ('opted_out'))`,
+            [broadcastId, MORTGAGE_TENANT_ID],
+          );
+          const smsRecipients = Number(smsCountRows[0]?.c ?? 0);
+          if (smsRecipients > BROADCAST_MMS_MAX_RECIPIENTS) {
+            return res.status(400).json({
+              success: false,
+              error: `MMS broadcast is limited to ${BROADCAST_MMS_MAX_RECIPIENTS} SMS recipients. Use a short link (portal.encoremortgage.org/l/…) for larger audiences.`,
+            });
+          }
+        }
+        fields.push("media_url = ?");
+        values.push(clean);
+        fields.push("media_content_type = ?");
+        values.push(
+          clean && typeof media_content_type === "string"
+            ? media_content_type
+            : null,
+        );
+        fields.push("media_filename = ?");
+        values.push(
+          clean && typeof media_filename === "string" ? media_filename : null,
+        );
+        if (clean) {
+          fields.push("sms_engine = ?");
+          values.push("messages");
+        }
+      }
+      if (short_link_code !== undefined) {
+        const code =
+          typeof short_link_code === "string" && short_link_code.trim()
+            ? short_link_code.trim().slice(0, 16)
+            : null;
+        fields.push("short_link_code = ?");
+        values.push(code);
+        if (code) {
+          await pool.query(
+            `UPDATE short_links
+             SET broadcast_id = COALESCE(broadcast_id, ?)
+             WHERE tenant_id = ? AND created_by = ? AND code = ?`,
+            [broadcastId, MORTGAGE_TENANT_ID, brokerId, code],
+          );
+        }
       }
 
       if (!fields.length) {
@@ -46185,6 +58119,12 @@ function createServer() {
         : [MORTGAGE_TENANT_ID, MORTGAGE_TENANT_ID, limit, offset];
       const [rows] = await pool.query<RowDataPacket[]>(listQuery, listParams);
 
+      for (const row of rows) {
+        if (row.status === "sending" && !row.is_cancelled) {
+          void resumeStaleSendingBroadcast(Number(row.id), MORTGAGE_TENANT_ID);
+        }
+      }
+
       const countQuery = `SELECT COUNT(*) AS total FROM realtor_broadcasts WHERE tenant_id = ?${statusFilter ? " AND status = ?" : ""}`;
       const countParams: any[] = statusFilter
         ? [MORTGAGE_TENANT_ID, statusFilter]
@@ -46204,6 +58144,16 @@ function createServer() {
           status: r.is_cancelled ? "cancelled" : r.status,
           audience_filter: safeJsonParse(r.audience_filter, null),
           is_cancelled: Boolean(r.is_cancelled),
+          sms_engine: parseBroadcastSmsEngine(r.sms_engine),
+          twilio_operation_ids: parseOperationIdsJson(r.twilio_operation_ids),
+          bulk_stats: safeJsonParse(r.bulk_stats_json, null),
+          progress_pct:
+            parseBroadcastSmsEngine(r.sms_engine) === "bulk"
+              ? mapBulkOperationStatsToProgress(
+                  safeJsonParse(r.bulk_stats_json, null),
+                  Number(r.recipient_count ?? 0),
+                ).progressPct
+              : null,
         })),
         total: countRows[0]?.total || 0,
         quota,
@@ -46266,6 +58216,16 @@ function createServer() {
           status: r.is_cancelled ? "cancelled" : r.status,
           audience_filter: safeJsonParse(r.audience_filter, null),
           is_cancelled: Boolean(r.is_cancelled),
+          sms_engine: parseBroadcastSmsEngine(r.sms_engine),
+          twilio_operation_ids: parseOperationIdsJson(r.twilio_operation_ids),
+          bulk_stats: safeJsonParse(r.bulk_stats_json, null),
+          progress_pct:
+            parseBroadcastSmsEngine(r.sms_engine) === "bulk"
+              ? mapBulkOperationStatsToProgress(
+                  safeJsonParse(r.bulk_stats_json, null),
+                  Number(r.recipient_count ?? 0),
+                ).progressPct
+              : null,
         },
         quota,
       });
@@ -46522,7 +58482,7 @@ function createServer() {
       }
 
       const [bRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, status, is_cancelled, channel, body_sms FROM realtor_broadcasts
+        `SELECT id, status, is_cancelled, channel, body_sms, media_url FROM realtor_broadcasts
          WHERE id = ? AND tenant_id = ?`,
         [broadcastId, MORTGAGE_TENANT_ID],
       );
@@ -46535,6 +58495,9 @@ function createServer() {
         ? "cancelled"
         : bRows[0].status;
       const broadcastSmsBody = String(bRows[0].body_sms || "");
+      const broadcastHasMedia =
+        typeof bRows[0].media_url === "string" &&
+        String(bRows[0].media_url).trim().length > 0;
       logBroadcastTrace("resend_failed_requested", {
         broadcastId,
         brokerId,
@@ -46594,6 +58557,7 @@ function createServer() {
           smsBody: broadcastSmsBody,
           estimatedEmailUnits: emailFailed,
           estimatedSmsUnits: smsFailed,
+          hasMedia: broadcastHasMedia,
         });
         if (!reserve.ok) {
           return res.status(402).json({
@@ -46648,7 +58612,7 @@ function createServer() {
       );
 
       // Fire send loop — processes only newly-pending recipients
-      sendBroadcastAsync(broadcastId).catch((err) =>
+      startBroadcastDelivery(broadcastId).catch((err) =>
         console.error(`[Resend failed] Broadcast #${broadcastId} error:`, err),
       );
       logBroadcastTrace("resend_failed_queued", {
@@ -46694,7 +58658,7 @@ function createServer() {
       }
 
       const [bRows] = await pool.query<RowDataPacket[]>(
-        `SELECT id, status, is_cancelled, channel, body_sms FROM realtor_broadcasts
+        `SELECT id, status, is_cancelled, channel, body_sms, media_url FROM realtor_broadcasts
          WHERE id = ? AND tenant_id = ?`,
         [broadcastId, MORTGAGE_TENANT_ID],
       );
@@ -46707,6 +58671,9 @@ function createServer() {
         ? "cancelled"
         : bRows[0].status;
       const broadcastSmsBody = String(bRows[0].body_sms || "");
+      const broadcastHasMedia =
+        typeof bRows[0].media_url === "string" &&
+        String(bRows[0].media_url).trim().length > 0;
       logBroadcastTrace("resend_pending_requested", {
         broadcastId,
         brokerId,
@@ -46885,6 +58852,7 @@ function createServer() {
           smsBody: broadcastSmsBody,
           estimatedEmailUnits: emailPending,
           estimatedSmsUnits: smsPending,
+          hasMedia: broadcastHasMedia,
         });
         if (!reserve.ok) {
           return res.status(402).json({
@@ -46908,7 +58876,7 @@ function createServer() {
         [broadcastId, MORTGAGE_TENANT_ID],
       );
 
-      sendBroadcastAsync(broadcastId).catch((err) =>
+      startBroadcastDelivery(broadcastId).catch((err) =>
         console.error(`[Resend pending] Broadcast #${broadcastId} error:`, err),
       );
       logBroadcastTrace("resend_pending_queued", {
@@ -47142,7 +59110,7 @@ function createServer() {
            WHERE id = ?`,
           [row.id],
         );
-        sendBroadcastAsync(row.id).catch((err) =>
+        startBroadcastDelivery(row.id).catch((err) =>
           console.error(`❌ Scheduled broadcast #${row.id} failed:`, err),
         );
         logBroadcastTrace("scheduled_cron_dispatched", {
@@ -47150,7 +59118,49 @@ function createServer() {
         });
       }
 
-      return res.json({ success: true, fired: due.length });
+      // Poll in-flight Bulk campaigns (Operation progress)
+      const [bulkSending] = await pool.query<RowDataPacket[]>(
+        `SELECT id FROM realtor_broadcasts
+         WHERE status = 'sending'
+           AND sms_engine = 'bulk'
+           AND is_cancelled = 0
+           AND twilio_operation_ids IS NOT NULL
+         ORDER BY updated_at ASC
+         LIMIT 10`,
+      );
+      for (const row of bulkSending) {
+        await pollBulkBroadcastOperations(Number(row.id));
+      }
+      logBroadcastTrace("scheduled_cron_bulk_polled", {
+        bulkCount: bulkSending.length,
+        bulkBroadcastIds: bulkSending.map((r) => r.id),
+      });
+
+      const [staleSending] = await pool.query<RowDataPacket[]>(
+        `SELECT id, tenant_id FROM realtor_broadcasts
+         WHERE status = 'sending'
+           AND is_cancelled = 0
+           AND updated_at < NOW() - INTERVAL 5 MINUTE
+         ORDER BY updated_at ASC
+         LIMIT 5`,
+      );
+      for (const row of staleSending) {
+        await resumeStaleSendingBroadcast(
+          Number(row.id),
+          Number(row.tenant_id),
+        );
+      }
+      logBroadcastTrace("scheduled_cron_stale_resume", {
+        staleCount: staleSending.length,
+        staleBroadcastIds: staleSending.map((r) => r.id),
+      });
+
+      return res.json({
+        success: true,
+        fired: due.length,
+        resumedStale: staleSending.length,
+        bulkPolled: bulkSending.length,
+      });
     } catch (err) {
       console.error("[Scheduled broadcasts cron] error:", err);
       return res.status(500).json({ success: false, error: "Cron failed" });
@@ -48411,11 +60421,22 @@ function createServer() {
               stripeBilling.stripeSubscriptionId,
             );
             stripeSubscriptionStatus = String(sub.status ?? "");
-            const mapped = mapStripeSubscriptionStatus(
-              stripeSubscriptionStatus,
+            const stripePeriodStart = stripePeriodToSqlDate(
+              sub.current_period_start,
             );
-            if (mapped !== stripeBilling.status) {
-              await syncStripeSubscriptionToDb(pool, MORTGAGE_TENANT_ID, sub);
+            if (
+              shouldSyncStripeSubscriptionPeriod({
+                dbPeriodStart: toSqlDate(config.subscription?.periodStart),
+                dbStatus: stripeBilling.status,
+                stripePeriodStart,
+                stripeStatus: stripeSubscriptionStatus,
+              })
+            ) {
+              await syncStripeSubscriptionToDb(
+                pool,
+                MORTGAGE_TENANT_ID,
+                sub as unknown as Record<string, unknown>,
+              );
             }
           } catch (subErr) {
             console.warn(
@@ -48426,6 +60447,17 @@ function createServer() {
           }
         }
 
+        const refreshedConfig =
+          await quotaService.getBillingConfig(MORTGAGE_TENANT_ID);
+        const billingPeriodAnchor = resolveBillingPeriodAnchor({
+          stripeSubscriptionId: stripeBilling.stripeSubscriptionId,
+          subscriptionStatus: refreshedConfig.subscription?.status,
+        });
+        const quotaRenewsOn =
+          billingPeriodAnchor === "stripe"
+            ? (refreshedConfig.subscription?.periodEnd ?? null)
+            : null;
+
         const stripeSubscriptionActive =
           stripeSubscriptionStatus === "active" ||
           stripeSubscriptionStatus === "trialing";
@@ -48433,7 +60465,7 @@ function createServer() {
         return res.json({
           success: true,
           config: {
-            ...config,
+            ...refreshedConfig,
             stripeEnabled: stripePublic.enabled,
             stripePublishableKey: stripePublic.publishableKey,
             stripeTestMode: stripePublic.testMode,
@@ -48445,6 +60477,8 @@ function createServer() {
             stripeSubscriptionStatus,
             hasPaymentMethod,
             stripeCustomerId: stripeBilling.stripeCustomerId,
+            billingPeriodAnchor,
+            quotaRenewsOn,
             billingInternalEconomicsEnabled:
               isBillingInternalEconomicsEnabled(),
           },
@@ -48828,6 +60862,48 @@ function getApp() {
 }
 
 // Export createServer for development use
+/** Mint a broker JWT for integration tests (skips OTP). */
+export function createBrokerSession(broker: {
+  id: number;
+  email: string;
+  role: string;
+}): string {
+  if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    throw new Error("JWT_SECRET required to mint broker test sessions");
+  }
+  return jwt.sign(
+    {
+      brokerId: broker.id,
+      email: broker.email,
+      role: broker.role,
+      userType: "broker",
+      jti: crypto.randomUUID(),
+    },
+    JWT_SECRET,
+    { expiresIn: "7d" },
+  );
+}
+
+/** Mint a client portal JWT for integration tests (skips OTP). */
+export function createClientSession(client: {
+  id: number;
+  email: string;
+}): string {
+  if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    throw new Error("JWT_SECRET required to mint client test sessions");
+  }
+  return jwt.sign(
+    {
+      clientId: client.id,
+      email: client.email,
+      userType: "client",
+      jti: crypto.randomUUID(),
+    },
+    JWT_SECRET,
+    { expiresIn: "30d" },
+  );
+}
+
 export { createServer };
 
 // Export handler for Vercel serverless

@@ -16,7 +16,12 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-type Props = { className?: string };
+type Props = {
+  className?: string;
+  /** Hide subscription-state notices (grace/restricted) — the overdue bar
+   *  already covers an unpaid renewal. Quota notices still show. */
+  suppressSubscriptionNotices?: boolean;
+};
 
 const LEVEL_STYLES: Record<
   BillingAccessLevel,
@@ -78,7 +83,10 @@ function useGraceCountdown(initialSeconds: number | null): number | null {
   return seconds;
 }
 
-export function BillingAccessBanner({ className }: Props) {
+export function BillingAccessBanner({
+  className,
+  suppressSubscriptionNotices = false,
+}: Props) {
   const { access, showWarnBanner, stripeEnabled, isPlatformOwner, config } =
     useBillingAccess();
 
@@ -91,6 +99,13 @@ export function BillingAccessBanner({ className }: Props) {
   if (!isPlatformOwner || !access || !showWarnBanner) return null;
   if (access.level === "healthy") return null;
   if (config?.billingUiEnabled === false) return null;
+  if (
+    suppressSubscriptionNotices &&
+    (access.level === "subscription_grace" ||
+      access.level === "subscription_restricted")
+  ) {
+    return null;
+  }
 
   const styles = LEVEL_STYLES[access.level];
   const Icon = styles.Icon;

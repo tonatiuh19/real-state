@@ -82,9 +82,13 @@ export const createBroker = createAsyncThunk(
       );
       return data.broker;
     } catch (error: any) {
-      return rejectWithValue(
-        error.response?.data?.error || "Failed to create broker",
-      );
+      const data = error.response?.data;
+      return rejectWithValue({
+        error: data?.error || "Failed to create broker",
+        existing_broker_id: data?.existing_broker_id
+          ? Number(data.existing_broker_id)
+          : undefined,
+      });
     }
   },
 );
@@ -356,7 +360,14 @@ const brokersSlice = createSlice({
       })
       .addCase(createBroker.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.payload as string;
+        const payload = action.payload as
+          | string
+          | { error?: string }
+          | undefined;
+        state.error =
+          typeof payload === "string"
+            ? payload
+            : payload?.error || "Failed to create broker";
       })
       // Update broker
       .addCase(updateBroker.pending, (state) => {

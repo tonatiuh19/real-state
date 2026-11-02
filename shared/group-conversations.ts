@@ -135,26 +135,27 @@ export function resolveGroupConversationsEnabled(
     runtime?: string;
   } = {},
 ): boolean {
-  if (
-    !isGroupConversationsEnabled(
-      env.enabled ?? process.env.GROUP_CONVERSATIONS_ENABLED,
-    )
-  ) {
+  // Prefer explicit override keys (even when undefined) so tests are not
+  // polluted by process.env — `??` alone still reads env when value is undefined.
+  const enabledRaw =
+    "enabled" in env ? env.enabled : process.env.GROUP_CONVERSATIONS_ENABLED;
+  if (!isGroupConversationsEnabled(enabledRaw)) {
     return false;
   }
 
   const runtime = (
-    env.runtime ??
-    process.env.VERCEL_ENV ??
-    process.env.NODE_ENV ??
-    ""
+    ("runtime" in env
+      ? env.runtime
+      : process.env.VERCEL_ENV ?? process.env.NODE_ENV) ?? ""
   ).toLowerCase();
 
   if (runtime !== "production") return true;
 
-  return isTruthyEnvFlag(
-    env.allowProduction ?? process.env.GROUP_CONVERSATIONS_ALLOW_PRODUCTION,
-  );
+  const allowRaw =
+    "allowProduction" in env
+      ? env.allowProduction
+      : process.env.GROUP_CONVERSATIONS_ALLOW_PRODUCTION;
+  return isTruthyEnvFlag(allowRaw);
 }
 
 export function newGroupConversationId(): string {
@@ -162,9 +163,13 @@ export function newGroupConversationId(): string {
   return `conv_group_${uuid}`;
 }
 
-/** GSM-7 segment count (matches api billing). */
+/** UCS-2-aware segment count (matches api billing + shared/short-links). */
 export function smsSegmentsFromBody(body: string): number {
-  return Math.ceil(Math.max((body || "").length, 1) / 160);
+  const text = String(body ?? "");
+  const hasNonGsm = /[^\x00-\x7F]/.test(text);
+  const perSeg = hasNonGsm ? 67 : 160;
+  const charCount = text.length;
+  return charCount === 0 ? 1 : Math.ceil(charCount / perSeg);
 }
 
 /** Group MMS bills segments × active recipients. */

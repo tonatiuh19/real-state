@@ -47,6 +47,8 @@ import {
   BookmarkPlus,
   Info,
   ArrowRightLeft,
+  Calculator,
+  FileSearch,
 } from "lucide-react";
 import SaveAsTemplateDialog from "@/components/SaveAsTemplateDialog";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -122,6 +124,7 @@ import {
 } from "@/store/slices/schedulerSlice";
 import { BrokerDatePicker } from "@/components/BrokerDatePicker";
 import { BrokerTimePicker } from "@/components/BrokerTimePicker";
+import { useNavigate } from "react-router-dom";
 
 interface ClientDetailPanelProps {
   isOpen: boolean;
@@ -615,6 +618,7 @@ export default function ClientDetailPanel({
   onClientUpdated,
 }: ClientDetailPanelProps) {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { toast } = useToast();
   const { profile, isLoading, isSaving, error } = useAppSelector(
     (s) => s.clientDetail,
@@ -1188,6 +1192,36 @@ export default function ClientDetailPanel({
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={() => {
+                        if (!client?.id) return;
+                        onClose();
+                        navigate(
+                          `/admin/loan-calculator/fha?clientId=${client.id}`,
+                        );
+                      }}
+                      className="h-8 text-xs"
+                    >
+                      <Calculator className="w-3.5 h-3.5 mr-1" />
+                      Open in Loan Calculator
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (!client?.id) return;
+                        onClose();
+                        navigate(
+                          `/admin/free-analysis?clientId=${client.id}`,
+                        );
+                      }}
+                      className="h-8 text-xs"
+                    >
+                      <FileSearch className="w-3.5 h-3.5 mr-1" />
+                      Free Analysis
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
                       onClick={() => setEditing(true)}
                       className="h-8 text-xs"
                     >
@@ -1266,7 +1300,7 @@ export default function ClientDetailPanel({
                           </p>
                           <p className="text-xs text-muted-foreground capitalize flex items-center gap-1 flex-wrap">
                             {client.assigned_broker.role === "broker"
-                              ? "Partner"
+                              ? "Realtor"
                               : client.assigned_broker.role === "admin"
                                 ? "Mortgage Banker"
                                 : client.assigned_broker.role}{" "}
@@ -2619,7 +2653,7 @@ export default function ClientDetailPanel({
                           ? "Banker"
                           : broker.role === "platform_owner"
                             ? "Staff"
-                            : "Partner";
+                            : "Realtor";
                       const isSelected = broker.id === transferBrokerId;
                       return (
                         <CommandItem

@@ -123,6 +123,34 @@ async function main() {
     results.push(
       await runStep(
         pool,
+        "link_assets (orphan >90d)",
+        `SELECT COUNT(*) AS c FROM link_assets
+         WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
+           AND id NOT IN (
+             SELECT asset_id FROM short_links WHERE asset_id IS NOT NULL
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM realtor_broadcasts rb
+             WHERE rb.media_url LIKE CONCAT('%/api/link-assets/public/', link_assets.id, '%')
+               AND rb.status IN ('draft', 'scheduled', 'sending')
+           )`,
+        [],
+        `DELETE FROM link_assets
+         WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
+           AND id NOT IN (
+             SELECT asset_id FROM short_links WHERE asset_id IS NOT NULL
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM realtor_broadcasts rb
+             WHERE rb.media_url LIKE CONCAT('%/api/link-assets/public/', link_assets.id, '%')
+               AND rb.status IN ('draft', 'scheduled', 'sending')
+           )`,
+        [],
+      ),
+    );
+    results.push(
+      await runStep(
+        pool,
         "broker_sessions (expired)",
         "SELECT COUNT(*) AS c FROM broker_sessions WHERE expires_at < NOW()",
         [],

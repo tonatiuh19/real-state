@@ -29,10 +29,17 @@ import {
   CalendarDays,
   Calculator,
   CreditCard,
+  ChevronDown,
+  Home,
+  Medal,
+  Caravan,
+  FolderOpen,
+  FileSearch,
 } from "lucide-react";
 import { LiaRobotSolid } from "react-icons/lia";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
@@ -50,6 +57,7 @@ import { cn } from "@/lib/utils";
 import { IS_DEV } from "@/lib/env";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { logout, initAdminSession } from "@/store/slices/brokerAuthSlice";
+import { fetchCrmConfig } from "@/store/slices/crmSlice";
 import { selectSectionControlsMap } from "@/store/slices/adminSectionControlsSlice";
 import { selectRolePermissionsMap } from "@/store/slices/roleSectionPermissionsSlice";
 import { fetchEmailMailboxes } from "@/store/slices/emailSlice";
@@ -64,6 +72,10 @@ import { DatabaseQuotaBanner } from "@/components/DatabaseQuotaBanner";
 import { BillingAccessBanner } from "@/components/billing/BillingAccessBanner";
 import { BillingTeamNoticeBanner } from "@/components/billing/BillingTeamNoticeBanner";
 import { BillingSuspendedWall } from "@/components/billing/BillingSuspendedWall";
+import { BillingOverdueBar } from "@/components/billing/BillingOverdueBar";
+import { BillingOverdueInterstitial } from "@/components/billing/BillingOverdueInterstitial";
+import { BillingOverdueDot } from "@/components/billing/BillingOverdueDot";
+import { useBillingOverdue } from "@/hooks/useBillingOverdue";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -90,6 +102,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [avatarErr, setAvatarErr] = useState(false);
+  const [openSubmenus, setOpenSubmenus] = useState<Record<string, boolean>>({});
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const location = useLocation();
@@ -108,6 +121,8 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     useAppSelector((s) => s.adminSectionControls);
 
   const isPlatformOwner = user?.role === "platform_owner";
+  // Unpaid platform renewal (Stripe) — permanent badge + mobile interstitial.
+  const billingOverdue = useBillingOverdue(isPlatformOwner && !!sessionToken);
   const billingUiEnabled = useAppSelector(
     (s) => s.billing.config?.billingUiEnabled ?? false,
   );
@@ -157,6 +172,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   React.useEffect(() => {
     if (sessionToken) {
       dispatch(initAdminSession());
+      dispatch(fetchCrmConfig());
       dispatch(fetchEmailMailboxes());
       if (isPlatformOwner) {
         dispatch(fetchBillingAccess());
@@ -174,7 +190,8 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
   };
 
   const emailMailboxes = useAppSelector((s) => s.email.mailboxes);
-  const hasActiveMailbox = emailMailboxes.some((m) => m.status === "active");
+  /** Show Email nav when the broker has any connected mailbox (not only status=active). */
+  const hasEmailMailbox = emailMailboxes.length > 0;
 
   const menuItems = [
     {
@@ -183,6 +200,70 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       icon: <LayoutDashboard className="h-4 w-4" />,
       path: "/admin",
       hidden: !isSectionVisible("dashboard", true, true),
+    },
+    {
+      id: "loan-calculator",
+      label: "Loan Calculator",
+      icon: <Calculator className="h-4 w-4" />,
+      path: "/admin/loan-calculator",
+      hidden: !isSectionVisible("loan-calculator", true, true),
+      children: [
+        {
+          id: "lc-fha",
+          label: "FHA",
+          path: "/admin/loan-calculator/fha",
+          icon: <Home className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-va",
+          label: "VA",
+          path: "/admin/loan-calculator/va",
+          icon: <Medal className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-conventional",
+          label: "Conventional",
+          path: "/admin/loan-calculator/conventional",
+          icon: <Building2 className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-investment",
+          label: "Investment Property",
+          path: "/admin/loan-calculator/investment",
+          icon: <TrendingUp className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-mobile",
+          label: "Mobile Home",
+          path: "/admin/loan-calculator/mobile-home",
+          icon: <Caravan className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-quick",
+          label: "Quick Payment",
+          path: "/admin/loan-calculator/quick-payment",
+          icon: <Calculator className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-income",
+          label: "Income Worksheet",
+          path: "/admin/loan-calculator/income",
+          icon: <FileText className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "lc-saves",
+          label: "Saved Calculations",
+          path: "/admin/loan-calculator/saves",
+          icon: <FolderOpen className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+    {
+      id: "free-analysis",
+      label: "Free Analysis",
+      icon: <FileSearch className="h-4 w-4" />,
+      path: "/admin/free-analysis",
+      hidden: !isSectionVisible("free-analysis", true, true),
     },
     {
       id: "pipeline",
@@ -197,6 +278,13 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       icon: <Users className="h-4 w-4" />,
       path: "/admin/clients",
       hidden: !isSectionVisible("clients", true, true),
+    },
+    {
+      id: "crm-people",
+      label: "People",
+      icon: <Users className="h-4 w-4" />,
+      path: "/admin/crm/people",
+      hidden: !isPlatformOwner,
     },
     {
       id: "tasks",
@@ -240,14 +328,18 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
       path: "/admin/billing",
       hidden:
         !isPlatformOwner ||
-        (!billingUiEnabled && !stripeBillingEnabled && !billingAccessBlocked),
+        (!billingUiEnabled &&
+          !stripeBillingEnabled &&
+          !billingAccessBlocked &&
+          !billingOverdue),
+      badge: billingOverdue ? "Overdue" : undefined,
     },
     {
       id: "email",
       label: "Email",
       icon: <Mail className="h-4 w-4" />,
       path: "/admin/email",
-      hidden: !isSectionVisible("email", true, false) || !hasActiveMailbox,
+      hidden: !isSectionVisible("email", true, false) || !hasEmailMailbox,
     },
     {
       id: "reminder-flows",
@@ -286,7 +378,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     },
     {
       id: "income-calculator",
-      label: "Income Calculator",
+      label: "Specialty Income",
       icon: <Calculator className="h-4 w-4" />,
       path: "/admin/income-calculator",
       hidden: !isSectionVisible("income-calculator", true, true),
@@ -343,45 +435,162 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
     navigate,
   ]);
 
+  // Auto-expand submenu when on a child route
+  React.useEffect(() => {
+    setOpenSubmenus((prev) => {
+      const next = { ...prev };
+      for (const item of menuItems) {
+        if (
+          Array.isArray((item as any).children) &&
+          location.pathname.startsWith(item.path)
+        ) {
+          next[item.id] = true;
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
   // Shared menu renderer used by both desktop sidebar and mobile Sheet
-  const renderMenuItems = (onItemClick?: () => void) =>
+  const renderMenuItems = (
+    onItemClick?: () => void,
+    opts?: { collapsed?: boolean },
+  ) =>
     effectiveMenuItems.map((item) => {
+      const children = (
+        item as {
+          children?: {
+            id: string;
+            label: string;
+            path: string;
+            icon?: React.ReactNode;
+          }[];
+        }
+      ).children;
+      const hasChildren = Array.isArray(children) && children.length > 0;
+      const isParentActive =
+        location.pathname === item.path ||
+        location.pathname.startsWith(item.path + "/");
+      const isExpanded = hasChildren
+        ? (openSubmenus[item.id] ?? isParentActive)
+        : false;
+      const collapsed = !!opts?.collapsed;
+
       const menuButton = (
         <Button
-          key={item.id}
-          variant={location.pathname === item.path ? "secondary" : "ghost"}
+          key={`${item.id}-btn`}
+          variant={isParentActive && !hasChildren ? "secondary" : "ghost"}
           className={cn(
-            "w-full gap-3 justify-start",
-            location.pathname === item.path
+            "relative w-full gap-3",
+            collapsed ? "justify-center px-2" : "justify-start",
+            isParentActive && !hasChildren
               ? "bg-primary/10 text-primary hover:bg-primary/20"
+              : "",
+            isParentActive && hasChildren
+              ? "bg-primary/5 text-primary hover:bg-primary/10"
               : "",
             item.disabled
               ? "opacity-60 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground"
               : "",
           )}
           onClick={() => {
-            if (!item.disabled) {
+            if (item.disabled) return;
+            if (hasChildren) {
+              if (collapsed) {
+                navigate(children![0].path);
+                onItemClick?.();
+                return;
+              }
+              setOpenSubmenus((s) => ({
+                ...s,
+                [item.id]: !isExpanded,
+              }));
+              if (!isParentActive) {
+                navigate(children![0].path);
+                onItemClick?.();
+              }
+            } else {
               navigate(item.path);
               onItemClick?.();
             }
           }}
           aria-disabled={item.disabled}
+          aria-expanded={hasChildren ? isExpanded : undefined}
+          title={collapsed && !item.disabled ? item.label : undefined}
         >
           {item.icon}
-          <span>{item.label}</span>
-          {item.disabled && <Lock className="h-3.5 w-3.5 ml-auto" />}
+          {collapsed && (item as { badge?: string }).badge ? (
+            <BillingOverdueDot className="right-1 top-1" />
+          ) : null}
+          {!collapsed && (
+            <>
+              <span className="flex-1 text-left">{item.label}</span>
+              {(item as { badge?: string }).badge ? (
+                <Badge
+                  variant="destructive"
+                  className="h-5 animate-pulse px-1.5 text-[10px] font-semibold uppercase tracking-wide"
+                >
+                  {(item as { badge?: string }).badge}
+                </Badge>
+              ) : null}
+              {item.disabled && <Lock className="h-3.5 w-3.5" />}
+              {hasChildren && !item.disabled && (
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 transition-transform",
+                    isExpanded && "rotate-180",
+                  )}
+                />
+              )}
+            </>
+          )}
+          {collapsed && item.disabled && (
+            <Lock className="h-3.5 w-3.5 absolute top-1.5 right-1.5" />
+          )}
         </Button>
       );
 
-      if (!item.disabled) return menuButton;
-
       return (
-        <Tooltip key={item.id} delayDuration={250}>
-          <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
-          <TooltipContent side="right">
-            <p>{item.tooltipMessage}</p>
-          </TooltipContent>
-        </Tooltip>
+        <div key={item.id} className="space-y-0.5 relative">
+          {item.disabled ? (
+            <Tooltip delayDuration={250}>
+              <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
+              <TooltipContent side={collapsed ? "right" : "top"}>
+                <p>{item.tooltipMessage}</p>
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            menuButton
+          )}
+          {hasChildren && isExpanded && !item.disabled && !collapsed && (
+            <div className="ml-3 pl-3 border-l border-border/70 space-y-0.5">
+              {children!.map((child) => {
+                const childActive = location.pathname === child.path;
+                return (
+                  <Button
+                    key={child.id}
+                    variant={childActive ? "secondary" : "ghost"}
+                    size="sm"
+                    className={cn(
+                      "w-full gap-2 justify-start h-8 text-xs font-medium",
+                      childActive
+                        ? "bg-primary/10 text-primary hover:bg-primary/20"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => {
+                      navigate(child.path);
+                      onItemClick?.();
+                    }}
+                  >
+                    {child.icon}
+                    <span>{child.label}</span>
+                  </Button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       );
     });
 
@@ -400,9 +609,10 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
             variant="ghost"
             size="icon"
             onClick={() => setMobileMenuOpen(true)}
-            className="h-9 w-9"
+            className="relative h-9 w-9"
           >
             <Menu className="h-5 w-5" />
+            {billingOverdue ? <BillingOverdueDot /> : null}
           </Button>
         </div>
       </div>
@@ -447,7 +657,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   navigate("/admin/profile");
                   setMobileMenuOpen(false);
                 }}
-                className="focus:outline-none"
+                className="relative focus:outline-none"
               >
                 <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
                   {!avatarErr && userAvatarUrl ? (
@@ -463,6 +673,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                     </span>
                   )}
                 </Avatar>
+                {billingOverdue ? <BillingOverdueDot /> : null}
               </button>
               <button
                 type="button"
@@ -548,63 +759,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                   )}
                 />
               ))
-            : effectiveMenuItems.map((item) => {
-                const menuButton = (
-                  <Button
-                    key={item.id}
-                    variant={
-                      location.pathname === item.path ? "secondary" : "ghost"
-                    }
-                    className={cn(
-                      "w-full gap-3",
-                      sidebarCollapsed
-                        ? "justify-center px-2"
-                        : "justify-start",
-                      location.pathname === item.path
-                        ? "bg-primary/10 text-primary hover:bg-primary/20"
-                        : "",
-                      item.disabled
-                        ? "opacity-60 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground"
-                        : "",
-                    )}
-                    onClick={() => {
-                      if (!item.disabled) navigate(item.path);
-                    }}
-                    aria-disabled={item.disabled}
-                    title={
-                      sidebarCollapsed && !item.disabled
-                        ? item.label
-                        : undefined
-                    }
-                  >
-                    {item.icon}
-                    {!sidebarCollapsed && (
-                      <>
-                        <span>{item.label}</span>
-                        {item.disabled && (
-                          <Lock className="h-3.5 w-3.5 ml-auto" />
-                        )}
-                      </>
-                    )}
-                    {sidebarCollapsed && item.disabled && (
-                      <Lock className="h-3.5 w-3.5 absolute top-1.5 right-1.5" />
-                    )}
-                  </Button>
-                );
-
-                if (!item.disabled) {
-                  return menuButton;
-                }
-
-                return (
-                  <Tooltip key={item.id} delayDuration={250}>
-                    <TooltipTrigger asChild>{menuButton}</TooltipTrigger>
-                    <TooltipContent side={sidebarCollapsed ? "right" : "top"}>
-                      <p>{item.tooltipMessage}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })}
+            : renderMenuItems(undefined, { collapsed: sidebarCollapsed })}
         </div>
 
         {/* Dev mode badge */}
@@ -634,7 +789,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               <button
                 type="button"
                 onClick={() => navigate("/admin/profile")}
-                className="focus:outline-none shrink-0"
+                className="relative focus:outline-none shrink-0"
               >
                 <Avatar className="h-9 w-9 ring-2 ring-primary/20 cursor-pointer hover:ring-primary/50 transition-all">
                   {!avatarErr && userAvatarUrl ? (
@@ -650,6 +805,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
                     </span>
                   )}
                 </Avatar>
+                {billingOverdue ? <BillingOverdueDot /> : null}
               </button>
               <button
                 type="button"
@@ -693,7 +849,12 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
               {sessionToken && <NotificationBell variant="compact" />}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-9 w-9">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="relative h-9 w-9"
+                  >
+                    {billingOverdue ? <BillingOverdueDot /> : null}
                     <Avatar className="h-9 w-9">
                       {!avatarErr && userAvatarUrl ? (
                         <img
@@ -790,16 +951,24 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
           </div>
         ) : (
           <>
+            {billingOverdue ? (
+              <BillingOverdueBar overdue={billingOverdue} />
+            ) : null}
             <div className="px-4 pt-4 md:px-6 md:pt-4">
               <DatabaseQuotaBanner />
               {isPlatformOwner ? (
-                <BillingAccessBanner />
+                <BillingAccessBanner
+                  suppressSubscriptionNotices={!!billingOverdue}
+                />
               ) : (
                 <BillingTeamNoticeBanner />
               )}
             </div>
             {children}
             {isPlatformOwner ? <BillingSuspendedWall /> : null}
+            {billingOverdue ? (
+              <BillingOverdueInterstitial overdue={billingOverdue} />
+            ) : null}
           </>
         )}
       </main>

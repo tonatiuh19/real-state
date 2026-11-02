@@ -1,6 +1,6 @@
 # Per-Owner CRM, Conversations & Identity Linking
 
-> **Status**: Approved product + architecture specification (pre-implementation)  
+> **Status**: Phases 0–7 implemented (flag-gated via env vars; default OFF — legacy behavior until pilot).  
 > **Supersedes**: `docs/PRIVATE_CONTACTS_ARCHITECTURE.md` (deprecated — separate “private contacts” layer)  
 > **Business guide (non-technical):** [`PER_OWNER_CRM_BUSINESS_GUIDE.md`](./PER_OWNER_CRM_BUSINESS_GUIDE.md)  
 > **Related**: `docs/IDENTITY_SYNC_ARCHITECTURE.md` (webhook idempotency, channel identities — complementary)  
@@ -83,7 +83,8 @@ This document is the single source of truth for product decisions, data model, U
 | Decision | Choice |
 |----------|--------|
 | Clients list | **People view** — group by phone, expand banker copies |
-| Messaging | Global messaging access (existing `platform_owner` behavior) |
+| Conversations inbox | **Same mine/shared scoping as mortgage bankers** — no global thread list |
+| Send (legacy) | `platform_owner` may still message via ownership paths; not a tenant-wide inbox |
 
 ---
 
@@ -520,7 +521,14 @@ When admin confirms duplicate:
 
 ## 9. API changes (summary)
 
-Feature flag: `PER_OWNER_CRM_ENABLED` (+ production allow flag + pilot broker IDs).
+Feature flags (environment variables — same pattern as `GROUP_CONVERSATIONS_*`):
+
+| Env var | Purpose |
+|---------|---------|
+| `PER_OWNER_CRM_ENABLED` | **Only** master switch (`1` / `true` / `yes` / `on`) — active in all environments when set |
+
+Set in `.env` locally or Vercel project Environment Variables. **Not** in broker Settings UI.  
+Legacy `system_settings` rows from Phase 0 migration are **ignored** — env is authoritative.
 
 ### 9.1 New endpoints
 
@@ -698,4 +706,4 @@ All product answers captured June 2026:
 ---
 
 _Document owner: Engineering + Product_  
-_Next step: Phase 0 migration draft + update `shared/api.ts` types for person groups and transfer jobs._
+_Next step: Phase 2 — backfill `owner_client_scope_broker_id` on threads; then Phase 3 pilot with flags on for Miguel/Daniel._

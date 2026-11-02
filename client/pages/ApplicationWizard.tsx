@@ -31,15 +31,7 @@ import {
   MapPin,
   Phone,
   Star,
-  Globe,
 } from "lucide-react";
-import {
-  FaFacebook,
-  FaInstagram,
-  FaLinkedin,
-  FaXTwitter,
-  FaYoutube,
-} from "react-icons/fa6";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
@@ -52,6 +44,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { BrokerPublicContactCard } from "@/components/BrokerPublicContactCard";
+import { GoogleReviewsBadge } from "@/components/GoogleReviewsBadge";
+import { formatPublicCredentialLine } from "@/lib/publicBrokerCredentials";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -225,35 +220,38 @@ const AvatarCircle = ({
 }) => {
   const dim = size === "lg" ? "h-[110px] w-[110px]" : "h-8 w-8";
   const text = size === "lg" ? "text-3xl" : "text-xs";
-  return (
-    <button
-      type="button"
-      onClick={onClick}
+  const shellClass = cn(
+    dim,
+    "rounded-full overflow-hidden ring-4 ring-white border-[3px] border-primary shadow-lg shrink-0",
+    onClick
+      ? "cursor-pointer transition-transform hover:scale-105 focus:outline-none"
+      : "cursor-default",
+  );
+  const inner = person.avatar_url ? (
+    <img
+      src={person.avatar_url}
+      alt={`${person.first_name} ${person.last_name}`}
+      className="h-full w-full object-cover"
+    />
+  ) : (
+    <div
       className={cn(
-        dim,
-        "rounded-full overflow-hidden ring-4 ring-white border-[3px] border-primary shadow-lg transition-transform hover:scale-105 focus:outline-none shrink-0",
-        onClick ? "cursor-pointer" : "cursor-default",
+        "h-full w-full bg-primary flex items-center justify-center text-white font-bold",
+        text,
       )}
     >
-      {person.avatar_url ? (
-        <img
-          src={person.avatar_url}
-          alt={`${person.first_name} ${person.last_name}`}
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        <div
-          className={cn(
-            "h-full w-full bg-primary flex items-center justify-center text-white font-bold",
-            text,
-          )}
-        >
-          {person.first_name[0]}
-          {person.last_name[0]}
-        </div>
-      )}
-    </button>
+      {person.first_name[0]}
+      {person.last_name[0]}
+    </div>
   );
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={shellClass}>
+        {inner}
+      </button>
+    );
+  }
+  return <div className={shellClass}>{inner}</div>;
 };
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -536,7 +534,7 @@ const ApplicationWizard = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
-              className="w-full max-w-md"
+              className="w-full max-w-xl"
             >
               {(() => {
                 const isHomeTeam =
@@ -546,7 +544,7 @@ const ApplicationWizard = () => {
                   <>
                     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                       <div className="h-1 bg-primary" />
-                      <div className="p-9">
+                      <div className="p-6 sm:p-9">
                         {isHomeTeam ? (
                           /* ── My Home Team Layout ── */
                           <>
@@ -584,32 +582,56 @@ const ApplicationWizard = () => {
                               </p>
                             </div>
 
-                            {/* Clickable names */}
-                            <div className="flex justify-center items-center gap-2 mb-6">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setContactModalPerson(brokerInfo)
-                                }
-                                className="text-base font-semibold text-primary hover:underline underline-offset-2 transition-colors"
-                              >
-                                {brokerInfo.first_name} {brokerInfo.last_name}
-                              </button>
-                              <span className="text-gray-300 font-light">
-                                |
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setContactModalPerson(
-                                    brokerInfo.mortgage_banker,
-                                  )
-                                }
-                                className="text-base font-semibold text-primary hover:underline underline-offset-2 transition-colors"
-                              >
-                                {brokerInfo.mortgage_banker!.first_name}{" "}
-                                {brokerInfo.mortgage_banker!.last_name}
-                              </button>
+                            {/* Clickable names + credential row */}
+                            <div className="mb-6 space-y-1.5">
+                              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-x-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setContactModalPerson(brokerInfo)
+                                  }
+                                  className="justify-self-end text-base font-semibold text-primary hover:underline underline-offset-2 transition-colors text-right"
+                                >
+                                  {brokerInfo.first_name} {brokerInfo.last_name}
+                                </button>
+                                <span className="text-gray-300 font-light">
+                                  |
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setContactModalPerson(
+                                      brokerInfo.mortgage_banker,
+                                    )
+                                  }
+                                  className="justify-self-start text-base font-semibold text-primary hover:underline underline-offset-2 transition-colors text-left"
+                                >
+                                  {brokerInfo.mortgage_banker!.first_name}{" "}
+                                  {brokerInfo.mortgage_banker!.last_name}
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-x-2">
+                                <p className="justify-self-end text-[11px] text-gray-500 leading-snug text-right max-w-[11rem]">
+                                  {formatPublicCredentialLine({
+                                    kind: "realtor",
+                                    licenseNumber: brokerInfo.license_number,
+                                  })}
+                                </p>
+                                <span
+                                  className="text-transparent font-light select-none"
+                                  aria-hidden
+                                >
+                                  |
+                                </span>
+                                <p className="justify-self-start text-[11px] text-gray-500 leading-snug text-left max-w-[11rem]">
+                                  {formatPublicCredentialLine({
+                                    kind: "mortgage_banker",
+                                    licenseNumber:
+                                      brokerInfo.mortgage_banker!
+                                        .license_number,
+                                  })}
+                                </p>
+                              </div>
                             </div>
 
                             <Separator className="mb-5" />
@@ -618,27 +640,20 @@ const ApplicationWizard = () => {
                           /* ── Single Mortgage Banker Layout ── */
                           <>
                             <div className="flex items-center gap-5 mb-7">
-                              <AvatarCircle
-                                person={brokerInfo}
-                                onClick={() =>
-                                  setContactModalPerson(brokerInfo)
-                                }
-                              />
+                              <AvatarCircle person={brokerInfo} />
                               <div className="min-w-0">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setContactModalPerson(brokerInfo)
-                                  }
-                                  className="text-left"
-                                >
-                                  <h1 className="text-xl font-bold text-gray-900 truncate hover:underline underline-offset-2">
-                                    {brokerInfo.first_name}{" "}
-                                    {brokerInfo.last_name}
-                                  </h1>
-                                </button>
+                                <h1 className="text-xl font-bold text-gray-900 truncate">
+                                  {brokerInfo.first_name}{" "}
+                                  {brokerInfo.last_name}
+                                </h1>
                                 <p className="text-sm text-gray-500 mt-0.5">
-                                  Mortgage Banker
+                                  {formatPublicCredentialLine({
+                                    kind:
+                                      brokerInfo.role === "broker"
+                                        ? "realtor"
+                                        : "mortgage_banker",
+                                    licenseNumber: brokerInfo.license_number,
+                                  })}
                                 </p>
                               </div>
                             </div>
@@ -679,6 +694,11 @@ const ApplicationWizard = () => {
                                 "{brokerInfo.bio}"
                               </p>
                             )}
+
+                            <BrokerPublicContactCard
+                              person={brokerInfo}
+                              className="mb-5"
+                            />
 
                             <Separator className="mb-5" />
                           </>
@@ -739,6 +759,8 @@ const ApplicationWizard = () => {
                       </div>
                     </div>
 
+                    <GoogleReviewsBadge className="mt-4" />
+
                     {/* Trust badges */}
                     <div className="flex justify-center gap-6 mt-5">
                       {[
@@ -771,7 +793,7 @@ const ApplicationWizard = () => {
           ) : null}
         </AnimatePresence>
 
-        {/* ── Contact Info Modal ── */}
+        {/* ── Contact Info Modal (Home Team avatars / names) ── */}
         <Dialog
           open={!!contactModalPerson}
           onOpenChange={() => setContactModalPerson(null)}
@@ -807,7 +829,7 @@ const ApplicationWizard = () => {
                             ? "Platform Owner"
                             : contactModalPerson.role === "admin"
                               ? "Mortgage Banker"
-                              : "Partner"}
+                              : "Realtor"}
                         </p>
                       </div>
                     </div>
@@ -819,161 +841,11 @@ const ApplicationWizard = () => {
                     </p>
                   )}
 
-                  <div className="space-y-2">
-                    {contactModalPerson.phone && (
-                      <a
-                        href={`tel:${contactModalPerson.phone}`}
-                        className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
-                      >
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
-                          <Phone className="h-3.5 w-3.5 text-primary" />
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
-                            Phone
-                          </p>
-                          <p className="text-sm font-semibold text-gray-900">
-                            {contactModalPerson.phone}
-                          </p>
-                        </div>
-                      </a>
-                    )}
-                    <a
-                      href={`mailto:${contactModalPerson.email}`}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
-                    >
-                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
-                        <Mail className="h-3.5 w-3.5 text-primary" />
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
-                          Email
-                        </p>
-                        <p className="text-sm font-semibold text-gray-900 truncate">
-                          {contactModalPerson.email}
-                        </p>
-                      </div>
-                    </a>
-                    {(contactModalPerson.office_address ||
-                      contactModalPerson.office_city ||
-                      contactModalPerson.office_state) &&
-                      (() => {
-                        const addressParts = [
-                          contactModalPerson.office_address,
-                          contactModalPerson.office_city,
-                          contactModalPerson.office_state,
-                          contactModalPerson.office_zip,
-                        ].filter(Boolean);
-                        const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressParts.join(", "))}`;
-                        return (
-                          <a
-                            href={mapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-primary/5 transition-colors group"
-                          >
-                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
-                              <MapPin className="h-3.5 w-3.5 text-primary" />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">
-                                Address · Open in Maps ↗
-                              </p>
-                              {contactModalPerson.office_address && (
-                                <p className="text-sm font-semibold text-gray-900">
-                                  {contactModalPerson.office_address}
-                                </p>
-                              )}
-                              <p className="text-sm font-semibold text-gray-900">
-                                {[
-                                  contactModalPerson.office_city,
-                                  contactModalPerson.office_state,
-                                  contactModalPerson.office_zip,
-                                ]
-                                  .filter(Boolean)
-                                  .join(", ")}
-                              </p>
-                            </div>
-                          </a>
-                        );
-                      })()}
-                  </div>
-
-                  {/* Social Networks */}
-                  {(contactModalPerson.website_url ||
-                    contactModalPerson.linkedin_url ||
-                    contactModalPerson.facebook_url ||
-                    contactModalPerson.instagram_url ||
-                    contactModalPerson.twitter_url ||
-                    contactModalPerson.youtube_url) && (
-                    <div className="mt-4 pt-4 border-t border-gray-100">
-                      <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-3">
-                        Connect
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {contactModalPerson.website_url && (
-                          <a
-                            href={contactModalPerson.website_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-xs font-medium text-gray-700"
-                          >
-                            <Globe className="h-3.5 w-3.5" /> Website
-                          </a>
-                        )}
-                        {contactModalPerson.linkedin_url && (
-                          <a
-                            href={contactModalPerson.linkedin_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0A66C2]/10 hover:bg-[#0A66C2]/20 transition-colors text-xs font-medium text-[#0A66C2]"
-                          >
-                            <FaLinkedin className="h-3.5 w-3.5" /> LinkedIn
-                          </a>
-                        )}
-                        {contactModalPerson.facebook_url && (
-                          <a
-                            href={contactModalPerson.facebook_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1877F2]/10 hover:bg-[#1877F2]/20 transition-colors text-xs font-medium text-[#1877F2]"
-                          >
-                            <FaFacebook className="h-3.5 w-3.5" /> Facebook
-                          </a>
-                        )}
-                        {contactModalPerson.instagram_url && (
-                          <a
-                            href={contactModalPerson.instagram_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#E1306C]/10 hover:bg-[#E1306C]/20 transition-colors text-xs font-medium text-[#E1306C]"
-                          >
-                            <FaInstagram className="h-3.5 w-3.5" /> Instagram
-                          </a>
-                        )}
-                        {contactModalPerson.twitter_url && (
-                          <a
-                            href={contactModalPerson.twitter_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-xs font-medium text-gray-900"
-                          >
-                            <FaXTwitter className="h-3.5 w-3.5" /> X
-                          </a>
-                        )}
-                        {contactModalPerson.youtube_url && (
-                          <a
-                            href={contactModalPerson.youtube_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FF0000]/10 hover:bg-[#FF0000]/20 transition-colors text-xs font-medium text-[#FF0000]"
-                          >
-                            <FaYoutube className="h-3.5 w-3.5" /> YouTube
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                  <BrokerPublicContactCard
+                    person={contactModalPerson}
+                    showHeading={false}
+                    className="bg-transparent border-0 p-0 shadow-none"
+                  />
                 </>
               )}
             </div>

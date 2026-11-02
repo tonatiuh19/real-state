@@ -188,13 +188,19 @@ export default function Brokers() {
               values.specializations.length > 0
                 ? values.specializations
                 : undefined,
+            created_by_broker_id:
+              values.role === "broker" && values.created_by_broker_id
+                ? values.created_by_broker_id
+                : undefined,
           }),
         ).unwrap();
-        // If a partner, set the assigned MB right away
+        // Fallback if API ignored owner (older deploy): set assigned MB via update
         if (
           values.role === "broker" &&
           values.created_by_broker_id &&
-          newBroker?.id
+          newBroker?.id &&
+          Number((newBroker as { created_by_broker_id?: number | null })
+            .created_by_broker_id) !== Number(values.created_by_broker_id)
         ) {
           await dispatch(
             updateBroker({
@@ -303,9 +309,13 @@ export default function Brokers() {
       }
       setWizardOpen(false);
     } catch (error: any) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error?.error || error?.message || "Operation failed";
       toast({
         title: "Error",
-        description: error || "Operation failed",
+        description: message,
         variant: "destructive",
       });
       // Re-throw so the wizard knows the submission failed and keeps the dialog open
@@ -467,7 +477,7 @@ export default function Brokers() {
                           ? "Platform Owner"
                           : b.role === "admin"
                             ? "Mortgage Banker"
-                            : "Partner"}
+                            : "Realtor"}
                       </Badge>
                       {assignedMB && (
                         <p className="text-xs text-gray-500 whitespace-nowrap">
@@ -666,7 +676,7 @@ export default function Brokers() {
                         ? "Platform Owner"
                         : broker.role === "admin"
                           ? "Mortgage Banker"
-                          : "Partner"}
+                          : "Realtor"}
                     </Badge>
                     <Badge variant={getStatusBadgeVariant(broker.status)}>
                       {broker.status}
@@ -718,6 +728,14 @@ export default function Brokers() {
           open={wizardOpen}
           onClose={() => setWizardOpen(false)}
           onSubmit={handleWizardSubmit}
+          onEditExistingBroker={(brokerId) => {
+            const existing =
+              brokers.find((b) => b.id === brokerId) ||
+              ({ id: brokerId } as Broker);
+            setWizardMode("edit");
+            setSelectedBroker(existing);
+            setWizardOpen(true);
+          }}
           broker={selectedBroker}
           mode={wizardMode}
         />

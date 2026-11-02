@@ -20,6 +20,7 @@ import {
   fetchSavedSegments,
   createSavedSegment,
   deleteSavedSegment,
+  fetchShortLinks,
 } from "@/store/slices/realtorBroadcastSlice";
 import {
   fetchEmailTemplates,
@@ -86,6 +87,8 @@ import {
   Download,
   BookmarkPlus,
   BookOpen,
+  Link2,
+  MousePointerClick,
 } from "lucide-react";
 import ReactQuill from "react-quill-new";
 import "react-quill-new/dist/quill.snow.css";
@@ -109,6 +112,14 @@ import {
   wouldExceedQuota,
 } from "@/utils/billing-quota";
 import { billingTopUpHref, suggestTopUpPackId } from "@/utils/billing-payment-status";
+import { BROADCAST_MMS_MAX_RECIPIENTS, estimateSmsSegments } from "@shared/short-links";
+import {
+  BroadcastSmsLinkTools,
+  confirmHighSegmentSms,
+  confirmMmsAudience,
+  type BroadcastLinkAttachment,
+  type BroadcastMmsAttachment,
+} from "@/components/BroadcastSmsLinkTools";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -250,7 +261,7 @@ function formatBroadcastFailureReason(raw: string | null): string {
 }
 
 function smsSegments(text: string): number {
-  return Math.ceil((text || "").length / 160) || 1;
+  return estimateSmsSegments(text).segments;
 }
 
 function formatQuotaUnits(n: number): string {
@@ -414,7 +425,9 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     quota,
   } = useAppSelector((state) => state.realtorBroadcasts);
   const { toast } = useToast();
-  const { user: currentBroker } = useAppSelector((state) => state.brokerAuth);
+  const { user: currentBroker, sessionToken } = useAppSelector(
+    (state) => state.brokerAuth,
+  );
   const { emailTemplates, smsTemplates } = useAppSelector(
     (s) => s.communicationTemplates,
   );
@@ -434,6 +447,10 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
   const [saveSegmentName, setSaveSegmentName] = useState("");
   const [showSaveSegment, setShowSaveSegment] = useState(false);
   const [showSegmentPresets, setShowSegmentPresets] = useState(false);
+  const [linkAttachment, setLinkAttachment] =
+    useState<BroadcastLinkAttachment | null>(null);
+  const [mmsAttachment, setMmsAttachment] =
+    useState<BroadcastMmsAttachment | null>(null);
   const previewTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Merge tag autocomplete refs & state
@@ -501,15 +518,52 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     updateForm({
       title: latestDraft.title ?? "",
       channel: (latestDraft.channel as RealtorBroadcastChannel) ?? "email",
-      subject: (latestDraft as any).subject ?? "",
-      body_email: (latestDraft as any).body_email ?? "",
-      body_sms: (latestDraft as any).body_sms ?? "",
+      subject: latestDraft.subject ?? "",
+      body_email: latestDraft.body_email ?? "",
+      body_sms: latestDraft.body_sms ?? "",
       segments: af?.segments ?? ["all_active_realtors"],
       excluded_ids: af?.excluded_ids ?? [],
       stage_filter: af?.stage_filter ?? [],
       tag_filter: af?.tag_filter ?? [],
     });
-  }, [latestDraft, draftId, updateForm]);
+    if (latestDraft.media_url) {
+      setMmsAttachment({
+        url: latestDraft.media_url,
+        contentType: latestDraft.media_content_type || "application/octet-stream",
+        filename: latestDraft.media_filename || "attachment",
+      });
+    } else {
+      setMmsAttachment(null);
+    }
+    if (latestDraft.short_link_code) {
+      const code = latestDraft.short_link_code;
+      setLinkAttachment({
+        code,
+        shortUrl: `https://portal.encoremortgage.org/l/${code}`,
+        targetUrl: "",
+        title: null,
+      });
+      // Hydrate target_url from Redux short-links list
+      void dispatch(fetchShortLinks(50))
+        .unwrap()
+        .then((links) => {
+          const match = links.find((s) => s.code === code);
+          if (match) {
+            setLinkAttachment({
+              code: match.code,
+              shortUrl: match.short_url,
+              targetUrl: match.target_url,
+              title: match.title,
+            });
+          }
+        })
+        .catch(() => {
+          /* ignore hydrate errors */
+        });
+    } else {
+      setLinkAttachment(null);
+    }
+  }, [latestDraft, draftId, updateForm, sessionToken, dispatch]);
 
   // Step transition with auto-save
   const goToStep = useCallback(
@@ -531,12 +585,16 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             body_sms: form.body_sms || undefined,
             audience_filter: af,
             scheduled_at: form.scheduled_at || undefined,
-          }),
+            media_url: mmsAttachment?.url ?? null,
+            media_content_type: mmsAttachment?.contentType ?? null,
+            media_filename: mmsAttachment?.filename ?? null,
+            short_link_code: linkAttachment?.code ?? null,
+          } as any),
         );
       }
       setStep(n);
     },
-    [draftId, form, dispatch],
+    [draftId, form, dispatch, mmsAttachment, linkAttachment],
   );
 
   // Auto-preview on audience change
@@ -548,6 +606,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
         previewBroadcastAudience({
           channel: form.channel,
           body_sms: form.body_sms,
+          media_url: mmsAttachment?.url ?? null,
           audience_filter: {
             segments: form.segments,
             // excluded_ids intentionally NOT sent — selections are client-side only
@@ -569,6 +628,8 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     form.channel,
     form.stage_filter,
     form.tag_filter,
+    form.body_sms,
+    mmsAttachment?.url,
   ]);
 
   // Clean up preview on unmount
@@ -577,6 +638,19 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
       dispatch(clearAudiencePreview());
     };
   }, [dispatch]);
+
+  // Drop MMS if audience grows past the hard cap after sizing
+  useEffect(() => {
+    if (!mmsAttachment) return;
+    const smsCount = audiencePreview?.sms_count ?? 0;
+    if (smsCount > BROADCAST_MMS_MAX_RECIPIENTS) {
+      setMmsAttachment(null);
+      toast({
+        title: "MMS removed",
+        description: `Audience is ${smsCount} SMS recipients — MMS is capped at ${BROADCAST_MMS_MAX_RECIPIENTS}. Use a short link.`,
+      });
+    }
+  }, [audiencePreview?.sms_count, mmsAttachment, toast]);
 
   const canAdvanceStep1 =
     form.title.trim() &&
@@ -594,6 +668,7 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             smsBody: form.body_sms,
             emailRecipientCount: audiencePreview.email_count,
             smsRecipientCount: audiencePreview.sms_count,
+            hasMedia: !!mmsAttachment?.url,
           }).sms_segments,
         email_sends:
           audiencePreview.estimated_email_sends ?? audiencePreview.email_count,
@@ -695,6 +770,17 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
     }
 
     try {
+      if (
+        (form.channel === "sms" || form.channel === "both") &&
+        !confirmHighSegmentSms(form.body_sms)
+      ) {
+        return;
+      }
+      const smsAudience = audiencePreview?.sms_count ?? 0;
+      if (mmsAttachment && !confirmMmsAudience(smsAudience)) {
+        return;
+      }
+
       await dispatch(
         createBroadcast({
           title: form.title,
@@ -708,9 +794,15 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             ? new Date(form.scheduled_at).toISOString()
             : undefined,
           send_now: form.send_now,
+          media_url: mmsAttachment?.url,
+          media_content_type: mmsAttachment?.contentType,
+          media_filename: mmsAttachment?.filename,
+          short_link_code: linkAttachment?.code,
         }),
       ).unwrap();
       setForm(WIZARD_DEFAULTS);
+      setLinkAttachment(null);
+      setMmsAttachment(null);
       setStep(1);
       setDraftId(null);
       setConfirmed(false);
@@ -1080,9 +1172,45 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                "Reply STOP to unsubscribe." is automatically appended.
+                &quot;Reply STOP to unsubscribe.&quot; is automatically appended.
               </p>
+              <BroadcastSmsLinkTools
+                sessionToken={sessionToken}
+                channel={form.channel}
+                bodySms={form.body_sms}
+                bodyEmail={form.body_email}
+                smsRecipientEstimate={audiencePreview?.sms_count ?? 0}
+                allowMmsAttach={
+                  !!audiencePreview &&
+                  (audiencePreview.sms_count ?? 0) > 0 &&
+                  (audiencePreview.sms_count ?? 0) <=
+                    BROADCAST_MMS_MAX_RECIPIENTS
+                }
+                onBodySmsChange={(body_sms) => updateForm({ body_sms })}
+                onBodyEmailChange={(body_email) => updateForm({ body_email })}
+                linkAttachment={linkAttachment}
+                onLinkAttachmentChange={setLinkAttachment}
+                mmsAttachment={mmsAttachment}
+                onMmsAttachmentChange={setMmsAttachment}
+              />
             </div>
+          )}
+
+          {form.channel === "email" && (
+            <BroadcastSmsLinkTools
+              sessionToken={sessionToken}
+              channel={form.channel}
+              bodySms={form.body_sms}
+              bodyEmail={form.body_email}
+              smsRecipientEstimate={0}
+              allowMmsAttach={false}
+              onBodySmsChange={(body_sms) => updateForm({ body_sms })}
+              onBodyEmailChange={(body_email) => updateForm({ body_email })}
+              linkAttachment={linkAttachment}
+              onLinkAttachmentChange={setLinkAttachment}
+              mmsAttachment={mmsAttachment}
+              onMmsAttachmentChange={setMmsAttachment}
+            />
           )}
 
           <div className="flex justify-end pt-2">
@@ -1490,6 +1618,27 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
             </Card>
           )}
 
+          {(form.channel === "sms" || form.channel === "both") &&
+            audiencePreview &&
+            audiencePreview.sms_count > 0 && (
+              <BroadcastSmsLinkTools
+                sessionToken={sessionToken}
+                channel={form.channel}
+                bodySms={form.body_sms}
+                bodyEmail={form.body_email}
+                smsRecipientEstimate={audiencePreview.sms_count}
+                allowMmsAttach={
+                  audiencePreview.sms_count <= BROADCAST_MMS_MAX_RECIPIENTS
+                }
+                onBodySmsChange={(body_sms) => updateForm({ body_sms })}
+                onBodyEmailChange={(body_email) => updateForm({ body_email })}
+                linkAttachment={linkAttachment}
+                onLinkAttachmentChange={setLinkAttachment}
+                mmsAttachment={mmsAttachment}
+                onMmsAttachmentChange={setMmsAttachment}
+              />
+            )}
+
           <div className="flex justify-between pt-2">
             <Button variant="outline" onClick={() => setStep(1)}>
               <ChevronLeft className="mr-1 h-4 w-4" /> Back
@@ -1587,6 +1736,27 @@ function BroadcastWizard({ onSuccess }: { onSuccess: () => void }) {
 
                 <span className="text-muted-foreground">Channel</span>
                 <span className="font-medium capitalize">{form.channel}</span>
+
+                {linkAttachment && (
+                  <>
+                    <span className="text-muted-foreground">Short link</span>
+                    <span className="font-mono text-xs break-all">
+                      {linkAttachment.shortUrl}
+                    </span>
+                  </>
+                )}
+
+                {mmsAttachment && (
+                  <>
+                    <span className="text-muted-foreground">MMS file</span>
+                    <span className="text-xs">
+                      {mmsAttachment.filename}{" "}
+                      <span className="text-muted-foreground">
+                        (durable · max {50} recipients)
+                      </span>
+                    </span>
+                  </>
+                )}
 
                 {form.subject && (
                   <>
@@ -2103,12 +2273,38 @@ function BroadcastDetailDialog({
               {b.status === "sending" && (
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>
+                    <span className="flex items-center gap-2">
                       {b.sent_count + b.failed_count} / {b.recipient_count}
+                      {b.sms_engine === "bulk" ? (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] border-orange-300 text-orange-700"
+                        >
+                          Bulk
+                        </Badge>
+                      ) : null}
                     </span>
-                    <span>{progress}%</span>
+                    <span>
+                      {typeof b.progress_pct === "number"
+                        ? b.progress_pct
+                        : progress}
+                      %
+                    </span>
                   </div>
-                  <Progress value={progress} className="h-2" />
+                  <Progress
+                    value={
+                      typeof b.progress_pct === "number"
+                        ? b.progress_pct
+                        : progress
+                    }
+                    className="h-2"
+                  />
+                  {b.sms_engine === "bulk" ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Progress from Twilio Bulk Operation · quota still counts
+                      SMS segments (Broadcast Bulk)
+                    </p>
+                  ) : null}
                 </div>
               )}
 
@@ -2394,7 +2590,19 @@ function BroadcastHistory() {
                   className="cursor-pointer hover:bg-muted/40 transition-colors"
                   onClick={() => setSelectedId(b.id)}
                 >
-                  <TableCell className="font-medium">{b.title}</TableCell>
+                  <TableCell className="font-medium">
+                    <span className="inline-flex items-center gap-1.5 flex-wrap">
+                      {b.title}
+                      {b.sms_engine === "bulk" ? (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 border-orange-500/40 text-orange-700 bg-orange-500/10"
+                        >
+                          Bulk
+                        </Badge>
+                      ) : null}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="capitalize text-xs">
                       {b.channel}
@@ -2514,6 +2722,129 @@ function BroadcastHistory() {
   );
 }
 
+// ─── Short link click analytics ───────────────────────────────────────────────
+
+function ShortLinksPanel() {
+  const dispatch = useAppDispatch();
+  const { shortLinks, isLoadingShortLinks } = useAppSelector(
+    (s) => s.realtorBroadcasts,
+  );
+  const { toast } = useToast();
+
+  useEffect(() => {
+    dispatch(fetchShortLinks(40));
+  }, [dispatch]);
+
+  const copy = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({ title: "Copied", description: url });
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: url,
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <MousePointerClick className="h-4 w-4 text-primary" />
+          Short link clicks
+        </CardTitle>
+        <p className="text-sm text-muted-foreground font-normal">
+          First-party links at{" "}
+          <code className="text-xs">portal.encoremortgage.org/l/…</code>
+        </p>
+      </CardHeader>
+      <CardContent>
+        {isLoadingShortLinks ? (
+          <div className="space-y-2">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        ) : shortLinks.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            No short links yet. Create one from Compose (paste URL or upload PDF /
+            photo).
+          </p>
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Short URL</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead className="text-right">Clicks</TableHead>
+                  <TableHead>Last click</TableHead>
+                  <TableHead className="w-[80px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {shortLinks.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell className="font-mono text-xs max-w-[220px]">
+                      <button
+                        type="button"
+                        className="text-left text-primary hover:underline truncate block w-full"
+                        onClick={() => void copy(s.short_url)}
+                        title={s.target_url}
+                      >
+                        {s.short_url.replace(/^https?:\/\//, "")}
+                      </button>
+                    </TableCell>
+                    <TableCell className="text-sm truncate max-w-[140px]">
+                      {s.title || "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold">
+                      {s.click_count.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      {s.last_clicked_at
+                        ? new Date(s.last_clicked_at).toLocaleString()
+                        : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2"
+                        onClick={() => void copy(s.short_url)}
+                      >
+                        <Link2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+        <div className="mt-3 flex justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => dispatch(fetchShortLinks(40))}
+            disabled={isLoadingShortLinks}
+          >
+            {isLoadingShortLinks ? (
+              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+            )}
+            Refresh
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function RealtorBroadcasts() {
@@ -2534,6 +2865,7 @@ export default function RealtorBroadcasts() {
     // Switch to history tab and refresh
     setActiveTab("history");
     dispatch(fetchBroadcasts());
+    dispatch(fetchShortLinks(40));
   };
 
   return (
@@ -2584,7 +2916,7 @@ export default function RealtorBroadcasts() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full max-w-xs grid-cols-2">
+        <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="new" className="flex items-center gap-1.5">
             <Send className="h-3.5 w-3.5" />
             New Broadcast
@@ -2592,6 +2924,10 @@ export default function RealtorBroadcasts() {
           <TabsTrigger value="history" className="flex items-center gap-1.5">
             <RotateCcw className="h-3.5 w-3.5" />
             History
+          </TabsTrigger>
+          <TabsTrigger value="links" className="flex items-center gap-1.5">
+            <Link2 className="h-3.5 w-3.5" />
+            Short links
           </TabsTrigger>
         </TabsList>
 
@@ -2601,6 +2937,10 @@ export default function RealtorBroadcasts() {
 
         <TabsContent value="history" className="mt-6">
           <BroadcastHistory />
+        </TabsContent>
+
+        <TabsContent value="links" className="mt-6">
+          <ShortLinksPanel />
         </TabsContent>
       </Tabs>
     </div>

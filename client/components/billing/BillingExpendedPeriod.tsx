@@ -76,7 +76,7 @@ export function BillingExpendedPeriod({
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <TrendingUp className="h-4 w-4 text-primary" />
-              Expended — last 30 days
+              Expended — current billing period
             </CardTitle>
             <CardDescription>
               {usage.periodStart} → {usage.periodEnd}

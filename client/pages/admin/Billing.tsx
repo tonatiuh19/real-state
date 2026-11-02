@@ -27,6 +27,7 @@ import { BillingUsageMeter } from "@/components/billing/BillingUsageMeter";
 import { BillingBudgetForecast } from "@/components/billing/BillingBudgetForecast";
 import { BillingExpendedPeriod } from "@/components/billing/BillingExpendedPeriod";
 import { StripePlatformSubscription } from "@/components/billing/StripePlatformSubscription";
+import { BillingOverduePayCard } from "@/components/billing/BillingOverduePayCard";
 import { StripeTopUpCheckout } from "@/components/billing/StripeTopUpCheckout";
 import { BILLING_PLAN_DEFAULTS } from "@shared/billing-calculator";
 import {
@@ -91,7 +92,6 @@ const Billing = () => {
     usage,
     expenditure,
     quota,
-    refreshedAt,
     isLoadingUsage,
     error,
   } = useAppSelector((s) => s.billing);
@@ -225,6 +225,8 @@ const Billing = () => {
           }
         />
 
+        <BillingOverduePayCard />
+
         {paymentStatus === "success" ? (
           <div
             role="status"
@@ -278,14 +280,6 @@ const Billing = () => {
                 </Badge>
               ) : null}
             </>
-          ) : null}
-          {usage && showUsageDashboard ? (
-            <span className="text-xs text-muted-foreground">
-              Period {usage.periodStart} → {usage.periodEnd}
-              {refreshedAt
-                ? ` · refreshed ${new Date(refreshedAt).toLocaleString()}`
-                : null}
-            </span>
           ) : null}
           {access?.level && access.level !== "healthy" ? (
             access.level === "subscription_grace" ? (
@@ -587,18 +581,27 @@ const Billing = () => {
                       </CardTitle>
                       <CardDescription>
                         Highest variable cost — counts toward unified SMS/email
-                        quota
+                        quota. Bulk campaigns use the same{" "}
+                        <span className="font-medium">sms_segments</span> meter
+                        and appear as{" "}
+                        <span className="font-medium">Broadcast (Bulk)</span> —
+                        not a separate cheaper unit.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">
-                          SMS segments
+                          Broadcast SMS segments
                         </span>
                         <span className="font-medium tabular-nums">
                           {expenditure.broadcast.smsSegments.toLocaleString()}
                         </span>
                       </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Includes standard and Bulk delivery engines. Monthly
+                        platform fee is unchanged; only segment usage updates
+                        Live quota.
+                      </p>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">
                           Share of SMS usage
@@ -705,7 +708,7 @@ const Billing = () => {
                         Mortgi AI
                       </CardTitle>
                       <CardDescription>
-                        Groq token pool — separate from SMS/voice/email
+                        AI token pool — separate from SMS/voice/email
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="grid gap-4 sm:grid-cols-3 text-sm">

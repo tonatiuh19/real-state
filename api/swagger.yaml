@@ -45,6 +45,10 @@ tags:
     description: Pre-approval letter generation and delivery
   - name: Clients
     description: Client directory (admin view)
+  - name: Calculator Saves
+    description: CRM-linked broker loan/income calculator worksheets
+  - name: CRM
+    description: Per-owner CRM — people view, links, transfers (flag-gated)
   - name: Voice
     description: Browser-based calling via Twilio Voice SDK
   - name: Brokers
@@ -102,6 +106,45 @@ components:
 
   # ─── Reusable Schemas ───────────────────────────────────────────────────────
   schemas:
+    BillingOverduePaymentCard:
+      type: object
+      properties:
+        id: { type: string }
+        brand: { type: string, example: visa }
+        last4: { type: string }
+        exp_month: { type: integer }
+        exp_year: { type: integer }
+        wallet: { type: string, nullable: true, example: apple_pay }
+        is_default: { type: boolean }
+        usable: { type: boolean }
+        unusable_reason: { type: string, nullable: true }
+    BillingOverdueInvoice:
+      type: object
+      properties:
+        invoice_id: { type: string }
+        number: { type: string, nullable: true, example: "QHYJCHRX-0015" }
+        amount_due_usd: { type: number, example: 350 }
+        currency: { type: string, example: usd }
+        failed_at: { type: string, format: date-time }
+        days_overdue: { type: integer }
+        attempt_count: { type: integer }
+        next_payment_attempt: { type: string, format: date-time, nullable: true }
+        hosted_invoice_url: { type: string, nullable: true }
+    BlockedPhoneNumber:
+      type: object
+      properties:
+        id: { type: integer }
+        phone_e164: { type: string, example: "+15628253422" }
+        normalized_phone: { type: string, example: "5628253422" }
+        block_calls: { type: boolean }
+        block_sms: { type: boolean }
+        reason: { type: string, nullable: true }
+        blocked_by_broker_id: { type: integer, nullable: true }
+        blocked_by_name: { type: string, nullable: true }
+        blocked_call_count: { type: integer }
+        blocked_sms_count: { type: integer }
+        last_blocked_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
     SuccessResponse:
       type: object
       properties:
@@ -406,6 +449,31 @@ components:
         linked_person_name: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+
+    BrokerCalculatorSave:
+      type: object
+      properties:
+        id: { type: integer }
+        tenant_id: { type: integer }
+        broker_id: { type: integer }
+        client_id: { type: integer }
+        loan_application_id: { type: integer, nullable: true }
+        kind:
+          type: string
+          enum: [fha, va, conventional, investment, mobile_home, income]
+        title: { type: string }
+        summary_json: { type: object, nullable: true }
+        payload_json: { type: object }
+        borrower_client_ids:
+          type: array
+          items: { type: integer, nullable: true }
+          nullable: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        client_first_name: { type: string, nullable: true }
+        client_last_name: { type: string, nullable: true }
+        application_number: { type: string, nullable: true }
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 paths:
@@ -1560,6 +1628,19 @@ paths:
                 years_employed:
                   type: string
                   nullable: true
+                employer_phone:
+                  type: string
+                  nullable: true
+                  description: Employer phone (max 30 chars)
+                employer_address:
+                  type: string
+                  nullable: true
+                  description: Employer business address (max 500 chars)
+                employment_start_date:
+                  type: string
+                  format: date
+                  nullable: true
+                  description: Employment start date (YYYY-MM-DD)
       responses:
         "200":
           description: Loan details updated
@@ -1577,6 +1658,10 @@ paths:
     get:
       tags: [Loans]
       summary: Export loan as MISMO 3.4 XML
+      description: >
+        Generates a MISMO 3.4 XML file for the loan. By default, no task
+        completion is required. When the tenant setting `mismo_require_all_tasks`
+        is enabled, every task on the loan must be approved first.
       security:
         - BrokerAuth: []
       parameters:
@@ -1591,6 +1676,11 @@ paths:
             application/xml:
               schema:
                 type: string
+        "400":
+          description: Tasks gate blocked export
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ── Pre-Approval ──────────────────────────────────────────────────────────────
   /loans/{loanId}/pre-approval-letter:
@@ -1623,6 +1713,11 @@ paths:
     post:
       tags: [Pre-Approval]
       summary: Create pre-approval letter
+      description: >
+        Creates a pre-approval letter for the loan. By default, no task or
+        document completion is required. When the tenant setting
+        `pre_approval_require_all_tasks` is enabled, every task on the loan must
+        be approved first.
       security:
         - BrokerAuth: []
       parameters:
@@ -1643,6 +1738,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Validation failed or tasks gate blocked creation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     put:
       tags: [Pre-Approval]
       summary: Update pre-approval letter
@@ -1714,7 +1814,11 @@ paths:
     post:
       tags: [Public]
       summary: Submit a loan application from the public wizard
-      description: Creates a client account (if new) and a loan application. No auth required.
+      description: >
+        Creates a client account (if new) and a loan application. No auth required.
+        When `broker_token` resolves to a mortgage banker and/or partner, those brokers
+        receive an in-app notification and an email alert (same pattern as voicemail alerts).
+        The applicant may also receive the Application Received reminder-flow welcome.
       requestBody:
         required: true
         content:
@@ -1817,6 +1921,62 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  /apply/free-analysis:
+    post:
+      tags: [Public]
+      summary: Public Free Analysis via broker share link
+      description: >
+        Same attribution model as the portal wizard share link (`/apply/{slug}`).
+        Accepts multipart PDF + contact fields. New contacts are created with
+        `clients.source=free_analysis`, `income_type=W-2`, and a `draft` loan
+        (pipeline lead). Existing owner-scoped clients are reused without
+        overwriting name; a draft is created only when they have no loans.
+        CRM write commits before PDF parse so the DB pool is not held during
+        analysis. No authentication required.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [broker_token, first_name, last_name, email, pdf]
+              properties:
+                broker_token:
+                  { type: string, description: "Broker slug or public_token" }
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string }
+                language: { type: string, enum: [en, es] }
+                goal: { type: string }
+                email_opt_in: { type: string, description: "true|false" }
+                pdf:
+                  { type: string, format: binary, description: "application/pdf max 4MB" }
+      responses:
+        "200":
+          description: Analysis generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  analysis: { type: object }
+                  client_id: { type: integer }
+                  is_new_lead: { type: boolean }
+                  draft_id: { type: integer, nullable: true }
+                  application_number: { type: string, nullable: true }
+        "400":
+          description: Validation / upload error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Share link not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   # ── Public Broker Info ────────────────────────────────────────────────────────
   /public/broker/{token}:
     get:
@@ -1852,11 +2012,386 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
+  # ── Per-Owner CRM ────────────────────────────────────────────────────────────
+  /crm/config:
+    get:
+      tags: [CRM]
+      summary: Per-owner CRM feature flags for current broker session
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: CRM config (per_owner_crm.activeForBroker when PER_OWNER_CRM_ENABLED=1)
+  /crm/people:
+    get:
+      tags: [CRM]
+      summary: Platform-owner people view (group clients by normalized_phone)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 30 }
+      responses:
+        "200":
+          description: Phone-grouped CRM rows
+        "403":
+          description: Platform owner only
+  /crm/person-groups:
+    post:
+      tags: [CRM]
+      summary: Request identity link for same-phone client rows
+      security:
+        - BrokerAuth: []
+      responses:
+        "201":
+          description: Pending link group created
+  /crm/person-groups/{groupId}/approve:
+    post:
+      tags: [CRM]
+      summary: Admin approve or reject a link group
+      security:
+        - BrokerAuth: []
+  /crm/person-groups/{groupId}/merge:
+    post:
+      tags: [CRM]
+      summary: Platform owner merge group members to survivor client
+      security:
+        - BrokerAuth: []
+  /crm/transfers:
+    post:
+      tags: [CRM]
+      summary: Start client transfer between mortgage bankers
+      security:
+        - BrokerAuth: []
+  /crm/transfers/{jobId}:
+    get:
+      tags: [CRM]
+      summary: Transfer job status and conflicts
+      security:
+        - BrokerAuth: []
+  /crm/transfers/{jobId}/resolve:
+    post:
+      tags: [CRM]
+      summary: Resolve transfer wizard (source owner)
+      security:
+        - BrokerAuth: []
+
   # ── Clients ────────────────────────────────────────────────────────────────────
+
+  /admin/credit-analysis:
+    post:
+      tags: [Free Analysis]
+      summary: Run Free Analysis for a CRM client (PDF upload)
+      description: >
+        Text-based tri-merge PDF credit analysis (SmartCredit / Xactus preferred; IdentityIQ /
+        MyFreeScoreNow / myFICO / generic heuristics). Requires linked client_id.
+        Algorithm-only (no Claude). Optional email to client when email_opt_in=true.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [client_id, pdf]
+              properties:
+                client_id: { type: integer }
+                pdf: { type: string, format: binary }
+                mode: { type: string, enum: [client, agent] }
+                language: { type: string, enum: [en, es] }
+                goal: { type: string }
+                email_opt_in: { type: boolean }
+      responses:
+        "200":
+          description: Analysis created
+        "400":
+          description: Validation / upload error
+        "403":
+          description: Access denied
+    get:
+      tags: [Free Analysis]
+      summary: List Free Analyses for a client
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: client_id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Analysis history
+  /admin/credit-analysis/{id}:
+    get:
+      tags: [Free Analysis]
+      summary: Get one Free Analysis by id
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Analysis detail
+  /portal/credit-analysis:
+    get:
+      tags: [Free Analysis]
+      summary: Client portal — list own analyses
+      security:
+        - ClientAuth: []
+      responses:
+        "200":
+          description: Latest + history
+    post:
+      tags: [Free Analysis]
+      summary: Client portal — upload PDF and run analysis
+      security:
+        - ClientAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [pdf]
+              properties:
+                pdf: { type: string, format: binary }
+                language: { type: string, enum: [en, es] }
+                goal: { type: string }
+                email_opt_in: { type: boolean }
+      responses:
+        "200":
+          description: Analysis created
+  /go/free-score:
+    get:
+      tags: [Free Analysis]
+      summary: Soft-pull affiliate redirect (Encore Mortgage branding)
+      description: Redirects to ENCORE_FREE_SCORE_URL (MyFreeScoreNow-style snapshot link). No bureau API.
+      responses:
+        "302":
+          description: Redirect
+
+  /calculator-saves:
+    get:
+      tags: [Calculator Saves]
+      summary: List broker calculator saves
+      description: >
+        Platform owners see all tenant saves. Admins/brokers see only their own broker_id saves.
+        Supports server-side filters (q, kind, client_id, loan_id) and pagination.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 25 }
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: kind
+          schema:
+            type: string
+            enum: [fha, va, conventional, investment, mobile_home, income, all]
+        - in: query
+          name: client_id
+          schema: { type: integer }
+        - in: query
+          name: loan_id
+          schema: { type: integer }
+        - in: query
+          name: broker_id
+          schema: { type: integer }
+          description: Platform owner only — filter by creator broker
+      responses:
+        "200":
+          description: Paginated calculator saves
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  saves:
+                    type: array
+                    items: { $ref: "#/components/schemas/BrokerCalculatorSave" }
+                  pagination: { $ref: "#/components/schemas/PaginationInfo" }
+    post:
+      tags: [Calculator Saves]
+      summary: Create a calculator save (client_id required)
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id, kind, title, payload_json]
+              properties:
+                client_id: { type: integer }
+                loan_application_id: { type: integer, nullable: true }
+                kind:
+                  type: string
+                  enum: [fha, va, conventional, investment, mobile_home, income]
+                title: { type: string }
+                summary_json: { type: object, nullable: true }
+                payload_json: { type: object }
+                borrower_client_ids:
+                  type: array
+                  items: { type: integer, nullable: true }
+                  nullable: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  save: { $ref: "#/components/schemas/BrokerCalculatorSave" }
+
+  /calculator-saves/{id}:
+    get:
+      tags: [Calculator Saves]
+      summary: Get one calculator save
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Save detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  save: { $ref: "#/components/schemas/BrokerCalculatorSave" }
+    put:
+      tags: [Calculator Saves]
+      summary: Update a calculator save
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_id: { type: integer }
+                loan_application_id: { type: integer, nullable: true }
+                kind:
+                  type: string
+                  enum: [fha, va, conventional, investment, mobile_home, income]
+                title: { type: string }
+                summary_json: { type: object, nullable: true }
+                payload_json: { type: object }
+                borrower_client_ids:
+                  type: array
+                  items: { type: integer, nullable: true }
+                  nullable: true
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Calculator Saves]
+      summary: Delete a calculator save
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+
+  /calculator-saves/{id}/apply-note:
+    post:
+      tags: [Calculator Saves]
+      summary: Append calculator snapshot to loan notes
+      description: >
+        Appends a formatted snapshot to loan_applications.notes only.
+        Never overwrites loan income fields.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                loan_application_id:
+                  type: integer
+                  description: Required when the save has no loan_application_id
+      responses:
+        "200":
+          description: Notes updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  loan_application_id: { type: integer }
+                  notes: { type: string }
+                  message: { type: string }
+
+  /clients/{clientId}/open-loans:
+    get:
+      tags: [Calculator Saves]
+      summary: Open loans for calculator client match
+      description: >
+        Returns non-draft, non-funded loans for a client (application_number, property_value)
+        for calculator prefill / loan select.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: clientId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Open loans list
+
   /clients:
     get:
       tags: [Clients]
       summary: List all clients
+      description: >
+        Legacy mode lists clients via loan co-ownership paths. When PER_OWNER_CRM_ENABLED
+        is set for the deployment, non–platform-owners see only assigned_broker_id = me
+        with list_visibility = active.
       security:
         - BrokerAuth: []
       parameters:
@@ -2532,6 +3067,8 @@ paths:
         **Mortgage bankers** (`admin`) and **platform owners** may create brokers.
         Mortgage bankers always create **Partner** realtors owned by themselves (`created_by_broker_id` forced to session broker).
         Platform owners may set `role: "broker"` (Partner) or `role: "admin"` (Mortgage Banker).
+        Soft-deleted partners with the same email under the owning MB are **reactivated** instead of failing UNIQUE.
+        Deleting a broker frees email/phone so the address can be re-added later.
       security:
         - BrokerAuth: []
       requestBody:
@@ -2550,6 +3087,16 @@ paths:
                   type: string
                   enum: [admin, broker]
                 license_number: { type: string }
+                specializations:
+                  type: array
+                  items: { type: string }
+                created_by_broker_id:
+                  type: integer
+                  nullable: true
+                  description: >
+                    Platform owner only — assign Partner to this Mortgage Banker
+                    or platform owner at create time. Accepts role admin or
+                    platform_owner.
       responses:
         "201":
           description: Broker created
@@ -3182,6 +3729,70 @@ paths:
                   - type: object
                     properties:
                       documents: { type: array, items: { type: object } }
+
+  /documents/{documentId}/download:
+    get:
+      tags: [Documents]
+      summary: Download a task document with semantic filename (LA#_ID / Seguro / Bank_Statement)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - name: documentId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: File attachment stream
+        "404":
+          description: Document not found
+
+  /documents/bulk-download:
+    post:
+      tags: [Documents]
+      summary: Download selected documents (or all for a loan) as a zip
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                document_ids:
+                  type: array
+                  items: { type: integer }
+                application_id: { type: integer }
+      responses:
+        "200":
+          description: ZIP attachment
+        "400":
+          description: No documents selected, or more than 100 documents requested
+
+  /loans/{applicationId}/refresh-document-checklist:
+    post:
+      tags: [Documents]
+      summary: Ensure ID/SSN/Bank checklist tasks exist; multi-slot template fields apply live
+      security:
+        - BrokerAuth: []
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Checklist refresh result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      created_tasks: { type: integer }
+                      message: { type: string }
 
   # ── Client Portal ─────────────────────────────────────────────────────────────
   /client/applications:
@@ -4035,6 +4646,12 @@ paths:
           name: include_broadcast
           schema: { type: boolean, default: false }
           description: Include broadcast-generated threads (persisted `broadcast_hidden` tag and legacy `broadcast-*` ids). Defaults to false for normal inbox UX.
+        - in: query
+          name: inbox_scope
+          schema: { type: string, enum: [mine, shared, all] }
+          description: >
+            Per-owner CRM (PER_OWNER_CRM_ENABLED env). mine = broker CRM scope; shared = unclaimed company-number queue.
+            Ignored when PER_OWNER_CRM_ENABLED is unset/false.
       responses:
         "200":
           description: Threads
@@ -4234,6 +4851,113 @@ paths:
         "503":
           description: Real-time service not configured
 
+  /conversations/{conversationId}/claim:
+    post:
+      tags: [Conversations]
+      summary: Claim shared-queue thread (per-owner CRM flag-gated)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+      responses:
+        "200":
+          description: Thread claimed and client row created
+        "409":
+          description: Not in shared queue or phone conflict on your list
+
+  /blocked-numbers:
+    get:
+      tags: [Voice]
+      summary: List blocked phone numbers (tenant-wide)
+      description: >
+        Admin, superadmin and platform_owner only. Inbound calls from a blocked
+        number are rejected before ringing (TwiML Reject busy); inbound SMS are
+        dropped without a conversation, notification or email. STOP/START
+        keywords are still honoured. Matching uses the last 10 digits.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Blocked numbers, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  blocked_numbers:
+                    type: array
+                    items: { $ref: "#/components/schemas/BlockedPhoneNumber" }
+        "403":
+          description: Admin access required
+    post:
+      tags: [Voice]
+      summary: Block a phone number for inbound calls and/or SMS
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                  description: Any format; 10 to 15 digits. 10-digit numbers are treated as US (+1).
+                  example: "+15628253422"
+                reason: { type: string, nullable: true, maxLength: 255 }
+                block_calls: { type: boolean, default: true }
+                block_sms: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Number blocked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  blocked_number: { $ref: "#/components/schemas/BlockedPhoneNumber" }
+        "400":
+          description: Invalid number, neither channel selected, or the number is one of your own lines
+        "403":
+          description: Admin access required
+        "409":
+          description: Number already blocked
+
+  /blocked-numbers/{id}:
+    delete:
+      tags: [Voice]
+      summary: Unblock a phone number
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Number unblocked
+        "403":
+          description: Admin access required
+        "404":
+          description: Blocked number not found
+
   /conversations/{conversationId}/save-contact:
     post:
       tags: [Conversations]
@@ -4302,6 +5026,8 @@ paths:
     get:
       tags: [Conversations]
       summary: List configured conversation mailboxes
+      description: |
+        Brokers see mailboxes assigned to them. Platform owners see all tenant mailboxes.
       security:
         - BrokerAuth: []
       responses:
@@ -4911,6 +5637,11 @@ paths:
                 properties:
                   success: { type: boolean, example: false }
                   message: { type: string }
+        "403":
+          description: Cannot deactivate the last Application Received welcome flow (non-platform-owner)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     delete:
       tags: [Reminder Flows]
       summary: Delete a reminder flow
@@ -4950,6 +5681,11 @@ paths:
                   - type: object
                     properties:
                       is_active: { type: boolean }
+        "403":
+          description: Cannot deactivate the last Application Received welcome flow (non-platform-owner)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /reminder-flow-executions:
     get:
@@ -5663,6 +6399,62 @@ paths:
           description: Invalid slug format
         "409":
           description: Slug already taken
+
+  /broker/notification-preferences:
+    get:
+      tags: [Broker]
+      summary: Get own email notification preferences
+      description: >
+        Returns email alert toggles for the authenticated broker.
+        Missing DB row is treated as all ON (legacy behavior). In-app bell is always on.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Preferences (with defaults applied)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  preferences:
+                    type: object
+                    properties:
+                      email_new_application: { type: boolean }
+                      email_voicemail: { type: boolean }
+                      email_inbound_sms: { type: boolean }
+                      email_inbound_email: { type: boolean }
+                      email_scheduler_booking: { type: boolean }
+                      email_reminder_flow_broker: { type: boolean }
+                      secondary_email: { type: string, nullable: true }
+                      account_email: { type: string }
+                      account_email_sendable: { type: boolean }
+    put:
+      tags: [Broker]
+      summary: Update own email notification preferences
+      description: Partial update allowed. Only the authenticated broker can change their prefs.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email_new_application: { type: boolean }
+                email_voicemail: { type: boolean }
+                email_inbound_sms: { type: boolean }
+                email_inbound_email: { type: boolean }
+                email_scheduler_booking: { type: boolean }
+                email_reminder_flow_broker: { type: boolean }
+                secondary_email: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Updated preferences
+        "400":
+          description: Validation error
 
   /calendar/events:
     get:
@@ -6453,6 +7245,62 @@ paths:
         "200":
           description: Notification deleted
 
+  # ─── Short links (portal.encoremortgage.org/l/:code) ───────────────────────
+  /short-links:
+    get:
+      tags: [Broadcasts]
+      summary: List recent short links for the signed-in broker (click stats)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Short link list
+    post:
+      tags: [Broadcasts]
+      summary: Create a first-party short link (portal.encoremortgage.org/l/…). Platform owner only; target host must be Encore (or CLIENT_URL / MMS_PUBLIC_URL).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_url]
+              properties:
+                target_url: { type: string }
+                title: { type: string }
+      responses:
+        "200":
+          description: Created short link
+        "400":
+          description: Invalid or disallowed target_url
+        "403":
+          description: Platform owner required
+  /short-links/upload:
+    post:
+      tags: [Broadcasts]
+      summary: Upload PDF/image, host it, and return a short link (or durable asset when create_short_link=false). Platform owner only.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                title: { type: string }
+                create_short_link:
+                  type: string
+                  description: Set to "false" for durable MMS asset without short link
+      responses:
+        "200":
+          description: Hosted asset + short URL (or asset-only)
+        "403":
+          description: Platform owner required
+
   # ─── Realtor Broadcast Center ─────────────────────────────────────────────
   /realtor-broadcasts/preview:
     post:
@@ -6605,7 +7453,22 @@ paths:
                 type: object
                 properties:
                   success: { type: boolean }
-                  broadcast: { type: object }
+                  broadcast: {
+                    type: object
+                    description: Broadcast detail including optional Bulk Messaging fields
+                    properties:
+                      id: { type: integer }
+                      title: { type: string }
+                      channel: { type: string, enum: [email, sms, both] }
+                      sms_engine: { type: string, enum: [messages, bulk] }
+                      twilio_operation_ids:
+                        type: array
+                        items: { type: string }
+                        nullable: true
+                      bulk_stats: { type: object, nullable: true }
+                      bulk_progress: { type: object, nullable: true }
+                      status: { type: string }
+                  }
                   quota:
                     $ref: "#/components/schemas/UnifiedQuotaSummary"
     patch:
@@ -6893,9 +7756,19 @@ paths:
                           status: { type: string }
                           periodStart: { type: string, format: date }
                           periodEnd: { type: string, format: date, nullable: true }
+                      billingPeriodAnchor:
+                        type: string
+                        enum: [stripe, calendar]
+                        description: Stripe subscription anchor vs calendar month
+                      quotaRenewsOn:
+                        type: string
+                        format: date
+                        nullable: true
+                        description: Date included quotas reset (Stripe current_period_end)
                       stripeEnabled: { type: boolean }
                       stripePublishableKey: { type: string, nullable: true }
                       stripeTestMode: { type: boolean }
+                      stripeWebhookConfigured: { type: boolean }
                       stripePlatformSubscriptionConfigured: { type: boolean }
                       stripeSubscriptionLinked: { type: boolean }
                       stripeSubscriptionActive: { type: boolean }
@@ -6904,7 +7777,7 @@ paths:
                       stripeCustomerId: { type: string, nullable: true }
                       billingInternalEconomicsEnabled:
                         type: boolean
-                        description: Dev/finance only — when false, COGS/margin/infra are stripped from API and UI
+                        description: Local dev only (NODE_ENV=development) — when false, COGS/margin/infra are stripped from API and UI
         "403":
           description: Not platform_owner
 
@@ -7204,6 +8077,122 @@ paths:
         "403":
           description: Not platform_owner
 
+  /billing/overdue:
+    get:
+      tags: [Billing]
+      summary: Unpaid platform renewal invoice (platform owner only)
+      description: >
+        Reads Stripe directly (open, already-attempted renewal invoices with a
+        balance; ignores never-paid checkout attempts). Cached 2 minutes and
+        cleared on any invoice webhook. Drives the overdue badge, mobile
+        interstitial and Billing page pay card.
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: query
+          name: refresh
+          schema: { type: string, enum: ["1", "true"] }
+          description: Bypass the cache (e.g. right after paying)
+      responses:
+        "200":
+          description: Overdue invoice, or null when nothing is owed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  overdue:
+                    allOf:
+                      - $ref: "#/components/schemas/BillingOverdueInvoice"
+                    nullable: true
+        "403":
+          description: Only platform owners can access billing
+        "502":
+          description: Could not reach Stripe
+
+  /billing/overdue/payment-options:
+    get:
+      tags: [Billing]
+      summary: Overdue renewal + cards on file for paying it in-app (platform owner only)
+      description: >
+        Always fresh from Stripe. Each card is marked usable or not with a reason:
+        brand the account can't charge (e.g. Amex on the Mexico-registered account;
+        see STRIPE_SUPPORTED_CARD_BRANDS), expired, or hard-declined by the issuer on
+        the overdue invoice (do_not_try_again / invalid_account / lost_card / …).
+        Usable cards first, then the default.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Overdue invoice (or null) and cards
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  overdue:
+                    allOf:
+                      - $ref: "#/components/schemas/BillingOverdueInvoice"
+                    nullable: true
+                  cards:
+                    type: array
+                    items: { $ref: "#/components/schemas/BillingOverduePaymentCard" }
+                  supported_brands:
+                    type: array
+                    items: { type: string }
+                    example: [visa, mastercard, carnet]
+        "403":
+          description: Only platform owners can access billing
+        "502":
+          description: Could not reach Stripe
+
+  /billing/overdue/pay:
+    post:
+      tags: [Billing]
+      summary: Pay the overdue renewal invoice in-app with a card on file (platform owner only)
+      description: >
+        Charges the invoice on-session (invoices.pay). On success the card becomes
+        the default on the customer and on every live subscription, and the local
+        subscription row is re-synced. If the bank requires 3-D Secure, returns
+        requires_action + client_secret: finish with stripe.handleNextAction, then
+        call again with the same body (the server sees the invoice paid and finalizes).
+        Idempotent: calling again after payment returns paid without a second charge.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invoice_id, payment_method_id]
+              properties:
+                invoice_id: { type: string }
+                payment_method_id: { type: string }
+      responses:
+        "200":
+          description: Paid, or bank verification required
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  paid: { type: boolean }
+                  invoice_id: { type: string }
+                  requires_action: { type: boolean }
+                  client_secret: { type: string }
+        "400":
+          description: Invalid request (invoice not this customer's, not payable, card not on file)
+        "402":
+          description: Declined (bank decline message, or card brand not accepted)
+        "403":
+          description: Only platform owners can access billing
+        "503":
+          description: Stripe not configured / payment unavailable
+
   /billing/stripe/config:
     get:
       tags: [Billing]
@@ -7383,6 +8372,18 @@ paths:
                   subscription_id: { type: string }
                   stripe_status: { type: string }
                   already_active: { type: boolean }
+        "409":
+          description: >
+            A renewal invoice is unpaid. No new subscription is created; pay the
+            returned overdue invoice instead.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: false }
+                  error: { type: string }
+                  overdue: { $ref: "#/components/schemas/BillingOverdueInvoice" }
         "503":
           description: Stripe or STRIPE_PLATFORM_PRICE_ID not configured
 
@@ -7473,7 +8474,13 @@ paths:
                 setup_intent_id: { type: string }
       responses:
         "200":
-          description: Payment method saved and set as default
+          description: >
+            Payment method saved and set as default on the customer and on every
+            live Stripe subscription (not only the locally tracked one).
+        "422":
+          description: >
+            Card brand the account can't charge (e.g. Amex) — not set as default.
+            Body includes unsupported_brand.
 
   /billing/stripe/portal:
     post:
@@ -7520,7 +8527,7 @@ paths:
   /cron/process-scheduled-broadcasts:
     get:
       tags: [Cron]
-      summary: Process due scheduled broadcasts (cron-protected endpoint)
+      summary: Process due scheduled broadcasts, poll Bulk Operations, and resume stale in-flight sends (cron-protected endpoint)
       parameters:
         - in: query
           name: secret
@@ -7528,7 +8535,7 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Number of broadcasts fired
+          description: Number of broadcasts fired, stale sends resumed, and Bulk ops polled
           content:
             application/json:
               schema:
@@ -7536,3 +8543,5 @@ paths:
                 properties:
                   success: { type: boolean }
                   fired: { type: integer }
+                  resumedStale: { type: integer }
+                  bulkPolled: { type: integer }

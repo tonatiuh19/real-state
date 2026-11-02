@@ -262,3 +262,29 @@
   border: none !important;
   border-radius: 0;
 }
+
+/* Loan Calculator suite — print / Save as PDF */
+@media print {
+  body.loan-calc-suite-active aside,
+  body.loan-calc-suite-active nav,
+  body.loan-calc-suite-active header,
+  body.loan-calc-suite-active .print\\:hidden {
+    display: none !important;
+  }
+
+  body.loan-calc-suite-active .loan-calc-suite {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+
+  body.loan-calc-suite-active .loan-calc-print-root {
+    display: block !important;
+  }
+
+  /* Keep results column printable (AdminLayout rail stays hidden) */
+  body.loan-calc-suite-active .loan-calc-print-root aside {
+    display: block !important;
+    break-before: page;
+  }
+}

@@ -1317,7 +1317,7 @@ export default function BrokerDetailPanel({
                             <Badge
                               variant={isPartner ? "secondary" : "default"}
                             >
-                              {isPartner ? "Partner" : "Mortgage Banker"}
+                              {isPartner ? "Realtor" : "Mortgage Banker"}
                             </Badge>
                           </div>
                           <div>

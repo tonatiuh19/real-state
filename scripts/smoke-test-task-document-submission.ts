@@ -198,17 +198,41 @@ async function simulateClientSubmit(
   if (actualStatus === "pending_approval") {
     const templateId = tasks[0].template_id;
     if (templateId) {
-      const [ff] = await conn.query<RowDataPacket[]>(
-        `SELECT COUNT(*) AS cnt FROM task_form_fields
+      const [requiredFileFields] = await conn.query<RowDataPacket[]>(
+        `SELECT id, field_label FROM task_form_fields
          WHERE task_template_id = ?
-           AND field_type IN ('file_pdf','file_image','file_upload')`,
+           AND field_type IN ('file_pdf','file_image','file_upload')
+           AND is_required = 1`,
         [templateId],
       );
-      const requiresDocuments = Number(ff[0]?.cnt ?? 0) > 0;
-      if (requiresDocuments) {
-        const dc = await docCount(conn, taskId);
-        if (dc === 0)
-          return { ok: false, status: 400, reason: "no documents uploaded" };
+      if (requiredFileFields.length > 0) {
+        const [uploadedFieldRows] = await conn.query<RowDataPacket[]>(
+          `SELECT DISTINCT field_id FROM task_documents
+           WHERE task_id = ? AND field_id IS NOT NULL`,
+          [taskId],
+        );
+        const uploadedFieldIds = new Set(
+          uploadedFieldRows.map((r) => Number(r.field_id)),
+        );
+        const totalDocs = await docCount(conn, taskId);
+        const missingRequired = requiredFileFields.filter(
+          (f) => !uploadedFieldIds.has(Number(f.id)),
+        );
+        if (missingRequired.length > 0) {
+          const allHaveFieldIds = uploadedFieldIds.size > 0;
+          const enoughLegacyDocs =
+            !allHaveFieldIds && totalDocs >= requiredFileFields.length;
+          if (!enoughLegacyDocs) {
+            return {
+              ok: false,
+              status: 400,
+              reason:
+                totalDocs === 0
+                  ? "no documents uploaded"
+                  : `missing required: ${missingRequired.map((f) => f.field_label).join(", ")}`,
+            };
+          }
+        }
       }
     }
   }
@@ -227,6 +251,7 @@ async function simulateClientUpload(
   taskId: number,
   clientId: number,
   documentType: "pdf" | "image",
+  fieldId: number | null = null,
 ): Promise<{ ok: boolean; status?: number; reason?: string }> {
   const [own] = await conn.query<RowDataPacket[]>(
     `SELECT t.id FROM tasks t
@@ -240,9 +265,10 @@ async function simulateClientUpload(
   await conn.query<ResultSetHeader>(
     `INSERT INTO task_documents
        (task_id, field_id, document_type, filename, original_filename, file_path, file_size, uploaded_by_user_id)
-     VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       taskId,
+      fieldId,
       documentType,
       `smoke_${Date.now()}.${documentType === "pdf" ? "pdf" : "jpg"}`,
       `original.${documentType === "pdf" ? "pdf" : "jpg"}`,
@@ -358,6 +384,57 @@ async function runTests(conn: Connection) {
   const r4 = await simulateClientSubmit(conn, task4, clientA, "completed");
   if (r4.ok) pass("guard: multi-document task submits fine");
   else fail("guard: multi-doc submission", JSON.stringify(r4));
+
+  // ── 4b. Two required file fields (bank Month 1+2) — one upload BLOCKED ──
+  const [bankTplIns] = await conn.query<ResultSetHeader>(
+    `INSERT INTO task_templates
+       (tenant_id, title, description, task_type, priority, created_by_broker_id, requires_documents, has_custom_form)
+     VALUES (?, ?, 'smoke bank', 'document_verification', 'high', ?, 1, 1)`,
+    [TENANT_ID, `${runId} BankTpl`, broker],
+  );
+  const bankTplId = bankTplIns.insertId;
+  const [m1] = await conn.query<ResultSetHeader>(
+    `INSERT INTO task_form_fields
+       (task_template_id, field_name, field_label, field_type, is_required, order_index)
+     VALUES (?, 'bank_statement_month_1', 'Bank Statement – Month 1', 'file_pdf', 1, 0)`,
+    [bankTplId],
+  );
+  const [m2] = await conn.query<ResultSetHeader>(
+    `INSERT INTO task_form_fields
+       (task_template_id, field_name, field_label, field_type, is_required, order_index)
+     VALUES (?, 'bank_statement_month_2', 'Bank Statement – Month 2', 'file_pdf', 1, 1)`,
+    [bankTplId],
+  );
+  const bankTask = await insertTask(conn, {
+    templateId: bankTplId,
+    applicationId: loanA,
+    title: `${runId} Bank Task`,
+  });
+  await simulateClientUpload(conn, bankTask, clientA, "pdf", m1.insertId);
+  const rBank1 = await simulateClientSubmit(
+    conn,
+    bankTask,
+    clientA,
+    "completed",
+  );
+  if (!rBank1.ok && rBank1.status === 400)
+    pass("guard: bank task with only Month 1 is BLOCKED (Month 2 required)");
+  else
+    fail(
+      "guard: bank Month1-only should be blocked",
+      JSON.stringify(rBank1),
+    );
+
+  await simulateClientUpload(conn, bankTask, clientA, "pdf", m2.insertId);
+  const rBank2 = await simulateClientSubmit(
+    conn,
+    bankTask,
+    clientA,
+    "completed",
+  );
+  if (rBank2.ok)
+    pass("guard: bank task with Month 1 + Month 2 can be submitted");
+  else fail("guard: bank Month1+2 submission", JSON.stringify(rBank2));
 
   // ── 5. Non-document task (text-only) submits with 0 docs ──
   const task5 = await insertTask(conn, {

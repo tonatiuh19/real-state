@@ -16,6 +16,7 @@ import Documents from "./pages/admin/Documents";
 import Settings from "./pages/admin/Settings";
 import CommunicationTemplates from "./pages/admin/CommunicationTemplates";
 import Conversations from "./pages/admin/Conversations";
+import CrmPeople from "./pages/admin/CrmPeople";
 import Reports from "./pages/admin/Reports";
 // import Compliance from "./pages/admin/Compliance";
 // import Notifications from "./pages/admin/Notifications";
@@ -29,6 +30,8 @@ import ClientTasks from "./pages/client/Tasks";
 import ClientProfile from "./pages/client/Profile";
 import ClientDocuments from "./pages/client/Documents";
 import ClientCalculator from "./pages/client/Calculator";
+import PortalFreeAnalysis from "./pages/client/PortalFreeAnalysis";
+import PublicFreeAnalysis from "./pages/client/PublicFreeAnalysis";
 import FAQ from "./pages/FAQ";
 import LoanOptions from "./pages/LoanOptions";
 import About from "./pages/About";
@@ -38,6 +41,8 @@ import SchedulerReschedule from "./pages/SchedulerReschedule";
 import AdminScheduler from "./pages/admin/Scheduler";
 import AdminCalendar from "./pages/admin/Calendar";
 import IncomeCalculator from "./pages/admin/IncomeCalculator";
+import LoanCalculator from "./pages/admin/LoanCalculator";
+import FreeAnalysis from "./pages/admin/FreeAnalysis";
 import Email from "./pages/admin/Email";
 import Mortgi from "./pages/admin/Mortgi";
 import RealtorBroadcasts from "./pages/admin/RealtorBroadcasts";
@@ -99,6 +104,14 @@ const AppRoutes = () => (
       element={
         <ClientLayout>
           <ClientCalculator />
+        </ClientLayout>
+      }
+    />
+    <Route
+      path="/portal/free-analysis"
+      element={
+        <ClientLayout>
+          <PortalFreeAnalysis />
         </ClientLayout>
       }
     />
@@ -169,6 +182,15 @@ const AppRoutes = () => (
         </AppLayout>
       }
     />
+    {/* Broker share link – Free Analysis (public, creates draft lead for new contacts) */}
+    <Route
+      path="/apply/:brokerToken/free-analysis"
+      element={
+        <AppLayout showHeader={false} showFooter={false}>
+          <PublicFreeAnalysis />
+        </AppLayout>
+      }
+    />
     {/* Broker share link – unique link per broker, pre-loads broker profile */}
     <Route
       path="/apply/:brokerToken"
@@ -201,6 +223,14 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <Clients />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/crm/people"
+      element={
+        <AdminLayout>
+          <CrmPeople />
         </AdminLayout>
       }
     />
@@ -356,6 +386,32 @@ const AppRoutes = () => (
       element={
         <AdminLayout>
           <AdminCalendar />
+        </AdminLayout>
+      }
+    />
+
+    <Route
+      path="/admin/loan-calculator"
+      element={
+        <AdminLayout>
+          <LoanCalculator />
+        </AdminLayout>
+      }
+    />
+    <Route
+      path="/admin/loan-calculator/:kind"
+      element={
+        <AdminLayout>
+          <LoanCalculator />
+        </AdminLayout>
+      }
+    />
+
+    <Route
+      path="/admin/free-analysis"
+      element={
+        <AdminLayout>
+          <FreeAnalysis />
         </AdminLayout>
       }
     />

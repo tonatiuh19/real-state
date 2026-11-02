@@ -145,36 +145,38 @@ export function DataGrid<T>({
   noBleeding = false,
 }: DataGridProps<T>) {
   // ── Pagination footer ──────────────────────────────────────────────────────
-  const paginationFooter = pagination && pagination.totalPages > 1 && (
-    <div className="flex items-center justify-between mt-4 px-2 text-sm text-muted-foreground">
+  const paginationFooter = pagination && pagination.total > 0 && (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-4 px-2 text-sm text-muted-foreground">
       <span>
         Showing {(pagination.page - 1) * pagination.limit + 1}–
         {Math.min(pagination.page * pagination.limit, pagination.total)} of{" "}
         {pagination.total}
       </span>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPageChange(pagination.page - 1)}
-          disabled={pagination.page <= 1}
-          aria-label="Previous page"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <span className="text-xs">
-          Page {pagination.page} of {pagination.totalPages}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPageChange(pagination.page + 1)}
-          disabled={pagination.page >= pagination.totalPages}
-          aria-label="Next page"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPageChange(pagination.page - 1)}
+            disabled={pagination.page <= 1}
+            aria-label="Previous page"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <span className="text-xs">
+            Page {pagination.page} of {pagination.totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPageChange(pagination.page + 1)}
+            disabled={pagination.page >= pagination.totalPages}
+            aria-label="Next page"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 

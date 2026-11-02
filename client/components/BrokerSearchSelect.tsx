@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 function brokerRoleLabel(role: Broker["role"]): string {
   if (role === "platform_owner") return "Platform Owner";
   if (role === "admin") return "Mortgage Banker";
-  return "Partner";
+  return "Realtor";
 }
 
 export interface BrokerSearchSelectProps {
@@ -94,7 +94,7 @@ export function BrokerSearchSelect({
           : placeholder);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -113,8 +113,9 @@ export function BrokerSearchSelect({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[--radix-popover-trigger-width] p-0"
+        className="z-[100] w-[--radix-popover-trigger-width] p-0"
         sideOffset={4}
+        onWheel={(e) => e.stopPropagation()}
       >
         <Command shouldFilter={false}>
           <CommandInput
@@ -123,7 +124,10 @@ export function BrokerSearchSelect({
             onValueChange={setSearch}
             className="h-9"
           />
-          <CommandList className="max-h-72">
+          <CommandList
+            className="max-h-72 overscroll-contain"
+            onWheel={(e) => e.stopPropagation()}
+          >
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />

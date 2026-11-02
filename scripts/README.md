@@ -1,3 +1,40 @@
+# Scripts
+
+## Production deploy (`npm run deploy:prod`)
+
+Same gate pattern as optimum-credit, plus mortgage-domain smokes:
+
+1. **`check:api-inline`** — refuse relative runtime imports from `api/index.ts` (Vercel `ERR_MODULE_NOT_FOUND`)
+2. **`validate:all`** — typecheck, unit tests, Application Received preflight, loan/realtor/pipeline/CRM/docs/billing/broadcast/comms smokes, build
+3. Prompt / CLI version → `npx vercel --prod`
+4. Short-lived TiDB write of tenant-scoped `app_version` (connection not held across Vercel)
+
+```bash
+npm run deploy:prod
+# or non-interactive:
+npm run deploy:prod -- 1.2.3
+# emergency only:
+npm run deploy:prod -- --skip-checks 1.2.3
+# or SKIP_DEPLOY_CHECKS=1
+```
+
+## Validation
+
+| Script | Purpose |
+|--------|---------|
+| `npm run check:api-inline` | Vercel monolith import gate |
+| `npm run test:integration` | Live HTTP via createServer + supertest (TiDB) |
+| `npm run test:cleanup-fixtures` | Purge leftover @example.test fixtures |
+| `npm run validate:broadcast-short-links` | Short-link helpers + api/vercel drift gate |
+| `npm run validate:all` | Full pre-deploy suite (also run by deploy) |
+| `npm run validate:per-owner-crm-all` | CRM phases + deep + audit + unit |
+| `npm run validate:crm-docs-edge` | Cross-owner email/realtor + doc slots for all MBs |
+| `npm run validate:task-documents` | Upload/submit guards incl. bank Month 1+2 |
+
+CI (`.github/workflows/ci.yml`) runs api-inline + typecheck + unit specs (no live TiDB).
+
+---
+
 # Sync from partner repo
 
 Pull **new** shared product files from the other client repo (Encore Mortgage / real-state) without overwriting anything in this repo.
@@ -79,7 +116,16 @@ npx tsx scripts/backfill-application-received-flows.ts --execute
 # Edge-case smoke tests (synthetic data, rolled back)
 npm run validate:application-received-automation
 
+# Production preflight (read-only — fails if Flow #3 inactive or misconfigured)
+npm run preflight:application-received
+
 # Task document upload + submission guard, ownership, reopen migration (synthetic, rolled back)
 npm run validate:task-documents
+
+# Per-owner CRM Phase 0 foundation (tables, columns, flags OFF — synthetic, rolled back)
+npm run validate:per-owner-crm-phase0
+
+# Per-owner CRM Phase 1 per-owner phone UNIQUE (synthetic, rolled back)
+npm run validate:per-owner-crm-phase1
 ```
 

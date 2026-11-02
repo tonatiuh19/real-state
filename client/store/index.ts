@@ -34,6 +34,11 @@ import mortgiReducer from "./slices/mortgiSlice";
 import realtorBroadcastsReducer from "./slices/realtorBroadcastSlice";
 import billingReducer from "./slices/billingSlice";
 import bulkImportReducer from "./slices/bulkImportSlice";
+import crmReducer from "./slices/crmSlice";
+import brokerNotificationPrefsReducer from "./slices/brokerNotificationPrefsSlice";
+import calculatorSavesReducer from "./slices/calculatorSavesSlice";
+import creditAnalysisReducer from "./slices/creditAnalysisSlice";
+import blockedNumbersReducer from "./slices/blockedNumbersSlice";
 
 export const store = configureStore({
   reducer: {
@@ -70,6 +75,11 @@ export const store = configureStore({
     realtorBroadcasts: realtorBroadcastsReducer,
     billing: billingReducer,
     bulkImport: bulkImportReducer,
+    crm: crmReducer,
+    brokerNotificationPrefs: brokerNotificationPrefsReducer,
+    calculatorSaves: calculatorSavesReducer,
+    creditAnalysis: creditAnalysisReducer,
+    blockedNumbers: blockedNumbersReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

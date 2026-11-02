@@ -399,7 +399,7 @@ export function MortgiWidget({ userType }: MortgiWidgetProps) {
             whileHover={{ x: -6 }}
             whileTap={{ scale: 0.97 }}
             onClick={() => dispatch(toggleChat())}
-            className="fixed right-0 top-1/2 -translate-y-1/2 z-[60] flex flex-col items-center gap-2 bg-gradient-to-b from-rose-600 to-red-600 px-2 pt-4 pb-3 rounded-l-2xl shadow-xl cursor-pointer select-none"
+            className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center gap-2 bg-gradient-to-b from-rose-600 to-red-600 px-2 pt-4 pb-3 rounded-l-2xl shadow-xl cursor-pointer select-none"
             aria-label="Open Mortgi AI assistant"
           >
             {messages.length > 0 && (

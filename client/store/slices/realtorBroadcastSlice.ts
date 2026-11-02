@@ -25,6 +25,10 @@ import type {
   GetSavedSegmentsResponse,
   ResendFailedResponse,
   ResendPendingResponse,
+  GetShortLinksResponse,
+  ShortLinkRow,
+  CreateShortLinkResponse,
+  UploadShortLinkAssetResponse,
 } from "@shared/api";
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -39,11 +43,13 @@ interface RealtorBroadcastState {
   latestDraft: RealtorBroadcast | null;
   savedSegments: BroadcastSavedSegment[];
   quota: UnifiedQuotaSummary | null;
+  shortLinks: ShortLinkRow[];
   isLoading: boolean;
   isSending: boolean;
   isPreviewing: boolean;
   isResending: boolean;
   isExporting: boolean;
+  isLoadingShortLinks: boolean;
   error: string | null;
 }
 
@@ -57,11 +63,13 @@ const initialState: RealtorBroadcastState = {
   latestDraft: null,
   savedSegments: [],
   quota: null,
+  shortLinks: [],
   isLoading: false,
   isSending: false,
   isPreviewing: false,
   isResending: false,
   isExporting: false,
+  isLoadingShortLinks: false,
   error: null,
 };
 
@@ -200,6 +208,72 @@ export const saveBroadcastDraft = createAsyncThunk(
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
     return id;
+  },
+);
+
+export const fetchShortLinks = createAsyncThunk(
+  "realtorBroadcasts/fetchShortLinks",
+  async (limit: number | void, { getState }) => {
+    const { sessionToken } = (getState() as RootState).brokerAuth;
+    const { data } = await axios.get<GetShortLinksResponse>("/api/short-links", {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+      params: { limit: limit ?? 30 },
+    });
+    return data.short_links ?? [];
+  },
+);
+
+export const createShortLink = createAsyncThunk(
+  "realtorBroadcasts/createShortLink",
+  async (
+    payload: { target_url: string; title?: string },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const { data } = await axios.post<CreateShortLinkResponse>(
+        "/api/short-links",
+        payload,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      if (!data.success || !data.short_link) {
+        return rejectWithValue(data.error || "Could not create short link");
+      }
+      return data.short_link;
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, "Could not create short link"),
+      );
+    }
+  },
+);
+
+export const uploadShortLinkAsset = createAsyncThunk(
+  "realtorBroadcasts/uploadShortLinkAsset",
+  async (
+    payload: { file: File; title?: string; createShortLink?: boolean },
+    { getState, rejectWithValue },
+  ) => {
+    try {
+      const { sessionToken } = (getState() as RootState).brokerAuth;
+      const form = new FormData();
+      form.append("file", payload.file);
+      if (payload.title) form.append("title", payload.title);
+      if (payload.createShortLink === false) {
+        form.append("create_short_link", "false");
+      }
+      const { data } = await axios.post<UploadShortLinkAssetResponse>(
+        "/api/short-links/upload",
+        form,
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+      if (!data.success) {
+        return rejectWithValue(data.error || "Upload failed");
+      }
+      return data;
+    } catch (error) {
+      return rejectWithValue(extractApiErrorMessage(error, "Upload failed"));
+    }
   },
 );
 
@@ -548,6 +622,55 @@ const realtorBroadcastSlice = createSlice({
         (s) => s.id !== action.payload,
       );
     });
+
+    builder
+      .addCase(fetchShortLinks.pending, (state) => {
+        state.isLoadingShortLinks = true;
+      })
+      .addCase(fetchShortLinks.fulfilled, (state, action) => {
+        state.isLoadingShortLinks = false;
+        state.shortLinks = action.payload;
+      })
+      .addCase(fetchShortLinks.rejected, (state) => {
+        state.isLoadingShortLinks = false;
+      })
+      .addCase(createShortLink.fulfilled, (state, action) => {
+        const row = action.payload;
+        state.shortLinks = [
+          {
+            id: row.id,
+            code: row.code,
+            short_url: row.short_url,
+            target_url: row.target_url,
+            title: row.title ?? null,
+            asset_id: row.asset_id ?? null,
+            broadcast_id: row.broadcast_id ?? null,
+            click_count: row.click_count ?? 0,
+            last_clicked_at: row.last_clicked_at ?? null,
+            created_at: row.created_at ?? new Date().toISOString(),
+          },
+          ...state.shortLinks.filter((s) => s.code !== row.code),
+        ];
+      })
+      .addCase(uploadShortLinkAsset.fulfilled, (state, action) => {
+        const row = action.payload.short_link;
+        if (!row) return;
+        state.shortLinks = [
+          {
+            id: row.id,
+            code: row.code,
+            short_url: row.short_url,
+            target_url: row.target_url,
+            title: row.title ?? null,
+            asset_id: row.asset_id ?? null,
+            broadcast_id: row.broadcast_id ?? null,
+            click_count: row.click_count ?? 0,
+            last_clicked_at: row.last_clicked_at ?? null,
+            created_at: row.created_at ?? new Date().toISOString(),
+          },
+          ...state.shortLinks.filter((s) => s.code !== row.code),
+        ];
+      });
 
     // Sync unified quota after Stripe top-up or billing page refresh
     builder

@@ -88,7 +88,11 @@ const roleSectionPermissionsSlice = createSlice({
     clearError(state) {
       state.error = null;
     },
-    /** Optimistically patch a single permission in local state */
+    /**
+     * Optimistically patch a single permission in local state.
+     * Upserts when the section_id is new (e.g. loan-calculator before a seed row exists)
+     * so Settings toggles persist on Save via PUT upsert.
+     */
     setPermission(
       state,
       action: {
@@ -105,6 +109,16 @@ const roleSectionPermissionsSlice = createSlice({
       );
       if (existing) {
         existing.is_visible = is_visible;
+      } else {
+        state.permissions.push({
+          id: 0,
+          tenant_id: 0,
+          broker_role,
+          section_id,
+          is_visible,
+          updated_by: null,
+          updated_at: new Date().toISOString(),
+        });
       }
     },
   },

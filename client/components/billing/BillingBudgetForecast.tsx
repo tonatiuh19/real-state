@@ -140,7 +140,7 @@ export function BillingBudgetForecast({
           />
           <ForecastField
             id="twilio"
-            label="Extra Twilio numbers"
+            label="Extra SMS numbers"
             value={inputs.extraTwilioNumbers}
             onChange={(n) => patch({ extraTwilioNumbers: n })}
           />

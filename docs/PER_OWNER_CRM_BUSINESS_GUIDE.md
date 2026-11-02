@@ -110,7 +110,7 @@ flowchart TB
 | **People view**        | See `(555) 123-4567` once, expand to all banker copies underneath           |
 | **Link & merge tools** | Connect duplicates, approve “same person” requests, merge when ready        |
 | **Restore access**     | If a transfer hides a client from someone’s list, **you can bring it back** |
-| **Messaging**          | You can still message broadly (platform owner access)                       |
+| **Conversations**      | **Mine** + **Shared** only — same privacy as mortgage bankers (use **People** for cross-owner oversight) |
 | **Oversight**          | Audit trail when links, transfers, and merges happen                        |
 
 ### Partner realtors

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
 import {
@@ -25,6 +25,7 @@ import {
   reassignClient,
 } from "@/store/slices/clientsSlice";
 import type { ClientCreateConflict } from "@/store/slices/clientsSlice";
+import { fetchCrmConfig } from "@/store/slices/crmSlice";
 import { useToast } from "@/hooks/use-toast";
 import type { GetClientsResponse } from "@shared/api";
 
@@ -60,11 +61,31 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
   const { toast } = useToast();
   const isEdit = !!client;
   const currentUser = useAppSelector((s) => s.brokerAuth.user);
+  const { perOwnerCrmActive } = useAppSelector((s) => s.crm);
 
   const [conflict, setConflict] = useState<
     ClientCreateConflict["conflict"] | null
   >(null);
+  const [conflictHint, setConflictHint] = useState<string | null>(null);
   const [isReassigning, setIsReassigning] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      dispatch(fetchCrmConfig());
+    }
+  }, [open, dispatch]);
+
+  const isCrossOwnerConflict =
+    conflict != null &&
+    conflict.broker_id != null &&
+    currentUser?.id != null &&
+    conflict.broker_id !== currentUser.id;
+
+  const showTransferAction =
+    !isEdit &&
+    conflict != null &&
+    !perOwnerCrmActive &&
+    isCrossOwnerConflict;
 
   const formik = useFormik({
     enableReinitialize: true,
@@ -134,8 +155,10 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
       } catch (err: any) {
         // Check if this is a structured email conflict (409 with existing owner info)
         if (err && typeof err === "object" && err.conflict) {
-          const conflictData = (err as ClientCreateConflict).conflict;
+          const conflictPayload = err as ClientCreateConflict;
+          const conflictData = conflictPayload.conflict;
           setConflict(conflictData);
+          setConflictHint(conflictPayload.hint ?? null);
           if (conflictData.conflict_field === "phone") {
             formik.setFieldError(
               "phone",
@@ -149,6 +172,7 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
         } else {
           const message: string = err || "Something went wrong.";
           setConflict(null);
+          setConflictHint(null);
           // Highlight the conflicting field inline so the user knows exactly what to fix
           if (/phone/i.test(message)) {
             formik.setFieldError("phone", message);
@@ -232,6 +256,7 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
         if (!v) {
           formik.resetForm();
           setConflict(null);
+          setConflictHint(null);
           onClose();
         }
       }}
@@ -308,7 +333,7 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
                         </p>
                       </div>
                     </div>
-                    {!isEdit && (
+                    {!isEdit && showTransferAction && (
                       <Button
                         type="button"
                         size="sm"
@@ -325,6 +350,20 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
                         Transfer to my account
                       </Button>
                     )}
+                    {conflictHint && (
+                      <p className="text-xs text-amber-800 dark:text-amber-300">
+                        {conflictHint}
+                      </p>
+                    )}
+                    {!perOwnerCrmActive && isCrossOwnerConflict && (
+                      <p className="text-xs text-amber-800 dark:text-amber-300">
+                        Per-owner CRM is off. Enable{" "}
+                        <span className="font-semibold">
+                          PER_OWNER_CRM_ENABLED=1
+                        </span>{" "}
+                        on Vercel to save your own copy for this phone.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -340,7 +379,10 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
                   placeholder="(555) 000-0000"
                   value={formik.values.phone}
                   onChange={(e) => {
-                    if (conflict?.conflict_field === "phone") setConflict(null);
+                    if (conflict?.conflict_field === "phone") {
+                      setConflict(null);
+                      setConflictHint(null);
+                    }
                     formik.handleChange(e);
                   }}
                   onBlur={formik.handleBlur}
@@ -378,7 +420,7 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
                         </p>
                       </div>
                     </div>
-                    {!isEdit && (
+                    {!isEdit && showTransferAction && (
                       <Button
                         type="button"
                         size="sm"
@@ -394,6 +436,20 @@ const ClientFormDialog: React.FC<ClientFormDialogProps> = ({
                         )}
                         Transfer to my account
                       </Button>
+                    )}
+                    {conflictHint && (
+                      <p className="text-xs text-amber-800 dark:text-amber-300">
+                        {conflictHint}
+                      </p>
+                    )}
+                    {!perOwnerCrmActive && isCrossOwnerConflict && (
+                      <p className="text-xs text-amber-800 dark:text-amber-300">
+                        Per-owner CRM is off. Enable{" "}
+                        <span className="font-semibold">
+                          PER_OWNER_CRM_ENABLED=1
+                        </span>{" "}
+                        on Vercel to save your own copy for this phone.
+                      </p>
                     )}
                   </div>
                 )}

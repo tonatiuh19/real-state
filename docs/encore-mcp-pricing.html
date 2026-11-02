@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Encore Mortgage — AI Ops (MCP) Quotation</title>
+  <style>
+    @page { size: Letter; margin: 0.6in; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      color: #1a2332;
+      background: #fff;
+      line-height: 1.45;
+    }
+    .page { page-break-after: always; max-width: 7.2in; margin: 0 auto 32px; }
+    .page:last-child { page-break-after: auto; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 3px solid #1a3a5c;
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+    }
+    .logo { height: 48px; width: auto; }
+    .header-meta { text-align: right; font-size: 12px; color: #4a5568; }
+    .header-meta .brand {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #1a3a5c;
+      font-weight: 700;
+    }
+    .ff { color: #2b6cb0; font-weight: 700; margin-top: 4px; }
+    .page-label { font-size: 11px; color: #718096; margin-bottom: 12px; }
+    h1 { font-size: 24px; color: #1a3a5c; margin-bottom: 8px; }
+    h2 {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #1a3a5c;
+      margin: 20px 0 10px;
+      font-weight: 700;
+    }
+    .lede { font-size: 13.5px; color: #3d4a5c; margin-bottom: 14px; }
+    .note {
+      background: #f0f4f8;
+      border-left: 4px solid #2b6cb0;
+      padding: 10px 14px;
+      font-size: 12.5px;
+      color: #1a3a5c;
+      font-weight: 700;
+      margin-bottom: 18px;
+    }
+    .adv { list-style: none; margin-bottom: 8px; }
+    .adv li { padding: 0 0 12px 16px; position: relative; }
+    .adv li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #1a3a5c;
+    }
+    .adv strong { display: block; font-size: 13px; margin-bottom: 2px; }
+    .adv span { font-size: 12px; color: #718096; }
+    .card {
+      border: 2px solid #1a3a5c;
+      border-radius: 8px;
+      background: #f7fafc;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    .badge {
+      display: inline-block;
+      background: #1a3a5c;
+      color: #fff;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 3px;
+      margin-bottom: 8px;
+    }
+    .prices { display: flex; gap: 48px; margin: 12px 0 8px; }
+    .price-label {
+      font-size: 10px;
+      color: #718096;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .price-value { font-size: 28px; font-weight: 700; }
+    .price-value span { font-size: 14px; font-weight: 500; color: #718096; }
+    .hint { font-size: 12px; color: #718096; }
+    .stats { display: flex; gap: 10px; margin: 10px 0 12px; }
+    .stat {
+      flex: 1;
+      background: #1a3a5c;
+      color: #fff;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .stat .num { font-size: 18px; font-weight: 700; }
+    .stat .lbl {
+      font-size: 9px;
+      opacity: 0.85;
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin: 8px 0 14px;
+    }
+    th {
+      text-align: left;
+      background: #1a3a5c;
+      color: #fff;
+      padding: 8px 10px;
+      font-size: 11px;
+    }
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+    tr:nth-child(even) td { background: #f8fafc; }
+    tr.hl td { background: #e8eef6; font-weight: 600; }
+    .bullets { list-style: none; margin: 6px 0 14px; }
+    .bullets li {
+      padding: 3px 0 3px 14px;
+      position: relative;
+      font-size: 12.5px;
+      color: #2d3748;
+    }
+    .bullets li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 9px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #1a3a5c;
+    }
+    .excl { font-size: 11.5px; color: #718096; margin-top: 8px; }
+    .footer {
+      margin-top: 24px;
+      padding-top: 10px;
+      border-top: 1px solid #d0d7e2;
+      font-size: 11px;
+      color: #718096;
+    }
+    .footer strong { color: #1a3a5c; }
+  </style>
+</head>
+<body>
+  <section class="page">
+    <div class="header">
+      <img class="logo" src="encore-logo.png" alt="Encore Mortgage" />
+      <div class="header-meta">
+        <div class="brand">Encore Mortgage</div>
+        <div>AI Ops (MCP) · Quotation</div>
+        <div class="ff">Family &amp; Friends pricing</div>
+      </div>
+    </div>
+    <p class="page-label">Page 1 · Overview</p>
+
+    <h1>Platform Owner AI Ops</h1>
+    <p class="lede">
+      Connect Claude or Cursor to your Encore CRM — pipeline, clients, SMS, tasks,
+      and more — with OAuth, audit logs, and confirm-gated writes. For platform owner seats only.
+    </p>
+    <div class="note">
+      Family &amp; Friends quotation — preferential pricing, not publicly listed rates.
+    </div>
+
+    <h2>Why AI Ops</h2>
+    <ul class="adv">
+      <li>
+        <strong>Run the CRM from Claude or Cursor</strong>
+        <span>Search clients, update pipeline, send SMS, create tasks — without living in the admin UI.</span>
+      </li>
+      <li>
+        <strong>Secure by design</strong>
+        <span>OAuth connection, audit log on every tool call, and confirm-gated writes before anything changes.</span>
+      </li>
+      <li>
+        <strong>Built for power-user owners</strong>
+        <span>Sized for real platform-owner load (search, messaging, tasks) — not a demo chatbot.</span>
+      </li>
+      <li>
+        <strong>Your meters stay separate</strong>
+        <span>SMS, email, and Mortgi still bill through existing Encore usage packs. This quote is MCP access only.</span>
+      </li>
+    </ul>
+
+    <h2>Your package</h2>
+    <div class="card">
+      <div class="badge">Ops MCP</div>
+      <h3 style="font-size:16px;color:#1a3a5c;margin-bottom:8px;">Platform Owner AI Ops Seat</h3>
+      <div class="prices">
+        <div>
+          <div class="price-label">Setup (one-time)</div>
+          <div class="price-value">$5,000</div>
+        </div>
+        <div>
+          <div class="price-label">Monthly seat</div>
+          <div class="price-value">$300 <span>/ mo</span></div>
+        </div>
+      </div>
+      <p class="hint">See page 2 for what each fee covers and year-1 examples.</p>
+    </div>
+
+    <h2>Cash summary (this quote)</h2>
+    <div class="stats">
+      <div class="stat"><div class="num">$5,000</div><div class="lbl">One-time setup</div></div>
+      <div class="stat"><div class="num">$300</div><div class="lbl">Per month / seat</div></div>
+      <div class="stat"><div class="num">$5,300</div><div class="lbl">Month 1 total</div></div>
+      <div class="stat"><div class="num">$300</div><div class="lbl">Steady-state / mo</div></div>
+    </div>
+    <p class="excl">
+      Add-on only — stacks beside your existing Encore platform plan.<br />
+      Not in this quote: platform subscription · SMS / email / Mortgi · Claude/Cursor model usage.
+    </p>
+    <div class="footer">
+      <strong>Encore Mortgage · Confidential — Family &amp; Friends quotation</strong><br />
+      Questions: alex@go-mez.com or cesar@go-mez.com · Valid as of September 2026 · 1/2
+    </div>
+  </section>
+
+  <section class="page">
+    <div class="header">
+      <img class="logo" src="encore-logo.png" alt="Encore Mortgage" />
+      <div class="header-meta">
+        <div class="brand">Encore Mortgage</div>
+        <div>AI Ops (MCP) · Quotation</div>
+        <div class="ff">Family &amp; Friends pricing</div>
+      </div>
+    </div>
+    <p class="page-label">Page 2 · How pricing works</p>
+
+    <h1>How the pricing works</h1>
+    <p class="lede">
+      Two charges for AI Ops (MCP). Everything else stays on your current Encore meters.
+    </p>
+
+    <h2>1. One-time setup — $5,000</h2>
+    <p class="hint" style="margin-bottom:4px;">
+      <strong style="color:#1a3a5c;">50% ($2,500) due to start</strong> build + onboarding.
+      Balance due when MCP is enabled.
+    </p>
+    <p class="hint" style="margin-bottom:8px;">Covers:</p>
+    <table>
+      <thead>
+        <tr><th>Deliverable</th><th>What you get</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Encore tool catalog</strong></td><td>Wire CRM actions (clients, loans, SMS, tasks, docs) as MCP tools</td></tr>
+        <tr><td><strong>OAuth + consent</strong></td><td>Claude / Cursor connect, revoke UI, platform-owner scoping</td></tr>
+        <tr><td><strong>Safety gates</strong></td><td>Confirm-gated writes, rate limits, full audit logging</td></tr>
+        <tr><td><strong>Owner training</strong></td><td>Live walkthrough + day-to-day AI Ops playbook</td></tr>
+        <tr><td><strong>Go-live support</strong></td><td>First-week check-in and issue triage</td></tr>
+      </tbody>
+    </table>
+
+    <h2>2. Monthly seat — $300 / mo</h2>
+    <p class="hint" style="margin-bottom:6px;">Recurring per platform-owner Claude/Cursor connection. Includes:</p>
+    <ul class="bullets">
+      <li>1 active AI connection (Claude Desktop or Cursor MCP)</li>
+      <li>3,000 MCP tool calls / month included in the seat</li>
+      <li>Ongoing audit export access + support for that seat</li>
+      <li>Connector updates as Encore features evolve</li>
+    </ul>
+
+    <h2>3. Add-ons (only if needed)</h2>
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Price</th><th>When it applies</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Extra seat</strong></td><td>$99 / mo</td><td>Each additional platform-owner connection</td></tr>
+      </tbody>
+    </table>
+
+    <h2>4. Example year-1 cashflow</h2>
+    <table>
+      <thead>
+        <tr><th>Scenario</th><th>Math</th><th>Amount</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Kickoff (50% setup)</td><td>$2,500 deposit to start</td><td>$2,500</td></tr>
+        <tr><td>Go-live (setup balance + seat)</td><td>$2,500 + $300</td><td>$2,800</td></tr>
+        <tr><td>Months 2–12</td><td>$300 × 11</td><td>$3,300</td></tr>
+        <tr class="hl"><td>Year 1 total (1 seat)</td><td></td><td>$8,600</td></tr>
+        <tr><td>Optional: 2nd seat all year</td><td>$99 × 12</td><td>+ $1,188</td></tr>
+      </tbody>
+    </table>
+
+    <h2>5. Billed separately (not in this quote)</h2>
+    <ul class="bullets">
+      <li>Encore platform subscription (your existing monthly plan)</li>
+      <li>SMS · email · Mortgi usage meters and top-up packs</li>
+      <li>Claude / Cursor model tokens (owner’s Anthropic or Cursor account)</li>
+    </ul>
+
+    <div class="footer">
+      <strong>Encore Mortgage · Confidential — Family &amp; Friends quotation</strong><br />
+      Questions: alex@go-mez.com or cesar@go-mez.com · Valid as of September 2026 · 2/2
+    </div>
+  </section>
+</body>
+</html>

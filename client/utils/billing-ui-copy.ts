@@ -1,13 +1,34 @@
 /** User-facing billing labels — no Stripe branding or internal mode names. */
 
+import type { BillingPeriodAnchor } from "@shared/api";
+import {
+  formatBillingPeriodRange,
+  formatQuotaRenewalLabel,
+} from "@shared/billing-period";
 import {
   BILLING_PAYMENT_UNAVAILABLE_MESSAGE,
   isBillingPaymentActionableMessage,
 } from "@shared/billing-errors";
 
 export { BILLING_PAYMENT_UNAVAILABLE_MESSAGE };
+export { formatBillingPeriodRange };
 
 export const SECURE_PAYMENT_NOTE = "Secure encrypted checkout";
+
+/** Subscription uses anniversary billing (internal anchor), not calendar month. */
+export function usesSubscriptionAnniversaryBilling(
+  anchor: BillingPeriodAnchor | undefined,
+): boolean {
+  return anchor === "stripe";
+}
+
+export function formatIncludedQuotaRenewalLine(
+  quotaRenewsOn: string | null | undefined,
+): string | null {
+  const label = formatQuotaRenewalLabel(quotaRenewsOn);
+  if (!label) return null;
+  return `included quotas renew on ${label}`;
+}
 
 export function formatQuotaModeLabel(
   mode: string | null | undefined,

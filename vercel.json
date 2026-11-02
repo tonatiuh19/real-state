@@ -3,9 +3,22 @@
   "installCommand": "npm install",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 60
+    }
+  },
   "routes": [
     {
       "src": "/api/(.*)",
+      "dest": "/api/index.ts"
+    },
+    {
+      "src": "/go/(.*)",
+      "dest": "/api/index.ts"
+    },
+    {
+      "src": "/l/(.*)",
       "dest": "/api/index.ts"
     },
     {

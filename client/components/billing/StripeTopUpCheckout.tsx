@@ -462,7 +462,7 @@ export function StripeTopUpCheckout({
                 </p>
               ) : null}
               <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
-                Expended usage above reflects sends in the last 30 days and does not
+                Expended usage above reflects sends in the current billing period and does not
                 change when you add capacity. Quota balances and meters refresh
                 automatically.
               </p>

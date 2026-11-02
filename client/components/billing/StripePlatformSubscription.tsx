@@ -23,6 +23,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  formatBillingPeriodRange,
+  formatIncludedQuotaRenewalLine,
+  usesSubscriptionAnniversaryBilling,
+} from "@/utils/billing-ui-copy";
 import { cn } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -231,12 +236,18 @@ export function StripePlatformSubscription({ hideHeader = false }: Props) {
     isConfirmingSubscription,
     isLoadingConfig,
     error,
+    overdue,
   } = useAppSelector((s) => s.billing);
   const [localError, setLocalError] = useState<string | null>(null);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
   const [justSubscribed, setJustSubscribed] = useState(false);
   const [suppressAutoSubscribe, setSuppressAutoSubscribe] = useState(false);
   const autoSetupAttempted = useRef(false);
+  // Once an overdue renewal has been seen here, never auto-start a checkout:
+  // when it clears (paid) the page may not yet know the subscription is active
+  // again, and an automatic setup would open a second subscription.
+  const sawOverdue = useRef(false);
+  if (overdue) sawOverdue.current = true;
 
   const publishableKey = config?.stripePublishableKey ?? null;
   const stripePromise = useMemo(
@@ -321,6 +332,8 @@ export function StripePlatformSubscription({ hideHeader = false }: Props) {
       !subscriptionSetup &&
       !isSubscriptionSetupLoading &&
       !suppressAutoSubscribe &&
+      !overdue &&
+      !sawOverdue.current &&
       !autoSetupAttempted.current
     ) {
       autoSetupAttempted.current = true;
@@ -333,6 +346,7 @@ export function StripePlatformSubscription({ hideHeader = false }: Props) {
     subscriptionSetup,
     isSubscriptionSetupLoading,
     suppressAutoSubscribe,
+    overdue,
     startSetup,
   ]);
 
@@ -380,15 +394,28 @@ export function StripePlatformSubscription({ hideHeader = false }: Props) {
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
-                {formatUsd(platformFee)}/month · included quotas renew each
-                billing period
+                {formatUsd(platformFee)}/month
+                {usesSubscriptionAnniversaryBilling(
+                  config?.billingPeriodAnchor,
+                ) && config?.quotaRenewsOn ? (
+                  <>
+                    {" "}
+                    ·{" "}
+                    <span className="font-medium text-foreground">
+                      {formatIncludedQuotaRenewalLine(config.quotaRenewsOn)}
+                    </span>
+                  </>
+                ) : (
+                  <> · included quotas renew each billing period</>
+                )}
               </p>
               {config?.subscription?.periodStart ? (
                 <p className="text-xs text-muted-foreground">
-                  Current period {config.subscription.periodStart}
-                  {config.subscription.periodEnd
-                    ? ` → ${config.subscription.periodEnd}`
-                    : ""}
+                  Current period{" "}
+                  {formatBillingPeriodRange(
+                    config.subscription.periodStart,
+                    config.subscription.periodEnd,
+                  )}
                 </p>
               ) : null}
             </div>
@@ -470,9 +497,19 @@ export function StripePlatformSubscription({ hideHeader = false }: Props) {
         </p>
       ) : null}
 
-      {suppressAutoSubscribe &&
-      !subscriptionSetup &&
-      !isSubscriptionSetupLoading ? (
+      {overdue && !subscriptionComplete ? (
+        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-destructive/40 bg-destructive/5 px-6 py-10 text-center">
+          <p className="text-sm font-medium text-destructive">
+            Your last renewal is unpaid.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Pay the overdue invoice at the top of this page to keep your
+            subscription — no new subscription is needed.
+          </p>
+        </div>
+      ) : suppressAutoSubscribe &&
+        !subscriptionSetup &&
+        !isSubscriptionSetupLoading ? (
         <div className="flex flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-border/80 px-6 py-12 text-center">
           <p className="text-sm text-muted-foreground">
             Test reset complete. Start a fresh subscription checkout when
@@ -516,7 +553,7 @@ export function StripePlatformSubscription({ hideHeader = false }: Props) {
                 receipt?.skipped === "no_recipient"
               ) {
                 setLocalNotice(
-                  "Subscription active — confirmation email could not be sent. Check RESEND_API_KEY and platform owner email.",
+                  "Subscription active — we couldn't send the confirmation email right now. Your subscription is still active.",
                 );
               }
             }}

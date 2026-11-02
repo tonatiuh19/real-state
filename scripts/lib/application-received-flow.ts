@@ -57,6 +57,110 @@ export async function isFlowActive(
   return rows.length > 0 && Number(rows[0].is_active) === 1;
 }
 
+export type ApplicationReceivedPreflightCheck = {
+  name: string;
+  pass: boolean;
+  detail?: string;
+};
+
+export type ApplicationReceivedPreflightResult = {
+  ok: boolean;
+  checks: ApplicationReceivedPreflightCheck[];
+};
+
+/**
+ * Read-only production guard: Flow #3 must exist, be active, and have runnable steps.
+ * Used by deploy preflight, validate:all, and smoke-test preflight.
+ */
+export async function runApplicationReceivedProdPreflight(
+  conn: Connection,
+  tenantId: number,
+): Promise<ApplicationReceivedPreflightResult> {
+  const checks: ApplicationReceivedPreflightCheck[] = [];
+
+  const [flowRows] = await conn.query<RowDataPacket[]>(
+    `SELECT id, name, is_active, trigger_event, flow_category, loan_type_filter
+     FROM reminder_flows
+     WHERE id = ? AND tenant_id = ?`,
+    [APPLICATION_RECEIVED_FLOW_ID, tenantId],
+  );
+
+  if (!flowRows.length) {
+    checks.push({
+      name: "flow #3 exists",
+      pass: false,
+      detail: `No reminder_flows row id=${APPLICATION_RECEIVED_FLOW_ID}`,
+    });
+    return { ok: false, checks };
+  }
+
+  const flow = flowRows[0];
+  checks.push({
+    name: "flow #3 exists",
+    pass: true,
+    detail: String(flow.name ?? ""),
+  });
+
+  const active = Number(flow.is_active) === 1;
+  checks.push({
+    name: "flow #3 is active",
+    pass: active,
+    detail: active ? undefined : "is_active=0 — welcome nurture will not run",
+  });
+
+  const triggerOk = flow.trigger_event === NUDGE_TO_STATUS;
+  checks.push({
+    name: "trigger_event is application_received",
+    pass: triggerOk,
+    detail: triggerOk ? undefined : String(flow.trigger_event),
+  });
+
+  const categoryOk = flow.flow_category === "loan";
+  checks.push({
+    name: "flow_category is loan",
+    pass: categoryOk,
+    detail: categoryOk ? undefined : String(flow.flow_category),
+  });
+
+  const [activeLoanFlows] = await conn.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM reminder_flows
+     WHERE tenant_id = ? AND trigger_event = ? AND flow_category = 'loan' AND is_active = 1`,
+    [tenantId, NUDGE_TO_STATUS],
+  );
+  const activeCount = Number(activeLoanFlows[0]?.c ?? 0);
+  checks.push({
+    name: "at least one active application_received loan flow",
+    pass: activeCount >= 1,
+    detail: activeCount >= 1 ? undefined : "zero active flows for this trigger",
+  });
+
+  const [triggerSteps] = await conn.query<RowDataPacket[]>(
+    `SELECT step_key FROM reminder_flow_steps
+     WHERE flow_id = ? AND step_type = 'trigger' LIMIT 1`,
+    [APPLICATION_RECEIVED_FLOW_ID],
+  );
+  checks.push({
+    name: "flow #3 has trigger step",
+    pass: triggerSteps.length > 0,
+    detail: triggerSteps.length > 0 ? undefined : "missing trigger node",
+  });
+
+  const [sendSteps] = await conn.query<RowDataPacket[]>(
+    `SELECT step_type FROM reminder_flow_steps
+     WHERE flow_id = ? AND step_type IN ('send_email', 'send_sms', 'send_whatsapp')
+     LIMIT 1`,
+    [APPLICATION_RECEIVED_FLOW_ID],
+  );
+  checks.push({
+    name: "flow #3 has outbound message step",
+    pass: sendSteps.length > 0,
+    detail:
+      sendSteps.length > 0 ? undefined : "no send_email/send_sms/send_whatsapp step",
+  });
+
+  return { ok: checks.every((c) => c.pass), checks };
+}
+
 /**
  * Mirrors api/index.ts triggerReminderFlows for application_received only.
  */

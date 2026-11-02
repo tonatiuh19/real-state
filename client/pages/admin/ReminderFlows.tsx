@@ -2548,6 +2548,12 @@ const ReminderFlows = () => {
     if (toggleReminderFlow.fulfilled.match(result)) {
       const { is_active } = result.payload;
       toast({ title: is_active ? "Flow activated" : "Flow deactivated" });
+    } else {
+      toast({
+        title: "Cannot change flow",
+        description: (result.payload as string) ?? "Failed to toggle reminder flow",
+        variant: "destructive",
+      });
     }
   };
 
@@ -2840,6 +2846,11 @@ const ReminderFlows = () => {
                   {activeCategory === "loan"
                     ? "Active and historical reminder flow executions per loan"
                     : "Active and historical realtor prospecting flow executions"}
+                  {execPagination
+                    ? ` · Showing ${(execPagination.page - 1) * execPagination.limit + 1}–${Math.min(execPagination.page * execPagination.limit, execPagination.total)} of ${execPagination.total}`
+                    : executions.length > 0
+                      ? ` · ${executions.length} shown`
+                      : ""}
                 </CardDescription>
               </CardHeader>
               <CardContent>

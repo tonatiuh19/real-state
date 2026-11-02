@@ -53,10 +53,20 @@ interface BrokerAuthState {
   databaseQuotaExceeded: boolean;
 }
 
+// Helper to read browser storage safely (SSR / vitest node have no localStorage)
+const storageGet = (key: string): string | null => {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
 // Helper to get user from localStorage
 const getSavedUser = (): BrokerUser | null => {
   try {
-    const savedUser = localStorage.getItem("broker_user");
+    const savedUser = storageGet("broker_user");
     return savedUser ? JSON.parse(savedUser) : null;
   } catch {
     return null;
@@ -65,8 +75,8 @@ const getSavedUser = (): BrokerUser | null => {
 
 const initialState: BrokerAuthState = {
   user: getSavedUser(),
-  sessionToken: localStorage.getItem("broker_session"),
-  isAuthenticated: !!localStorage.getItem("broker_session"),
+  sessionToken: storageGet("broker_session"),
+  isAuthenticated: !!storageGet("broker_session"),
   loading: false,
   profileLoading: false,
   profileSaving: false,

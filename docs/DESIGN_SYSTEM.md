@@ -24,7 +24,7 @@
 1. Client submits loan application via public wizard **or** broker creates it manually (New Loan wizard)
         ↓
    **Application Received** reminder flow starts on submit (welcome email/SMS + nurture).
-   If no active flow is configured, a fallback welcome email is sent and admins are alerted.
+   If no active flow is configured, a fallback welcome email is sent. Platform owners get one deduped daily alert with the specific skip reason (e.g. flow inactive); per-loan alerts fire only if fallback also fails.
         ↓
 2. Mortgage Banker reviews, assigns loan to a broker and optionally a Realtor partner
         ↓
@@ -59,11 +59,11 @@
 | **Communication Templates** | Reusable templates per channel (email, SMS, WhatsApp). Assignable per pipeline step.                                |
 | **Reminder Flows**          | Visual flow builder (nodes + edges) for automated multi-step reminder sequences. Triggered by pipeline events.      |
 | **Scheduler**               | Public booking page for clients. Admins manage availability windows, meeting types (phone/video), Zoom integration. |
-| **Pre-Approval Letters**    | HTML-template letters tied to a loan. Editable approved amount (capped at max set by admin), emailable to client.   |
+| **Pre-Approval Letters**    | HTML-template letters tied to a loan. Editable approved amount (capped at max set by admin), emailable to client. Realtor co-signer labeled **Realtor** with **DRE#** (MB keeps **NMLS#**).   |
 | **MISMO Export**            | One-click MISMO 3.4 XML export per loan for underwriting submission.                                                |
 | **Reports**                 | Revenue, performance, and overview analytics with CSV/PDF export.                                                   |
 | **Audit Logs**              | Full activity log of all broker/client actions with entity context.                                                 |
-| **Settings**                | Tenant-level settings (company info, NMLS, notification preferences).                                               |
+| **Settings**                | Tenant-level settings (company info, NMLS). Broker email alert prefs live on **Profile → Notification Preferences**. |
 | **Team Management**         | Admins invite/manage Partner brokers and other Mortgage Bankers.                                                    |
 | **Section Controls**        | Per-tenant sidebar section enable/disable toggles (DB-driven).                                                      |
 
@@ -153,7 +153,7 @@ Both submit surfaces show `ApplicationSubmitFlowLegend` on the final review step
 | Public wizard (`ApplicationWizard` step 5) | `ApplicationSubmitFlowLegend` | `client` — borrower-facing |
 | New Loan wizard (`NewLoanWizard` step 5) | `ApplicationSubmitFlowLegend` | `broker` — explains client will get welcome email/SMS |
 
-Backend: `ensureApplicationReceivedAutomation()` in `api/index.ts` — triggers `triggerReminderFlows('application_received')`; on zero matches, sends fallback welcome email and notifies admins + assigned LO.
+Backend: `ensureApplicationReceivedAutomation()` in `api/index.ts` — triggers `triggerReminderFlows('application_received')`; on zero matches, diagnoses skip reason (inactive flow, loan-type filter, LO restriction, etc.), sends fallback welcome email, and notifies platform owners once per 24h per reason when fallback succeeds. The last active `application_received` loan flow cannot be deactivated by admins (toggle/save); platform owners only, with audit log. **Preflight:** `npm run preflight:application-received` (also in `validate:all` and `deploy:prod`).
 
 ### Loan Types
 
@@ -745,6 +745,8 @@ Full menu items (shown to `admin`):
 | Label | Route | Icon |
 |-------|-------|------|
 | Overview | `/admin` | LayoutDashboard |
+| Loan Calculator | `/admin/loan-calculator/*` | Calculator (submenu: FHA, VA, Conventional, Investment, Mobile Home, Quick Payment, Income Worksheet, **Saved Calculations**) |
+| Free Analysis | `/admin/free-analysis` | Text-based tri-merge PDF credit analysis (SmartCredit / Xactus + compatible). Client-linked. Optional email. Shareable broker link `/apply/{slug}/free-analysis` (wizard-style; new contacts → draft lead). Section: `free-analysis`. |
 | Pipeline | `/admin/pipeline` | Kanban |
 | Clients & Leads | `/admin/clients` | Users |
 | Tasks | `/admin/tasks` | CheckCircle2 |
@@ -1037,7 +1039,7 @@ The app is a **SPA** using React Router v6 with three layout zones:
 | `/client-login`       | `ClientLogin`            | No layout wrapper         |
 | `/wizard`             | `ApplicationWizard`      | New client onboarding     |
 | `/apply`              | `ApplicationWizard`      | Alias for `/wizard`       |
-| `/apply/:brokerToken` | `ApplicationWizard`      | Pre-loads specific broker |
+| `/apply/:brokerToken` | `ApplicationWizard`      | Pre-loads specific broker. **Single-person landing** shows contact inline + credential line `Mortgage Banker · NMLS #…` (or Realtor · DRE #…); missing license hidden. Card `max-w-xl`. **Google reviews** under main card; trust badges last. **My Home Team**: names on one row, titles+licenses on the row below. |
 
 ### Client Portal Routes (`/portal/*`)
 
@@ -1059,6 +1061,11 @@ All wrapped in `AdminLayout`. Require broker session.
 | Path                             | Page                     |
 | -------------------------------- | ------------------------ |
 | `/admin`                         | `AdminDashboard`         |
+| `/admin/loan-calculator`         | `LoanCalculator` suite (FHA / VA / Conventional / Investment / Mobile Home + Quick Payment + **Wage Earner Income Worksheet** + **Saved Calculations**). Product calculators **embed** the household income worksheet and can **Apply to monthly income** so multi-borrower qualifying totals feed DTI. When a CRM client is linked, saves go to DB table `broker_calculator_saves` (`client_id` required, `loan_application_id` optional). Apply-to-loan **appends** a snapshot to `loan_applications.notes` only — never overwrites income fields or auto-fills from annual income. Unlinked worksheets still use browser localStorage as offline fallback. Entry points: Calculator UI (`ClientLinkCombobox`), Client profile “Open in Loan Calculator”, Loan overlay “Run calculator”. Section: `loan-calculator`. |
+| `/admin/free-analysis`           | Free Analysis — upload text-based SmartCredit / Xactus (or compatible) PDF → dispute Rounds 1–4 + EN/ES. Requires CRM client. Optional email. History in `credit_analyses`. **Shareable broker link** (same pattern as portal wizard): `/apply/{slug\|token}/free-analysis` — public form; **new contacts** → `source=free_analysis`, `income_type=W-2`, `normalized_phone`, draft loan + broker notify (`/admin/free-analysis?clientId=`). Existing clients: names not overwritten; draft only if no loans. CRM commit before PDF parse. Helpers (`DismissibleHelp` v3). Portal: `/portal/free-analysis`. Section: `free-analysis`. |
+| `/admin/loan-calculator/income`  | Standalone Wage Earner Income Analysis (up to 4 borrowers, optional CRM client per borrower slot, base-pay methods, OT/comm/bonus, non-taxable, **YTD Amount / year-end pace**, household total). Same worksheet state is shared when opened inside a product calculator. DB-backed saves when a primary client is linked. |
+| `/admin/loan-calculator/saves`   | Server-filtered DataGrid of calculator scenarios (q / kind / client_id). Platform owners see all tenant saves; admin/broker see own `broker_id` only. |
+| `/admin/income-calculator`       | `IncomeCalculator` — specialty / self-employed (Rental, Schedule C, entities, SSI). Separate from Wage Earner. |
 | `/admin/pipeline`                | `Pipeline`               |
 | `/admin/clients`                 | `Clients`                |
 | `/admin/tasks`                   | `Tasks`                  |
@@ -1097,7 +1104,7 @@ The Pipeline is a **horizontal Kanban board** — the core loan management view 
 | Search input           | Real-time filter by applicant name or application number. Shows result count badge when active                        |
 | Refresh button         | Re-fetches loans with current filters; shows spinner                                                                  |
 | Filters dropdown       | Multi-filter: Status, Priority, Loan Type, Date Range. Badge shows active filter count. "Clear all" resets everything |
-| **New Loan** button    | Opens `NewLoanWizard` modal (admin only)                                                                              |
+| **New Loan** button    | Opens `NewLoanWizard` modal (admin only). Sticky Previous/Next footer on mobile; Mortgi tab below dialog z-index. Broker/partner assignment uses searchable `BrokerSearchSelect` (type-to-find) so long directories scroll past early alphabet names inside the dialog. |
 | **Get My Link** button | Opens `BrokerShareLinkModal` for partner's referral link (partner role)                                               |
 
 **Filter options:**
@@ -1169,8 +1176,8 @@ A full-height right-side **Sheet** (`sm:max-w-3xl`) that slides in when a loan c
 | Application number      | `#ENxxxxxx` monospace badge                                                                                                                          |
 | Priority badge          | Color-coded: urgent (red) / high (orange) / medium (blue) / low (gray)                                                                               |
 | Pipeline status badge   | Current status label                                                                                                                                 |
-| **Export MISMO**        | Downloads MISMO 3.4 XML. Only enabled when all tasks are approved. Hidden for `broker` role                                                          |
-| **Pre-Approval Letter** | Opens `PreApprovalLetterModal`. Locked until all tasks approved. Partners see "Waiting for Mortgage Banker" tooltip if tasks done but amount not set |
+| **Export MISMO**        | Downloads MISMO 3.4 XML. Available anytime by default; optional admin setting can require all tasks approved first. Hidden for `broker` role |
+| **Pre-Approval Letter** | Opens `PreApprovalLetterModal`. Available anytime by default; optional admin setting can require all tasks approved first. Partners see "Waiting for Mortgage Banker" tooltip until the first letter is issued |
 | **Pre-Approval Banner** | Shown when an active letter exists — displays approved amount, max approved amount cap, and expiry date                                              |
 
 ### Sections (rendered in order)
@@ -1434,7 +1441,11 @@ Replaces 20 `{{TOKEN}}` patterns in the HTML template. Notable behaviours:
 
 ## Broadcast Center — quota UX (with billing)
 
+Broadcast compose supports **first-party short links** (`portal.encoremortgage.org/l/…`, platform_owner only, Encore-domain allowlist), PDF/image upload→shorten, email CTA button injection, UCS-2-aware segment cost warnings (soft ≥3 / hard confirm ≥5), and **optional MMS** capped at 50 SMS recipients (attach after audience is sized; durable `link_assets` with 90-day orphan purge; Messages API only — Bulk skipped when media is set; quota reserves ≥2 segment-equivalents per MMS recipient). Draft autosave persists media + short_link_code. **Short links** tab shows click analytics. Prefer short SMS + link for large lists.
+
 **Compose step — merge tags:** Subject and SMS fields use native `selectionStart` to detect `{{` and show the tag picker. The email body uses ReactQuill — detection must use Quill `text-change` / `selection-change` via `bindQuillMergeTagListeners` in `client/lib/quillMergeTags.ts` (React `onChange` clears selection). Picker anchors below the Quill toolbar (`top-11`).
+
+**Twilio Bulk Messaging (beta, ops-only):** Gated by env `BROADCAST_BULK_MESSAGING_ENABLED=1` or `BROADCAST_SMS_ENGINE=bulk` (default off — legacy Messages API). **Not shown in Settings UI.** When on, SMS (and the SMS half of `both`) uses Twilio Bulk Messages + Operation polling; email half stays on the legacy Resend loop. History shows a **Bulk** badge and detail shows Operation progress %. Merge tags in the SMS body force legacy Messages API. Billing still meters `sms_segments` labeled **Broadcast (Bulk)**. See `docs/TWILIO_BULK_MESSAGING_BROADCAST_PROPOSAL.md`.
 
 When `billing_quota_mode` ≥ `warn`, Broadcast Center uses **unified SMS/email quota** (not a separate dollar wallet):
 
@@ -1453,13 +1464,13 @@ When `billing_quota_mode` ≥ `warn`, Broadcast Center uses **unified SMS/email 
 
 **Tabs:** Live usage meters + expenditure cards; **Budget forecast** tab runs `computeBudgetForecast()` interactively.
 
-**Stripe:** `StripePlatformSubscription` ($350/mo) uses Payment Element once; card saved for renewals + top-ups. `StripeTopUpCheckout` charges the **saved card** via `POST /api/billing/stripe/charge-quote` after an **AlertDialog confirmation** (amount, pack label, card last4). Card-only, Link disabled. Test card `4242 4242 4242 4242`. Payment API failures show **“We're unable to take payment right now. Please try again later.”** to owners; real errors are logged server-side as `[billing] …` (see `sanitizeBillingError` + `shared/billing-errors.ts`).
+**Stripe:** `StripePlatformSubscription` ($350/mo) uses Payment Element once; card saved for renewals + top-ups. Active subscriptions show **subscription anniversary** dates (`periodStart → periodEnd`) and **“included quotas renew on {date}”** from `quotaRenewsOn` — no processor branding in UI (`billing-ui-copy.ts`). Calendar-month rollover applies only when no linked subscription. `StripeTopUpCheckout` charges the **saved card** via `POST /api/billing/stripe/charge-quote` after an **AlertDialog confirmation** (amount, pack label, card last4). Card-only, Link disabled. Test card `4242 4242 4242 4242`. Payment API failures show **“We're unable to take payment right now. Please try again later.”** to owners; real errors are logged server-side as `[billing] …` (see `sanitizeBillingError` + `shared/billing-errors.ts`).
 
 **Broadcast top-ups:** There is **no separate broadcast pack**. Blasts consume the unified SMS/email pools — `StripeTopUpCheckout` shows an orange **Broadcasting — unified quota** callout with last-30-day blast stats and shortcuts to the SMS/Email tabs. Full broadcast economics live in `BillingExpendedPeriod` above.
 
-**Economics (internal):** COGS math lives in `shared/billing-calculator.ts`. **Not shown to platform owners in production** — gated by `billingInternalEconomicsEnabled` on `GET /api/billing/config` (true only when `NODE_ENV=development` or `BILLING_INTERNAL_ECONOMICS=true`). When enabled: itemized fixed infra (`BillingInfraBreakdown`), margins, pack economics on top-up cards. Customers see usage vs quotas, retail prices, and owner spend only.
+**Economics (internal):** COGS math lives in `shared/billing-calculator.ts`. **Local dev only** — `billingInternalEconomicsEnabled` is true only when `NODE_ENV=development` (never production or Vercel preview). When enabled: itemized fixed infra (`BillingInfraBreakdown`), margins, pack economics on top-up cards. Platform owners in production see usage vs quotas, retail prices, and owner spend only — no vendor stack or COGS. Billing UI avoids processor/vendor names (`billing-ui-copy.ts`).
 
-**Payment flow:** subscribe → card on file → **capacity slider** (SMS / voice / email / scheduler / Mortgi tabs, tier slider + chips) → confirm modal → `charge-quote` → quota + purchase history refresh → quota granted idempotently. **`BillingPurchaseHistory`** shows active period plan vs top-up breakdown and Stripe top-ups with **Active this period** badges. Webhook backup. Deep links `/admin/billing?topup=1&pack=sms_1k` open SMS @ 1k tier. Encore HTML receipt on first grant (not Stripe receipt email). **Expended — last 30 days** counts historical sends only; top-ups update **Live quota balances** and meters, not past usage totals.
+**Payment flow:** subscribe → card on file → **capacity slider** (SMS / voice / email / scheduler / Mortgi tabs, tier slider + chips) → confirm modal → `charge-quote` → quota + purchase history refresh → quota granted idempotently. **`BillingPurchaseHistory`** shows active period plan vs top-up breakdown and Stripe top-ups with **Active this period** badges. Webhook backup. Deep links `/admin/billing?topup=1&pack=sms_1k` open SMS @ 1k tier. Encore HTML receipt on first grant (not Stripe receipt email). **Expended — current billing period** counts usage since period start (Stripe subscription or calendar month); top-ups update **Live quota balances** and meters, not past usage totals.
 
 **Payment required UX:** `BillingAccessBanner` (platform owner) at 80%+ quota, quota block, subscription grace (amber countdown), restricted, or suspended — **Pay now** / **Update payment** CTAs. `BillingTeamNoticeBanner` (brokers/admins) shows grace countdown, `soft_warn` at 80%+ (orange, sends not blocked), and “contact your administrator” copy with no billing links. `BillingSuspendedWall` is a full-screen overlay for platform owners only (billing page exempt). `BillingActionGate` wraps cost-generating controls (Conversations composer, Mortgi broker input, **Realtor Broadcasts** send step, etc.) with **fail-closed** behavior: locks while billing status is loading or fetch failed, and when `blocksCostActions` / `blocksOutbound` is true. Uses a disabled `<fieldset>` plus keyboard capture so Enter cannot bypass the overlay.
 
@@ -1484,6 +1495,10 @@ When `billing_quota_mode` ≥ `warn`, Broadcast Center uses **unified SMS/email 
 
 **Reservation TTL:** Cron `GET /api/cron/expire-quota-reservations` releases stale broadcast quota holds (`tenant_usage_reservations` TTL 120 min).
 
+### TiDB / Office 365 sync (infra cost)
+
+`communications` has composite index `idx_comm_external_id (tenant_id, external_id)` for Twilio/O365 dedup lookups. O365 cron (`GET /api/cron/sync-office365-mailboxes`) uses incremental Graph `$filter` on `receivedDateTime`, batch `IN (...)` dedup per folder, and an in-memory `graph_conversation_id` map (one query per mailbox per run) — avoids ~500K full-table scans per sync cycle that drove TiDB Request Unit spend.
+
 While `billing_quota_mode=off`, grace banners show but **no blocks or full wall** (safe deploy).
 
 Stripe webhooks `invoice.payment_failed`, `customer.subscription.updated` drive the ladder. Dev: `POST /api/billing/access/simulate` with `{ scenario: "past_due" | "active" }` in Stripe test mode.
@@ -1507,12 +1522,37 @@ Stripe webhooks `invoice.payment_failed`, `customer.subscription.updated` drive 
 
 ---
 
+### Overdue renewal (platform owner)
+
+Shown only to `platform_owner` while Stripe has an unpaid renewal invoice (`GET /api/billing/overdue`, independent of `billing_quota_mode`). Disappears automatically once paid (5-min poll + on tab focus + "I've paid — check status"). Same visual language as `BillingAccessBanner` / `BillingSuspendedWall`: theme tokens only (`destructive`, `primary`, `card`, `muted`), with `dark:text-red-400` on destructive text because dark `--destructive` is too dim for text.
+
+- **`BillingOverdueBar`** — permanent, non-dismissible `rounded-xl` banner (`border-destructive/40`, `bg-card` + `from-destructive/15` gradient wash, blurred accent), `sticky top-0` in `<main>` over a `bg-background/80 backdrop-blur-md` strip. Icon tile (`rounded-xl bg-destructive/15`, ping), "Payment overdue" + outline `Badge` with days, default **Pay now** button. Below 400px: icon tile hidden, button reads "Pay", title never wraps.
+- **`BillingOverdueDot`** — pulsing `bg-destructive` dot on avatars, the mobile menu button and the collapsed Billing nav icon; Billing nav item shows a `Badge variant="destructive"` **Overdue** (pulsing). The old access banner hides its subscription notices while the overdue bar is up (quota notices still show).
+- **`BillingOverdueInterstitial`** (mobile only) — frosted overlay (`bg-background/80 backdrop-blur-md`) with a `rounded-2xl border-destructive/30 bg-card` sheet anchored to the bottom on phones: icon tile, amount, days/invoice badge, `muted/30` bullet list of what pauses, default **Pay now** + outline "Remind me later" (locked 10s with a `bg-muted` fill), `SECURE_PAYMENT_NOTE`. Re-opens on every route change and app open (never on `/admin/billing`). Focus trapped; Escape closes only after the countdown.
+- **`BillingOverduePayCard`** — `Card` at the top of Billing (`id="billing-overdue"`, `scroll-mt-40 md:scroll-mt-28`): icon tile + `CardTitle`, overdue `Badge`, amount, invoice / attempts / next-retry chips. **Pays in-app** (no redirect): "Pay with" radio list of saved cards (selected = `border-primary bg-primary/5 ring-1`; unusable = muted, disabled, reason in destructive text — unsupported brand e.g. Amex, expired, hard-declined), dashed "Use a new card" opening the existing `ChangeCardForm` (Payment Element, card only) inline, inline error alert, full-width default **Pay $350.00 with Visa •••• 1450** button (3-D Secure handled in place via `stripe.handleNextAction`, label "Verifying with your bank…"), `SECURE_PAYMENT_NOTE`. Success swaps to an emerald "Payment received" card. The subscription form shows "renewal unpaid" and never auto-starts checkout once an overdue renewal has been seen.
+- Helpers: `useBillingOverdue` (polling, call once in `AdminLayout`), `useBillingOverdueValue`, `formatOverdueAmount`, `formatDaysOverdue`.
+
+---
+
 ## Conversations layout
 
 - **Desktop (`lg+`):** thread list (drag-resize) · message area · **contact panel** (`w-72`).
 - **Contact panel collapse:** toggle in the contact panel header only (`PanelRightClose` when open). Collapsed → slim right rail (`w-10`) with expand control; message area grows to fill space.
 - **Persistence:** `localStorage` key `conversations:contactPanelOpen` (`1` = open; **default closed**).
 - **Mobile:** contact panel hidden; tap avatar/name opens `ClientDetailPanel` slide-over.
+
+---
+
+## Blocked Numbers
+
+Tenant-wide block list for spam / robocalls. Admin, superadmin and platform_owner only (UI hidden for other roles; API returns 403).
+
+- **Reusable components:** `BlockNumberDialog` (Formik + Yup; phone, Calls / Texts switches, optional reason, optional "Also close this conversation") and `BlockedNumbersCard` (search, list, unblock with `AlertDialog` confirm). State lives in `blockedNumbersSlice` (`fetchBlockedNumbers`, `blockPhoneNumber`, `unblockPhoneNumber`, `selectIsPhoneBlocked`).
+- **Settings:** "Blocked Numbers" section under Phone Configuration, red accent (`bg-red-50/60`), `Ban` icon. Rows show number (`formatPhoneLabel`, mono + tabular nums), channel badges (`PhoneOff` Calls / `MessageSquareOff` Texts), reason, who blocked it, and "N attempts stopped". Rows stack on mobile; Unblock aligns right.
+- **Conversations header:** `⋮` menu → **Block number** (red) / **Unblock number** (emerald). A blocked thread shows a red outline `Blocked` badge next to the phone.
+- **Color:** destructive red for block actions and the icon tile (`bg-red-50 text-red-600 ring-red-100`); emerald for unblock.
+- **Motion:** spring-in icon tile in the dialog; list rows slide in, slide out right on unblock (`AnimatePresence` + `layout`).
+- **Behavior copy:** blocked calls hear a busy signal (never ring or leave voicemail); blocked texts are discarded; STOP / START are still honored.
 
 ---
 

@@ -52,7 +52,7 @@ export function BillingInfraBreakdown({
         ) : null}
       </ul>
       <p className="text-[11px] text-muted-foreground">
-        Excludes Twilio SMS/voice variable usage, card processing (~2.9% + $0.30/charge), and
+        Excludes variable SMS/voice usage, card processing (~2.9% + $0.30/charge), and
         Office 365 (tenant-provided).
       </p>
     </div>

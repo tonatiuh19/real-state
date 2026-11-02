@@ -16,6 +16,7 @@ When a client replies, the system detects the response and advances (or stops) t
 | `GET /api/cron/sync-o365-calendars`      | Every 30 min (cron) | Sync Outlook calendar events into scheduler blocked ranges    |
 | `GET /api/cron/sync-teams-policy`        | Every 24h (cron)    | Grant Teams app-access policy for users with Teams enabled    |
 | `GET /api/cron/purge-mms-media`          | Every 24h (cron)    | Delete expired MMS media rows from `mms_media` table          |
+| `GET /api/cron/purge-link-assets`        | Every 24h (cron)    | Delete orphan broadcast `link_assets` older than 90 days      |
 | `GET /api/cron/purge-old-data`           | Weekly (cron)       | Batched retention cleanup (logs, sessions, email body trim)   |
 | `POST /api/webhooks/inbound-sms`         | Real-time (Twilio)  | Receive SMS replies → mark executions responded               |
 
@@ -163,6 +164,35 @@ Expected response:
 > The 72-hour TTL is a generous safety buffer. Rows that have already been
 > served are still kept until the nightly purge — that's fine.
 
+### 2f2. Purge orphan broadcast link assets — daily
+
+Durable PDFs/images uploaded for short links / optional MMS live in `link_assets`.
+This job deletes rows older than **90 days** that are:
+
+- not referenced by `short_links.asset_id`, and
+- not attached to an in-flight broadcast (`draft` / `scheduled` / `sending`)
+
+| Field   | Value |
+| ------- | ----- |
+| Minute  | `10`  |
+| Hour    | `3`   |
+| Day     | `*`   |
+| Month   | `*`   |
+| Weekday | `*`   |
+
+```bash
+curl -s "https://portal.encoremortgage.org/api/cron/purge-link-assets?secret=YOUR_CRON_SECRET" > /dev/null 2>&1
+```
+
+Expected response:
+
+```json
+{ "success": true, "deleted": 2, "retention_days": 90 }
+```
+
+> Prefer short SMS + portal short link for large lists. MMS attachments should
+> stay rare (≤50 recipients); this purge keeps TiDB from accumulating flyer blobs.
+
 ### 2g. Purge old data (retention) — weekly
 
 Keeps TiDB row storage under control by deleting expired ephemeral rows and
@@ -211,6 +241,7 @@ Expected response:
 | Target | Retention |
 | ------ | --------- |
 | `mms_media` | expired (`expires_at <= NOW()`) |
+| `link_assets` | orphan blobs older than 90 days (same rules as `/api/cron/purge-link-assets`) |
 | `broker_sessions`, `user_sessions`, `revoked_tokens` | expired |
 | `audit_logs` | older than 90 days |
 | `email_sync_log` | older than 30 days |
@@ -221,8 +252,9 @@ Expected response:
 | `communications` (email `body`) | trim to 400 chars when older than 60 days |
 | `communications` (`provider_response` / `metadata`) | cleared when older than 90 days |
 
-> Keep **§2f** (`purge-mms-media`) on a **daily** schedule — MMS blobs are the
-> highest per-row cost. **§2g** handles everything else weekly.
+> Keep **§2f** (`purge-mms-media`) and **§2f2** (`purge-link-assets`) on a
+> **daily** schedule — media blobs are the highest per-row cost. **§2g** handles
+> everything else weekly.
 
 ### 2h. Process scheduled broadcasts — every 5 minutes
 
@@ -406,7 +438,7 @@ LIMIT 50;
 | `GET /api/cron/process-reminder-flows`       | `*/10 * * * *`                        | Advance flow executions — send SMS/email, evaluate branches, handle timeouts  |
 | `GET /api/cron/poll-inbound-email`           | `*/5 * * * *`                         | Detect email replies → mark executions responded → advance `responded` branch |
 | `GET /api/cron/sync-teams-policy`            | `10 2 * * *`                          | Auto-grant Teams policy for active users with Teams enabled                   |
-| `GET /api/cron/process-scheduled-broadcasts` | `*/5 * * * *`                         | Fire Realtor Broadcast campaigns whose scheduled time has arrived (≤10/tick)  |
+| `GET /api/cron/process-scheduled-broadcasts` | `*/5 * * * *`                         | Fire scheduled Realtor Broadcasts (≤10/tick) and resume stale `sending` campaigns (≤5/tick)  |
 | `POST /api/webhooks/inbound-sms`             | Real-time (Twilio)                    | Detect SMS replies → mark executions responded → advance `responded` branch   |
 | `POST /api/webhooks/inbound-email`           | Real-time (Postmark/Mailgun/SendGrid) | Detect email replies (alternative to IMAP poll)                               |
 

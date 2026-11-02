@@ -390,7 +390,12 @@ function NumericInput({
 
 // ─── Main Component ───────────────────────────────────────────────────────
 
-const CalculatorPage = () => {
+type CalculatorPageProps = {
+  /** Hide public “Apply Now” CTA when embedded in broker CRM */
+  hideApplyCta?: boolean;
+};
+
+const CalculatorPage = ({ hideApplyCta = false }: CalculatorPageProps) => {
   const [searchParams] = useSearchParams();
 
   // ── Inputs ──
@@ -566,34 +571,48 @@ const CalculatorPage = () => {
   };
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-start justify-between"
-      >
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-white">
-              <CalcIcon className="h-5 w-5" />
-            </div>
-            <h1 className="text-3xl font-bold tracking-tight">Calculator</h1>
-          </div>
-          <p className="text-muted-foreground">
-            Estimate your monthly mortgage payment in real time.
-          </p>
+    <div className={hideApplyCta ? "space-y-6" : "space-y-8"}>
+      {/* Header — compact when embedded in broker CRM */}
+      {hideApplyCta ? (
+        <div className="flex items-center justify-end print:hidden">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReset}
+            className="rounded-xl gap-2"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Reset
+          </Button>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleReset}
-          className="rounded-xl gap-2 flex"
+      ) : (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-start justify-between"
         >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Reset
-        </Button>
-      </motion.div>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-white">
+                <CalcIcon className="h-5 w-5" />
+              </div>
+              <h1 className="text-3xl font-bold tracking-tight">Calculator</h1>
+            </div>
+            <p className="text-muted-foreground">
+              Estimate your monthly mortgage payment in real time.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReset}
+            className="rounded-xl gap-2 flex"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Reset
+          </Button>
+        </motion.div>
+      )}
 
       <div className="grid gap-8 lg:grid-cols-[1fr_420px]">
         {/* ── LEFT: Inputs ── */}
@@ -1220,40 +1239,44 @@ const CalculatorPage = () => {
             </AnimatePresence>
           </div>
 
-          {/* Trust badges */}
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { icon: <Shield className="h-4 w-4" />, label: "Secure" },
-              { icon: <Info className="h-4 w-4" />, label: "Estimate Only" },
-              { icon: <Sparkles className="h-4 w-4" />, label: "Real-time" },
-            ].map((b) => (
-              <div
-                key={b.label}
-                className="flex flex-col items-center gap-1 rounded-xl border bg-muted/20 py-3 text-xs text-muted-foreground font-medium"
-              >
-                {b.icon}
-                {b.label}
-              </div>
-            ))}
-          </div>
-
-          {/* CTA */}
-          <div className="rounded-2xl border-2 border-primary/20 bg-primary/5 p-5 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-bold">Ready to apply?</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Start your mortgage application today.
-              </p>
+          {/* Trust badges — public/client only */}
+          {!hideApplyCta && (
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { icon: <Shield className="h-4 w-4" />, label: "Secure" },
+                { icon: <Info className="h-4 w-4" />, label: "Estimate Only" },
+                { icon: <Sparkles className="h-4 w-4" />, label: "Real-time" },
+              ].map((b) => (
+                <div
+                  key={b.label}
+                  className="flex flex-col items-center gap-1 rounded-xl border bg-muted/20 py-3 text-xs text-muted-foreground font-medium"
+                >
+                  {b.icon}
+                  {b.label}
+                </div>
+              ))}
             </div>
-            <Button
-              size="sm"
-              className="rounded-xl shrink-0 shadow-lg shadow-primary/25"
-              onClick={() => (window.location.href = "/apply")}
-            >
-              Apply Now
-              <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
-            </Button>
-          </div>
+          )}
+
+          {/* CTA — public/client only */}
+          {!hideApplyCta && (
+            <div className="rounded-2xl border-2 border-primary/20 bg-primary/5 p-5 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold">Ready to apply?</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Start your mortgage application today.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="rounded-xl shrink-0 shadow-lg shadow-primary/25"
+                onClick={() => (window.location.href = "/apply")}
+              >
+                Apply Now
+                <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
         </motion.div>
       </div>
     </div>

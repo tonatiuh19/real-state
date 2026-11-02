@@ -1,7 +1,12 @@
 import type { UnifiedQuotaSummary } from "@shared/api";
+import {
+  broadcastSmsQuotaUnits,
+  estimateBroadcastUnits as estimateBroadcastUnitsShared,
+  smsSegmentsFromBody as smsSegmentsFromBodyShared,
+} from "@shared/short-links";
 
 export function smsSegmentsFromBody(body: string): number {
-  return Math.ceil(Math.max((body || "").length, 1) / 160);
+  return smsSegmentsFromBodyShared(body);
 }
 
 export function estimateBroadcastUnits(params: {
@@ -9,17 +14,17 @@ export function estimateBroadcastUnits(params: {
   smsBody?: string;
   emailRecipientCount: number;
   smsRecipientCount: number;
+  hasMedia?: boolean;
 }): { sms_segments: number; email_sends: number } {
-  const segmentsPerSms = smsSegmentsFromBody(params.smsBody || "");
-  const sms_segments =
-    params.channel === "sms" || params.channel === "both"
-      ? params.smsRecipientCount * segmentsPerSms
-      : 0;
-  const email_sends =
-    params.channel === "email" || params.channel === "both"
-      ? params.emailRecipientCount
-      : 0;
-  return { sms_segments, email_sends };
+  return estimateBroadcastUnitsShared(params);
+}
+
+/** @deprecated Prefer estimateBroadcastUnits({ hasMedia }) */
+export function broadcastSmsUnits(
+  body: string,
+  hasMedia = false,
+): number {
+  return broadcastSmsQuotaUnits(body, hasMedia);
 }
 
 export function quotaSliceRemaining(slice: {

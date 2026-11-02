@@ -33,9 +33,18 @@ type ChangeFormProps = {
   onCancel: () => void;
   onSuccess: () => void;
   onError: (message: string) => void;
+  /** Defaults to "Save new card". */
+  submitLabel?: string;
 };
 
-function ChangeCardForm({ setupIntentId, onCancel, onSuccess, onError }: ChangeFormProps) {
+/** Saves a card via SetupIntent (Payment Element) and makes it the default. */
+export function ChangeCardForm({
+  setupIntentId,
+  onCancel,
+  onSuccess,
+  onError,
+  submitLabel = "Save new card",
+}: ChangeFormProps) {
   const stripe = useStripe();
   const elements = useElements();
   const dispatch = useAppDispatch();
@@ -96,7 +105,7 @@ function ChangeCardForm({ setupIntentId, onCancel, onSuccess, onError }: ChangeF
           ) : (
             <>
               <ShieldCheck className="h-4 w-4" />
-              Save new card
+              {submitLabel}
             </>
           )}
         </Button>

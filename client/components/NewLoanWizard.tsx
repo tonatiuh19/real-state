@@ -9,6 +9,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -71,7 +81,8 @@ import { fetchTasks } from "@/store/slices/tasksSlice";
 import { fetchBrokers } from "@/store/slices/brokersSlice";
 import ShareLinkModal from "@/components/ShareLinkModal";
 import { ApplicationSubmitFlowLegend } from "@/components/ApplicationSubmitFlowLegend";
-import type { GetClientsResponse, TaskTemplate } from "@shared/api";
+import { BrokerSearchSelect } from "@/components/BrokerSearchSelect";
+import type { CreateLoanRequest, GetClientsResponse, TaskTemplate } from "@shared/api";
 
 interface NewLoanWizardProps {
   open: boolean;
@@ -201,6 +212,14 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
   const [showDraftPrompt, setShowDraftPrompt] = useState(false);
   const [wasSuccessfullySubmitted, setWasSuccessfullySubmitted] =
     useState(false);
+  const [duplicatePhoneDialog, setDuplicatePhoneDialog] = useState<{
+    suggestions: Array<{
+      client_id: number;
+      client_name: string;
+      assigned_broker_name: string | null;
+    }>;
+    pendingValues: Record<string, unknown>;
+  } | null>(null);
 
   const { loanDraft } = useAppSelector((state) => state.pipeline);
 
@@ -282,20 +301,24 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
     }
   }, [open, dispatch, user, loanDraft]);
 
-  const handleFinalSubmit = async (values: any) => {
+  const handleFinalSubmit = async (
+    values: Record<string, unknown>,
+    confirmDuplicatePhone = false,
+  ) => {
     setIsSubmitting(true);
     try {
       await fullSchema.validate(values, { abortEarly: false });
 
       await dispatch(
         createLoan({
-          ...values,
+          ...(values as unknown as CreateLoanRequest),
           loan_amount: String(values.loan_amount),
           property_value: String(values.property_value),
           down_payment: String(values.down_payment),
           ...(isAdmin && selectedBrokerId
             ? { broker_user_id: selectedBrokerId }
             : {}),
+          ...(confirmDuplicatePhone ? { confirm_duplicate_phone: true } : {}),
           dependent_count: (() => {
             if (values.dependent_count === "" || values.dependent_count == null)
               return undefined;
@@ -339,11 +362,29 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
 
       // Reset success flag after a brief delay to ensure clean state
       setTimeout(() => setWasSuccessfullySubmitted(false), 100);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errObj =
+        error && typeof error === "object"
+          ? (error as Record<string, unknown>)
+          : null;
+      if (errObj?.error === "duplicate_phone_other_owners") {
+        setDuplicatePhoneDialog({
+          suggestions: (errObj.duplicate_suggestions as Array<{
+            client_id: number;
+            client_name: string;
+            assigned_broker_name: string | null;
+          }>) ?? [],
+          pendingValues: values,
+        });
+        return;
+      }
       toast({
         title: "Error",
         description:
-          (typeof error === "string" && error) || "Failed to create loan",
+          (typeof error === "string" && error) ||
+          (typeof errObj?.error === "string" && errObj.error) ||
+          (typeof errObj?.message === "string" && errObj.message) ||
+          "Failed to create loan",
         variant: "destructive",
       });
     } finally {
@@ -545,14 +586,14 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
           }
         }}
       >
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+        <DialogContent className="!flex !flex-col max-w-3xl w-[calc(100%-1.5rem)] sm:w-full max-h-[min(92dvh,92vh)] p-0 gap-0 overflow-hidden">
           {/* ── Mode Selection ── shown when dialog first opens */}
           {mode === null && (
             <AnimatePresence>
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex flex-col py-6"
+                className="flex flex-col py-6 px-6 overflow-y-auto"
               >
                 {/* Header */}
                 <div className="mb-6 text-center">
@@ -621,7 +662,11 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
 
           {/* ── Existing wizard content — only shown when mode = 'manual' ── */}
           {mode === "manual" && (
-            <>
+            <form
+              onSubmit={formik.handleSubmit}
+              className="flex flex-col flex-1 min-h-0 overflow-hidden"
+            >
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 pt-6 pb-4">
               <DialogHeader>
                 <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
                   Create New Loan Application
@@ -721,7 +766,7 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                 <Progress value={progress} className="h-2" />
               </div>
 
-              <form onSubmit={formik.handleSubmit} className="space-y-6">
+              <div className="space-y-6">
                 {/* Step 1: Client Information */}
                 {currentStep === 1 && (
                   <div className="space-y-4 animate-in fade-in slide-in-from-right-5 duration-300">
@@ -1115,7 +1160,9 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                       />
                     </div>
 
-                    {/* Broker Assignment (Admin Only) */}
+                    {/* Broker Assignment (Admin Only) — searchable so long
+                        directories (partners/realtors past "Angeles…") stay
+                        reachable inside the dialog */}
                     {isAdmin && (
                       <div className="pt-4 border-t">
                         <Label
@@ -1125,41 +1172,44 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                           <User className="h-4 w-4" />
                           Assign to Broker
                         </Label>
-                        <Select
-                          value={selectedBrokerId?.toString() || ""}
-                          onValueChange={(value) =>
-                            setSelectedBrokerId(parseInt(value))
-                          }
-                          disabled={brokersLoading}
-                        >
-                          <SelectTrigger className="mt-2">
-                            <SelectValue placeholder="Select broker..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {brokersLoading ? (
-                              <SelectItem value="loading" disabled>
-                                Loading brokers...
-                              </SelectItem>
-                            ) : brokers.length > 0 ? (
-                              brokers.map((broker) => (
-                                <SelectItem
-                                  key={broker.id}
-                                  value={broker.id.toString()}
-                                >
-                                  {broker.first_name} {broker.last_name}
-                                  {broker.id === user?.id && " (Me)"}
-                                </SelectItem>
-                              ))
-                            ) : (
-                              <SelectItem value="none" disabled>
-                                No brokers available
-                              </SelectItem>
-                            )}
-                          </SelectContent>
-                        </Select>
+                        <div className="mt-2">
+                          <BrokerSearchSelect
+                            value={
+                              selectedBrokerId != null
+                                ? String(selectedBrokerId)
+                                : ""
+                            }
+                            onValueChange={(value) => {
+                              if (value === "unassigned" || value === "") {
+                                setSelectedBrokerId(user?.id ?? null);
+                                return;
+                              }
+                              const id = parseInt(value, 10);
+                              setSelectedBrokerId(
+                                Number.isFinite(id) ? id : null,
+                              );
+                            }}
+                            disabled={brokersLoading}
+                            allowUnassigned={false}
+                            placeholder="Search brokers & partners…"
+                            selectedDisplayName={(() => {
+                              const selected = brokers.find(
+                                (b) => b.id === selectedBrokerId,
+                              );
+                              if (selected) {
+                                return `${selected.first_name} ${selected.last_name}${selected.id === user?.id ? " (Me)" : ""}`;
+                              }
+                              if (selectedBrokerId === user?.id && user) {
+                                return `${user.first_name} ${user.last_name} (Me)`;
+                              }
+                              return undefined;
+                            })()}
+                          />
+                        </div>
                         <p className="text-xs text-muted-foreground mt-2">
-                          Assign this loan to yourself or another broker in your
-                          team.
+                          Assign this loan to yourself or another broker /
+                          partner in your team. Type a name to jump past the
+                          start of the alphabet.
                         </p>
                       </div>
                     )}
@@ -1727,44 +1777,90 @@ const NewLoanWizard: React.FC<NewLoanWizardProps> = ({
                     <ApplicationSubmitFlowLegend variant="broker" />
                   </div>
                 )}
+              </div>
+              </div>
 
-                {/* Navigation Buttons */}
-                <div className="flex justify-between pt-6 border-t">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={currentStep === 1 ? handleClose : handlePrevious}
-                  >
-                    {currentStep === 1 ? (
-                      "Cancel"
-                    ) : (
-                      <>
-                        <ArrowLeft className="h-4 w-4 mr-2" /> Previous
-                      </>
-                    )}
-                  </Button>
-                  <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />{" "}
-                        Creating...
-                      </>
-                    ) : currentStep === 5 ? (
-                      <>
-                        <CheckCircle className="h-4 w-4 mr-2" /> Create Loan
-                      </>
-                    ) : (
-                      <>
-                        Next <ArrowRight className="h-4 w-4 ml-2" />
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </form>
-            </>
+              {/* Sticky footer — always visible above mobile browser chrome / Mortgi tab */}
+              <div className="shrink-0 flex justify-between gap-3 border-t bg-background px-6 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={currentStep === 1 ? handleClose : handlePrevious}
+                >
+                  {currentStep === 1 ? (
+                    "Cancel"
+                  ) : (
+                    <>
+                      <ArrowLeft className="h-4 w-4 mr-2" /> Previous
+                    </>
+                  )}
+                </Button>
+                <Button type="submit" disabled={isSubmitting} className="min-w-[7.5rem]">
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />{" "}
+                      Creating...
+                    </>
+                  ) : currentStep === 5 ? (
+                    <>
+                      <CheckCircle className="h-4 w-4 mr-2" /> Create Loan
+                    </>
+                  ) : (
+                    <>
+                      Next <ArrowRight className="h-4 w-4 ml-2" />
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
           )}
         </DialogContent>
       </Dialog>
+      <AlertDialog
+        open={duplicatePhoneDialog != null}
+        onOpenChange={(open) => {
+          if (!open) setDuplicatePhoneDialog(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Same phone on another banker&apos;s list</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Other mortgage bankers already have client rows with this phone.
+                  You can still create the loan on your borrower row, or request a
+                  link from the People view later.
+                </p>
+                {duplicatePhoneDialog?.suggestions?.length ? (
+                  <ul className="list-disc pl-5 space-y-1">
+                    {duplicatePhoneDialog.suggestions.map((s) => (
+                      <li key={s.client_id}>
+                        {s.client_name}
+                        {s.assigned_broker_name
+                          ? ` (${s.assigned_broker_name})`
+                          : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = duplicatePhoneDialog?.pendingValues;
+                setDuplicatePhoneDialog(null);
+                if (pending) void handleFinalSubmit(pending, true);
+              }}
+            >
+              Create loan anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <ShareLinkModal
         open={showShareLinkModal}
         onOpenChange={(isOpen) => {
