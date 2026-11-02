@@ -8522,7 +8522,9 @@ paths:
               type: object
       responses:
         "200":
-          description: Event received
+          description: >
+            Event received. The Stripe account is shared: events whose metadata.tenant_id
+            names another tenant return ignored=true and are not recorded or processed.
 
   /cron/process-scheduled-broadcasts:
     get:
