@@ -2423,6 +2423,33 @@ CREATE TABLE `email_sync_log` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
+-- Table structure for table `broker_delegations`
+-- Owner broker grants a delegate scoped access to their clients, realtors,
+-- conversations and (optionally) their personal Twilio line.
+--
+
+CREATE TABLE IF NOT EXISTS `broker_delegations` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `tenant_id` int NOT NULL,
+  `owner_broker_id` int NOT NULL COMMENT 'Broker whose data/line is shared',
+  `delegate_broker_id` int NOT NULL COMMENT 'Broker who receives access',
+  `can_view_clients` tinyint(1) NOT NULL DEFAULT '1',
+  `can_view_realtors` tinyint(1) NOT NULL DEFAULT '1',
+  `can_view_conversations` tinyint(1) NOT NULL DEFAULT '1',
+  `can_send_from_line` tinyint(1) NOT NULL DEFAULT '0' COMMENT '1 = delegate may send SMS / call from owner twilio_caller_id',
+  `created_by_broker_id` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `revoked_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_broker_delegation_pair` (`tenant_id`,`owner_broker_id`,`delegate_broker_id`),
+  KEY `idx_broker_delegations_delegate` (`tenant_id`,`delegate_broker_id`,`revoked_at`),
+  CONSTRAINT `fk_broker_delegations_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_broker_delegations_owner` FOREIGN KEY (`owner_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_broker_delegations_delegate` FOREIGN KEY (`delegate_broker_id`) REFERENCES `brokers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
 -- Table structure for table `broker_role_section_permissions`
 -- Per-role sidebar visibility control. platform_owner always sees everything.
 -- admin and broker visibility is seeded here; configurable by platform_owner.

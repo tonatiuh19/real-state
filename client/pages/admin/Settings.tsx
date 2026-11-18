@@ -17,6 +17,7 @@ import {
   Lock,
   Download,
   Ban,
+  Users,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { MetaHelmet } from "@/components/MetaHelmet";
@@ -46,6 +47,7 @@ import {
   setPermission,
 } from "@/store/slices/roleSectionPermissionsSlice";
 import { BlockedNumbersCard } from "@/components/BlockedNumbersCard";
+import { PhoneLinesTeamAccessCard } from "@/components/PhoneLinesTeamAccessCard";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -583,10 +585,23 @@ const Settings = () => {
                 <BlockedNumbersCard canEdit={isAdmin} />
               </SettingsSection>
 
+              {/* Phone lines & team access — admins / platform owner */}
+              {isAdmin && (
+                <SettingsSection
+                  index={4}
+                  icon={Users}
+                  title="Phone lines & team access"
+                  description="Shared main line ring group, and who can work whose book"
+                  accent="bg-sky-50/60"
+                >
+                  <PhoneLinesTeamAccessCard />
+                </SettingsSection>
+              )}
+
               {/* Role Section Permissions — platform_owner only */}
               {isPlatformOwner && (
                 <SettingsSection
-                  index={4}
+                  index={5}
                   icon={ShieldCheck}
                   title="Role Visibility"
                   description="Control which sidebar sections are visible for Mortgage Bankers and Partners"

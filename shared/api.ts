@@ -1287,6 +1287,8 @@ export interface GetTaskSignaturesResponse {
 export interface ConversationThread {
   id: number;
   conversation_id: string;
+  /** Twilio line this thread sends/receives on (E.164). */
+  inbox_number?: string | null;
   application_id?: number | null;
   lead_id?: number | null;
   client_id?: number | null;
@@ -1445,6 +1447,8 @@ export interface EmailRecipient {
 }
 
 export interface SendMessageRequest {
+  /** Optional E.164 line to send from (must be in GET /api/voice/lines). */
+  from_line?: string;
   conversation_id?: string;
   application_id?: number;
   lead_id?: number;
@@ -4173,4 +4177,81 @@ export interface CreateBlockedPhoneNumberResponse {
 export interface DeleteBlockedPhoneNumberResponse {
   success: boolean;
   error?: string;
+}
+
+// ============================================================================
+// Phone lines, shared main line & broker delegations
+// Pure helpers: shared/broker-delegation.ts (inlined in api/index.ts).
+// ============================================================================
+
+export type SendableLineKind = "main" | "personal" | "delegated";
+
+export interface SendableLine {
+  /** E.164 */
+  number: string;
+  kind: SendableLineKind;
+  label: string;
+  owner_broker_id: number | null;
+  is_default: boolean;
+}
+
+/** GET /api/voice/lines */
+export interface SendableLinesResponse {
+  success: boolean;
+  lines: SendableLine[];
+}
+
+export interface BrokerDelegation {
+  id: number;
+  owner_broker_id: number;
+  owner_name: string;
+  owner_line: string | null;
+  delegate_broker_id: number;
+  delegate_name: string;
+  delegate_email: string | null;
+  delegate_role: string | null;
+  can_view_clients: boolean;
+  can_view_realtors: boolean;
+  can_view_conversations: boolean;
+  can_send_from_line: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /api/broker-delegations */
+export interface BrokerDelegationsResponse {
+  success: boolean;
+  delegations: BrokerDelegation[];
+}
+
+/** POST /api/broker-delegations */
+export interface UpsertBrokerDelegationRequest {
+  owner_broker_id?: number;
+  delegate_broker_id: number;
+  can_view_clients?: boolean;
+  can_view_realtors?: boolean;
+  can_view_conversations?: boolean;
+  can_send_from_line?: boolean;
+}
+
+export interface UpsertBrokerDelegationResponse {
+  success: boolean;
+  delegation: BrokerDelegation;
+}
+
+export interface MainLineConfigDto {
+  number: string | null;
+  ring_broker_ids: number[];
+  ring_brokers: Array<{ id: number; name: string }>;
+}
+
+/** GET/PUT /api/settings/main-line */
+export interface MainLineResponse {
+  success: boolean;
+  main_line: MainLineConfigDto;
+}
+
+export interface UpdateMainLineRequest {
+  number: string | null;
+  ring_broker_ids: number[];
 }

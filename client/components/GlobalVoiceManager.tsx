@@ -2,20 +2,39 @@ import React, { useEffect, useRef, useCallback, useState } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import * as AblyLib from "ably";
 import { getSharedAblyClient } from "@/lib/ably-client";
-import { Phone, PhoneOff, PhoneIncoming } from "lucide-react";
+import { Phone, PhoneOff, PhoneIncoming, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   setDeviceStatus,
+  setDeviceError,
+  setVoiceAvailable,
+  requestVoiceReconnect,
+  notifyCallAnswered,
   endOutboundCall,
   resolveOutboundCallName,
   fetchVoiceToken,
   updateVoiceAvailability,
   lookupContact,
 } from "@/store/slices/voiceSlice";
+import type { VoiceTokenRejection } from "@/store/slices/voiceSlice";
 import VoiceCallPanel from "@/components/VoiceCallPanel";
 import { VoiceDeviceProvider } from "@/contexts/VoiceDeviceContext";
 import { logger } from "@/lib/logger";
+import VoiceErrorAlert from "@/components/VoiceErrorAlert";
+import {
+  applyInputDevice,
+  backoffDelayMs,
+  describeVoiceError,
+  getSavedMicId,
+  isMicError,
+  preflightMicrophone,
+  type VoiceErrorInfo,
+} from "@/utils/voiceErrors";
+
+/** Max attempts for token fetch / register before giving up (≈1+2+4 s of backoff). */
+const MAX_VOICE_ATTEMPTS = 4;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * GlobalVoiceManager — mounted once inside AdminLayout so the Twilio Device
@@ -27,6 +46,15 @@ const GlobalVoiceManager: React.FC = () => {
   const { sessionToken } = useAppSelector((s) => s.brokerAuth);
   const isAvailable = useAppSelector((s) => s.voice.isAvailable);
   const outboundCall = useAppSelector((s) => s.voice.outboundCall);
+  const deviceStatus = useAppSelector((s) => s.voice.deviceStatus);
+  const deviceError = useAppSelector((s) => s.voice.deviceError);
+  const reconnectNonce = useAppSelector((s) => s.voice.reconnectNonce);
+
+  // Latest availability for async setup/retry code (avoids stale closures).
+  const isAvailableRef = useRef(isAvailable);
+  isAvailableRef.current = isAvailable;
+  const deviceStatusRef = useRef(deviceStatus);
+  deviceStatusRef.current = deviceStatus;
 
   const deviceRef = useRef<Device | null>(null);
   // Prevents the [isAvailable] effect from calling register() before setup() completes.
@@ -50,6 +78,11 @@ const GlobalVoiceManager: React.FC = () => {
   const [activeIncomingCall, setActiveIncomingCall] = useState<Call | null>(
     null,
   );
+  // Mic preflight failure while a call is ringing (shown on the ringing card).
+  const [ringingError, setRingingError] = useState<VoiceErrorInfo | null>(null);
+  const [accepting, setAccepting] = useState(false);
+  // Session-only dismissal for the "offline for calls" / device error banners.
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   // Tracks the Device's audio helper so inbound VoiceCallPanel can switch devices
   const [deviceAudio, setDeviceAudio] = useState<Device["audio"] | null>(null);
 
@@ -61,13 +94,67 @@ const GlobalVoiceManager: React.FC = () => {
     [dispatch],
   );
 
-  const fetchToken = useCallback(async (): Promise<string | null> => {
-    try {
-      return await dispatch(fetchVoiceToken()).unwrap();
-    } catch {
+  /**
+   * Fetch a voice token with bounded exponential backoff. Non-retryable
+   * failures (402 quota, 401/403) stop immediately. The mapped reason is
+   * stored in voiceSlice.deviceError so the UI can explain it.
+   */
+  const fetchToken = useCallback(
+    async (
+      isCancelled: () => boolean = () => false,
+    ): Promise<string | null> => {
+      for (let attempt = 0; attempt < MAX_VOICE_ATTEMPTS; attempt++) {
+        try {
+          const token = await dispatch(fetchVoiceToken()).unwrap();
+          return token;
+        } catch (rej) {
+          const r = (rej ?? {}) as Partial<VoiceTokenRejection>;
+          const info = describeVoiceError({
+            status: typeof r.status === "number" ? r.status : 0,
+            message: r.message,
+          });
+          dispatch(setDeviceError(info));
+          logger.warn(
+            `[GlobalVoiceManager] Token fetch failed (attempt ${attempt + 1}/${MAX_VOICE_ATTEMPTS}):`,
+            info.code,
+            info.message,
+          );
+          if (!info.retryable || attempt === MAX_VOICE_ATTEMPTS - 1) break;
+          await sleep(backoffDelayMs(attempt));
+          if (isCancelled()) return null;
+        }
+      }
       return null;
-    }
-  }, [dispatch]);
+    },
+    [dispatch],
+  );
+
+  /** register() with bounded exponential backoff; sets status "error" + reason on final failure. */
+  const registerWithRetry = useCallback(
+    async (device: Device, isCancelled: () => boolean = () => false) => {
+      for (let attempt = 0; attempt < MAX_VOICE_ATTEMPTS; attempt++) {
+        if (isCancelled() || !isAvailableRef.current) return;
+        if (device.state === Device.State.Registered) return;
+        try {
+          await device.register();
+          return;
+        } catch (err) {
+          const info = describeVoiceError(err);
+          logger.warn(
+            `[GlobalVoiceManager] register() failed (attempt ${attempt + 1}/${MAX_VOICE_ATTEMPTS}):`,
+            err,
+          );
+          if (!info.retryable || attempt === MAX_VOICE_ATTEMPTS - 1) {
+            dispatch(setDeviceError(info));
+            dispatch(setDeviceStatus("error"));
+            return;
+          }
+          await sleep(backoffDelayMs(attempt));
+        }
+      }
+    },
+    [dispatch],
+  );
 
   // Keep `busyRef` in sync so the Twilio "incoming" handler (which captures
   // refs, not state) knows whether to reject a concurrent inbound call.
@@ -100,13 +187,16 @@ const GlobalVoiceManager: React.FC = () => {
     if (!sessionToken) return;
 
     let device: Device | null = null;
+    let cancelled = false;
+    const isCancelled = () => cancelled;
 
     const setup = async () => {
       // Reset any stale DB availability from a previous session/tab before we start.
       reportAvailability(false);
       dispatch(setDeviceStatus("connecting"));
 
-      const token = await fetchToken();
+      const token = await fetchToken(isCancelled);
+      if (cancelled) return;
       if (!token) {
         logger.error("[GlobalVoiceManager] Failed to fetch voice token");
         dispatch(setDeviceStatus("error"));
@@ -143,15 +233,42 @@ const GlobalVoiceManager: React.FC = () => {
         reportAvailability(false);
       });
 
-      device.on("error", (err) => {
+      device.on("error", async (err) => {
         logger.error("[GlobalVoiceManager] Device error:", err);
-        dispatch(setDeviceStatus("error"));
+        const info = describeVoiceError(err);
+        const current = device;
+        if (!current) return;
+        // Mic errors belong to a specific call — VoiceCallPanel shows them.
+        // Don't mark the whole Device as broken when it's still registered.
+        if (isMicError(info) && current.state === Device.State.Registered) {
+          return;
+        }
+        dispatch(setDeviceError(info));
+        if (info.category === "token") {
+          const newToken = await fetchToken(isCancelled);
+          if (newToken && !cancelled) {
+            current.updateToken(newToken);
+            if (isAvailableRef.current) registerWithRetry(current, isCancelled);
+            return;
+          }
+        } else if (
+          info.retryable &&
+          current.state !== Device.State.Registered &&
+          isAvailableRef.current
+        ) {
+          dispatch(setDeviceStatus("connecting"));
+          registerWithRetry(current, isCancelled);
+          return;
+        }
+        if (current.state !== Device.State.Registered) {
+          dispatch(setDeviceStatus("error"));
+        }
       });
 
       device.on("tokenAboutToExpire", async () => {
         logger.log("[GlobalVoiceManager] Token about to expire — refreshing");
         try {
-          const newToken = await fetchToken();
+          const newToken = await fetchToken(isCancelled);
           if (newToken) {
             device?.updateToken(newToken);
           } else {
@@ -168,7 +285,7 @@ const GlobalVoiceManager: React.FC = () => {
       device.on("tokenExpired", async () => {
         logger.warn("[GlobalVoiceManager] Token expired — refreshing");
         try {
-          const newToken = await fetchToken();
+          const newToken = await fetchToken(isCancelled);
           if (newToken) {
             device?.updateToken(newToken);
           } else {
@@ -210,14 +327,12 @@ const GlobalVoiceManager: React.FC = () => {
         setRingingClientName(null);
         setRingingClientId(null);
         setRingingCall(call);
+        setRingingError(null);
 
         // Look up the caller's client record by phone number
-        if (from && sessionToken) {
-          fetch(
-            `/api/conversations/lookup-contact?phone=${encodeURIComponent(from)}`,
-            { headers: { Authorization: `Bearer ${sessionToken}` } },
-          )
-            .then((r) => r.json())
+        if (from) {
+          dispatch(lookupContact(from))
+            .unwrap()
             .then((data) => {
               if (data.found) {
                 setRingingClientName(data.client_name ?? null);
@@ -247,11 +362,8 @@ const GlobalVoiceManager: React.FC = () => {
       // ── Register based on current availability preference ─────────
       // Mark ready so the [isAvailable] toggle effect can take over from here.
       deviceReadyRef.current = true;
-      if (isAvailable) {
-        device.register().catch((err) => {
-          logger.error("[GlobalVoiceManager] register() failed:", err);
-          dispatch(setDeviceStatus("error"));
-        });
+      if (isAvailableRef.current) {
+        registerWithRetry(device, isCancelled);
       } else {
         dispatch(setDeviceStatus("idle"));
       }
@@ -260,6 +372,7 @@ const GlobalVoiceManager: React.FC = () => {
     setup();
 
     return () => {
+      cancelled = true;
       deviceReadyRef.current = false;
       device?.removeAllListeners();
       device?.destroy();
@@ -269,21 +382,25 @@ const GlobalVoiceManager: React.FC = () => {
       reportAvailability(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionToken]);
+  }, [sessionToken, reconnectNonce]);
 
   // Handle availability toggle.
   // On initial mount this fires too, but deviceReadyRef.current is false then
   // so the device operations are skipped until setup() completes.
   useEffect(() => {
-    if (!deviceReadyRef.current || !deviceRef.current) return;
+    if (!deviceReadyRef.current || !deviceRef.current) {
+      // Setup previously failed (e.g. token error) — going available rebuilds it.
+      if (isAvailable && deviceStatusRef.current === "error") {
+        dispatch(requestVoiceReconnect());
+      }
+      return;
+    }
     const device = deviceRef.current;
 
     if (isAvailable) {
+      setBannerDismissed(false);
       dispatch(setDeviceStatus("connecting"));
-      device.register().catch((err) => {
-        logger.error("[GlobalVoiceManager] register() failed on toggle:", err);
-        dispatch(setDeviceStatus("error"));
-      });
+      registerWithRetry(device);
     } else {
       device.unregister().catch(() => {});
       if (ringingCallRef.current) {
@@ -343,13 +460,31 @@ const GlobalVoiceManager: React.FC = () => {
     };
   }, [sessionToken]);
 
-  const handleAccept = () => {
-    if (!ringingCall) return;
+  const handleAccept = async () => {
+    if (!ringingCall || accepting) return;
+    const call = ringingCall;
+    setAccepting(true);
+    setRingingError(null);
+    // Preflight the mic so a blocked/busy mic shows guidance instead of
+    // accepting a call that immediately fails with 31401/31402.
+    const preflight = await preflightMicrophone(getSavedMicId());
+    setAccepting(false);
+    if (!preflight.ok) {
+      logger.warn(
+        "[GlobalVoiceManager] Mic preflight failed:",
+        preflight.error,
+      );
+      setRingingError(preflight.error);
+      return;
+    }
+    // Caller may have hung up while we were checking the mic.
+    if (ringingCallRef.current !== call) return;
+    await applyInputDevice(deviceRef.current?.audio, preflight.deviceId);
     // Grab SID before clearing refs
     const sid = ringingCallSidRef.current;
     // Pass rtcConstraints so echo-cancellation / noise-suppression / AGC apply
     // to the actual WebRTC audio track the recipient hears, not just the meter.
-    ringingCall.accept({
+    call.accept({
       rtcConstraints: {
         audio: {
           echoCancellation: true,
@@ -358,21 +493,12 @@ const GlobalVoiceManager: React.FC = () => {
         },
       },
     });
-    setActiveIncomingCall(ringingCall);
+    setActiveIncomingCall(call);
     ringingCallRef.current = null;
     ringingCallSidRef.current = null;
     setRingingCall(null);
     // Immediately notify all other online brokers via Ably to dismiss their ringing UI
-    if (sid && sessionToken) {
-      fetch("/api/voice/call-answered", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({ callSid: sid }),
-      }).catch(() => {});
-    }
+    if (sid) dispatch(notifyCallAnswered(sid));
   };
 
   const handleDecline = () => {
@@ -380,6 +506,7 @@ const GlobalVoiceManager: React.FC = () => {
     ringingCall.reject();
     ringingCallRef.current = null;
     setRingingCall(null);
+    setRingingError(null);
     setRingingPhone("");
     setRingingClientName(null);
     setRingingClientId(null);
@@ -393,6 +520,9 @@ const GlobalVoiceManager: React.FC = () => {
   };
 
   if (!sessionToken) return null;
+
+  const showStatusBanner =
+    !bannerDismissed && !ringingCall && !activeIncomingCall;
 
   return (
     <VoiceDeviceProvider deviceRef={deviceRef}>
@@ -427,13 +557,22 @@ const GlobalVoiceManager: React.FC = () => {
                 )}
               </div>
             </div>
+            {ringingError && (
+              <VoiceErrorAlert
+                error={ringingError}
+                defaultExpanded
+                onRetry={handleAccept}
+                retryLabel="Check mic & accept"
+              />
+            )}
             <div className="flex gap-2">
               <Button
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9 text-sm gap-1.5"
                 onClick={handleAccept}
+                disabled={accepting}
               >
                 <Phone className="h-4 w-4" />
-                Accept
+                {accepting ? "Checking mic…" : "Accept"}
               </Button>
               <Button
                 variant="destructive"
@@ -447,6 +586,49 @@ const GlobalVoiceManager: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Offline-for-calls / device error status — never silently off */}
+      {showStatusBanner && !isAvailable && (
+        <div className="fixed bottom-4 left-4 right-4 sm:right-auto sm:bottom-6 sm:left-6 z-40 animate-in slide-in-from-bottom-4 fade-in duration-300">
+          <div className="flex items-center gap-2 rounded-full border border-border bg-card/95 backdrop-blur pl-3 pr-1.5 py-1.5 shadow-lg sm:w-auto">
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="h-2 w-2 rounded-full bg-muted-foreground/60" />
+            </span>
+            <PhoneOff className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs text-foreground truncate">
+              You're offline for calls
+            </span>
+            <Button
+              size="sm"
+              className="h-7 rounded-full px-3 text-xs bg-green-600 hover:bg-green-700 text-white ml-auto"
+              onClick={() => dispatch(setVoiceAvailable(true))}
+            >
+              Go available
+            </Button>
+            <button
+              type="button"
+              className="rounded-full p-1 text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setBannerDismissed(true)}
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+      {showStatusBanner &&
+        isAvailable &&
+        deviceStatus === "error" &&
+        deviceError && (
+          <div className="fixed bottom-4 left-4 right-4 sm:right-auto sm:bottom-6 sm:left-6 sm:w-80 z-40 shadow-xl rounded-lg animate-in slide-in-from-bottom-4 fade-in duration-300">
+            <VoiceErrorAlert
+              error={deviceError}
+              onRetry={() => dispatch(requestVoiceReconnect())}
+              retryLabel="Reconnect"
+              onDismiss={() => setBannerDismissed(true)}
+            />
+          </div>
+        )}
 
       {/* Active call panel after accepting */}
       {activeIncomingCall && (

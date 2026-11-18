@@ -1,6 +1,13 @@
 import { createSlice, createAsyncThunk, PayloadAction } from "@reduxjs/toolkit";
 import axios from "axios";
 import type { RootState } from "../index";
+import type { VoiceErrorInfo } from "@/utils/voiceErrors";
+
+export interface VoiceTokenRejection {
+  message: string;
+  /** HTTP status (0 = network failure). 402 = quota/billing, 503 = not configured. */
+  status: number;
+}
 
 // ── Async thunks ──────────────────────────────────────────────────────────────
 
@@ -17,14 +24,15 @@ export const fetchVoiceToken = createAsyncThunk(
       return data.token;
     } catch (error: any) {
       const data = error.response?.data;
-      const message =
+      const status: number = error.response?.status ?? 0;
+      const message: string =
         data?.detail ||
         data?.headline ||
         data?.message ||
         (error.response?.status === 402
           ? "Voice minutes quota exceeded or billing action required"
           : "Failed to fetch voice token");
-      return rejectWithValue(message);
+      return rejectWithValue({ message, status } as VoiceTokenRejection);
     }
   },
 );
@@ -39,6 +47,24 @@ interface VoiceLogPayload {
   client_name?: string;
   direction?: string;
 }
+
+/** Broadcasts (via Ably on the server) that this broker answered a call. Fire-and-forget. */
+export const notifyCallAnswered = createAsyncThunk(
+  "voice/notifyCallAnswered",
+  async (callSid: string, { getState }) => {
+    const { sessionToken } = (getState() as RootState).brokerAuth;
+    try {
+      await axios.post(
+        "/api/voice/call-answered",
+        { callSid },
+        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      );
+    } catch {
+      // Non-fatal — the Twilio cancel event dismisses other brokers' UI anyway.
+    }
+    return callSid;
+  },
+);
 
 export const logVoiceCall = createAsyncThunk(
   "voice/logCall",
@@ -362,14 +388,27 @@ interface VoiceState {
   deviceStatus: DeviceStatus;
   /** When set, GlobalVoiceManager renders a persistent floating outbound call panel. */
   outboundCall: OutboundCallTarget | null;
+  /** Why the device is in "error" (or last transient failure) — shown in the UI. */
+  deviceError: VoiceErrorInfo | null;
+  /** Incremented to ask GlobalVoiceManager to tear down and rebuild the Device. */
+  reconnectNonce: number;
 }
 
-const stored = localStorage.getItem("voice_available");
+const readStoredAvailability = (): boolean => {
+  try {
+    const stored = localStorage.getItem("voice_available");
+    return stored === null ? true : stored === "true";
+  } catch {
+    return true;
+  }
+};
 
 const initialState: VoiceState = {
-  isAvailable: stored === null ? true : stored === "true",
+  isAvailable: readStoredAvailability(),
   deviceStatus: "idle",
   outboundCall: null,
+  deviceError: null,
+  reconnectNonce: 0,
 };
 
 const voiceSlice = createSlice({
@@ -378,10 +417,22 @@ const voiceSlice = createSlice({
   reducers: {
     setVoiceAvailable(state, action: PayloadAction<boolean>) {
       state.isAvailable = action.payload;
-      localStorage.setItem("voice_available", String(action.payload));
+      try {
+        localStorage.setItem("voice_available", String(action.payload));
+      } catch {
+        /* storage unavailable — keep in-memory value */
+      }
     },
     setDeviceStatus(state, action: PayloadAction<DeviceStatus>) {
       state.deviceStatus = action.payload;
+      if (action.payload === "registered") state.deviceError = null;
+    },
+    setDeviceError(state, action: PayloadAction<VoiceErrorInfo | null>) {
+      state.deviceError = action.payload;
+    },
+    requestVoiceReconnect(state) {
+      state.deviceError = null;
+      state.reconnectNonce += 1;
     },
     startOutboundCall(state, action: PayloadAction<OutboundCallTarget>) {
       state.outboundCall = action.payload;
@@ -409,6 +460,8 @@ const voiceSlice = createSlice({
 export const {
   setVoiceAvailable,
   setDeviceStatus,
+  setDeviceError,
+  requestVoiceReconnect,
   startOutboundCall,
   resolveOutboundCallName,
   endOutboundCall,

@@ -324,14 +324,14 @@ export function defaultConversationInboxScope(
 
 /**
  * WHERE fragment for GET /api/clients when per-owner CRM is active.
- * Params: brokerId, ...visibility enum values.
+ * Params: brokerId (or array of scope broker ids for delegation), ...visibility enum values.
  */
 export function perOwnerClientListWhere(
   clientAlias = "c",
   visibility: ClientListVisibility[] = ["active"],
 ): string {
   const vis = visibility.map((v) => `'${v}'`).join(",");
-  return `${clientAlias}.assigned_broker_id = ? AND ${clientAlias}.list_visibility IN (${vis})`;
+  return `${clientAlias}.assigned_broker_id IN (?) AND ${clientAlias}.list_visibility IN (${vis})`;
 }
 
 /** Shared company-number claim queue (unclaimed threads). */
@@ -341,15 +341,15 @@ export function perOwnerThreadSharedQueueWhere(threadAlias = "ct"): string {
 
 /**
  * Mine tab: exclude shared queue; thread belongs to this broker's CRM scope.
- * Params: brokerId × 3.
+ * Params: brokerId × 3 (each may be an array of scope broker ids — delegation).
  */
 export function perOwnerThreadMineWhere(threadAlias = "ct"): string {
   const shared = perOwnerThreadSharedQueueWhere(threadAlias);
   return `(NOT ${shared} AND (
-    ${threadAlias}.owner_client_scope_broker_id = ?
-    OR (${threadAlias}.broker_id = ? AND (
+    ${threadAlias}.owner_client_scope_broker_id IN (?)
+    OR (${threadAlias}.broker_id IN (?) AND (
       ${threadAlias}.owner_client_scope_broker_id IS NULL
-      OR ${threadAlias}.owner_client_scope_broker_id = ?
+      OR ${threadAlias}.owner_client_scope_broker_id IN (?)
     ))
   ))`;
 }

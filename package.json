@@ -19,6 +19,7 @@
     "typecheck": "tsc",
     "check:api-inline": "tsx scripts/check-api-inline.ts",
     "deploy:prod": "tsx scripts/deploy-prod.ts",
+    "deploy:stamp-version": "tsx scripts/deploy-prod.ts --stamp-only",
     "validate:create-loan": "tsx scripts/validate-create-loan-schema.ts",
     "validate:realtor-management": "tsx scripts/smoke-test-realtor-management.ts",
     "validate:loans-pipeline": "tsx scripts/smoke-test-loans-pipeline.ts",
@@ -32,7 +33,8 @@
     "validate:all": "npm run check:api-inline && npm run typecheck && npm test && npm run validate:create-loan && npm run validate:realtor-management && npm run validate:loans-pipeline && npm run validate:task-documents && npm run validate:voice-calls && npm run validate:group-conversations && npm run validate:direct-conversations && npm run validate:bulk-import && npm run validate:broadcast-short-links && npm run build",
     "test:integration": "vitest --run --project node api/",
     "teams:policy-sync": "bash scripts/teams-policy-sync.sh",
-    "purge:data": "node scripts/purge-old-data.mjs"
+    "purge:data": "node scripts/purge-old-data.mjs",
+    "test:cleanup-fixtures": "tsx scripts/cleanup-integration-test-fixtures.ts"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.11.2",

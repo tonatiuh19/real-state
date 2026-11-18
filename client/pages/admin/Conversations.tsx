@@ -84,6 +84,11 @@ import GroupSourcePill from "@/components/conversations/GroupSourcePill";
 import GroupThreadHeader from "@/components/conversations/GroupThreadHeader";
 import SyncedFromPhoneBanner from "@/components/conversations/SyncedFromPhoneBanner";
 import PhoneLink from "@/components/PhoneLink";
+import { FromLinePicker } from "@/components/FromLinePicker";
+import {
+  resolveFromLine,
+  setSelectedFromLine,
+} from "@/store/slices/phoneLinesSlice";
 import { BlockNumberDialog } from "@/components/BlockNumberDialog";
 import EmailLink from "@/components/EmailLink";
 import { adminPageMeta } from "@/lib/seo-helpers";
@@ -255,6 +260,15 @@ const Conversations = () => {
   );
 
   const currentPhone = currentThread?.client_phone ?? null;
+  const currentThreadInbox = currentThread?.inbox_number ?? null;
+  const { lines: phoneLines, selectedFromLine } = useAppSelector(
+    (s) => s.phoneLines,
+  );
+  // Reset any manual line pick when switching threads so the thread's own
+  // inbox line (or the default line) is preselected.
+  useEffect(() => {
+    dispatch(setSelectedFromLine(null));
+  }, [dispatch, currentThread?.conversation_id]);
   const whatsappStatus: boolean | null = currentPhone
     ? (whatsappAvailability[currentPhone] ?? null)
     : null;
@@ -1156,6 +1170,10 @@ const Conversations = () => {
 
   const handleSendMessage = async () => {
     const text = messageText.trim();
+    const fromLine =
+      messageType === "sms"
+        ? resolveFromLine(phoneLines, selectedFromLine, currentThreadInbox)
+        : null;
     if (!text && !mmsAttachment) return;
 
     const sentTemplateId =
@@ -1265,6 +1283,8 @@ const Conversations = () => {
       media_url: uploadedMediaUrl,
       media_content_type: uploadedContentType,
       media_filename: uploadedFilename,
+      // Only send an explicit line when the user actually has a choice.
+      from_line: phoneLines.length > 1 ? (fromLine ?? undefined) : undefined,
     };
 
     logger.log("[SMS Trace] 3/7 — dispatching sendMessage payload:", payload);
@@ -3510,6 +3530,12 @@ const Conversations = () => {
                     )}
                   <BillingActionGate>
                   <div className="flex flex-col gap-2">
+                    {messageType === "sms" &&
+                      !(currentThread && isGroupThread(currentThread)) && (
+                        <div className="flex">
+                          <FromLinePicker threadInbox={currentThreadInbox} />
+                        </div>
+                      )}
                     {/* MMS attachment preview (SMS only) */}
                     {messageType === "sms" && mmsAttachment && (
                       <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">

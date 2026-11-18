@@ -1,11 +1,21 @@
 import "dotenv/config";
 
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline/promises";
-import process from "node:process";
+import { spawn, spawnSync } from "child_process";
+import { createInterface } from "readline/promises";
+import fs from "fs";
+import path from "path";
 import mysql from "mysql2/promise";
 import { checkApiIndexInline } from "./check-api-inline";
+import { ask, notify, projectName } from "./deployAsk";
 
+/**
+ * Production deploy (same flow as groundwork / optimum-credit):
+ *   git gate (main == origin/main, commit+push prompt) → api inline gate → typecheck →
+ *   vitest (live dashboard, shared TiDB fixtures purged afterwards) → remaining validate:all
+ *   steps (domain smokes + build) → Vercel env check → git re-check → version → vercel --prod
+ *   → app_version stamp → git tag → Telegram notify.
+ * Escape hatches: --skip-checks / SKIP_DEPLOY_CHECKS=1, --allow-dirty, --stamp-only <version>.
+ */
 const DEFAULT_TENANT_ID = Number(process.env.DEPLOY_SETTINGS_TENANT_ID ?? "1");
 
 function requireEnv(name: string): string {
@@ -28,9 +38,7 @@ function dbConfig() {
     password: requireEnv("DB_PASSWORD"),
     database: requireEnv("DB_NAME"),
     ssl:
-      process.env.DB_SSL === "false"
-        ? undefined
-        : { minVersion: "TLSv1.2" as const },
+      process.env.DB_SSL === "false" ? undefined : { minVersion: "TLSv1.2" as const },
     // TiDB Serverless drops idle sockets; never hold a conn across vercel --prod.
     enableKeepAlive: true,
     connectTimeout: 20_000,
@@ -38,12 +46,90 @@ function dbConfig() {
 }
 
 async function withDb<T>(fn: (conn: mysql.Connection) => Promise<T>): Promise<T> {
-  const conn = await mysql.createConnection(dbConfig());
+  // TiDB Cloud sometimes takes too long to accept a connection. Opening a connection sends no
+  // statement, so it is always safe to retry. (Same as optimum-credit.)
+  let conn: mysql.Connection | null = null;
+  for (let attempt = 1; !conn; attempt++) {
+    try {
+      conn = await mysql.createConnection(dbConfig());
+    } catch (e: any) {
+      if (attempt >= 3 || !["ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "PROTOCOL_CONNECTION_LOST"].includes(String(e?.code))) throw e;
+      console.warn(`⏳ Database connection failed (${e.code}); retrying (${attempt}/2)…`);
+      await new Promise((r) => setTimeout(r, attempt * 5_000));
+    }
+  }
   try {
     return await fn(conn);
   } finally {
     await conn.end().catch(() => undefined);
   }
+}
+
+let testsRunning = false;
+let interrupted = false;
+/** True once the shared DB is known clean after the last test run (no second purge needed). */
+let purged = false;
+/** Set when the test run starts: before that there is no test data to purge. */
+let testsStarted = false;
+
+/** Removes every test fixture from the shared DB, synchronously (safe inside signal / exit paths). */
+function purgeTestData(reason: string) {
+  console.log(`\n🧹 ${reason}: purging test data from the shared DB...\n`);
+  // TiDB can drop a socket mid-cleanup (read ECONNRESET): try 3 times before failing the deploy.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const r = spawnSync("npm", ["run", "test:cleanup-fixtures"], { stdio: "inherit", env: process.env });
+    purged = r.status === 0;
+    if (purged || attempt === 3) break;
+    console.log(`\n⏳ Cleanup failed; retrying (${attempt}/2)...\n`);
+    spawnSync("sleep", [String(attempt * 5)]);
+  }
+  console.log(purged ? "\n✅ Test data cleaned up.\n" : "\n⚠️ Cleanup failed. Run: npm run test:cleanup-fixtures\n");
+}
+
+/**
+ * Ctrl+C during the test run: vitest is killed mid-suite, so its afterAll
+ * cleanups never run and test data stays visible to staff in the live admin.
+ * Wait for the children to stop, purge test fixtures synchronously, then exit.
+ * A second Ctrl+C exits immediately. (Same approach as optimum-credit.)
+ */
+
+/** Where the deploy is, for the abort message ("aborted during the tests"). */
+let stage = "starting";
+
+/** Failed tests from the last run (written by scripts/vitestProgressReporter.ts). */
+function failedTestsSummary(): string {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "node_modules/.cache/dl-test-failures.json"), "utf8")) as string[];
+    if (!list.length) return "";
+    return `\n${list.slice(0, 5).map((t) => `• ${t}`).join("\n")}${list.length > 5 ? `\n… and ${list.length - 5} more` : ""}`;
+  } catch {
+    return "";
+  }
+}
+
+const tgSafe = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Every abort tells the bot why, where and whether test data was cleaned. Never throws; at most ~10s. */
+async function notifyAbort(reason: string): Promise<void> {
+  const tests = stage === "tests" ? failedTestsSummary() : "";
+  const cleanup = testsStarted ? (purged ? "\n🧹 Test data cleaned up." : "\n⚠️ Test data cleanup did not finish: run npm run test:cleanup-fixtures") : "";
+  const text = `❌ <b>${tgSafe(projectName)} deploy aborted</b> (during ${tgSafe(stage)})\n${tgSafe(reason).slice(0, 600)}${tgSafe(tests)}${cleanup}\nNothing new went live.`;
+  await Promise.race([notify(text), new Promise((r) => setTimeout(r, 10_000))]);
+}
+
+function installInterruptCleanup() {
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (interrupted) process.exit(130);
+    interrupted = true;
+    console.log(`\n⛔ ${signal}: deploy aborted (Ctrl+C again to skip the cleanup).`);
+    // Any abort purges, so staff never see test data; wait for vitest workers to exit first.
+    setTimeout(() => {
+      if (testsStarted) purgeTestData("Aborted");
+      void notifyAbort(`Stopped by hand (${signal === "SIGINT" ? "Ctrl+C" : signal}).`).finally(() => process.exit(130));
+    }, testsRunning ? 1500 : 0);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
 }
 
 async function runCommand(command: string, args: string[]) {
@@ -69,12 +155,269 @@ async function runCommand(command: string, args: string[]) {
   });
 }
 
+// ── Vercel upload that survives the CLI's "fetch failed" ─────────────────────
+// `vercel --prod` uploads, then holds one connection open for the whole build to report Ready. On a
+// flaky network (or Node's fetch timing out) that connection drops and the CLI exits with
+// "Error: fetch failed" even though Vercel keeps building and goes live. We read the deployment URL
+// from the CLI output and, when that happens, follow the build ourselves with `vercel inspect`.
+
+/** The `*.vercel.app` deployment URL the CLI prints ("Production  https://…vercel.app"). */
+function parseVercelDeploymentUrl(output: string): string | null {
+  const urls = output.match(/https:\/\/[a-z0-9-]+\.vercel\.app/gi) || [];
+  return urls.length ? urls[urls.length - 1] : null;
+}
+
+/** "● Ready" / "● Error" / "● Building" … from `vercel inspect`. null = couldn't tell. */
+function parseVercelInspectStatus(output: string): "ready" | "error" | "building" | null {
+  const m = output.match(/status\s+●?\s*(\w+)/i);
+  if (!m) return null;
+  const st = m[1].toLowerCase();
+  if (st === "ready") return "ready";
+  if (st === "error" || st === "canceled" || st === "cancelled") return "error";
+  return "building";
+}
+
+async function vercelProdDeploy(extraArgs: string[]) {
+  let output = "";
+  const code = await new Promise<number | null>((resolve, reject) => {
+    const child = spawn("npx", ["vercel", "--prod", ...extraArgs], { stdio: ["inherit", "pipe", "pipe"], shell: false, env: process.env });
+    child.stdout.on("data", (d) => {
+      output += String(d);
+      process.stdout.write(d);
+    });
+    child.stderr.on("data", (d) => {
+      output += String(d);
+      process.stderr.write(d);
+    });
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  if (code === 0) return;
+  const url = parseVercelDeploymentUrl(output);
+  if (!url || !/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|network/i.test(output)) {
+    throw new Error(`npx vercel --prod failed with exit code ${code ?? "unknown"}`);
+  }
+  console.log(`\n⏳ The Vercel CLI lost its connection, but the deployment was created. Following it: ${url}`);
+  const deadline = Date.now() + 25 * 60_000;
+  let misses = 0;
+  while (Date.now() < deadline) {
+    let st: ReturnType<typeof parseVercelInspectStatus> = null;
+    try {
+      st = parseVercelInspectStatus(await captureCommand("npx", ["vercel", "inspect", url]));
+    } catch {
+      st = null;
+    }
+    if (st === "ready") {
+      console.log("✅ Vercel deployment is Ready and live.");
+      return;
+    }
+    if (st === "error") throw new Error(`Vercel deployment failed: ${url} (open it on vercel.com for the build log)`);
+    if (st === null && ++misses >= 10) throw new Error(`Couldn't read the Vercel deployment status 10 times in a row: ${url}`);
+    if (st !== null) misses = 0;
+    await new Promise((r) => setTimeout(r, 15_000));
+  }
+  throw new Error(`Vercel deployment still not Ready after 25 minutes: ${url}`);
+}
+
+// ── Git: deploy only what is committed and pushed on main ────────────────────
+// `vercel --prod` uploads the working tree, so what goes live must be exactly origin/main.
+// The deploy refuses to start (and refuses to upload) with uncommitted or unpushed work.
+// `--allow-dirty` lets uncommitted files ship; main, up to date, pushed and no secrets still apply.
+
+/** Never upload these, even if a .gitignore rule goes missing. */
+const SECRET_FILE = /(^|\/)(\.env(?!\.example$)(\..*)?|.*\.(pem|key|p12|pfx)|id_rsa.*|.*credentials.*\.json)$/i;
+
+const git = (args: string[]) => captureCommand("git", args).then((o) => o.trim());
+
+const statusFiles = (porcelain: string) =>
+  porcelain
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3).replace(/^.* -> /, ""));
+
+/** On main, same commit as origin/main, nothing uncommitted (unless --allow-dirty), no secrets. */
+async function assertGitReady(allowDirty: boolean): Promise<void> {
+  const branch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== "main") throw new Error(`Deploys run from main only (you are on "${branch}"). Merge into main first.`);
+  // Not trimmed: each porcelain line starts with a 2-letter code that can begin with a space.
+  const files = statusFiles(await captureCommand("git", ["status", "--porcelain"]));
+  const secrets = files.filter((f) => SECRET_FILE.test(f));
+  if (secrets.length) throw new Error(`These look like secrets and must never be uploaded: ${secrets.join(", ")}. Add them to .gitignore first.`);
+  if (files.length && !allowDirty) {
+    const list = files.slice(0, 10).map((f) => `   ${f}`).join("\n");
+    throw new Error(
+      `${files.length} uncommitted change(s). Commit and push to main first (or pass --allow-dirty):\n${list}${files.length > 10 ? `\n   … and ${files.length - 10} more` : ""}`,
+    );
+  }
+  if (files.length) console.log(`\n⚠️  --allow-dirty: ${files.length} uncommitted change(s) will ship without being committed.`);
+  await runCommand("git", ["fetch", "--quiet", "origin", "main"]);
+  const behind = Number(await git(["rev-list", "--count", "HEAD..origin/main"])) || 0;
+  if (behind > 0) throw new Error(`main is ${behind} commit(s) behind origin/main. Pull first (git pull --rebase), then deploy.`);
+  const ahead = Number(await git(["rev-list", "--count", "origin/main..HEAD"])) || 0;
+  if (ahead > 0) throw new Error(`main has ${ahead} commit(s) not pushed to origin. Run git push origin main, then deploy.`);
+}
+
+/** Rule-based suggestion from the changed files: type + main areas, e.g. "feat: city, events, deploy (+12 files)". */
+function suggestCommitMessage(porcelain: string): string {
+  const lines = porcelain.split("\n").filter(Boolean);
+  const files = statusFiles(porcelain);
+  const added = lines.filter((l) => l.startsWith("??") || l[0] === "A").map((l) => l.slice(3));
+  const isDoc = (f: string) => /\.(md|mdc)$/.test(f);
+  const isTest = (f: string) => /\.(test|spec)\.tsx?$/.test(f);
+  const type = files.every(isDoc)
+    ? "docs"
+    : files.every((f) => isTest(f) || isDoc(f))
+      ? "test"
+      : added.some((f) => /^(client\/(pages|components)|database\/migrations)\//.test(f)) || files.includes("api/index.ts")
+        ? "feat"
+        : files.every((f) => /^(scripts|\.cursor|\.claude)\/|^package(-lock)?\.json$|\.config\.ts$/.test(f) || isDoc(f))
+          ? "chore"
+          : "fix";
+  const area = (f: string) => {
+    if (f.startsWith("client/locales/")) return null;
+    if (isTest(f) || isDoc(f)) return null;
+    const m = f.match(/^client\/(?:pages|components)\/(?:admin\/|portal\/)?([^/.]+)/);
+    if (m) return m[1].replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+    if (f.startsWith("database/")) return "database";
+    if (f.startsWith("scripts/")) return "deploy scripts";
+    if (f === "api/index.ts" || f === "api/swagger.yaml") return "api";
+    return f.split("/")[0].replace(/^\./, "");
+  };
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    const a = area(f);
+    if (a) counts.set(a, (counts.get(a) || 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([a]) => a);
+  const extra = files.length > 1 ? ` (+${files.length} files)` : "";
+  return `${type}: ${top.length ? top.join(", ") : "update"}${extra}`;
+}
+
 /**
- * Vercel inline monolith gate + typecheck + full validate:all.
+ * Before the checks: main must match origin/main. Uncommitted or unpushed work is not an error any more:
+ * commit + push with the suggested or a custom message, wait while I handle it myself, or abort.
+ */
+async function resolveGit(allowDirty: boolean): Promise<void> {
+  while (true) {
+    const branch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    if (branch !== "main") throw new Error(`Deploys run from main only (you are on "${branch}"). Merge into main first.`);
+    await runCommand("git", ["fetch", "--quiet", "origin", "main"]);
+    const behind = Number(await git(["rev-list", "--count", "HEAD..origin/main"])) || 0;
+    if (behind > 0) throw new Error(`main is ${behind} commit(s) behind origin/main. Pull first (git pull --rebase), then deploy.`);
+    const porcelain = await captureCommand("git", ["status", "--porcelain"]);
+    const files = statusFiles(porcelain);
+    const secrets = files.filter((f) => SECRET_FILE.test(f));
+    if (secrets.length) throw new Error(`These look like secrets and must never be committed or uploaded: ${secrets.join(", ")}. Add them to .gitignore first.`);
+    const dirty = files.length > 0 && !allowDirty;
+    const ahead = Number(await git(["rev-list", "--count", "origin/main..HEAD"])) || 0;
+    if (!dirty && !ahead) {
+      if (files.length) console.log(`\n⚠️  --allow-dirty: ${files.length} uncommitted change(s) will ship without being committed.`);
+      return;
+    }
+
+    const suggested = dirty ? suggestCommitMessage(porcelain) : "";
+    const what = dirty
+      ? `${files.length} uncommitted change(s)${ahead ? ` and ${ahead} unpushed commit(s)` : ""} on main`
+      : `${ahead} commit(s) on main not pushed to origin`;
+    console.log(`\n📝 ${what}.`);
+    const a = await ask(`${what}. Deploys only ship what is on origin/main.`, [
+      ...(dirty
+        ? [
+            { key: "suggested", label: `Commit + push: "${suggested}"` },
+            { key: "custom", label: "Commit + push with my own message", text: "Commit message:" },
+          ]
+        : [{ key: "push", label: `Push ${ahead} commit(s) to origin/main` }]),
+      { key: "manual", label: "I'll handle it in the terminal (wait for me)" },
+      { key: "abort", label: "Abort the deploy" },
+    ]);
+    if (a.key === "abort") throw new Error("Deploy cancelled.");
+    if (a.key === "manual") {
+      await waitForCleanMain();
+      continue;
+    }
+    if (dirty) {
+      const message = a.key === "custom" && a.text ? a.text : suggested;
+      await runCommand("git", ["add", "-A"]);
+      await runCommand("git", ["commit", "--quiet", "-m", message]);
+      console.log(`✅ Committed: ${message}`);
+    }
+    await runCommand("git", ["push", "origin", "main"]);
+    console.log("✅ Pushed to origin/main.");
+  }
+}
+
+/** "I'll handle it": re-check every 5s until main is clean and pushed (Enter re-checks now). */
+async function waitForCleanMain(): Promise<void> {
+  console.log("\n⏳ Waiting for you: commit and push to main in another terminal tab. Press Enter here to re-check now, or Ctrl+C to abort.");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const enter = () => rl.question("").then(() => undefined);
+  try {
+    let pending = enter();
+    while (true) {
+      const clean = !(await captureCommand("git", ["status", "--porcelain"])).trim();
+      await runCommand("git", ["fetch", "--quiet", "origin", "main"]).catch(() => undefined);
+      const ahead = Number(await git(["rev-list", "--count", "origin/main..HEAD"]).catch(() => "1")) || 0;
+      if (clean && !ahead) {
+        console.log("✅ main is clean and pushed. Continuing...");
+        return;
+      }
+      const tick = await Promise.race([pending.then(() => "enter"), new Promise((r) => setTimeout(() => r("tick"), 5000))]);
+      if (tick === "enter") pending = enter();
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+const bump = (v: string, part: "patch" | "minor" | "major") => {
+  const m = v.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return part === "major" ? `${maj + 1}.0.0` : part === "minor" ? `${maj}.${min + 1}.0` : `${maj}.${min}.${pat + 1}`;
+};
+
+/** Suggested patch / minor, a custom one, or typed by me in the terminal. */
+async function chooseVersion(current: string | null): Promise<string> {
+  const cur = current?.trim() || "";
+  console.log(`\n🏷️  Current production version: ${cur || "not set"}`);
+  const patch = bump(cur, "patch");
+  const minor = bump(cur, "minor");
+  const a = await ask(`Release version (now ${cur || "not set"})`, [
+    ...(patch ? [{ key: "patch", label: `${patch} (patch, suggested)` }] : []),
+    ...(minor ? [{ key: "minor", label: `${minor} (minor)` }] : []),
+    { key: "custom", label: "Custom version", text: "Version:" },
+    { key: "manual", label: "I'll type it in the terminal (wait for me)" },
+    { key: "abort", label: "Abort the deploy" },
+  ]);
+  if (a.key === "abort") throw new Error("Deploy cancelled.");
+  if (a.key === "patch" && patch) return patch;
+  if (a.key === "minor" && minor) return minor;
+  if (a.key === "custom" && a.text) return normalizeVersion(a.text);
+  return promptForVersion(current);
+}
+
+/** After the deploy is live: tag the release. A failure only warns (the site is already up). */
+async function tagRelease(version: string): Promise<void> {
+  const tag = `v${version.replace(/^v/i, "")}`;
+  try {
+    if (await git(["tag", "--list", tag])) {
+      console.log(`ℹ️  Tag ${tag} already exists; not moving it.`);
+      return;
+    }
+    await runCommand("git", ["tag", "-a", tag, "-m", `Production release ${version}`]);
+    await runCommand("git", ["push", "origin", tag]);
+    console.log(`✅ Tagged and pushed ${tag}.`);
+  } catch (e) {
+    console.warn(`⚠️  Deploy is live, but tagging failed (${e instanceof Error ? e.message : String(e)}). Run: git tag -a ${tag} -m "Production release ${version}" && git push origin ${tag}`);
+  }
+}
+
+/**
+ * Typecheck + Vercel inline monolith gate + vitest — must pass before prod.
  * Relative runtime imports from api/index.ts → ERR_MODULE_NOT_FOUND on Vercel.
  */
 async function runPreDeployChecks() {
-  console.log("\n🧪 Pre-deploy checks: api inline + validate:all...\n");
+  console.log("\n🧪 Pre-deploy checks: api inline + typecheck + tests + validate:all...\n");
 
   const inline = checkApiIndexInline();
   console.log(inline.report);
@@ -84,9 +427,110 @@ async function runPreDeployChecks() {
     );
   }
 
-  // validate:all includes typecheck, unit tests, domain smokes, and build
-  await runCommand("npm", ["run", "validate:all"]);
-  console.log("\n✅ validate:all passed. Continuing to deploy...\n");
+  stage = "typecheck";
+  await runCommand("npm", ["run", "typecheck"]);
+  console.log("\n✅ Typecheck passed.\n");
+  // Tests write fixtures to the shared TiDB: purge test data whether the
+  // tests pass, fail, or are interrupted (Ctrl+C → installInterruptCleanup).
+  testsRunning = true;
+  testsStarted = true;
+  purged = false;
+  try {
+    // On a terminal: one live progress bar (scripts/vitestProgressReporter.ts) instead of every test line.
+    const progress = process.stdout.isTTY ? ["--reporter=./scripts/vitestProgressReporter.ts"] : [];
+    stage = "tests";
+    await runCommand("npx", ["vitest", "--run", ...progress]).catch((e) => {
+      throw interrupted ? e : new Error(`Tests failed.${failedTestsSummary() ? "" : ` (${e instanceof Error ? e.message : e})`}`);
+    });
+    console.log("\n✅ Tests passed. Continuing to deploy...\n");
+  } finally {
+    testsRunning = false;
+    if (!interrupted) purgeTestData("Tests finished");
+  }
+  if (!purged) throw new Error("Test data cleanup failed, so staff could see test rows. Run npm run test:cleanup-fixtures, then deploy again.");
+  // The rest of validate:all (domain smokes + build), read from package.json so both stay in sync.
+  for (const script of remainingValidateSteps()) {
+    stage = script;
+    await runCommand("npm", ["run", script]);
+  }
+  console.log("\n✅ validate:all steps passed.\n");
+  stage = "production env check";
+  await checkProductionEnv();
+}
+
+/** validate:all minus the steps the deploy already ran (inline gate, typecheck, vitest). */
+function remainingValidateSteps(): string[] {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "package.json"), "utf8")) as { scripts?: Record<string, string> };
+  const all = pkg.scripts?.["validate:all"];
+  if (!all) throw new Error('package.json has no "validate:all" script.');
+  const done = new Set(["check:api-inline", "typecheck", "test"]);
+  return all
+    .split("&&")
+    .map((s) => s.trim())
+    .map((s) => s.match(/^npm run ([\w:-]+)$/)?.[1] ?? (s === "npm test" ? "test" : `UNSUPPORTED:${s}`))
+    .filter((s) => !done.has(s))
+    .map((s) => {
+      if (s.startsWith("UNSUPPORTED:")) throw new Error(`validate:all step must be "npm run <script>": ${s.slice(12)}`);
+      return s;
+    });
+}
+
+/**
+ * Production env vars that features need at runtime but that nothing else
+ * catches before deploy (a missing one only shows up as a 503 in prod).
+ */
+const REQUIRED_PROD_ENV: Array<{ name: string; why: string; fix: string }> = [
+  { name: "DB_HOST", why: "every API route (TiDB)", fix: "Vercel → Settings → Environment Variables → add the TiDB credentials (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME)" },
+  { name: "JWT_SECRET", why: "broker / client sessions", fix: "Add JWT_SECRET to Vercel Production (same value as before, or everyone is logged out)" },
+  { name: "TWILIO_ACCOUNT_SID", why: "SMS, calls, voicemail", fix: "Twilio console → Account info → add to Vercel Production" },
+  { name: "TWILIO_AUTH_TOKEN", why: "SMS / calls and Twilio webhook signature checks", fix: "Twilio console → Account info → add to Vercel Production" },
+  { name: "TWILIO_API_KEY", why: "browser softphone tokens (calls)", fix: "Twilio console → API keys → add TWILIO_API_KEY + TWILIO_API_SECRET to Vercel Production" },
+  { name: "TWILIO_API_SECRET", why: "browser softphone tokens (calls)", fix: "Twilio console → API keys → add to Vercel Production" },
+  { name: "TWILIO_TWIML_APP_SID", why: "outbound browser calls", fix: "Twilio console → TwiML Apps → Mortgage Portal Voice App SID → add to Vercel Production" },
+  { name: "ABLY_API_KEY", why: "live conversation / incoming-call updates", fix: "Ably dashboard → API keys → add to Vercel Production" },
+  { name: "STRIPE_SECRET_KEY", why: "billing (server side)", fix: "Payment dashboard → Developers → API keys → add the secret key to Vercel Production" },
+  { name: "STRIPE_WEBHOOK_SECRET", why: "verifying billing webhooks", fix: "Payment dashboard → Webhooks → endpoint signing secret → add to Vercel Production" },
+];
+
+async function captureCommand(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], shell: false, env: process.env });
+    let out = "";
+    child.stdout.on("data", (d) => (out += String(d)));
+    child.stderr.on("data", (d) => (out += String(d)));
+    child.on("error", reject);
+    child.on("exit", (code) =>
+      code === 0 ? resolve(out) : reject(new Error(`${command} ${args.join(" ")} failed with exit code ${code ?? "unknown"}`)),
+    );
+  });
+}
+
+/** Lists Production env names on Vercel; asks before deploying if a required one is missing. */
+async function checkProductionEnv() {
+  console.log("\n🔐 Checking Vercel production env vars...\n");
+  let listing: string;
+  try {
+    listing = await captureCommand("npx", ["vercel", "env", "ls", "production"]);
+  } catch (err) {
+    console.log(`⚠️  Could not list Vercel env vars (${(err as Error).message}). Skipping env check.`);
+    return;
+  }
+  const names = new Set(listing.split("\n").map((line) => line.trim().split(/\s+/)[0]).filter((n) => /^[A-Z][A-Z0-9_]*$/.test(n)));
+  const missing = REQUIRED_PROD_ENV.filter((v) => !names.has(v.name));
+  if (!missing.length) {
+    console.log("✅ Required production env vars present.\n");
+    return;
+  }
+  for (const v of missing) {
+    console.log(`❌ Missing ${v.name} in Vercel Production — needed for ${v.why}.\n   Fix: ${v.fix}`);
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question("\n❓ Deploy anyway? Those features will return 503 until the var is added. (y/N): ");
+    if (answer.trim().toLowerCase() !== "y") throw new Error("Deploy cancelled: missing production env vars.");
+  } finally {
+    rl.close();
+  }
 }
 
 async function promptForVersion(
@@ -167,7 +611,16 @@ async function writeAppVersion(deployVersion: string): Promise<void> {
 }
 
 async function main() {
-  // Validate DB env early (before long typecheck/validate).
+  // `npm run deploy:stamp-version -- 1.2.12`: only record the version (deploy already live).
+  if (process.argv[2] === "--stamp-only") {
+    const v = normalizeVersion(process.argv[3] || "");
+    if (!v) throw new Error("Usage: npm run deploy:stamp-version -- <version>");
+    await writeAppVersion(v);
+    console.log(`✅ app_version set to ${v}.`);
+    return;
+  }
+  installInterruptCleanup();
+  // Validate DB env early (before long typecheck/deploy).
   dbConfig();
 
   const cliArgs = process.argv.slice(2);
@@ -175,7 +628,9 @@ async function main() {
     cliArgs.includes("--skip-checks") ||
     process.env.SKIP_DEPLOY_CHECKS === "1" ||
     process.env.SKIP_DEPLOY_CHECKS === "true";
-  const filteredArgs = cliArgs.filter((arg) => arg !== "--skip-checks");
+  // --allow-dirty: deploy uncommitted files as they are; main, up to date with origin and no secrets still apply.
+  const allowDirty = cliArgs.includes("--allow-dirty");
+  const filteredArgs = cliArgs.filter((arg) => arg !== "--skip-checks" && arg !== "--allow-dirty");
   const explicitVersion =
     filteredArgs.find((arg) => !arg.startsWith("-")) ?? "";
   const vercelArgs = explicitVersion
@@ -183,6 +638,10 @@ async function main() {
         (arg, index) => index !== filteredArgs.indexOf(explicitVersion),
       )
     : filteredArgs;
+
+  stage = "git check";
+  await resolveGit(allowDirty);
+  await notify(`🧪 <b>${projectName} deploy</b>: checks started on <code>${(await git(["rev-parse", "--short", "HEAD"])).slice(0, 12)}</code>.`);
 
   if (!skipChecks) {
     await runPreDeployChecks();
@@ -192,40 +651,67 @@ async function main() {
     );
   }
 
+  // Again after the checks: nothing committed, pulled or edited meanwhile slips into the upload.
+  stage = "git re-check after the tests";
+  await assertGitReady(allowDirty);
+
   // Short-lived connection — do not hold open across vercel --prod
   // (TiDB Serverless closes idle sockets → "connection is in closed state").
   const currentVersion = await readAppVersion();
   const deployVersion = explicitVersion
     ? normalizeVersion(explicitVersion)
-    : await promptForVersion(currentVersion);
+    : await (async () => {
+        stage = "version question";
+        return chooseVersion(currentVersion);
+      })();
 
   if (!deployVersion) {
     throw new Error("Deploy version cannot be empty.");
   }
 
+
   console.log(
     `\n🚀 Starting Vercel production deploy for version ${deployVersion}...\n`,
   );
+  stage = "Vercel upload";
+  await vercelProdDeploy(vercelArgs);
+  stage = "after going live";
 
-  // Domain gate kept in addition to optimum-style validate:all
-  // (also included inside validate:all — run once more only if skipped checks).
-  if (skipChecks) {
-    console.log("🔍 Running Application Received production preflight...\n");
-    await runCommand("npm", ["run", "preflight:application-received"]);
+  // The site is already live here: a network blip on the version stamp must not read as a failed
+  // deploy. Retry a few times, then say exactly what to run instead of "Deploy aborted".
+  let stamped = false;
+  for (let attempt = 1; attempt <= 4 && !stamped; attempt++) {
+    try {
+      await writeAppVersion(deployVersion);
+      stamped = true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (attempt === 4) {
+        console.warn(
+          `\n⚠️  Deploy is LIVE, but saving app_version ${deployVersion} failed (${msg}).\n   Run: npm run deploy:stamp-version -- ${deployVersion}`,
+        );
+        // The site is live either way: still record the release in git.
+        await tagRelease(deployVersion);
+        return;
+      }
+      console.warn(`⏳ Saving app_version failed (${msg}); retrying (${attempt}/3)...`);
+      await new Promise((r) => setTimeout(r, attempt * 5_000));
+    }
   }
-
-  await runCommand("npx", ["vercel", "--prod", ...vercelArgs]);
-
-  await writeAppVersion(deployVersion);
 
   console.log(
     `\n🎉 Production deploy succeeded! app_version updated to ${deployVersion}.`,
   );
+  await tagRelease(deployVersion);
+  await notify(`🎉 <b>${projectName} ${deployVersion} is live.</b>`);
 }
 
-main().catch((error) => {
-  console.error(
-    `\n❌ Deploy aborted: ${error instanceof Error ? error.message : String(error)}`,
-  );
+main().catch(async (error) => {
+  const msg = error instanceof Error ? error.message : String(error);
+  console.error(`\n❌ Deploy aborted: ${msg}`);
+  // Ctrl+C: the signal handler is still waiting for vitest to stop and owns the cleanup, message and exit.
+  if (interrupted) return;
+  if (testsStarted && !purged) purgeTestData("Deploy aborted");
+  await notifyAbort(msg);
   process.exit(1);
 });

@@ -39,6 +39,7 @@ import brokerNotificationPrefsReducer from "./slices/brokerNotificationPrefsSlic
 import calculatorSavesReducer from "./slices/calculatorSavesSlice";
 import creditAnalysisReducer from "./slices/creditAnalysisSlice";
 import blockedNumbersReducer from "./slices/blockedNumbersSlice";
+import phoneLinesReducer from "./slices/phoneLinesSlice";
 
 export const store = configureStore({
   reducer: {
@@ -80,6 +81,7 @@ export const store = configureStore({
     calculatorSaves: calculatorSavesReducer,
     creditAnalysis: creditAnalysisReducer,
     blockedNumbers: blockedNumbersReducer,
+    phoneLines: phoneLinesReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

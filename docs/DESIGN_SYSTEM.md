@@ -1556,6 +1556,12 @@ Tenant-wide block list for spam / robocalls. Admin, superadmin and platform_owne
 
 ---
 
+## Phone lines, From-line picker & team access
+
+- **`FromLinePicker`** (`client/components/FromLinePicker.tsx`): compact rounded-full chip/select ("Main line · (562) 337-0000") with a kind icon (personal `User`, main `Building2`, delegated `Users`). Renders nothing when the broker has 1 or 0 sendable lines; lazily dispatches `fetchSendableLines`. Optional `threadInbox` preselects the thread's inbox number when it is one of the user's lines. Used in the Conversations SMS composer (direct threads) and the VoiceCallPanel pre-call screen (sent as Twilio `FromLine` param). Also exports `formatLineLabel`.
+- **`PhoneLinesTeamAccessCard`** (`client/components/PhoneLinesTeamAccessCard.tsx`): Settings section "Phone lines & team access" (admins + platform owner). Main line number + ring-group toggle chips (editable by platform_owner only, read-only otherwise); team access list with per-scope switches (Clients, Realtors, Conversations, Send from line), Formik + Yup add dialog (delegate required, at least one scope; platform_owner can pick the owner) and `AlertDialog` revoke confirm.
+- **State:** `phoneLinesSlice` — `fetchSendableLines`, `fetchDelegations`, `upsertDelegation`, `revokeDelegation`, `fetchMainLine`, `updateMainLine`, `setSelectedFromLine`; pure `resolveFromLine(lines, selected, threadInbox)` (selection > thread inbox > default > first) and `selectEffectiveFromLine`. The Conversations page resets the selection when switching threads.
+
 ## Group Conversations (Implemented)
 
 > Full spec: `docs/GROUP_CONVERSATIONS_PROPOSAL.md`. **On in dev/preview by default; off in production** until `GROUP_CONVERSATIONS_ALLOW_PRODUCTION=1`. Master opt-out: `GROUP_CONVERSATIONS_ENABLED=0`. UI flag from `/api/admin/init` (no `VITE_*` env).
@@ -1608,3 +1614,10 @@ Tenant-wide block list for spam / robocalls. Admin, superadmin and platform_owne
 ### Bulk CSV import
 
 Mortgage bankers (`admin`) and **platform owners** can bulk-create **Clients** and **Realtor Management** partners. Mortgage bankers may import clients and realtor partners only — not other mortgage bankers. **5-step import wizard** with animated review summary before commit (no DB writes until confirm). Spec: `docs/BULK_CSV_IMPORT_PROPOSAL.md`. **Off in production by default** — enable with `BULK_CSV_IMPORT_ENABLED=1` or `BULK_CSV_IMPORT_ALLOW_PRODUCTION=1`. UI flag from `/api/admin/init`.
+
+## Voice error & availability UX
+
+- **`client/utils/voiceErrors.ts`** — `describeVoiceError(err)` maps Twilio codes (31401/31208 permission, 31402 acquisition failed, 31201–31207 media, 20101/20103/20104/20105/31202 token, 31000/31003/31005/31009/53000/53001 connection), `getUserMedia` DOMException names and HTTP 401/402/403/503/5xx to a serializable `VoiceErrorInfo` (`title`, `message`, `steps`, `retryable`, `showMicPicker`). macOS gets "System Settings → Privacy & Security → Microphone" steps. Also: `preflightMicrophone`, `applyInputDevice` (falls back to `default`), saved-mic helpers (`voice_mic_device_id` in localStorage), `backoffDelayMs`.
+- **`<VoiceErrorAlert />`** (`client/components/VoiceErrorAlert.tsx`) — red (amber for quota/service) inline alert with collapsible "How to fix" steps plus optional **Retry** / **Choose microphone** / dismiss actions. Use it for any calling failure instead of raw `err.message`.
+- **Mic rules:** run `preflightMicrophone` before `device.connect()` and `call.accept()`; stop the pre-call meter stream before connecting; during a call the level meter uses Twilio's `call.on("volume")` (never a second `getUserMedia` capture).
+- **Availability:** `GlobalVoiceManager` shows a floating "You're offline for calls — Go available" pill when `voice.isAvailable` is false, and a `VoiceErrorAlert` with **Reconnect** (`requestVoiceReconnect`) when `deviceStatus === "error"`. Token fetch / register retry with bounded exponential backoff (4 attempts); 402/401/403 are not retried. Reason lives in `voice.deviceError`.

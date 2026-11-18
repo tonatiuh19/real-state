@@ -233,7 +233,7 @@ describe("per-owner thread scope SQL", () => {
   it("mine scope excludes shared queue", () => {
     expect(perOwnerThreadMineWhere("ct")).toContain("NOT");
     expect(perOwnerThreadMineWhere("ct")).toContain(
-      "owner_client_scope_broker_id = ?",
+      "owner_client_scope_broker_id IN (?)",
     );
   });
 });

@@ -1,7 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 import { useAppDispatch } from "@/store/hooks";
-import { logVoiceCall } from "@/store/slices/voiceSlice";
+import { logVoiceCall, requestVoiceReconnect } from "@/store/slices/voiceSlice";
+import VoiceErrorAlert from "@/components/VoiceErrorAlert";
+import { FromLinePicker } from "@/components/FromLinePicker";
+import { selectEffectiveFromLine } from "@/store/slices/phoneLinesSlice";
+import {
+  applyInputDevice,
+  describeVoiceError,
+  getSavedMicId,
+  micConstraints,
+  preflightMicrophone,
+  resolveMicId,
+  saveMicId,
+  clearSavedMicId,
+  type VoiceErrorInfo,
+} from "@/utils/voiceErrors";
 import {
   Phone,
   PhoneOff,
@@ -88,7 +102,9 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const dispatch = useAppDispatch();
   const voiceDevice = useVoiceDeviceOptional();
   const deviceStatus = useAppSelector((s) => s.voice.deviceStatus);
-  const { sessionToken } = useAppSelector((s) => s.brokerAuth);
+  const deviceError = useAppSelector((s) => s.voice.deviceError);
+  const fromLine = useAppSelector(selectEffectiveFromLine);
+  const hasLineChoice = useAppSelector((s) => s.phoneLines.lines.length > 1);
 
   const deviceRef = useRef<Device | null>(null);
   const callRef = useRef<Call | null>(null);
@@ -103,7 +119,9 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   );
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorInfo, setErrorInfo] = useState<VoiceErrorInfo | null>(null);
+  // Pre-call mic problem detected by the level meter (permission/busy/missing).
+  const [micError, setMicError] = useState<VoiceErrorInfo | null>(null);
   const [callSid, setCallSid] = useState<string | null>(null);
   const [closeCountdown, setCloseCountdown] = useState<number | null>(null);
 
@@ -119,7 +137,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   // Device selection
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [speakerDevices, setSpeakerDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedMicId, setSelectedMicId] = useState("default");
+  const [selectedMicId, setSelectedMicId] = useState<string>(getSavedMicId);
   const [selectedSpeakerId, setSelectedSpeakerId] = useState("default");
   // Speaker volume: 0–1, persisted in localStorage
   const [speakerVolume, setSpeakerVolume] = useState<number>(() => {
@@ -152,27 +170,37 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     setMicLevel(0);
   }, []);
 
+  // Pre-call ONLY: during a call the meter is driven by Twilio's "volume"
+  // event so we never hold a second capture of the mic (a parallel
+  // getUserMedia stream can make Twilio's own acquisition fail with 31402).
   const startMicMeter = useCallback(
-    async (deviceId: string) => {
+    async (deviceId: string): Promise<boolean> => {
       // Always stop the previous meter first so we don't leak streams
       stopMicMeter();
+      let stream: MediaStream;
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio:
-            deviceId !== "default"
-              ? {
-                  deviceId: { exact: deviceId },
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true,
-                }
-              : {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true,
-                },
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: micConstraints(deviceId),
         });
-        micStreamRef.current = stream;
+      } catch (err) {
+        const name = (err as { name?: string })?.name;
+        if (
+          deviceId !== "default" &&
+          (name === "OverconstrainedError" || name === "NotFoundError")
+        ) {
+          // Saved/selected device is gone — fall back to the system default.
+          logger.warn("[VoiceCallPanel] Mic device missing, using default");
+          clearSavedMicId();
+          setSelectedMicId("default");
+          return startMicMeter("default");
+        }
+        logger.warn("[VoiceCallPanel] Mic meter getUserMedia failed:", err);
+        setMicError(describeVoiceError(err));
+        return false;
+      }
+      setMicError(null);
+      micStreamRef.current = stream;
+      try {
         const ctx = new AudioContext();
         micAudioCtxRef.current = ctx;
         const source = ctx.createMediaStreamSource(stream);
@@ -190,9 +218,11 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
           micRafRef.current = requestAnimationFrame(tick);
         };
         micRafRef.current = requestAnimationFrame(tick);
-      } catch {
-        // Mic meter is cosmetic — don't block the call
+      } catch (err) {
+        // Visualisation is cosmetic — the mic itself works.
+        logger.warn("[VoiceCallPanel] Mic meter visualisation failed:", err);
       }
+      return true;
     },
     [stopMicMeter],
   );
@@ -210,9 +240,14 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       try {
         // getUserMedia (inside startMicMeter) grants mic permission so that
         // enumerateDevices returns real human-readable device labels.
-        await startMicMeter("default");
+        await startMicMeter(selectedMicId);
         const devices = await navigator.mediaDevices.enumerateDevices();
         setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+        const resolved = resolveMicId(selectedMicId, devices);
+        if (resolved !== selectedMicId) {
+          setSelectedMicId(resolved);
+          startMicMeter(resolved);
+        }
         setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
       } catch {
         // Mic permission denied — selectors will fall back to showing "Default"
@@ -232,37 +267,58 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   useEffect(() => {
     if (callState !== "in-call") return;
 
-    const enumerate = () => {
-      navigator.mediaDevices
-        .enumerateDevices()
-        .then((devices) => {
-          setMicDevices(devices.filter((d) => d.kind === "audioinput"));
-          setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
-        })
-        .catch(() => {});
+    const enumerate = async (): Promise<MediaDeviceInfo[]> => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+        setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
+        return devices;
+      } catch {
+        return [];
+      }
     };
 
-    const handleDeviceChange = () => {
-      enumerate();
+    const handleDeviceChange = async () => {
+      const devices = await enumerate();
       // Re-apply the selected input device so Twilio doesn't silently stay
       // on the old one after the OS switches defaults (common with AirPods).
-      const audio = getAudioHelper();
-      if (audio) {
-        audio.setInputDevice(selectedMicId).catch(() => {});
+      // If the selected device was unplugged, fall back to the default
+      // instead of re-applying a dead id.
+      const target = resolveMicId(selectedMicId, devices);
+      const applied = await applyInputDevice(getAudioHelper(), target);
+      if (applied === null) {
+        logger.error("[VoiceCallPanel] Could not re-apply any input device");
+      } else if (applied !== selectedMicId) {
+        setSelectedMicId(applied);
       }
     };
 
     enumerate();
-    startMicMeter(selectedMicId);
     navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
     return () => {
-      stopMicMeter();
       navigator.mediaDevices.removeEventListener(
         "devicechange",
         handleDeviceChange,
       );
     };
-  }, [callState, getAudioHelper, selectedMicId, startMicMeter, stopMicMeter]);
+  }, [callState, getAudioHelper, selectedMicId]);
+
+  // In-call mic meter: use Twilio's own "volume" event (input 0–1) instead of
+  // opening a second getUserMedia capture alongside the call.
+  useEffect(() => {
+    if (callState !== "in-call") return;
+    const call = callRef.current;
+    if (!call) return;
+    stopMicMeter();
+    const onVolume = (inputVolume: number) => {
+      setMicLevel(Math.min(100, Math.round(inputVolume * 150)));
+    };
+    call.on("volume", onVolume);
+    return () => {
+      call.removeListener("volume", onVolume);
+      setMicLevel(0);
+    };
+  }, [callState, stopMicMeter]);
 
   // ── Mic preemption watchdog ─────────────────────────────────────────
   // Watches the active microphone MediaStreamTrack while in-call. When the
@@ -277,7 +333,8 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   // the previous mute state.
   useEffect(() => {
     if (callState !== "in-call") return;
-    const stream = micStreamRef.current;
+    // Watch the call's own local track (no separate meter stream in-call).
+    const stream = callRef.current?.getLocalStream?.();
     const track = stream?.getAudioTracks()?.[0];
     if (!track) return;
 
@@ -347,15 +404,23 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
   const handleMicChange = useCallback(
     async (deviceId: string) => {
       setSelectedMicId(deviceId);
-      // Always restart the mic meter so the level bar reflects the new device,
-      // both in the pre-call settings screen and during an active call.
-      startMicMeter(deviceId);
-      const audio = getAudioHelper();
-      if (!audio) return; // pre-call: no Twilio device yet, meter restart is enough
-      try {
-        await audio.setInputDevice(deviceId);
-      } catch (e) {
-        logger.error("[VoiceCallPanel] Failed to set input device:", e);
+      saveMicId(deviceId);
+      if (!callRef.current) {
+        // Pre-call: restart the meter (safe — no Twilio capture yet).
+        const ok = await startMicMeter(deviceId);
+        if (ok)
+          setErrorInfo((prev) => (prev && prev.showMicPicker ? null : prev));
+        return;
+      }
+      // In-call: switch Twilio's input; the "volume" event drives the meter.
+      const applied = await applyInputDevice(getAudioHelper(), deviceId);
+      if (applied === null) {
+        logger.error("[VoiceCallPanel] Failed to set input device:", deviceId);
+        setMicError(
+          describeVoiceError({ name: "NotReadableError" } as DOMException),
+        );
+      } else if (applied !== deviceId) {
+        setSelectedMicId(applied);
       }
     },
     [getAudioHelper, startMicMeter],
@@ -471,8 +536,24 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
   const initiateCall = useCallback(async () => {
     setCallState("initializing");
-    setErrorMsg(null);
+    setErrorInfo(null);
     callAlreadyLoggedRef.current = false;
+
+    // Release the pre-call meter BEFORE Twilio captures the mic — holding two
+    // captures is a common cause of AcquisitionFailedError (31402) on macOS.
+    stopMicMeter();
+
+    // Mic preflight: surface permission/busy/missing-device problems with
+    // guidance instead of starting a call that's doomed to fail.
+    const preflight = await preflightMicrophone(selectedMicId);
+    if (!preflight.ok) {
+      logger.warn("[VoiceCallPanel] Mic preflight failed:", preflight.error);
+      setErrorInfo(preflight.error);
+      setCallState("error");
+      return;
+    }
+    const micId = preflight.deviceId;
+    if (preflight.fellBack) setSelectedMicId("default");
 
     try {
       if (!voiceDevice) {
@@ -484,6 +565,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       const device =
         voiceDevice.getDevice() ?? (await voiceDevice.waitForDevice(15000));
       if (!device) {
+        if (deviceStatus === "error" && deviceError) throw deviceError;
         throw new Error(
           deviceStatus === "error"
             ? "Voice connection failed. Check your network or refresh the page."
@@ -499,8 +581,11 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
       const preCallAudio = device.audio;
       if (preCallAudio) {
-        if (selectedMicId !== "default") {
-          await preCallAudio.setInputDevice(selectedMicId).catch(() => {});
+        // Always apply (even "default") so a stale id from a previous call
+        // is replaced; falls back to default if the device can't be used.
+        const applied = await applyInputDevice(preCallAudio, micId);
+        if (applied !== null && applied !== selectedMicId) {
+          setSelectedMicId(applied);
         }
         if (supportsSinkId && selectedSpeakerId !== "default") {
           await preCallAudio.speakerDevices
@@ -512,7 +597,11 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       setCallState("connecting");
 
       const call = await device.connect({
-        params: { To: phone },
+        params: {
+          To: phone,
+          // Server TwiML validates FromLine; only sent when the user has a choice.
+          ...(hasLineChoice && fromLine ? { FromLine: fromLine } : {}),
+        },
         rtcConstraints: {
           audio: {
             echoCancellation: true,
@@ -553,21 +642,29 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
       call.on("error", (err: Error) => {
         logger.error("[VoiceCallPanel] Call error:", err);
-        setErrorMsg(err.message || "Call error");
+        setErrorInfo(describeVoiceError(err));
         stopTimer();
         setCallState("error");
         logCall("failed", duration, callSid).finally(cleanupDevice);
       });
     } catch (err: any) {
       logger.error("[VoiceCallPanel] Failed to initiate call:", err);
-      setErrorMsg(err?.message || "Failed to start call");
+      setErrorInfo(
+        err && typeof err === "object" && "category" in err
+          ? (err as VoiceErrorInfo)
+          : describeVoiceError(err),
+      );
       setCallState("error");
       cleanupDevice();
     }
   }, [
     voiceDevice,
     deviceStatus,
+    deviceError,
+    stopMicMeter,
     phone,
+    fromLine,
+    hasLineChoice,
     selectedMicId,
     selectedSpeakerId,
     supportsSinkId,
@@ -578,6 +675,27 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
     duration,
     callSid,
   ]);
+
+  const handleRetry = useCallback(() => {
+    setErrorInfo(null);
+    setDuration(0);
+    initiateCall();
+  }, [initiateCall]);
+
+  // Back to the pre-call screen with the mic picker + live meter visible.
+  const handleChooseMic = useCallback(() => {
+    setErrorInfo(null);
+    setDuration(0);
+    setCallState("idle");
+    startMicMeter(selectedMicId);
+    navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((devices) => {
+        setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+        setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
+      })
+      .catch(() => {});
+  }, [selectedMicId, startMicMeter]);
 
   // Auto-start call when component mounts (outbound only)
   useEffect(() => {
@@ -606,7 +724,7 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
 
       activeCall.on("error", (err: Error) => {
         logger.error("[VoiceCallPanel] Incoming call error:", err);
-        setErrorMsg(err.message || "Call error");
+        setErrorInfo(describeVoiceError(err));
         stopTimer();
         setCallState("error");
         logCall("failed", 0, activeCall.parameters?.CallSid).finally(
@@ -777,11 +895,26 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
         </div>
       )}
 
-      {errorMsg && (
-        <p className="text-xs text-red-600 text-center bg-red-50 rounded px-3 py-2">
-          {errorMsg}
-        </p>
+      {errorInfo && (
+        <VoiceErrorAlert
+          error={errorInfo}
+          defaultExpanded={errorInfo.showMicPicker}
+          onRetry={activeCall ? undefined : handleRetry}
+          onChooseMic={activeCall ? undefined : handleChooseMic}
+        />
       )}
+
+      {/* Device-level problem (token/quota/connection) before dialling */}
+      {!errorInfo &&
+        callState === "idle" &&
+        deviceStatus === "error" &&
+        deviceError && (
+          <VoiceErrorAlert
+            error={deviceError}
+            onRetry={() => dispatch(requestVoiceReconnect())}
+            retryLabel="Reconnect"
+          />
+        )}
 
       {/* Mic preemption banner — shows when the OS has paused the browser's
           microphone (most often: an incoming cell-phone call on macOS/iOS). */}
@@ -809,6 +942,14 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
               </div>
             </div>
           )}
+          {micError && !errorInfo && (
+            <VoiceErrorAlert
+              error={micError}
+              onRetry={() => startMicMeter(selectedMicId)}
+              retryLabel="Test mic again"
+            />
+          )}
+          <FromLinePicker disabled={callState === "initializing"} />
           <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-3">
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
               <Settings2 className="h-3 w-3" />
@@ -1192,17 +1333,8 @@ const VoiceCallPanel: React.FC<VoiceCallPanelProps> = ({
       {/* Ended / Error actions */}
       {(callState === "ended" || callState === "error") && (
         <div className="flex justify-center gap-2">
-          {callState === "error" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setCallState("idle");
-                setErrorMsg(null);
-                setDuration(0);
-                initiateCall();
-              }}
-            >
+          {callState === "error" && !errorInfo?.retryable && !activeCall && (
+            <Button variant="outline" size="sm" onClick={handleRetry}>
               <Phone className="h-3.5 w-3.5 mr-1.5" />
               Retry
             </Button>

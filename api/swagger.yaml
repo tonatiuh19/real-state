@@ -106,6 +106,47 @@ components:
 
   # ─── Reusable Schemas ───────────────────────────────────────────────────────
   schemas:
+    SendableLine:
+      type: object
+      properties:
+        number: { type: string, example: "+15623370000" }
+        kind: { type: string, enum: [main, personal, delegated] }
+        label: { type: string, example: Main line }
+        owner_broker_id: { type: integer, nullable: true }
+        is_default: { type: boolean }
+    BrokerDelegation:
+      type: object
+      properties:
+        id: { type: integer }
+        owner_broker_id: { type: integer }
+        owner_name: { type: string }
+        owner_line: { type: string, nullable: true }
+        delegate_broker_id: { type: integer }
+        delegate_name: { type: string }
+        delegate_email: { type: string, nullable: true }
+        delegate_role: { type: string, nullable: true }
+        can_view_clients: { type: boolean }
+        can_view_realtors: { type: boolean }
+        can_view_conversations: { type: boolean }
+        can_send_from_line: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MainLineResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        main_line:
+          type: object
+          properties:
+            number: { type: string, nullable: true }
+            ring_broker_ids: { type: array, items: { type: integer } }
+            ring_brokers:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: integer }
+                  name: { type: string }
     BillingOverduePaymentCard:
       type: object
       properties:
@@ -2607,6 +2648,9 @@ paths:
                   type: string
                   description: Legacy/alternate identity field (broker_{id})
                 CallSid: { type: string }
+                FromLine:
+                  type: string
+                  description: Optional E.164 caller ID chosen in the softphone; must be one of GET /voice/lines, otherwise the default line is used.
       responses:
         "200":
           description: TwiML response
@@ -2614,13 +2658,145 @@ paths:
             text/xml:
               schema: { type: string }
 
+  /voice/lines:
+    get:
+      tags: [Voice]
+      summary: Phone lines the current broker may send SMS / call from
+      description: Personal line, company main line and delegated owners' lines (can_send_from_line). First entry is the default.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Lines
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/SendableLine" }
+        "401": { description: Unauthorized }
+
+  /broker-delegations:
+    get:
+      tags: [Team Access]
+      summary: List active delegations
+      description: platform_owner sees all; others see delegations they granted or received.
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Delegations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  delegations:
+                    type: array
+                    items: { $ref: "#/components/schemas/BrokerDelegation" }
+        "401": { description: Unauthorized }
+    post:
+      tags: [Team Access]
+      summary: Grant or update a delegation (upsert)
+      description: Owner defaults to the caller; only platform_owner may set another owner_broker_id. Delegate must be an active admin/platform_owner. At least one scope required.
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [delegate_broker_id]
+              properties:
+                owner_broker_id: { type: integer }
+                delegate_broker_id: { type: integer }
+                can_view_clients: { type: boolean, default: true }
+                can_view_realtors: { type: boolean, default: true }
+                can_view_conversations: { type: boolean, default: true }
+                can_send_from_line: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  delegation: { $ref: "#/components/schemas/BrokerDelegation" }
+        "400": { description: Validation error }
+        "403": { description: Not allowed to delegate this owner's book }
+        "404": { description: Owner or delegate not found }
+
+  /broker-delegations/{id}:
+    delete:
+      tags: [Team Access]
+      summary: Revoke a delegation (owner, delegate or platform_owner)
+      security:
+        - BrokerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Revoked }
+        "403": { description: Access denied }
+        "404": { description: Not found }
+
+  /settings/main-line:
+    get:
+      tags: [Team Access]
+      summary: Company main line and ring group
+      security:
+        - BrokerAuth: []
+      responses:
+        "200":
+          description: Main line
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MainLineResponse" }
+    put:
+      tags: [Team Access]
+      summary: Update company main line (platform_owner only)
+      security:
+        - BrokerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                number: { type: string, nullable: true, description: E.164 or 10-digit US; empty clears }
+                ring_broker_ids:
+                  type: array
+                  items: { type: integer }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MainLineResponse" }
+        "400": { description: Invalid number or unknown broker }
+        "403": { description: Only platform owners }
+        "409": { description: Number is a broker's personal line }
+
   /voice/incoming:
     post:
       tags: [Voice]
       summary: TwiML webhook for inbound calls (Twilio → server)
       description: |
         Called by Twilio when an external caller dials a configured number.
-        Routes simultaneously to all available (voice_available=1) brokers.
+        Personal line (brokers.twilio_caller_id) rings only that broker.
+        Company main line (system_settings.main_line_number) always rings the
+        main_line_ring_broker_ids group plus available brokers, then tenant voicemail.
+        Other shared lines ring all available (voice_available=1) brokers.
         Falls back to the assigned broker or first active broker if none is available.
         No authentication required — called by Twilio servers.
       requestBody:
@@ -2790,9 +2966,6 @@ paths:
           description: Transcription saved
 
   /voice/phone-numbers:
-    get:
-      tags: [Voice]
-      summary: List Twilio phone numbers with webhook status and broker assignments
     get:
       tags: [Voice]
       summary: List Twilio phone numbers with webhook status and broker assignments
@@ -4751,6 +4924,9 @@ paths:
                 recipient_phone: { type: string }
                 recipient_email: { type: string }
                 body: { type: string }
+                from_line:
+                  type: string
+                  description: Optional E.164 line to send from; must be one of GET /voice/lines (403 otherwise). Also re-points the thread inbox so replies return on that line.
                 subject:
                   {
                     type: string,
@@ -7453,7 +7629,7 @@ paths:
                 type: object
                 properties:
                   success: { type: boolean }
-                  broadcast: {
+                  broadcast:
                     type: object
                     description: Broadcast detail including optional Bulk Messaging fields
                     properties:
@@ -7468,7 +7644,6 @@ paths:
                       bulk_stats: { type: object, nullable: true }
                       bulk_progress: { type: object, nullable: true }
                       status: { type: string }
-                  }
                   quota:
                     $ref: "#/components/schemas/UnifiedQuotaSummary"
     patch:
@@ -7780,16 +7955,6 @@ paths:
                         description: Local dev only (NODE_ENV=development) — when false, COGS/margin/infra are stripped from API and UI
         "403":
           description: Not platform_owner
-
-  /billing/stripe/packs:
-    get:
-      tags: [Billing]
-      summary: Legacy flat pack catalog (prefer /top-up-options)
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: All tier pack ids with optional economics (internal mode)
 
   /billing/stripe/top-up-options:
     get:
@@ -8216,7 +8381,8 @@ paths:
   /billing/stripe/packs:
     get:
       tags: [Billing]
-      summary: List available Stripe top-up packs
+      summary: Legacy flat pack catalog (prefer /top-up-options)
+      description: All tier pack ids with optional economics (internal mode).
       security:
         - bearerAuth: []
       responses:
