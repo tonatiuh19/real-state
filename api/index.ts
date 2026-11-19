@@ -3557,7 +3557,61 @@ async function getScopeBrokerIds(
 interface MainLineConfig {
   number: string | null;
   ringBrokerIds: number[];
+  /** SIP desk phones (e.g. front-desk Poly) that ring FIRST for main-line calls. */
+  deskSipUris: string[];
+  /** Seconds the desk phones ring before the browser ring group. */
+  deskRingSeconds: number;
+  /** Twilio SIP Domain SID allowed to place outbound desk-phone calls. */
+  sipDomainSid: string | null;
 }
+
+// ── SIP desk phone — inlined for Vercel serverless (source: shared/sip-dial.ts) ──
+type SipDialTarget =
+  | { kind: "emergency"; number: "911" | "933" }
+  | { kind: "pstn"; number: string };
+
+function parseSipDialTarget(sipTo: string | null | undefined): SipDialTarget | null {
+  if (!sipTo) return null;
+  const m = String(sipTo)
+    .trim()
+    .match(/^sips?:([^@;>]+)@/i);
+  const user = decodeURIComponent((m ? m[1] : String(sipTo)).trim());
+  const plus = user.startsWith("+");
+  const digits = user.replace(/\D/g, "");
+  if (!plus && (digits === "911" || digits === "933")) {
+    return { kind: "emergency", number: digits as "911" | "933" };
+  }
+  const d =
+    !plus && digits.length === 12 && digits.startsWith("91")
+      ? digits.slice(1)
+      : digits;
+  let e164: string | null = null;
+  if (!plus && d.length === 10) e164 = `+1${d}`;
+  else if (d.length === 11 && d.startsWith("1")) e164 = `+${d}`;
+  if (!e164) return null;
+  const area = e164.slice(2, 5);
+  const exch = e164.slice(5, 8);
+  if (/^[01]/.test(area) || /^[01]/.test(exch) || area === "900") return null;
+  return { kind: "pstn", number: e164 };
+}
+
+function parseSipEndpoints(raw: string | null | undefined): string[] {
+  if (!raw || !String(raw).trim()) return [];
+  let values: unknown[];
+  try {
+    const parsed = JSON.parse(String(raw));
+    values = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    values = String(raw).split(",");
+  }
+  const out: string[] = [];
+  for (const v of values) {
+    const str = String(v ?? "").trim();
+    if (/^sips?:[^@\s]+@[a-z0-9.-]+$/i.test(str) && !out.includes(str)) out.push(str);
+  }
+  return out;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 let _mainLineCache: { value: MainLineConfig; at: number } | null = null;
 
@@ -3570,19 +3624,34 @@ async function getMainLineConfig(): Promise<MainLineConfig> {
   if (_mainLineCache && Date.now() - _mainLineCache.at < 15_000) {
     return _mainLineCache.value;
   }
-  let value: MainLineConfig = { number: null, ringBrokerIds: [] };
+  let value: MainLineConfig = {
+    number: null,
+    ringBrokerIds: [],
+    deskSipUris: [],
+    deskRingSeconds: 15,
+    sipDomainSid: null,
+  };
   try {
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT setting_key, setting_value FROM system_settings
-       WHERE tenant_id = ? AND setting_key IN ('main_line_number', 'main_line_ring_broker_ids')`,
+       WHERE tenant_id = ? AND setting_key IN (
+         'main_line_number', 'main_line_ring_broker_ids', 'main_line_sip_endpoints',
+         'main_line_desk_ring_seconds', 'main_line_sip_domain_sid')`,
       [MORTGAGE_TENANT_ID],
     );
     const map = new Map<string, string>(
       rows.map((r) => [r.setting_key as string, String(r.setting_value ?? "")]),
     );
+    const deskSeconds = parseInt(map.get("main_line_desk_ring_seconds") || "", 10);
     value = {
       number: normalizeLineE164(map.get("main_line_number")),
       ringBrokerIds: parseRingBrokerIds(map.get("main_line_ring_broker_ids")),
+      deskSipUris: parseSipEndpoints(map.get("main_line_sip_endpoints")),
+      deskRingSeconds:
+        Number.isFinite(deskSeconds) && deskSeconds >= 5 && deskSeconds <= 60
+          ? deskSeconds
+          : 15,
+      sipDomainSid: (map.get("main_line_sip_domain_sid") || "").trim() || null,
     };
   } catch (err) {
     console.warn("[main-line] settings lookup failed:", err);
@@ -42384,7 +42453,11 @@ const handleDialStatus: RequestHandler = async (req, res) => {
   res.set("Content-Type", "text/xml");
   try {
     const callSid = (req.body?.CallSid as string) || "";
-    const dialCallStatus = (req.body?.DialCallStatus as string) || "";
+    // ?fallback=1: redirected here after an internal error — go to voicemail.
+    const dialCallStatus =
+      String(req.query?.fallback || "") === "1"
+        ? "no-answer"
+        : (req.body?.DialCallStatus as string) || "";
     const calledNumber =
       (req.body?.To as string) || (req.body?.Called as string) || "";
 
@@ -43229,6 +43302,312 @@ const handleVoiceCallAnswered: RequestHandler = async (req, res) => {
  *   Fallback: if nobody is marked available, route to the first active broker so the call
  *   is never silently dropped.
  */
+/**
+ * Brokers to ring on a shared (non-personal) line. Main line: ring group +
+ * available team members (never realtor partners). Other shared lines: all
+ * available brokers. Fallback: first active broker so the call isn't dropped.
+ */
+async function resolveSharedLineRingBrokerIds(
+  calledNumber: string,
+): Promise<number[]> {
+  const mainLine = await getMainLineConfig();
+  const isMainLineCall =
+    !!mainLine.number && normalizeLineE164(calledNumber) === mainLine.number;
+  let ringGroupIds: number[] = [];
+  if (isMainLineCall && mainLine.ringBrokerIds.length > 0) {
+    const [ringRows] = await pool.query<any>(
+      `SELECT id FROM brokers
+       WHERE tenant_id = ? AND status = 'active' AND id IN (?)`,
+      [MORTGAGE_TENANT_ID, mainLine.ringBrokerIds],
+    );
+    ringGroupIds = ringRows.map((r: any) => Number(r.id));
+  }
+  const [availableRows] = await pool.query<any>(
+    `SELECT id FROM brokers
+     WHERE tenant_id = ? AND status = 'active' AND voice_available = 1
+       ${isMainLineCall ? "AND role IN ('admin', 'platform_owner')" : ""}
+     ORDER BY id ASC
+     LIMIT 10`,
+    [MORTGAGE_TENANT_ID],
+  );
+  const ringIds = Array.from(
+    new Set<number>([
+      ...ringGroupIds,
+      ...availableRows.map((r: any) => Number(r.id)),
+    ]),
+  ).slice(0, 10);
+  if (ringIds.length > 0) return ringIds;
+  const [fallbackRows] = await pool.query<any>(
+    `SELECT id FROM brokers
+     WHERE tenant_id = ? AND status = 'active'
+     ORDER BY id ASC LIMIT 1`,
+    [MORTGAGE_TENANT_ID],
+  );
+  return fallbackRows.length > 0
+    ? [fallbackRows[0].id as number]
+    : [parseInt(process.env.TWILIO_INCOMING_BROKER_ID || "1", 10)];
+}
+
+/** Ring brokers' browsers (+ call forwarding) → /dial-status → voicemail. */
+async function appendBrokerRingDial(
+  twiml: InstanceType<typeof twilio.twiml.VoiceResponse>,
+  brokerIds: number[],
+): Promise<void> {
+  // Fetch call forwarding phones for the brokers who will ring
+  const [forwardingRows] = await pool.query<any>(
+    `SELECT id, call_forwarding_enabled, call_forwarding_phone
+     FROM brokers WHERE id IN (${brokerIds.map(() => "?").join(",")}) AND tenant_id = ?`,
+    [...brokerIds, MORTGAGE_TENANT_ID],
+  );
+  const forwardingMap = new Map<number, string | null>(
+    forwardingRows.map((r: any) => [
+      r.id as number,
+      r.call_forwarding_enabled
+        ? (r.call_forwarding_phone as string | null)
+        : null,
+    ]),
+  );
+
+  const statusCallbackUrl = `${getVoiceBaseUrl()}/api/voice/dial-status`;
+  const dial = twiml.dial({
+    timeout: 10,
+    // Twilio fires this URL on our server when any leg is answered — we use it
+    // to broadcast the Ably call-answered event so all browsers dismiss instantly,
+    // even when the answerer is a personal phone (not a browser).
+    action: statusCallbackUrl,
+    method: "POST",
+    record: "record-from-answer-dual",
+    recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/recording-status`,
+    recordingStatusCallbackMethod: "POST",
+    trim: "trim-silence",
+  } as any);
+
+  // Ring all target brokers simultaneously — first to accept wins.
+  for (const bid of brokerIds) {
+    dial.client(`broker_${bid}`);
+    // If this broker has call forwarding enabled, also ring their personal phone.
+    // The call-screen URL requires a keypress before bridging — carrier voicemail
+    // systems won't press a key so their leg hangs up and CRM voicemail triggers
+    // instead. handleCallScreenAccept returns empty <Response/> to bridge instantly.
+    const fwdPhone = forwardingMap.get(bid);
+    if (fwdPhone) {
+      dial.number(
+        {
+          url: `${getVoiceBaseUrl()}/api/voice/call-screen`,
+          method: "POST",
+        } as any,
+        fwdPhone,
+      );
+    }
+  }
+}
+
+/** Main line, stage 1: ring desk SIP phones; action decides next stage. */
+function appendDeskPhoneDial(
+  twiml: InstanceType<typeof twilio.twiml.VoiceResponse>,
+  mainLine: MainLineConfig,
+): void {
+  const dial = twiml.dial({
+    timeout: mainLine.deskRingSeconds,
+    action: `${getVoiceBaseUrl()}/api/voice/main-line-desk-status`,
+    method: "POST",
+    record: "record-from-answer-dual",
+    recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/recording-status`,
+    recordingStatusCallbackMethod: "POST",
+    trim: "trim-silence",
+  } as any);
+  for (const uri of mainLine.deskSipUris) dial.sip(uri);
+}
+
+/**
+ * POST /api/voice/main-line-desk-status
+ * Dial action after the desk phone(s) rang for a main-line call.
+ * Answered → done. Otherwise ring the browser ring group → /dial-status → voicemail.
+ * No broker auth — Twilio webhook (signature-validated).
+ */
+const handleMainLineDeskStatus: RequestHandler = async (req, res) => {
+  res.set("Content-Type", "text/xml");
+  try {
+    const dialCallStatus = String(req.body?.DialCallStatus || "");
+    const calledNumber =
+      (req.body?.To as string) || (req.body?.Called as string) || "";
+    if (dialCallStatus === "answered" || dialCallStatus === "completed") {
+      return res.status(200).send("<Response></Response>");
+    }
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const twiml = new VoiceResponse();
+    const brokerIds = await resolveSharedLineRingBrokerIds(calledNumber);
+    await appendBrokerRingDial(twiml, brokerIds);
+    return res.status(200).send(twiml.toString());
+  } catch (err) {
+    console.error("[main-line-desk-status] Error:", err);
+    // Never drop the caller: hand straight to the voicemail flow.
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const twiml = new VoiceResponse();
+    twiml.redirect(
+      { method: "POST" },
+      `${getVoiceBaseUrl()}/api/voice/dial-status?fallback=1`,
+    );
+    return res.status(200).send(twiml.toString());
+  }
+};
+
+/**
+ * POST /api/voice/sip-outbound
+ * Voice URL of the Twilio SIP Domain: a registered desk phone dialed a number.
+ * Caller ID = company main line. NANP + 911/933 only (toll-fraud guard).
+ */
+const handleSipOutbound: RequestHandler = async (req, res) => {
+  res.set("Content-Type", "text/xml");
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  try {
+    const mainLine = await getMainLineConfig();
+    const domainSid = String(req.body?.SipDomainSid || "");
+    if (
+      !mainLine.number ||
+      !mainLine.sipDomainSid ||
+      domainSid !== mainLine.sipDomainSid
+    ) {
+      console.warn(
+        `[sip-outbound] rejected: domain=${domainSid || "none"} configured=${mainLine.sipDomainSid || "none"}`,
+      );
+      twiml.reject({ reason: "rejected" });
+      return res.status(200).send(twiml.toString());
+    }
+
+    const target = parseSipDialTarget(req.body?.To as string);
+    if (!target) {
+      twiml.say(
+        { voice: "Polly.Joanna" },
+        "The number you dialed is not valid. Please dial a ten digit US number.",
+      );
+      twiml.hangup();
+      return res.status(200).send(twiml.toString());
+    }
+
+    if (target.kind === "emergency") {
+      // Emergency: no quota check, no recording, always the E911-registered line.
+      twiml.dial({ callerId: mainLine.number }).number(target.number);
+      return res.status(200).send(twiml.toString());
+    }
+
+    const voicePrecheck = await quotaService.precheck(MORTGAGE_TENANT_ID, {
+      dimension: "voice_minutes",
+      units: Math.ceil(VOICE_MIN_PER_CALL_EST),
+      source: "conversation",
+      refType: "sip_outbound",
+      refId: String(req.body?.CallSid || ""),
+    });
+    if (!voicePrecheck.allowed) {
+      twiml.say(
+        { voice: "Polly.Joanna" },
+        "Outbound calling is paused for this account. Please contact your administrator.",
+      );
+      twiml.hangup();
+      return res.status(200).send(twiml.toString());
+    }
+
+    const dial = twiml.dial({
+      callerId: mainLine.number,
+      timeout: 45,
+      answerOnBridge: true,
+      record: "record-from-answer-dual",
+      recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/recording-status`,
+      recordingStatusCallbackMethod: "POST",
+      trim: "trim-silence",
+      action: `${getVoiceBaseUrl()}/api/voice/sip-outbound-status?to=${encodeURIComponent(target.number)}`,
+      method: "POST",
+    } as any);
+    dial.number(target.number);
+    return res.status(200).send(twiml.toString());
+  } catch (err) {
+    console.error("[sip-outbound] Error:", err);
+    twiml.say({ voice: "Polly.Joanna" }, "We could not place your call. Please try again.");
+    twiml.hangup();
+    return res.status(200).send(twiml.toString());
+  }
+};
+
+/**
+ * POST /api/voice/sip-outbound-status
+ * Dial action for desk-phone outbound calls: log the call on the contact's
+ * conversation (like browser calls via /api/voice/log) and record quota usage.
+ */
+const handleSipOutboundStatus: RequestHandler = async (req, res) => {
+  res.set("Content-Type", "text/xml");
+  res.status(200).send("<Response></Response>");
+  try {
+    const callSid = String(req.body?.CallSid || "");
+    const to = normalizeLineE164(String(req.query?.to || ""));
+    if (!callSid || !to) return;
+    const [[existing]] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM communications
+       WHERE tenant_id = ? AND external_id = ? AND communication_type = 'call' LIMIT 1`,
+      [MORTGAGE_TENANT_ID, callSid],
+    );
+    if (existing) return;
+
+    const durationSec = Math.max(0, parseInt(String(req.body?.DialCallDuration || "0"), 10) || 0);
+    const status = String(req.body?.DialCallStatus || "completed");
+    const mainLine = await getMainLineConfig();
+    const clientId = await resolveClientIdByPhone(pool, MORTGAGE_TENANT_ID, to, {
+      brokerId: null,
+      inboxNumber: mainLine.number,
+    });
+    const conversationId = clientId
+      ? `conv_client_${clientId}`
+      : await resolvePhoneConversationId(pool, MORTGAGE_TENANT_ID, {
+          phone: to,
+          inboxNumber: mainLine.number,
+          brokerId: null,
+        });
+    const body = `📞 Front desk call — ${durationSec}s (${status})`;
+    const [commResult] = await pool.query<any>(
+      `INSERT INTO communications
+         (tenant_id, from_broker_id, to_user_id, communication_type, direction,
+          body, status, external_id, conversation_id, delivery_status, sent_at, created_at,
+          recording_duration)
+       VALUES (?, NULL, ?, 'call', 'outbound', ?, 'sent', ?, ?, ?, NOW(), NOW(), ?)`,
+      [
+        MORTGAGE_TENANT_ID,
+        clientId,
+        body,
+        callSid,
+        conversationId,
+        status === "completed" || status === "answered" ? "sent" : "failed",
+        durationSec,
+      ],
+    );
+    await upsertConversationThread({
+      tenantId: MORTGAGE_TENANT_ID,
+      commId: commResult.insertId,
+      conversationId,
+      applicationId: null,
+      leadId: null,
+      fromUserId: null,
+      fromBrokerId: null,
+      toUserId: clientId,
+      toBrokerId: null,
+      communicationType: "call",
+      direction: "outbound",
+      body,
+      inboxNumber: mainLine.number,
+      recipientPhone: to,
+    });
+    if (durationSec > 0) {
+      await wireVoiceQuota(Math.max(1, Math.ceil(durationSec / 60)), {
+        tenantId: MORTGAGE_TENANT_ID,
+        source: "conversation",
+        refType: "call",
+        refId: callSid,
+      });
+    }
+  } catch (err) {
+    console.error("[sip-outbound-status] log error:", err);
+  }
+};
+
 const handleVoiceIncoming: RequestHandler = async (req, res) => {
   res.setHeader("Content-Type", "text/xml");
 
@@ -43265,113 +43644,29 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
     );
 
     let brokerIds: number[];
+    const mainLine = await getMainLineConfig();
+    const isMainLineCall =
+      !!mainLine.number && normalizeLineE164(calledNumber) === mainLine.number;
 
     if (assignedRows.length > 0) {
       // Personal line — ring exclusively the assigned broker regardless of
       // voice_available so their dedicated number always reaches them.
       brokerIds = [assignedRows[0].id as number];
     } else {
-      // Shared line — ring all brokers who are currently marked available.
-      // Main line: the configured ring group ALWAYS rings (even if their
-      // browser isn't marked available, so call forwarding still reaches them).
-      const mainLine = await getMainLineConfig();
-      const isMainLineCall =
-        !!mainLine.number &&
-        normalizeLineE164(calledNumber) === mainLine.number;
-      let ringGroupIds: number[] = [];
-      if (isMainLineCall && mainLine.ringBrokerIds.length > 0) {
-        const [ringRows] = await pool.query<any>(
-          `SELECT id FROM brokers
-           WHERE tenant_id = ? AND status = 'active' AND id IN (?)`,
-          [MORTGAGE_TENANT_ID, mainLine.ringBrokerIds],
-        );
-        ringGroupIds = ringRows.map((r: any) => Number(r.id));
-      }
-      // Main line: only team members (mortgage bankers / owners) — never
-      // realtor partners, whose voice_available flag can also be stale.
-      const [availableRows] = await pool.query<any>(
-        `SELECT id FROM brokers
-         WHERE tenant_id = ? AND status = 'active' AND voice_available = 1
-           ${isMainLineCall ? "AND role IN ('admin', 'platform_owner')" : ""}
-         ORDER BY id ASC
-         LIMIT 10`,
-        [MORTGAGE_TENANT_ID],
-      );
-      const ringIds = Array.from(
-        new Set<number>([
-          ...ringGroupIds,
-          ...availableRows.map((r: any) => Number(r.id)),
-        ]),
-      ).slice(0, 10);
-
-      if (ringIds.length > 0) {
-        brokerIds = ringIds;
-      } else {
-        // Fallback: nobody available — route to first active broker so call isn't dropped.
-        const [fallbackRows] = await pool.query<any>(
-          `SELECT id FROM brokers
-           WHERE tenant_id = ? AND status = 'active'
-           ORDER BY id ASC LIMIT 1`,
-          [MORTGAGE_TENANT_ID],
-        );
-        brokerIds =
-          fallbackRows.length > 0
-            ? [fallbackRows[0].id as number]
-            : [parseInt(process.env.TWILIO_INCOMING_BROKER_ID || "1", 10)];
-      }
+      brokerIds = await resolveSharedLineRingBrokerIds(calledNumber);
     }
 
     const callerNumber =
       (req.body?.From as string) || (req.body?.Caller as string) || "Unknown";
 
-    // Fetch call forwarding phones for the brokers who will ring
-    const [forwardingRows] = await pool.query<any>(
-      `SELECT id, call_forwarding_enabled, call_forwarding_phone
-       FROM brokers WHERE id IN (${brokerIds.map(() => "?").join(",")}) AND tenant_id = ?`,
-      [...brokerIds, MORTGAGE_TENANT_ID],
-    );
-    const forwardingMap = new Map<number, string | null>(
-      forwardingRows.map((r: any) => [
-        r.id as number,
-        r.call_forwarding_enabled
-          ? (r.call_forwarding_phone as string | null)
-          : null,
-      ]),
-    );
-
     const VoiceResponse = twilio.twiml.VoiceResponse;
     const twiml = new VoiceResponse();
-    const statusCallbackUrl = `${getVoiceBaseUrl()}/api/voice/dial-status`;
-    const dial = twiml.dial({
-      timeout: 10,
-      // Twilio fires this URL on our server when any leg is answered — we use it
-      // to broadcast the Ably call-answered event so all browsers dismiss instantly,
-      // even when the answerer is a personal phone (not a browser).
-      action: statusCallbackUrl,
-      method: "POST",
-      record: "record-from-answer-dual",
-      recordingStatusCallback: `${getVoiceBaseUrl()}/api/voice/recording-status`,
-      recordingStatusCallbackMethod: "POST",
-      trim: "trim-silence",
-    } as any);
-
-    // Ring all target brokers simultaneously — first to accept wins.
-    for (const bid of brokerIds) {
-      dial.client(`broker_${bid}`);
-      // If this broker has call forwarding enabled, also ring their personal phone.
-      // The call-screen URL requires a keypress before bridging — carrier voicemail
-      // systems won't press a key so their leg hangs up and CRM voicemail triggers
-      // instead. handleCallScreenAccept returns empty <Response/> to bridge instantly.
-      const fwdPhone = forwardingMap.get(bid);
-      if (fwdPhone) {
-        dial.number(
-          {
-            url: `${getVoiceBaseUrl()}/api/voice/call-screen`,
-            method: "POST",
-          } as any,
-          fwdPhone,
-        );
-      }
+    if (isMainLineCall && assignedRows.length === 0 && mainLine.deskSipUris.length > 0) {
+      // Desk phone(s) first; /main-line-desk-status falls through to the
+      // browser ring group, then voicemail.
+      appendDeskPhoneDial(twiml, mainLine);
+    } else {
+      await appendBrokerRingDial(twiml, brokerIds);
     }
 
     // Respond to Twilio immediately — DB logging must NOT block the TwiML response.
@@ -52025,6 +52320,18 @@ function createServer() {
     twilioWebhookGuard,
     handleDialStatus,
   ); // Twilio statusCallback — signature-validated
+  // Front-desk SIP phone (Twilio SIP Domain) — all signature-validated
+  expressApp.post(
+    "/api/voice/main-line-desk-status",
+    twilioWebhookGuard,
+    handleMainLineDeskStatus,
+  );
+  expressApp.post("/api/voice/sip-outbound", twilioWebhookGuard, handleSipOutbound);
+  expressApp.post(
+    "/api/voice/sip-outbound-status",
+    twilioWebhookGuard,
+    handleSipOutboundStatus,
+  );
   expressApp.post(
     "/api/voice/recording-status",
     twilioWebhookGuard,

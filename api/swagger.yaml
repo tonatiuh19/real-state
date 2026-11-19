@@ -2795,6 +2795,66 @@ paths:
         "403": { description: Only platform owners }
         "409": { description: Number is a broker's personal line }
 
+  /voice/main-line-desk-status:
+    post:
+      tags: [Voice]
+      summary: Main-line desk phone Dial action (Twilio → server)
+      description: |
+        Fired after the front-desk SIP phone(s) in main_line_sip_endpoints rang for
+        main_line_desk_ring_seconds. Answered → empty TwiML. Otherwise rings the
+        browser ring group + available team members, then /voice/dial-status (voicemail).
+        Twilio signature-validated; no broker auth.
+      responses:
+        "200":
+          description: TwiML
+          content:
+            text/xml:
+              schema: { type: string }
+
+  /voice/sip-outbound:
+    post:
+      tags: [Voice]
+      summary: SIP Domain voice URL — desk phone places a call (Twilio → server)
+      description: |
+        Only accepted when SipDomainSid equals system_settings.main_line_sip_domain_sid
+        (otherwise <Reject>). Caller ID is the company main line. Only US/NANP numbers
+        and 911/933 are allowed (international / 900 refused: toll-fraud guard).
+        Calls are recorded and logged via /voice/sip-outbound-status. 911 is never
+        recorded or quota-checked.
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                SipDomainSid: { type: string }
+                To: { type: string, example: "sip:5624490000@encore-mortgage.sip.twilio.com" }
+                From: { type: string }
+                CallSid: { type: string }
+      responses:
+        "200":
+          description: TwiML
+          content:
+            text/xml:
+              schema: { type: string }
+
+  /voice/sip-outbound-status:
+    post:
+      tags: [Voice]
+      summary: Desk phone outbound Dial action — logs the call in the CRM
+      parameters:
+        - in: query
+          name: to
+          required: true
+          schema: { type: string }
+          description: E.164 number that was dialed
+      responses:
+        "200":
+          description: Empty TwiML (logging happens asynchronously, idempotent by CallSid)
+          content:
+            text/xml:
+              schema: { type: string }
+
   /voice/incoming:
     post:
       tags: [Voice]
@@ -2803,7 +2863,9 @@ paths:
         Called by Twilio when an external caller dials a configured number.
         Personal line (brokers.twilio_caller_id) rings only that broker.
         Company main line (system_settings.main_line_number) always rings the
-        main_line_ring_broker_ids group plus available brokers, then tenant voicemail.
+        main_line_ring_broker_ids group plus available team members, then tenant voicemail.
+        When main_line_sip_endpoints is set, the front-desk SIP phone rings first
+        (main_line_desk_ring_seconds) via /voice/main-line-desk-status.
         Other shared lines ring all available (voice_available=1) brokers.
         Falls back to the assigned broker or first active broker if none is available.
         No authentication required — called by Twilio servers.
