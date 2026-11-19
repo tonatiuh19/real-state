@@ -3499,7 +3499,7 @@ function isSendableLine(
   return !!n && lines.some((l) => l.number === n);
 }
 
-/** 30s in-process cache of active delegations per delegate. */
+/** 5s in-process cache of active delegations per delegate. */
 const _delegationCache = new Map<
   number,
   { at: number; rows: BrokerDelegationRow[] }
@@ -3514,7 +3514,9 @@ async function getActiveDelegationsForDelegate(
 ): Promise<BrokerDelegationRow[]> {
   if (!delegateBrokerId) return [];
   const cached = _delegationCache.get(delegateBrokerId);
-  if (cached && Date.now() - cached.at < 30_000) return cached.rows;
+  // Short TTL: invalidation only reaches this instance; other warm serverless
+  // instances pick up a revoke within 5s.
+  if (cached && Date.now() - cached.at < 5_000) return cached.rows;
   try {
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT d.owner_broker_id, d.delegate_broker_id, d.can_view_clients,
@@ -3565,7 +3567,7 @@ function invalidateMainLineCache(): void {
 
 /** Company main line (system_settings.main_line_number / main_line_ring_broker_ids). */
 async function getMainLineConfig(): Promise<MainLineConfig> {
-  if (_mainLineCache && Date.now() - _mainLineCache.at < 60_000) {
+  if (_mainLineCache && Date.now() - _mainLineCache.at < 15_000) {
     return _mainLineCache.value;
   }
   let value: MainLineConfig = { number: null, ringBrokerIds: [] };
@@ -3594,10 +3596,15 @@ async function listSendableLinesForBroker(
   brokerId: number,
 ): Promise<SendableLine[]> {
   const [[self]] = await pool.query<RowDataPacket[]>(
-    `SELECT twilio_caller_id FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
+    `SELECT twilio_caller_id, role FROM brokers WHERE id = ? AND tenant_id = ? LIMIT 1`,
     [brokerId, MORTGAGE_TENANT_ID],
   );
   const mainLine = await getMainLineConfig();
+  // The company main line is for the team (mortgage bankers / owners) and the
+  // ring group — never realtor partners (role 'broker').
+  const mayUseMainLine =
+    ["admin", "platform_owner"].includes(String(self?.role ?? "")) ||
+    mainLine.ringBrokerIds.includes(brokerId);
   const ownerIds = await getDelegatedOwnerIds(brokerId, "line");
   let delegatedLines: Array<{
     owner_broker_id: number;
@@ -3619,7 +3626,7 @@ async function listSendableLinesForBroker(
   }
   return buildSendableLines({
     personalLine: (self?.twilio_caller_id as string | null) ?? null,
-    mainLine: mainLine.number,
+    mainLine: mayUseMainLine ? mainLine.number : null,
     delegatedLines,
   });
 }
@@ -13372,6 +13379,18 @@ async function _executeThreadUpsert(core: {
           ) {
             ownerIds.push(resolvedBrokerId);
           }
+          // Company main line with no known relationship owner → the main-line
+          // ring group handles it (never fan out to every admin).
+          if (ownerIds.length === 0 && inboxNumber) {
+            const mainLine = await getMainLineConfig();
+            if (
+              mainLine.number &&
+              normalizeLineE164(inboxNumber) === mainLine.number &&
+              mainLine.ringBrokerIds.length > 0
+            ) {
+              ownerIds = [...mainLine.ringBrokerIds];
+            }
+          }
         }
         await createBrokerNotification({
           brokerIds: ownerIds.length ? ownerIds : null,
@@ -14419,10 +14438,14 @@ async function sendGroupOutboundMessage(
     // line when the broker may send from it, else their default line.
     const lines = await listSendableLinesForBroker(brokerId);
     const inbox = normalizeLineE164(thread.inbox_number as string | null);
-    fromNumber =
-      (inbox && lines.find((l) => l.number === inbox)?.number) ||
-      lines[0]?.number ||
-      "";
+    if (inbox && !lines.some((l) => l.number === inbox)) {
+      // Never switch an existing group to another number: replies would split.
+      throw new GroupSendError(
+        403,
+        "This group texts from a line you can't send from",
+      );
+    }
+    fromNumber = inbox || lines[0]?.number || "";
   }
   if (!fromNumber) {
     throw new GroupSendError(400, "No Twilio line assigned");
@@ -15975,10 +15998,10 @@ async function canBrokerMessageClient(
          SELECT 1 FROM loan_applications la
          WHERE la.client_user_id = c.id
            AND la.tenant_id = c.tenant_id
-           AND (la.broker_user_id = ? OR la.partner_broker_id = ?)
+           AND (la.broker_user_id IN (?) OR la.partner_broker_id IN (?))
        )
      LIMIT 1`,
-    [clientId, MORTGAGE_TENANT_ID, msgScopeIds, brokerId, brokerId],
+    [clientId, MORTGAGE_TENANT_ID, msgScopeIds, msgScopeIds, msgScopeIds],
   );
   return ownerCheck.length === 0;
 }
@@ -18524,13 +18547,20 @@ type BrokerNotificationCategory =
  * 4-path loan/client ownership SQL (aliases: la = loan_applications, c = clients).
  * See docs/OWNERSHIP_MODEL.md — path 4: MB owns the partner on partner_broker_id.
  */
-const LOAN_OWNERSHIP_WHERE_SQL = `(c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ? OR EXISTS (
+const LOAN_OWNERSHIP_WHERE_SQL = `(c.assigned_broker_id IN (?) OR la.broker_user_id IN (?) OR la.partner_broker_id IN (?) OR EXISTS (
   SELECT 1 FROM brokers op
-  WHERE op.id = la.partner_broker_id AND op.created_by_broker_id = ? AND op.tenant_id = la.tenant_id
+  WHERE op.id = la.partner_broker_id AND op.created_by_broker_id IN (?) AND op.tenant_id = la.tenant_id
 ))`;
 
-function loanOwnershipWhereParams(brokerId: number): number[] {
-  return [brokerId, brokerId, brokerId, brokerId];
+/**
+ * Params for LOAN_OWNERSHIP_WHERE_SQL. Pass a single id, or the delegation
+ * scope set (getScopeBrokerIds(brokerId, "clients")) so a delegate sees the
+ * owner's pipeline. Arrays require pool.query (prepared execute() can't expand).
+ */
+function loanOwnershipWhereParams(
+  brokerIds: number | number[],
+): Array<number | number[]> {
+  return [brokerIds, brokerIds, brokerIds, brokerIds];
 }
 
 /** Non–platform-owner calendar visibility: own events + client-linked via ownership paths. */
@@ -18596,6 +18626,15 @@ function rowHasLoanOwnershipAccess(
   );
 }
 
+/** Delegation: loan access via an owner who granted this broker client access. */
+async function rowHasDelegatedLoanAccess(
+  brokerId: number,
+  row: Parameters<typeof rowHasLoanOwnershipAccess>[1],
+): Promise<boolean> {
+  const ownerIds = await getDelegatedOwnerIds(brokerId, "clients");
+  return ownerIds.some((ownerId) => rowHasLoanOwnershipAccess(ownerId, row));
+}
+
 async function fetchLoanAccessRow(
   loanId: number,
 ): Promise<RowDataPacket | null> {
@@ -18627,7 +18666,10 @@ async function assertLoanAccess(
   if (brokerRole === "platform_owner") {
     return { ok: true, loan };
   }
-  if (!rowHasLoanOwnershipAccess(brokerId, loan)) {
+  if (
+    !rowHasLoanOwnershipAccess(brokerId, loan) &&
+    !(await rowHasDelegatedLoanAccess(brokerId, loan))
+  ) {
     return { ok: false, status: 403, error: "Access denied" };
   }
   return { ok: true, loan };
@@ -22944,6 +22986,8 @@ const handleGetLoans: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
+    // Delegation: owners who granted client access share their pipeline.
+    const loanScopeIds = await getScopeBrokerIds(brokerId, "clients");
     const hasGlobalLoanAccess = brokerRole === "platform_owner";
 
     // Extract query parameters for filtering
@@ -22966,7 +23010,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
 
     const baseParams: any[] = hasGlobalLoanAccess
       ? [MORTGAGE_TENANT_ID]
-      : [...loanOwnershipWhereParams(brokerId), MORTGAGE_TENANT_ID];
+      : [...loanOwnershipWhereParams(loanScopeIds), MORTGAGE_TENANT_ID];
 
     const subqueryParams = [
       MORTGAGE_TENANT_ID, // For first subquery (next_task)
@@ -23064,7 +23108,7 @@ const handleGetLoans: RequestHandler = async (req, res) => {
     // Get total count for pagination
     const countQueryParams: any[] = hasGlobalLoanAccess
       ? [MORTGAGE_TENANT_ID]
-      : [...loanOwnershipWhereParams(brokerId), MORTGAGE_TENANT_ID];
+      : [...loanOwnershipWhereParams(loanScopeIds), MORTGAGE_TENANT_ID];
 
     // Add filter parameters to count query
     if (status && status !== "all") {
@@ -23216,6 +23260,8 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole;
+    // Delegation: owners who granted client access share their pipeline.
+    const loanScopeIds = await getScopeBrokerIds(brokerId, "clients");
     const loanId = req.params.loanId;
     const hasGlobalLoanAccess = brokerRole === "platform_owner";
 
@@ -23225,7 +23271,7 @@ const handleGetLoanDetails: RequestHandler = async (req, res) => {
       : `WHERE la.id = ? AND ${LOAN_OWNERSHIP_WHERE_SQL} AND la.tenant_id = ?`;
     const queryParams = hasGlobalLoanAccess
       ? [loanId, MORTGAGE_TENANT_ID]
-      : [loanId, ...loanOwnershipWhereParams(brokerId), MORTGAGE_TENANT_ID];
+      : [loanId, ...loanOwnershipWhereParams(loanScopeIds), MORTGAGE_TENANT_ID];
 
     // Get loan details with client, broker, and partner broker info
     const [loans] = (await pool.query(
@@ -23748,7 +23794,11 @@ const handleUpdateLoanStatus: RequestHandler = async (req, res) => {
     }
 
     const loan = loanRows[0];
-    if (!hasGlobalLoanAccess && !rowHasLoanOwnershipAccess(brokerId, loan)) {
+    if (
+      !hasGlobalLoanAccess &&
+      !rowHasLoanOwnershipAccess(brokerId, loan) &&
+      !(await rowHasDelegatedLoanAccess(brokerId, loan))
+    ) {
       return res.status(403).json({
         success: false,
         error: "Access denied",
@@ -23844,6 +23894,8 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
   try {
     const brokerId = (req as any).brokerId;
     const brokerRole = (req as any).brokerRole as string | undefined;
+    // Delegation: owners who granted client access share their pipeline.
+    const loanScopeIds = await getScopeBrokerIds(brokerId, "clients");
     const isSuperAdmin = brokerRole === "platform_owner";
 
     // Build WHERE clause: superadmins see all tenant loans; everyone else (admin/broker) sees their own via all 3 ownership paths
@@ -23852,13 +23904,10 @@ const handleGetDashboardStats: RequestHandler = async (req, res) => {
       : "LEFT JOIN clients c ON c.id = la.client_user_id";
     const scopeWhere = isSuperAdmin
       ? "la.tenant_id = ?"
-      : `(la.broker_user_id = ? OR la.partner_broker_id = ? OR c.assigned_broker_id = ? OR EXISTS (
-          SELECT 1 FROM brokers op
-          WHERE op.id = la.partner_broker_id AND op.created_by_broker_id = ? AND op.tenant_id = la.tenant_id
-        )) AND la.tenant_id = ?`;
+      : `${LOAN_OWNERSHIP_WHERE_SQL} AND la.tenant_id = ?`;
     const scopeParams = isSuperAdmin
       ? [MORTGAGE_TENANT_ID]
-      : [...loanOwnershipWhereParams(brokerId), MORTGAGE_TENANT_ID];
+      : [...loanOwnershipWhereParams(loanScopeIds), MORTGAGE_TENANT_ID];
 
     // Get total pipeline value and active applications
     const [pipelineStats] = (await pool.query(
@@ -24652,6 +24701,16 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
       conversations,
       group_threads: groupThreads,
       communications,
+      // Same rule POST /api/conversations/send enforces (incl. delegations),
+      // so the UI never re-implements ownership on its own.
+      permissions: {
+        can_message: await canBrokerMessageClient(
+          clientId,
+          brokerId,
+          brokerRole,
+          (conversations[0]?.conversation_id as string | undefined) ?? null,
+        ),
+      },
     });
   } catch (error) {
     console.error("[handleGetClientProfile] Error:", error);
@@ -25535,10 +25594,7 @@ const handleGetClients: RequestHandler = async (req, res) => {
     };
     const safeSortBy = SORT_MAP[sortBy] ?? "c.created_at";
 
-    const clientOwnershipSql = `(c.assigned_broker_id = ? OR la.broker_user_id = ? OR la.partner_broker_id = ? OR EXISTS (
-      SELECT 1 FROM brokers op
-      WHERE op.id = la.partner_broker_id AND op.created_by_broker_id = ? AND op.tenant_id = la.tenant_id
-    ))`;
+    const clientOwnershipSql = LOAN_OWNERSHIP_WHERE_SQL;
 
     const usePerOwnerList = crmFlags.activeForBroker && !hasGlobalClientAccess;
     const visibilityFilter = clientListVisibilityFilter(crmFlags);
@@ -25557,7 +25613,9 @@ const handleGetClients: RequestHandler = async (req, res) => {
       // Delegation: include owners who granted this broker client access.
       filterParams.push(await getScopeBrokerIds(brokerId, "clients"));
     } else if (!hasGlobalClientAccess) {
-      filterParams.push(...loanOwnershipWhereParams(brokerId));
+      filterParams.push(
+        ...loanOwnershipWhereParams(await getScopeBrokerIds(brokerId, "clients")),
+      );
     }
     if (sourceFilter) filterParams.push(sourceFilter);
     if (search) {
@@ -29389,6 +29447,11 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
     const { taskId } = req.params;
     const brokerId = (req as any).brokerId as number | undefined;
     const brokerRole = (req as any).brokerRole as string | undefined;
+    // Delegation: owners who granted client access share their pipeline.
+    // [0] never matches a broker; avoids an invalid empty IN ().
+    const loanScopeIds = brokerId
+      ? await getScopeBrokerIds(brokerId, "clients")
+      : [0];
     const clientId = (req as any).clientId as number | undefined;
 
     if (clientId) {
@@ -29419,7 +29482,7 @@ const handleGetTaskDocuments: RequestHandler = async (req, res) => {
        ORDER BY td.uploaded_at DESC`,
       hasGlobalDocumentAccess
         ? [taskId, MORTGAGE_TENANT_ID]
-        : [taskId, MORTGAGE_TENANT_ID, ...loanOwnershipWhereParams(brokerId)],
+        : [taskId, MORTGAGE_TENANT_ID, ...loanOwnershipWhereParams(loanScopeIds)],
     );
 
     res.json({
@@ -29443,6 +29506,11 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
     const { documentId } = req.params;
     const brokerId = (req as any).brokerId as number | undefined;
     const brokerRole = (req as any).brokerRole as string | undefined;
+    // Delegation: owners who granted client access share their pipeline.
+    // [0] never matches a broker; avoids an invalid empty IN ().
+    const loanScopeIds = brokerId
+      ? await getScopeBrokerIds(brokerId, "clients")
+      : [0];
     const clientId = (req as any).clientId as number | undefined;
 
     if (clientId) {
@@ -29487,7 +29555,7 @@ const handleDeleteTaskDocument: RequestHandler = async (req, res) => {
         : [
             documentId,
             MORTGAGE_TENANT_ID,
-            ...loanOwnershipWhereParams(brokerId),
+            ...loanOwnershipWhereParams(loanScopeIds),
           ],
     );
 
@@ -38192,7 +38260,10 @@ const handleCreateBlockedNumber: RequestHandler = async (req, res) => {
        LIMIT 1`,
       [MORTGAGE_TENANT_ID, last10],
     );
-    if (ownLine.length > 0) {
+    const mainLineLast10 = ((await getMainLineConfig()).number ?? "")
+      .replace(/\D/g, "")
+      .slice(-10);
+    if (ownLine.length > 0 || (mainLineLast10 && mainLineLast10 === last10)) {
       return res.status(400).json({
         success: false,
         error: "That number is one of your own phone lines",
@@ -39881,11 +39952,14 @@ const handleSendMessage: RequestHandler = async (req, res) => {
       }
     }
 
-    // Step 2b: configured company main line.
+    // Step 2b: configured company main line (team members / ring group only).
     if (!fromNumber) {
-      const mainLineNumber = (await getMainLineConfig()).number;
-      if (mainLineNumber && !otherBrokerPersonalLines.has(mainLineNumber)) {
-        fromNumber = mainLineNumber;
+      const mainLineOption = sendableLines.find((l) => l.kind === "main");
+      if (
+        mainLineOption &&
+        !otherBrokerPersonalLines.has(mainLineOption.number)
+      ) {
+        fromNumber = mainLineOption.number;
       }
     }
 
@@ -41730,9 +41804,12 @@ const handleRevokeBrokerDelegation: RequestHandler = async (req, res) => {
 };
 
 /** GET /api/settings/main-line — company main line + ring group. */
-const handleGetMainLine: RequestHandler = async (_req, res) => {
+const handleGetMainLine: RequestHandler = async (req, res) => {
   try {
-    invalidateMainLineCache();
+    const role = String((req as any).brokerRole ?? "");
+    if (!["admin", "platform_owner"].includes(role)) {
+      return res.status(403).json({ success: false, error: "Access denied" });
+    }
     const cfg = await getMainLineConfig();
     let ringBrokers: Array<{ id: number; name: string }> = [];
     if (cfg.ringBrokerIds.length > 0) {
@@ -43210,9 +43287,12 @@ const handleVoiceIncoming: RequestHandler = async (req, res) => {
         );
         ringGroupIds = ringRows.map((r: any) => Number(r.id));
       }
+      // Main line: only team members (mortgage bankers / owners) — never
+      // realtor partners, whose voice_available flag can also be stale.
       const [availableRows] = await pool.query<any>(
         `SELECT id FROM brokers
          WHERE tenant_id = ? AND status = 'active' AND voice_available = 1
+           ${isMainLineCall ? "AND role IN ('admin', 'platform_owner')" : ""}
          ORDER BY id ASC
          LIMIT 10`,
         [MORTGAGE_TENANT_ID],
@@ -43518,6 +43598,18 @@ const handleAssignPhoneNumber: RequestHandler = async (req, res) => {
       }
       const number = await twilioClient.incomingPhoneNumbers(sid).fetch();
       const callerIdE164 = number.phoneNumber;
+
+      // The company main line is shared — assigning it to one broker would
+      // make inbound calls ring only them and skip the ring group.
+      invalidateMainLineCache();
+      const mainLineNumber = (await getMainLineConfig()).number;
+      if (mainLineNumber && normalizeLineE164(callerIdE164) === mainLineNumber) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "This is the company main line. Change it in Settings → Phone lines & team access before assigning it to a broker.",
+        });
+      }
 
       // Clear any previous broker that owned this SID
       await pool.query(

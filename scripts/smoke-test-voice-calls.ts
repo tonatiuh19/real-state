@@ -96,9 +96,11 @@ async function main() {
   console.log("\n══ Voice / Phone Routing Smoke Tests ══\n");
 
   // ── Known brokers from Daniel's report ─────────────────────────────────────
-  // The Encore main line (+15623370000) moves between broker accounts
-  // (270004 → info@ 2580002 on 2026-10-13), so resolve its CURRENT active
-  // owner by number instead of hardcoding a broker id.
+  // The Encore main line (+15623370000) used to move between broker accounts
+  // as a "personal" line. Since 2026-11-18 it is the company main line
+  // (system_settings.main_line_number + main_line_ring_broker_ids) and must
+  // NOT be any broker's personal line. Legacy personal ownership still passes
+  // with a finding so older DB snapshots don't hard-fail.
   const ENCORE_MAIN_LINE = "+15623370000";
   const [brokers] = await conn.query<RowDataPacket[]>(
     `SELECT id, first_name, last_name, email, role, twilio_caller_id, twilio_phone_sid,
@@ -112,44 +114,70 @@ async function main() {
   const encore = brokers.find(
     (b) => b.id !== 3 && b.twilio_caller_id === ENCORE_MAIN_LINE,
   );
+  const [mainLineRows] = await conn.query<RowDataPacket[]>(
+    `SELECT setting_key, setting_value FROM system_settings
+     WHERE tenant_id = ? AND setting_key IN ('main_line_number', 'main_line_ring_broker_ids')`,
+    [TENANT_ID],
+  );
+  const mainLineSetting = new Map(
+    mainLineRows.map((r) => [String(r.setting_key), String(r.setting_value ?? "")]),
+  );
+  const mainLineNumber = mainLineSetting.get("main_line_number") || "";
+  let ringIds: number[] = [];
+  try {
+    ringIds = JSON.parse(mainLineSetting.get("main_line_ring_broker_ids") || "[]");
+  } catch {
+    ringIds = [];
+  }
 
-  if (!daniel || !encore) {
-    fail(
-      "Fixture brokers exist",
-      `Need broker id=3 and an active owner of ${ENCORE_MAIN_LINE}`,
-    );
+  if (!daniel) {
+    fail("Fixture brokers exist", "Need broker id=3 (Daniel)");
   } else {
-    pass("Fixture brokers exist", `Daniel=${daniel.id}, Encore=${encore.id}`);
-
+    pass("Fixture brokers exist", `Daniel=${daniel.id}`);
     if (daniel.twilio_caller_id === "+15624490000") {
       pass("Daniel personal line E.164", daniel.twilio_caller_id as string);
     } else {
       fail("Daniel personal line E.164", String(daniel.twilio_caller_id));
     }
+  }
 
-    if (encore.twilio_caller_id === ENCORE_MAIN_LINE) {
-      pass("Encore personal line E.164", encore.twilio_caller_id as string);
-    } else {
-      fail("Encore personal line E.164", String(encore.twilio_caller_id));
-    }
-
-    if (encore.twilio_phone_sid) {
-      pass("Encore has twilio_phone_sid (UI assign path)");
-    } else {
-      finding(
-        "V1",
-        "medium",
-        "Encore missing twilio_phone_sid",
-        "Number may have been set via migration-only twilio_caller_id; UI assign sets both sid+caller_id.",
+  if (mainLineNumber === ENCORE_MAIN_LINE) {
+    pass("Company main line configured", mainLineNumber);
+    if (encore) {
+      fail(
+        "Main line is not a personal line",
+        `broker ${encore.id} still has ${ENCORE_MAIN_LINE} as twilio_caller_id — inbound would ring only them`,
       );
+    } else {
+      pass("Main line is not a personal line");
     }
-
-    if (!daniel.twilio_phone_sid && daniel.twilio_caller_id) {
-      pass(
-        "Daniel migration-only caller_id (no sid) — documented edge",
-        "getSharedVoiceNumber excludes by caller_id even when sid is NULL",
-      );
-    }
+    const [ringRows] = ringIds.length
+      ? await conn.query<RowDataPacket[]>(
+          `SELECT id FROM brokers WHERE tenant_id = ? AND status = 'active' AND id IN (?)`,
+          [TENANT_ID, ringIds],
+        )
+      : [[] as RowDataPacket[]];
+    ringRows.length > 0
+      ? pass("Main line ring group has active brokers", ringRows.map((r) => r.id).join(","))
+      : finding(
+          "V5",
+          "medium",
+          "Main line ring group empty",
+          "Inbound main-line calls only ring brokers marked Available; set main_line_ring_broker_ids.",
+        );
+  } else if (encore) {
+    pass("Encore main line (legacy personal-line model)", `owner=${encore.id}`);
+    finding(
+      "V6",
+      "low",
+      "Main line still a personal line",
+      "Apply 20261118_120500_activate_main_line_emma_delegation.sql to switch to the shared main-line model.",
+    );
+  } else {
+    fail(
+      "Company main line configured",
+      `${ENCORE_MAIN_LINE} is neither main_line_number nor an active broker's line`,
+    );
   }
 
   // ── DB invariants ──────────────────────────────────────────────────────────

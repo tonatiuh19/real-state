@@ -1020,6 +1020,13 @@ export interface GetClientDetailProfileResponse {
     last_message_preview: string | null;
     thread_type?: "direct" | "group";
   }>;
+  /**
+   * Server-computed permissions for the current broker (same rule the send
+   * endpoint enforces — includes delegated access). Source of truth for the UI.
+   */
+  permissions?: {
+    can_message: boolean;
+  };
   group_threads?: Array<{
     id: number;
     conversation_id: string;

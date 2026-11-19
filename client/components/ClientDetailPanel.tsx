@@ -938,8 +938,12 @@ export default function ClientDetailPanel({
   const ownsClientThread = conversations.some(
     (c) => c.broker_id != null && c.broker_id === currentBroker?.id,
   );
+  // Server is the source of truth (covers delegated team access, e.g. an
+  // assistant working the owner's book). Local rule only as a fallback for
+  // older API responses without `permissions`.
   const canMessage =
-    isPlatformOwner || ownsClientAssignment || ownsClientThread;
+    profile?.permissions?.can_message ??
+    (isPlatformOwner || ownsClientAssignment || ownsClientThread);
 
   const statusMeta = CLIENT_STATUS_META[client?.status ?? "active"];
 

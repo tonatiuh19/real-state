@@ -1327,6 +1327,7 @@ paths:
     get:
       tags: [Loans]
       summary: List all loan applications
+      description: Non platform owners see loans they own via client/loan/partner ownership, plus the pipeline of owners who delegated client access to them (broker_delegations.can_view_clients). Same scope applies to GET /loans/{loanId}, /dashboard/stats and task documents.
       security:
         - BrokerAuth: []
       parameters:
@@ -2568,6 +2569,7 @@ paths:
     get:
       tags: [Clients]
       summary: Get full client profile with loans, conversations, and activity
+      description: Access includes delegated team access (broker_delegations.can_view_clients).
       security:
         - BrokerAuth: []
       parameters:
@@ -2584,6 +2586,11 @@ paths:
                 type: object
                 properties:
                   success: { type: boolean }
+                  permissions:
+                    type: object
+                    description: Server-computed permissions for the current broker (same rule POST /conversations/send enforces, incl. delegations).
+                    properties:
+                      can_message: { type: boolean }
                   client:
                     type: object
                     properties:
@@ -2662,7 +2669,7 @@ paths:
     get:
       tags: [Voice]
       summary: Phone lines the current broker may send SMS / call from
-      description: Personal line, company main line and delegated owners' lines (can_send_from_line). First entry is the default.
+      description: Personal line, company main line (team members and ring group only — never realtor partners) and delegated owners' lines (can_send_from_line). First entry is the default.
       security:
         - BrokerAuth: []
       responses:
@@ -2761,6 +2768,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MainLineResponse" }
+        "403": { description: Team members (admin / platform_owner) only }
     put:
       tags: [Team Access]
       summary: Update company main line (platform_owner only)

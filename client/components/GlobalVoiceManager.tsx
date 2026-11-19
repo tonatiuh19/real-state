@@ -129,9 +129,27 @@ const GlobalVoiceManager: React.FC = () => {
     [dispatch],
   );
 
+  /** True while a registerWithRetry loop runs — prevents parallel loops when
+   * register() both rejects and emits Device "error". */
+  const registeringRef = useRef(false);
+
   /** register() with bounded exponential backoff; sets status "error" + reason on final failure. */
   const registerWithRetry = useCallback(
     async (device: Device, isCancelled: () => boolean = () => false) => {
+      if (registeringRef.current) return;
+      registeringRef.current = true;
+      try {
+        await registerLoop(device, isCancelled);
+      } finally {
+        registeringRef.current = false;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dispatch],
+  );
+
+  const registerLoop = useCallback(
+    async (device: Device, isCancelled: () => boolean) => {
       for (let attempt = 0; attempt < MAX_VOICE_ATTEMPTS; attempt++) {
         if (isCancelled() || !isAvailableRef.current) return;
         if (device.state === Device.State.Registered) return;

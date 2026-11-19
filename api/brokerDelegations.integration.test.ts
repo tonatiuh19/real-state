@@ -34,6 +34,8 @@ describe("broker delegations HTTP", () => {
   let clientId = 0;
   let delegationId = 0;
   const conversationId = `conv_client_deleg_${Date.now()}`;
+  const loanNumber = `DLG-${Date.now()}`;
+  let loanId = 0;
 
   async function insertBroker(
     label: string,
@@ -108,6 +110,14 @@ describe("broker delegations HTTP", () => {
     clientId = c.insertId;
     clientIds.push(clientId);
 
+    const [loan] = await pool.query<ResultSetHeader>(
+      `INSERT INTO loan_applications
+         (tenant_id, application_number, client_user_id, loan_type, loan_amount, broker_user_id, status)
+       VALUES (?, ?, ?, 'purchase', 400000, ?, 'application_received')`,
+      [TENANT_ID, loanNumber, clientId, ownerId],
+    );
+    loanId = loan.insertId;
+
     await pool.query(
       `INSERT INTO conversation_threads
          (tenant_id, conversation_id, client_id, broker_id, owner_client_scope_broker_id,
@@ -116,6 +126,25 @@ describe("broker delegations HTTP", () => {
       [TENANT_ID, conversationId, clientId, ownerId, ownerId, ownerLine],
     );
   }, 90_000);
+
+  /** Pipeline list + loan detail + dashboard for the delegate. */
+  async function delegatePipeline(): Promise<{ list: boolean; detail: number }> {
+    const list = await request(app)
+      .get(`/api/loans?search=${encodeURIComponent(loanNumber)}`)
+      .set(auth(delegateToken));
+    expect(list.status).toBe(200);
+    const detail = await request(app)
+      .get(`/api/loans/${loanId}`)
+      .set(auth(delegateToken));
+    const stats = await request(app)
+      .get("/api/dashboard/stats")
+      .set(auth(delegateToken));
+    expect(stats.status).toBe(200);
+    return {
+      list: (list.body.loans || []).some((l: { id: number }) => Number(l.id) === loanId),
+      detail: detail.status,
+    };
+  }
 
   async function delegateSeesThread(): Promise<{ list: boolean; messages: number }> {
     const list = await request(app)
@@ -161,8 +190,15 @@ describe("broker delegations HTTP", () => {
       .get(`/api/clients/${clientId}/profile`)
       .set(auth(delegateToken));
     expect(profile.status).toBe(403);
+    // Owner always may message their own client.
+    const ownerProfile = await request(app)
+      .get(`/api/clients/${clientId}/profile`)
+      .set(auth(ownerToken));
+    expect(ownerProfile.body.permissions).toEqual({ can_message: true });
     expect(await delegateSeesRealtor()).toBe(false);
     expect(await delegateSeesThread()).toEqual({ list: false, messages: 404 });
+    expect((await delegatePipeline()).list).toBe(false);
+    expect([403, 404]).toContain((await delegatePipeline()).detail);
     const lines = await request(app)
       .get("/api/voice/lines")
       .set(auth(delegateToken));
@@ -251,8 +287,12 @@ describe("broker delegations HTTP", () => {
       .get(`/api/clients/${clientId}/profile`)
       .set(auth(delegateToken));
     expect(profile.status).toBe(200);
+    // Regression (Nov 18): UI showed "Assigned to another broker" and hid
+    // New Message for a delegate — server now returns the real permission.
+    expect(profile.body.permissions).toEqual({ can_message: true });
     expect(await delegateSeesRealtor()).toBe(true);
     expect(await delegateSeesThread()).toEqual({ list: true, messages: 200 });
+    expect(await delegatePipeline()).toEqual({ list: true, detail: 200 });
 
     const lines = await request(app)
       .get("/api/voice/lines")
@@ -309,6 +349,55 @@ describe("broker delegations HTTP", () => {
     expect(await delegateSeesClient()).toBe(false);
     expect(await delegateSeesRealtor()).toBe(false);
     expect(await delegateSeesThread()).toEqual({ list: false, messages: 404 });
+    expect((await delegatePipeline()).list).toBe(false);
+  });
+
+  it("realtor partners never get the company main line", async () => {
+    const main = await request(app)
+      .get("/api/settings/main-line")
+      .set(auth(ownerToken));
+    const mainNumber: string | null = main.body.main_line?.number ?? null;
+
+    const partnerMain = await request(app)
+      .get("/api/settings/main-line")
+      .set(auth(partnerToken));
+    expect(partnerMain.status).toBe(403);
+
+    const lines = await request(app)
+      .get("/api/voice/lines")
+      .set(auth(partnerToken));
+    expect(lines.status).toBe(200);
+    expect(
+      lines.body.lines.some((l: { kind: string }) => l.kind === "main"),
+    ).toBe(false);
+
+    if (mainNumber) {
+      // Team member (admin) does get it.
+      const teamLines = await request(app)
+        .get("/api/voice/lines")
+        .set(auth(delegateToken));
+      expect(
+        teamLines.body.lines.some((l: { number: string }) => l.number === mainNumber),
+      ).toBe(true);
+
+      const spoof = await request(app)
+        .post("/api/conversations/send")
+        .set(auth(partnerToken))
+        .send({
+          communication_type: "sms",
+          client_id: clientId,
+          body: "should not send",
+          from_line: mainNumber,
+        });
+      expect(spoof.status).toBe(403);
+
+      // Our own main line can never be blocked.
+      const block = await request(app)
+        .post("/api/blocked-numbers")
+        .set(auth(ownerToken))
+        .send({ phone: mainNumber });
+      expect(block.status).toBe(400);
+    }
   });
 
   it("main line: readable by team, only platform_owner may update", async () => {
