@@ -486,7 +486,8 @@ const REQUIRED_PROD_ENV: Array<{ name: string; why: string; fix: string }> = [
   { name: "TWILIO_AUTH_TOKEN", why: "SMS / calls and Twilio webhook signature checks", fix: "Twilio console → Account info → add to Vercel Production" },
   { name: "TWILIO_API_KEY", why: "browser softphone tokens (calls)", fix: "Twilio console → API keys → add TWILIO_API_KEY + TWILIO_API_SECRET to Vercel Production" },
   { name: "TWILIO_API_SECRET", why: "browser softphone tokens (calls)", fix: "Twilio console → API keys → add to Vercel Production" },
-  { name: "TWILIO_TWIML_APP_SID", why: "outbound browser calls", fix: "Twilio console → TwiML Apps → Mortgage Portal Voice App SID → add to Vercel Production" },
+  // TWILIO_TWIML_APP_SID is optional: getOrCreateTwimlAppSid() finds/creates the TwiML App.
+  { name: "APP_URL", why: "Twilio webhook signature validation + voice callback URLs", fix: "Add APP_URL=https://portal.encoremortgage.org to Vercel Production" },
   { name: "ABLY_API_KEY", why: "live conversation / incoming-call updates", fix: "Ably dashboard → API keys → add to Vercel Production" },
   { name: "STRIPE_SECRET_KEY", why: "billing (server side)", fix: "Payment dashboard → Developers → API keys → add the secret key to Vercel Production" },
   { name: "STRIPE_WEBHOOK_SECRET", why: "verifying billing webhooks", fix: "Payment dashboard → Webhooks → endpoint signing secret → add to Vercel Production" },
