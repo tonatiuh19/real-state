@@ -19,7 +19,12 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { ImapFlow } from "imapflow";
-import Ably from "ably";
+// Ably server SDK (MAU-pricing compatible). Declares this side as a server so
+// backend publishes are not billed as end users. Browsers use @ably/pubsub-device.
+import {
+  createHttpClient as createAblyHttpClient,
+  type PubSubHttpClient,
+} from "@ably/pubsub-server";
 import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import Groq from "groq-sdk";
@@ -10516,10 +10521,10 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
 }
 
 // Initialize Ably REST client (for publishing messages from the server)
-let ablyClient: Ably.Rest | null = null;
+let ablyClient: PubSubHttpClient | null = null;
 if (process.env.ABLY_API_KEY) {
   try {
-    ablyClient = new Ably.Rest({ key: process.env.ABLY_API_KEY });
+    ablyClient = createAblyHttpClient({ key: process.env.ABLY_API_KEY });
     console.log("✅ Ably client initialized successfully");
   } catch (error) {
     console.warn("⚠️  Warning: Failed to initialize Ably client:", error);
@@ -39057,7 +39062,8 @@ const handleAblyToken: RequestHandler = async (req, res) => {
   }
   try {
     const brokerId = (req as any).brokerId;
-    const tokenRequest = await (ablyClient as any).auth.requestToken({
+    // Browser (device) tokens: clientId is required on MAU-billed accounts.
+    const tokenRequest = await ablyClient.auth.requestToken({
       clientId: `broker-${brokerId}`,
       capability: {
         "conversation:*": ["subscribe"],

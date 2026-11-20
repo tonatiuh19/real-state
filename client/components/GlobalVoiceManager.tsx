@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
-import * as AblyLib from "ably";
+import type { RealtimeChannel as AblyRealtimeChannel } from "@ably/pubsub-device";
 import { getSharedAblyClient } from "@/lib/ably-client";
 import { Phone, PhoneOff, PhoneIncoming, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -436,7 +436,7 @@ const GlobalVoiceManager: React.FC = () => {
   // without waiting for the Twilio SDK cancel event (which may lag under load).
   useEffect(() => {
     if (!sessionToken) return;
-    let channel: AblyLib.RealtimeChannel | null = null;
+    let channel: AblyRealtimeChannel | null = null;
 
     const connect = async () => {
       try {

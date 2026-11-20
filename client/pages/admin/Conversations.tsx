@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import * as AblyLib from "ably";
+import type { RealtimeChannel as AblyRealtimeChannel } from "@ably/pubsub-device";
 import { getSharedAblyClient } from "@/lib/ably-client";
 import { useFormik } from "formik";
 import * as Yup from "yup";
@@ -721,7 +721,7 @@ const Conversations = () => {
 
   // Real-time updates via Ably
   useEffect(() => {
-    let allChannel: AblyLib.RealtimeChannel | null = null;
+    let allChannel: AblyRealtimeChannel | null = null;
 
     const connect = async () => {
       try {
@@ -794,7 +794,7 @@ const Conversations = () => {
   useEffect(() => {
     if (!currentThread?.conversation_id) return;
 
-    let convChannel: AblyLib.RealtimeChannel | null = null;
+    let convChannel: AblyRealtimeChannel | null = null;
     let mounted = true; // Guard: detect if cleanup ran before async subscribe completed
     const convId = currentThread.conversation_id;
 

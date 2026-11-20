@@ -1,4 +1,8 @@
-import * as AblyLib from "ably";
+import {
+  createClient,
+  type PubSubClient,
+  type TokenDetails,
+} from "@ably/pubsub-device";
 import axios from "axios";
 
 /**
@@ -12,7 +16,7 @@ import axios from "axios";
  * without breaking changes.
  */
 
-let clientPromise: Promise<AblyLib.Realtime | null> | null = null;
+let clientPromise: Promise<PubSubClient | null> | null = null;
 let currentToken: string | null = null;
 
 async function fetchToken(sessionToken: string): Promise<unknown> {
@@ -24,7 +28,7 @@ async function fetchToken(sessionToken: string): Promise<unknown> {
 
 export function getSharedAblyClient(
   sessionToken: string | null,
-): Promise<AblyLib.Realtime | null> {
+): Promise<PubSubClient | null> {
   if (!sessionToken) return Promise.resolve(null);
 
   // Re-create the client when the session token changes (e.g. after re-login).
@@ -40,16 +44,16 @@ export function getSharedAblyClient(
         // need to round-trip before connecting.
         const initial = await fetchToken(sessionToken);
         let firstUse = true;
-        return new AblyLib.Realtime({
+        return createClient({
           authCallback: async (_tokenParams, cb) => {
             try {
               if (firstUse) {
                 firstUse = false;
-                cb(null, initial as any);
+                cb(null, initial as TokenDetails);
                 return;
               }
               const fresh = await fetchToken(sessionToken);
-              cb(null, fresh as any);
+              cb(null, fresh as TokenDetails);
             } catch (err) {
               cb(err as any, null);
             }
