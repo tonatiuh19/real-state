@@ -1621,3 +1621,14 @@ Mortgage bankers (`admin`) and **platform owners** can bulk-create **Clients** a
 - **`<VoiceErrorAlert />`** (`client/components/VoiceErrorAlert.tsx`) — red (amber for quota/service) inline alert with collapsible "How to fix" steps plus optional **Retry** / **Choose microphone** / dismiss actions. Use it for any calling failure instead of raw `err.message`.
 - **Mic rules:** run `preflightMicrophone` before `device.connect()` and `call.accept()`; stop the pre-call meter stream before connecting; during a call the level meter uses Twilio's `call.on("volume")` (never a second `getUserMedia` capture).
 - **Availability:** `GlobalVoiceManager` shows a floating "You're offline for calls — Go available" pill when `voice.isAvailable` is false, and a `VoiceErrorAlert` with **Reconnect** (`requestVoiceReconnect`) when `deviceStatus === "error"`. Token fetch / register retry with bounded exponential backoff (4 attempts); 402/401/403 are not retried. Reason lives in `voice.deviceError`.
+
+## New Version Banner
+
+`client/components/NewVersionBanner.tsx` (mounted once in `AdminLayout`). Checks the deployed
+`index.html` every 5 minutes and when the tab becomes visible; if its hashed entry script differs
+from the running one, shows a floating card ("New version available · Reload"). Fetch lives in
+`appVersionSlice` (`checkForNewBuild`); pure helpers in `client/utils/buildVersion.ts`. Never shows
+in dev (no hashed entry script).
+
+`FromLinePicker` is also used in the client profile composer (`ClientDetailPanel` → `ComposeBox`),
+preselecting the open thread's `inbox_number`.

@@ -125,6 +125,8 @@ import {
 import { BrokerDatePicker } from "@/components/BrokerDatePicker";
 import { BrokerTimePicker } from "@/components/BrokerTimePicker";
 import { useNavigate } from "react-router-dom";
+import { FromLinePicker } from "@/components/FromLinePicker";
+import { resolveFromLine } from "@/store/slices/phoneLinesSlice";
 
 interface ClientDetailPanelProps {
   isOpen: boolean;
@@ -371,6 +373,8 @@ interface ComposeBoxProps {
   onBodyChange: (v: string) => void;
   onSend: () => void;
   onCancel: () => void;
+  /** Thread inbox (E.164) to preselect in the "Send from" picker. */
+  threadInbox?: string | null;
   compact?: boolean;
   onSaveAsTemplate?: () => void;
   templates?: {
@@ -394,6 +398,7 @@ function ComposeBox({
   onBodyChange,
   onSend,
   onCancel,
+  threadInbox,
   compact,
   onSaveAsTemplate,
   templates = [],
@@ -419,6 +424,9 @@ function ComposeBox({
           </button>
         </div>
       )}
+
+      {/* "Send from" line (hidden when the user has a single line) */}
+      {composeType === "sms" && <FromLinePicker threadInbox={threadInbox} />}
 
       {/* type selector + templates */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -620,6 +628,9 @@ export default function ClientDetailPanel({
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { lines: phoneLines, selectedFromLine } = useAppSelector(
+    (s) => s.phoneLines,
+  );
   const { profile, isLoading, isSaving, error } = useAppSelector(
     (s) => s.clientDetail,
   );
@@ -769,6 +780,10 @@ export default function ClientDetailPanel({
 
   const handleSendMessage = async () => {
     if (!composeBody.trim() || !client) return;
+    const fromLine =
+      composeType === "sms"
+        ? resolveFromLine(phoneLines, selectedFromLine, activeThreadInbox)
+        : null;
     const recipientPhone = client.phone ?? undefined;
     const recipientEmail = client.email ?? undefined;
     setSendingMsg(true);
@@ -784,6 +799,8 @@ export default function ClientDetailPanel({
             composeType === "email" ? composeSubject || undefined : undefined,
           body: composeBody.trim(),
           message_type: "text",
+          from_line:
+            phoneLines.length > 1 ? (fromLine ?? undefined) : undefined,
         }),
       ).unwrap();
       toast({ title: "Message sent" });
@@ -925,6 +942,9 @@ export default function ClientDetailPanel({
   const conversations = profile?.conversations ?? [];
   const groupThreads = profile?.group_threads ?? [];
   const allConversationThreads = [...conversations, ...groupThreads];
+  const activeThreadInbox =
+    conversations.find((c) => c.conversation_id === activeConvId)
+      ?.inbox_number ?? null;
   const communications = profile?.communications ?? [];
   const hasAssignedBroker = Boolean(client?.assigned_broker?.id);
   const transferBrokerCandidates = allBrokers.filter(
@@ -1950,6 +1970,7 @@ export default function ClientDetailPanel({
                       onSubjectChange={setComposeSubject}
                       onBodyChange={setComposeBody}
                       onSend={handleSendMessage}
+                      threadInbox={activeThreadInbox}
                       onCancel={() => setComposeOpen(false)}
                       onSaveAsTemplate={() => setSaveTemplateOpen(true)}
                       templates={convTemplates}
@@ -2237,6 +2258,7 @@ export default function ClientDetailPanel({
                       onSubjectChange={setComposeSubject}
                       onBodyChange={setComposeBody}
                       onSend={handleSendMessage}
+                      threadInbox={activeThreadInbox}
                       onCancel={() => setComposeOpen(false)}
                       compact
                       onSaveAsTemplate={() => setSaveTemplateOpen(true)}

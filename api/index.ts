@@ -24683,7 +24683,7 @@ const handleGetClientDetailProfile: RequestHandler = async (req, res) => {
 
     // Conversation threads (direct — client_id on thread)
     const [conversations] = await pool.query<RowDataPacket[]>(
-      `SELECT ct.id, ct.conversation_id, ct.broker_id, ct.last_message_at, ct.message_count,
+      `SELECT ct.id, ct.conversation_id, ct.broker_id, ct.inbox_number, ct.last_message_at, ct.message_count,
               ct.unread_count, ct.last_message_type, ct.status, ct.priority,
               ct.last_message_preview, ct.thread_type
        FROM conversation_threads ct

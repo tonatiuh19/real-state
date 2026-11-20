@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import GlobalVoiceManager from "@/components/GlobalVoiceManager";
+import NewVersionBanner from "@/components/NewVersionBanner";
 import NotificationBell from "@/components/layout/NotificationBell";
 import {
   LayoutDashboard,
@@ -995,6 +996,7 @@ const AdminLayout = ({ children }: AdminLayoutProps) => {
         </AlertDialogContent>
       </AlertDialog>
       <GlobalVoiceManager />
+      <NewVersionBanner />
       <MortgiWidget userType="broker" />
     </div>
   );

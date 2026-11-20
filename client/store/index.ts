@@ -3,6 +3,7 @@ import axios from "axios";
 import { closeSharedAblyClient } from "@/lib/ably-client";
 import clientAuthReducer from "./slices/clientAuthSlice";
 import brokerAuthReducer from "./slices/brokerAuthSlice";
+import appVersionReducer from "./slices/appVersionSlice";
 import applicationsReducer from "./slices/applicationsSlice";
 import leadsReducer from "./slices/leadsSlice";
 import documentsReducer from "./slices/documentsSlice";
@@ -43,6 +44,7 @@ import phoneLinesReducer from "./slices/phoneLinesSlice";
 
 export const store = configureStore({
   reducer: {
+    appVersion: appVersionReducer,
     clientAuth: clientAuthReducer,
     brokerAuth: brokerAuthReducer,
     applications: applicationsReducer,

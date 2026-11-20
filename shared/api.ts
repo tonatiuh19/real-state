@@ -1011,6 +1011,8 @@ export interface GetClientDetailProfileResponse {
     id: number;
     conversation_id: string;
     broker_id: number | null;
+    /** Twilio line the thread sends/receives on (E.164). */
+    inbox_number?: string | null;
     last_message_at: string | null;
     message_count: number;
     unread_count: number;
